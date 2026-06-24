@@ -1,23 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import { initializeApp, getApps } from 'firebase-admin/app';
-import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
-import type { AppOptions } from 'firebase-admin/app';
-import fs from 'fs';
-import path from 'path';
-
-// Initialize Firebase Admin if not already initialized
-if (!getApps().length) {
-  try {
-     let projectId = 'al-ai-chat';
-     try {
-       const configOptions = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'firebase-applet-config.json'), 'utf-8'));
-       if (configOptions.projectId) projectId = configOptions.projectId;
-     } catch(e) {}
-     initializeApp({ projectId });
-  } catch (err) {
-     console.error('Firebase Admin initialization error', err);
-  }
-}
+import { DecodedIdToken } from 'firebase-admin/auth';
+import { getFirebaseAdminAuth } from './firebaseAdmin';
 
 export interface AuthRequest extends Request {
   user?: DecodedIdToken;
@@ -35,7 +18,7 @@ export const verifyFirebaseToken = async (req: AuthRequest, res: Response, next:
   }
 
   try {
-    const decodedToken = await getAuth().verifyIdToken(idToken);
+    const decodedToken = await getFirebaseAdminAuth().verifyIdToken(idToken);
     req.user = decodedToken;
     next();
   } catch (error) {
@@ -57,7 +40,7 @@ export const optionalAuth = async (req: AuthRequest, res: Response, next: NextFu
     const idToken = authHeader.split('Bearer ')[1]?.trim();
     if (idToken && idToken !== 'null' && idToken !== 'undefined' && idToken.split('.').length === 3) {
       try {
-        const decodedToken = await getAuth().verifyIdToken(idToken);
+        const decodedToken = await getFirebaseAdminAuth().verifyIdToken(idToken);
         req.user = decodedToken;
       } catch (error) {
         console.error('Error verifying optional Firebase ID token:', error);

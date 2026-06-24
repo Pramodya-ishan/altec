@@ -17,7 +17,7 @@ import { RPM_LIMIT, RPD_LIMIT, requestCountPM, requestCountPD } from "./server/a
 // Migrate old data
 
 
-async function startServer() {
+function startServer() {
   const app = express();
   const PORT = 3000;
 
@@ -366,11 +366,14 @@ async function startServer() {
   // New endpoint for Lesson Optimizer
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
-    const vite = await createViteServer({
+    createViteServer({
       server: { middlewareMode: true, hmr: false },
       appType: "spa",
+    }).then((vite) => {
+      app.use(vite.middlewares);
+    }).catch(err => {
+      console.error("Failed to start Vite dev server middleware", err);
     });
-    app.use(vite.middlewares);
   } else {
     // Note: Vercel serves static files via routes in vercel.json. We don't necessarily need this locally but we keep it here.
     const distPath = path.join(process.cwd(), "dist");
@@ -391,10 +394,5 @@ async function startServer() {
 }
 
 // Keep it compatible with Vercel which looks for `export default` or `module.exports = app`
-const appPromise = startServer();
-export default (req: any, res: any) => {
-  appPromise.then(app => app(req, res)).catch(err => {
-    console.error("Failed to start server on Vercel", err);
-    res.status(500).send("Failed to start server: " + (err?.stack || err?.message || String(err)));
-  });
-};
+const app = startServer();
+export default app;

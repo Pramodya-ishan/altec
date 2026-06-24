@@ -1,22 +1,6 @@
 import express from 'express';
 import { readUser, writeUser, encrypt, decrypt } from '../data/userRepository';
-import { getAuth } from 'firebase-admin/auth';
-import { initializeApp, getApps, cert } from 'firebase-admin/app';
-import fs from 'fs';
-import path from 'path';
-
-if (getApps().length === 0) {
-  try {
-     let projectId = 'al-ai-chat';
-     try {
-       const configOptions = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'firebase-applet-config.json'), 'utf-8'));
-       if (configOptions.projectId) projectId = configOptions.projectId;
-     } catch(e) {}
-     initializeApp({ projectId });
-  } catch (e) {
-    console.error("Firebase admin init error", e);
-  }
-}
+import { getFirebaseAdminAuth } from './firebaseAdmin';
 
 export const authRoutes = express.Router();
 authRoutes.post("/force-reset-password", async (req, res) => {
@@ -25,8 +9,8 @@ authRoutes.post("/force-reset-password", async (req, res) => {
       if (!email || !password) {
         return res.status(400).json({ error: "Email and new password are required" });
       }
-      const userRecord = await getAuth().getUserByEmail(email);
-      await getAuth().updateUser(userRecord.uid, { password });
+      const userRecord = await getFirebaseAdminAuth().getUserByEmail(email);
+      await getFirebaseAdminAuth().updateUser(userRecord.uid, { password });
       res.json({ success: true, message: "Password updated successfully" });
     } catch (e: any) {
       res.status(500).json({ error: e.message || "Failed to update password" });
