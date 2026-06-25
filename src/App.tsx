@@ -20,6 +20,7 @@ import { PlaylistModal } from './components/modals/PlaylistModal';
 import { SilencePlayerModal } from './components/modals/SilencePlayerModal';
 import { AnimatePresence, motion } from 'motion/react';
 import { cn } from './lib/utils';
+import { Analytics } from '@vercel/analytics/react';
 
 function ToastNotification() {
   const { notifications, removeNotification } = useApp();
@@ -368,6 +369,7 @@ export default function App() {
   return (
     <AppProvider>
       <AppContent />
+      <Analytics />
     </AppProvider>
   );
 }
