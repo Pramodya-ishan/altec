@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>recoding viwer Local Player</title>
+  <link rel="stylesheet" href="index.css">
+  <script defer src="local-player-fixed.js"></script>
+</head>
+<body>
+  <main class="rv-app">
+    <section class="rv-topbar">
+      <div>
+        <h1>recoding viwer</h1>
+        <p>Local HTML5 player with safe background audio analysis, silent-skip ETA, and draggable fullscreen overlay</p>
+      </div>
+      <div class="rv-actions">
+        <label class="rv-open-btn">
+          <input id="rv-file-input" type="file" accept="video/*,audio/*,.mp4,.mkv,.webm,.mov,.m4v,.mp3,.wav,.ogg,.m4a" multiple>
+          Open local file
+        </label>
+        <button id="rv-scan-btn" type="button" disabled>Analyze audio</button>
+        <button id="rv-fullscreen-btn" type="button" disabled>Fullscreen overlay</button>
+      </div>
+    </section>
+
+    <section id="rv-drop-zone" class="rv-drop-zone">
+      <div class="rv-player-shell" id="rv-player-shell">
+        <video id="rv-video" controls playsinline preload="metadata"></video>
+        <div id="rv-overlay" class="rv-overlay" hidden>
+          <span class="eta">ETA --:--</span>
+          <span class="sep"></span>
+          <button class="minus" type="button" aria-label="Decrease speed">−</button>
+          <button class="rate" type="button" title="Reset speed">1.00x</button>
+          <button class="plus" type="button" aria-label="Increase speed">+</button>
+        </div>
+      </div>
+      <div class="rv-empty" id="rv-empty">
+        <strong id="rv-empty-text">Drop a video here</strong>
+        <span id="rv-empty-subtext">or click Open local file</span>
+      </div>
+    </section>
+
+    <section class="rv-info-grid">
+      <article class="rv-card"><span>Status</span><strong id="rv-status">Waiting for file</strong></article>
+      <article class="rv-card"><span>Silent parts</span><strong id="rv-silence-count">0</strong></article>
+      <article class="rv-card"><span>ETA mode</span><strong id="rv-eta-mode">Normal</strong></article>
+    </section>
+
+    <section class="rv-playlist-wrap">
+      <h2>Playlist</h2>
+      <ol id="rv-playlist" class="rv-playlist"></ol>
+    </section>
+  </main>
+</body>
+</html>
