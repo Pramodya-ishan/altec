@@ -1,6 +1,0 @@
-{
-  "name": "A/L Tech Blueprint",
-  "description": "A comprehensive progress tracker, predictor, and planner map for AL Technology subjects.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
