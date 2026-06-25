@@ -9,7 +9,22 @@ function interpolateRank(z: number, points: number[][]) {
    points.sort((a, b) => b[0] - a[0]);
 
    if (z >= points[0][0]) return points[0][1];
-   if (z <= points[points.length - 1][0]) return points[points.length - 1][1];
+   
+   if (z <= points[points.length - 1][0]) {
+      if (points.length < 2) return points[points.length - 1][1];
+      
+      // Use overall slope from the highest and lowest Z-score to extrapolate safely,
+      // avoiding local noise at the tail end of the data.
+      const zFirst = points[0][0];
+      const rFirst = points[0][1];
+      const zLast = points[points.length - 1][0];
+      const rLast = points[points.length - 1][1];
+      
+      if (zFirst === zLast) return rLast;
+      
+      const ratio = (zLast - z) / (zFirst - zLast);
+      return Math.max(1, Math.round(rLast + ratio * (rLast - rFirst)));
+   }
    
    for (let i = 0; i < points.length - 1; i++) {
       const z1 = points[i][0];
@@ -18,6 +33,7 @@ function interpolateRank(z: number, points: number[][]) {
       const r2 = points[i+1][1];
       
       if (z <= z1 && z >= z2) {
+         if (z1 === z2) continue;
          const ratio = (z1 - z) / (z1 - z2);
          return Math.max(1, Math.round(r1 + ratio * (r2 - r1)));
       }
@@ -26,7 +42,7 @@ function interpolateRank(z: number, points: number[][]) {
 }
 
 function getZScorePoints(type: 'island' | 'district') {
-  const points: number[][] = [];
+  let points: number[][] = [];
   
   const allRecords = zscoreData.students || [];
 
@@ -45,6 +61,22 @@ function getZScorePoints(type: 'island' | 'district') {
         points.push([z, districtRank]);
       }
     }
+  });
+
+  // Sort descending by Z-score to enforce monotonicity
+  points.sort((a, b) => b[0] - a[0]);
+
+  // Enforce monotonicity: as Z-score decreases, rank must not decrease (must be numerically larger or equal)
+  let maxRankSoFar = 1;
+  points = points.map(p => {
+      const currentZ = p[0];
+      let currentRank = p[1];
+      if (currentRank < maxRankSoFar) {
+          currentRank = maxRankSoFar; // smooth out noise
+      } else {
+          maxRankSoFar = currentRank;
+      }
+      return [currentZ, currentRank];
   });
 
   return points;
