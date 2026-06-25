@@ -1,0 +1,147 @@
+{
+  "entities": {
+    "UserProgress": {
+      "title": "User Progress Data",
+      "description": "Progress data, target marks, paper structures, and metrics for the tech blueprint.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "User email address"
+        },
+        "data": {
+          "type": "object",
+          "description": "A/L progress metadata containing sft, et, and ict subject data"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of last update"
+        }
+      },
+      "required": ["email", "data", "updatedAt"]
+    },
+    "ChatHistory": {
+      "title": "Chat History",
+      "description": "Stored chat interactions backlogged for the student helper",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "User email address"
+        },
+        "history": {
+          "type": "array",
+          "description": "Array of thread parts represented by the AI"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO timestamp of last progress save"
+        }
+      },
+      "required": ["email", "history", "updatedAt"]
+    },
+    "BypassConfig": {
+      "title": "YouTube Bot Bypass Session",
+      "description": "Contains Netscape or typical key-value cookie settings for server download authentication to prevent Bot Block.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "User email address"
+        },
+        "cookies": {
+          "type": "string",
+          "description": "The custom youtube cookies text provided by the user"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Save date-time tracking"
+        }
+      },
+      "required": ["email", "cookies", "updatedAt"]
+    },
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Student profile containing their username, custom picture or design avatar, and a short learning bio.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        },
+        "picture": {
+          "type": "string"
+        },
+        "bio": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["email", "username", "picture", "bio", "updatedAt"]
+    },
+    "Notification": {
+      "title": "User Push Notification",
+      "description": "Stored push notifications representing new messages, friend requests, or system announcements.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["message", "friend_request", "announcement"]
+        },
+        "senderEmail": {
+          "type": "string"
+        },
+        "senderName": {
+          "type": "string"
+        },
+        "read": {
+          "type": "boolean"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "title", "message", "type", "read", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/progress/data": {
+      "schema": "UserProgress",
+      "description": "Path to student academic tracker data"
+    },
+    "/users/{userId}/chat/history": {
+      "schema": "ChatHistory",
+      "description": "Path to chat history notes"
+    },
+    "/users/{userId}/bypass/config": {
+      "schema": "BypassConfig",
+      "description": "Path to custom YouTube bypass cookies configuration"
+    },
+    "/users/{userId}/profile/info": {
+      "schema": "UserProfile",
+      "description": "Path to custom student profile info"
+    },
+    "/users/{userId}/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "Path to individual user push notifications"
+    }
+  }
+}
