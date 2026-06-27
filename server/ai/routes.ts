@@ -612,9 +612,10 @@ Make sure to format beautifully in markdown.`;
     } catch (error: any) {
       console.error(error);
       let msg = error.message || "Failed to generate response";
-      if (msg.includes("You exceeded your current quota")) {
-        msg =
-          "Free tier limit reached for the selected model. Please wait a minute and try again, or switch to a different model.";
+      if (!process.env.GEMINI_API_KEY) {
+        msg = "Configuration Error: GEMINI_API_KEY is missing in Vercel Environment Variables. Please add it in your Vercel Dashboard.";
+      } else if (msg.includes("You exceeded your current quota")) {
+        msg = "Free tier limit reached for the selected model. Please wait a minute and try again, or switch to a different model.";
       }
       res.status(500).json({ error: msg });
     }

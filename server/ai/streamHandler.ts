@@ -115,7 +115,11 @@ export const handleAIStream = async (req: Request, res: Response) => {
     sendEvent('done', { success: true });
   } catch (error: any) {
     console.error('Stream error:', error);
-    sendEvent('error', { message: error.message || 'Generation failed' });
+    let msg = error.message || 'Generation failed';
+    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === "dummy") {
+      msg = "Configuration Error: GEMINI_API_KEY is missing in Vercel Environment Variables. Please add it in your Vercel Dashboard.";
+    }
+    sendEvent('error', { message: msg });
   } finally {
     res.end();
   }
