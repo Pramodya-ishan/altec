@@ -4,8 +4,7 @@ import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
 import fs from "fs";
 import crypto from "crypto";
-import ytdl from "@distube/ytdl-core";
-import play from "play-dl";
+// Dynamically import ytdl and play-dl only when needed to prevent Vercel initialization crashes
 
 import zlib from "zlib";
 import { encrypt, decrypt, getUserFile, readUser, writeUser, syncUserFromFirestore } from "./server/data/userRepository";
@@ -19,6 +18,12 @@ import { RPM_LIMIT, RPD_LIMIT, requestCountPM, requestCountPD } from "./server/a
 function startServer() {
   const app = express();
   const PORT = 3000;
+
+  // Debug middleware
+  app.use((req, res, next) => {
+    console.log("Vercel Request:", req.method, req.url, req.originalUrl);
+    next();
+  });
 
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
@@ -276,6 +281,7 @@ function startServer() {
       }
 
       // If cookies provided, configure play-dl with youtube authentication token
+      const play = (await import("play-dl")).default;
       if (cookies && cookies.trim() !== "") {
         try {
           await play.setToken({

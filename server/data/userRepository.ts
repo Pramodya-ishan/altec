@@ -118,6 +118,7 @@ export function readUser(email: string) {
 }
 
 export function writeUser(email: string, userData: any) {
+  if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
   const file = getUserFile(email);
   const jsonStr = JSON.stringify(userData);
   const encrypted = encrypt(jsonStr);

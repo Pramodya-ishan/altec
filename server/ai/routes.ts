@@ -1260,6 +1260,10 @@ Ensure the suggestions are grammatically correct, friendly, and brief. Do not ou
     res.setHeader("Connection", "keep-alive");
 
     try {
+      if (!process.env.GEMINI_API_KEY) {
+        throw new Error("GEMINI_API_KEY environment variable is missing on Vercel. Please add it to your Vercel project settings.");
+      }
+
       const ai = new GoogleGenAI({
         apiKey: process.env.GEMINI_API_KEY,
         httpOptions: { headers: { "User-Agent": "aistudio-build" } },
@@ -1451,7 +1455,10 @@ Ensure the suggestions are grammatically correct, friendly, and brief. Do not ou
       res.end();
     } catch (error: any) {
       console.error("Failed to generate lesson optimizer stream:", error);
-      res.write(`event: error\ndata: ${JSON.stringify({ message: "Could not connect to AI. Please try again." })}\n\n`);
+      const msg = error.message && error.message.includes("GEMINI_API_KEY") 
+        ? "Configuration Error: GEMINI_API_KEY is missing in Vercel Environment Variables. Please add it in your Vercel Dashboard."
+        : "Could not connect to AI. Please try again.";
+      res.write(`event: error\ndata: ${JSON.stringify({ message: msg })}\n\n`);
       res.write("event: done\ndata: {\"success\": false}\n\n");
       res.end();
     }
