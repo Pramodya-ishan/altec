@@ -339,7 +339,9 @@ export function ProfileView() {
      };
      updateUsage();
      loadStorageStats();
-     const interval = setInterval(updateUsage, 5000);
+     const interval = window.setInterval(() => {
+       if (document.visibilityState === 'visible') updateUsage();
+     }, 30000);
      return () => clearInterval(interval);
   }, []);
 

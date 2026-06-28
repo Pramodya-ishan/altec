@@ -57,7 +57,10 @@ export async function syncUserFromFirestore(email: string) {
   try {
     // We use the 'backups' collection, which has public read/write permission (encrypted data)
     const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents/backups/${encodeURIComponent(cleanEmail)}?key=${apiKey}`;
-    const res = await fetch(url);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
     if (res.status === 200) {
       const data: any = await res.json();
       const userDataEncrypted = data?.fields?.userData?.stringValue;
@@ -124,7 +127,9 @@ export function writeUser(email: string, userData: any) {
   const jsonStr = JSON.stringify(userData);
   const encrypted = encrypt(jsonStr);
   const zipped = zlib.gzipSync(encrypted);
-  fs.writeFileSync(file, zipped);
+  const tempFile = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tempFile, zipped);
+  fs.renameSync(tempFile, file);
 
   // Background backup to Firestore REST API
   if (email && email.includes("@") && apiKey) {
@@ -140,7 +145,8 @@ export function writeUser(email: string, userData: any) {
     fetch(url, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(8000)
     }).catch(err => {
       console.error("Failed to backup user data to Firestore REST API:", err);
     });

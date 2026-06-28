@@ -160,8 +160,8 @@ export function PaperMarksView() {
                   <i className="fa-solid fa-plus text-sm"></i>
                 </button>
               </div>
-              <div className="w-full h-[280px]">
-                <ResponsiveContainer width="100%" height="100%">
+              <div className="w-full h-[280px] min-w-0 min-h-[1px] overflow-hidden">
+                <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 640, height: 280 }}>
                   <LineChart data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                     <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 12 ? v.substring(0, 12) + '...' : v} dy={10} />
@@ -180,8 +180,8 @@ export function PaperMarksView() {
                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                   <i className="fa-solid fa-circle text-[8px] text-amber-500"></i> MCQ Marks <span className="text-slate-300">/</span> {maxSubScale}
                 </h3>
-                <div className="w-full h-[200px]">
-                  <ResponsiveContainer width="100%" height="100%">
+                <div className="w-full h-[200px] min-w-0 min-h-[1px] overflow-hidden">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 320, height: 200 }}>
                     <LineChart data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                       <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 10 ? v.substring(0, 10) + '...' : v} dy={10} />
@@ -196,8 +196,8 @@ export function PaperMarksView() {
                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                   <i className="fa-solid fa-circle text-[8px] text-emerald-500"></i> Essay Marks <span className="text-slate-300">/</span> {maxSubScale}
                 </h3>
-                <div className="w-full h-[200px]">
-                  <ResponsiveContainer width="100%" height="100%">
+                <div className="w-full h-[200px] min-w-0 min-h-[1px] overflow-hidden">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 320, height: 200 }}>
                     <LineChart data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
                       <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                       <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 10 ? v.substring(0, 10) + '...' : v} dy={10} />
