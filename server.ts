@@ -281,7 +281,8 @@ function startServer() {
       }
 
       // If cookies provided, configure play-dl with youtube authentication token
-      const play = (await import("play-dl")).default;
+      const playDlPkg = "play-dl";
+      const play = (await import(playDlPkg)).default;
       if (cookies && cookies.trim() !== "") {
         try {
           await play.setToken({
@@ -384,7 +385,8 @@ function startServer() {
   // New endpoint for Lesson Optimizer
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
-    import("vite").then(({ createServer }) => {
+    const vitePkg = "vite";
+    import(vitePkg).then(({ createServer }) => {
       createServer({
         server: { middlewareMode: true, hmr: false },
         appType: "spa",
@@ -406,7 +408,8 @@ function startServer() {
   }
 
   // Only listen automatically if not on Vercel
-  if (!process.env.VERCEL) {
+  const isVercel = process.env.VERCEL === "1" || process.env.VERCEL_ENV || process.env.VERCEL_URL;
+  if (!isVercel) {
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on http://0.0.0.0:${PORT}`);
     });

@@ -22,7 +22,7 @@ let isFirebaseEnabled = false;
 if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
   try {
     firebaseApp = getApps().length ? getApp() : initializeApp(activeConfig);
-    let dbId = activeConfig.firestoreDatabaseId || "ai-studio-c097068e-a4a9-4ea3-9b00-0b3195093c42";
+    let dbId = (activeConfig as any).firestoreDatabaseId || "ai-studio-c097068e-a4a9-4ea3-9b00-0b3195093c42";
     db = getFirestore(firebaseApp, dbId);
     auth = getAuth(firebaseApp);
     isFirebaseEnabled = true;

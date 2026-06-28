@@ -3,7 +3,8 @@ import path from 'path';
 import crypto from 'crypto';
 import zlib from 'zlib';
 
-const DB_DIR = process.env.VERCEL ? "/tmp/data_users" : path.join(process.cwd(), "data_users");
+const isVercel = process.env.VERCEL === "1" || process.env.VERCEL_ENV || process.env.VERCEL_URL;
+const DB_DIR = isVercel ? "/tmp/data_users" : path.join(process.cwd(), "data_users");
 let rawKey = process.env.ENCRYPTION_KEY || "default_encryption_key_32_chars!";
 if (rawKey.length > 32) rawKey = rawKey.substring(0, 32);
 if (rawKey.length < 32) rawKey = rawKey.padEnd(32, '0');
@@ -12,7 +13,7 @@ const ENCRYPTION_KEY = rawKey;
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
 
 const SOURCE_DIR = path.join(process.cwd(), "data_users");
-if (process.env.VERCEL && fs.existsSync(SOURCE_DIR)) {
+if (isVercel && fs.existsSync(SOURCE_DIR)) {
   try {
     const files = fs.readdirSync(SOURCE_DIR);
     for (const file of files) {
