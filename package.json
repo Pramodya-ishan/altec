@@ -4,12 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server/dev.ts",
-    "build": "vite build",
-    "build:local": "vite build && esbuild server/dev.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=dist/server.mjs",
-    "start": "node dist/server.mjs",
-    "preview": "vite preview",
-    "clean": "rm -rf dist",
+    "dev": "tsx server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "start": "node dist/server.cjs",
+    "preview": "node dist/server.cjs",
+    "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -59,8 +58,5 @@
     "lucide-react": "^1.17.0",
     "tailwindcss": "^4.1.14",
     "ts-morph": "^28.0.0"
-  },
-  "engines": {
-    "node": ">=20 <23"
   }
 }

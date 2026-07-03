@@ -978,9 +978,7 @@ export function AdmissionPredictorView() {
                     <ResponsiveContainer
                       width="100%"
                       height="100%"
-                      minWidth={1}
-                      minHeight={1}
-                      initialDimension={{ width: 640, height: 320 }}
+                      minWidth={0}
                     >
                       <AreaChart
                         data={chartData}
@@ -1078,23 +1076,90 @@ export function AdmissionPredictorView() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -15 }}
             transition={{ duration: 0.2 }}
+            className="h-[calc(100vh-120px)]"
           >
-            <AiProgressDiagnosticsSummary
-              targetZ={targetZ}
-              overallZ={overallZScore}
-              sftZ={sftZ}
-              etZ={etZ}
-              ictZ={ictZ}
-              sftMark={sftMark}
-              etMark={etMark}
-              ictMark={ictMark}
-              zScoreHistory={historyPoints}
-              appData={data}
-              saveData={saveData}
-            />
+            <NotebookLMAdvisor appData={data} />
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+export function NotebookLMAdvisor({ appData }: { appData: any }) {
+  const { showNotification } = useApp();
+  
+  const handleCopyData = () => {
+    const dataToCopy = JSON.stringify(appData, null, 2);
+    navigator.clipboard.writeText(dataToCopy);
+    showNotification("Data copied to clipboard! Paste it into NotebookLM.", "success");
+  };
+
+  return (
+    <div className="bg-white border border-slate-200/80 rounded-[1.5rem] p-6 shadow-sm transition-all duration-300 flex flex-col h-full">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-5 mb-4 border-b border-slate-100 pb-4 font-sans text-left shrink-0">
+        <div className="flex items-center gap-4">
+          <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-500 shrink-0 shadow-sm">
+            <i className="fa-solid fa-brain text-base"></i>
+          </div>
+          <div>
+            <h3 className="text-lg font-black text-slate-900 font-display flex items-center gap-1.5 lg:text-xl tracking-tight leading-tight text-left">
+              NotebookLM Advisor
+            </h3>
+            <p className="text-xs text-slate-500 font-medium mt-1">
+              Analyze your progress with Google NotebookLM
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleCopyData}
+            className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 px-3 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-sm active:scale-95"
+          >
+            <i className="fa-solid fa-copy"></i> Copy Data
+          </button>
+          <a
+            href="https://notebooklm.google.com/notebook/411f2e5c-ad33-41d9-a956-c6fc4bb8e236"
+            target="_blank"
+            rel="noreferrer"
+            className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-3 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-sm active:scale-95"
+          >
+            <i className="fa-solid fa-arrow-up-right-from-square"></i> Open App
+          </a>
+        </div>
+      </div>
+
+      <div className="flex-1 rounded-2xl overflow-hidden border border-slate-200 shadow-inner bg-slate-50 relative flex flex-col items-center justify-center text-center p-8 min-h-[300px]">
+        <div className="max-w-md mx-auto space-y-6">
+          <div className="flex items-center justify-center gap-4">
+            <div className="w-16 h-16 bg-white rounded-2xl shadow-sm border border-slate-200 flex items-center justify-center text-slate-400">
+              <i className="fa-solid fa-copy text-2xl"></i>
+            </div>
+            <div className="w-8 h-px bg-slate-300"></div>
+            <div className="w-16 h-16 bg-indigo-600 rounded-2xl shadow-md border border-indigo-500 flex items-center justify-center text-white">
+              <i className="fa-solid fa-arrow-up-right-from-square text-2xl"></i>
+            </div>
+          </div>
+          
+          <div>
+            <h4 className="text-xl font-black text-slate-800 tracking-tight mb-2">Two-Step Analysis</h4>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              Google Accounts cannot be authenticated securely within embedded frames. To analyze your progress without redirect errors:
+            </p>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-slate-200 text-left space-y-3 shadow-sm">
+            <div className="flex gap-3">
+              <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-xs shrink-0">1</div>
+              <p className="text-sm text-slate-700">Click <strong>Copy Data</strong> above to copy your current progress payload.</p>
+            </div>
+            <div className="flex gap-3">
+              <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs shrink-0">2</div>
+              <p className="text-sm text-slate-700">Click <strong>Open App</strong> to open NotebookLM securely in a new tab, then paste your data.</p>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

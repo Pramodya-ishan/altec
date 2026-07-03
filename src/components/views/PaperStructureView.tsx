@@ -479,13 +479,18 @@ export function PaperStructureView() {
       return false;
     });
 
+    const hasNotes = subjectData.topics[topic]?.notes?.trim() || (subjectData.topics[topic]?.videos?.length || 0) > 0;
+
     return (
       <span
         onClick={() => openPlaylist(topic)}
-        className="text-sm font-semibold text-slate-700 cursor-pointer hover:text-primary-600 hover:underline transition-all block text-left line-clamp-2 leading-tight"
-        title={topic}
+        className="text-sm font-semibold text-slate-700 cursor-pointer hover:text-primary-600 transition-all flex items-start gap-1.5 text-left leading-tight group"
+        title="Open Lesson Notes & Files"
       >
-        {topic}
+        <span className="line-clamp-2 group-hover:underline">{topic}</span>
+        {hasNotes && (
+          <i className="fa-solid fa-book-open text-amber-500 text-[10px] mt-1 shrink-0 opacity-80" title="Has Notes/Files"></i>
+        )}
       </span>
     );
   };
@@ -864,10 +869,30 @@ export function PaperStructureView() {
                       <div className="mb-6">
                         <h2 className="text-2xl text-slate-900 font-display font-extrabold tracking-tight">Structured Essay (Part A)</h2>
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                      <motion.div 
+                        className="grid grid-cols-1 sm:grid-cols-2 gap-6"
+                        variants={{
+                          hidden: { opacity: 0 },
+                          show: {
+                            opacity: 1,
+                            transition: {
+                              staggerChildren: 0.1
+                            }
+                          }
+                        }}
+                        initial="hidden"
+                        animate="show"
+                      >
                         {def.partAItems.map((item, idx) => (
-                          <div key={item.q} className={cn("flex gap-4 py-3")}>
-                            <div className="bg-slate-50 border border-slate-100 text-slate-600 text-sm font-bold px-3 h-9 rounded-lg flex items-center justify-center shrink-0">
+                          <motion.div 
+                            key={item.q} 
+                            className={cn("flex gap-4 py-3")}
+                            variants={{
+                              hidden: { opacity: 0, y: 10 },
+                              show: { opacity: 1, y: 0, transition: { duration: 0.3 } }
+                            }}
+                          >
+                            <div className="bg-slate-50 border border-slate-100 text-slate-600 text-sm font-bold px-3 h-9 rounded-lg flex items-center justify-center shrink-0 shadow-sm">
                               {item.q}
                             </div>
                             <div className="flex-1">
@@ -881,9 +906,9 @@ export function PaperStructureView() {
                                 ))}
                               </ul>
                             </div>
-                          </div>
+                          </motion.div>
                         ))}
-                      </div>
+                      </motion.div>
                     </div>
                   </motion.article>
                 )}
@@ -912,9 +937,29 @@ export function PaperStructureView() {
                     transition={{ duration: 0.3, ease: 'easeInOut' }}
                     className="overflow-hidden"
                   >
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <motion.div 
+                      className="grid grid-cols-1 md:grid-cols-2 gap-6"
+                      variants={{
+                        hidden: { opacity: 0 },
+                        show: {
+                          opacity: 1,
+                          transition: {
+                            staggerChildren: 0.1
+                          }
+                        }
+                      }}
+                      initial="hidden"
+                      animate="show"
+                    >
                       {def.bcdGroups.map(group => (
-                        <article key={group.label} className="bg-white border border-slate-200 rounded-[1.5rem] p-6 shadow-sm hover:shadow-md transition-all duration-300">
+                        <motion.article 
+                          key={group.label} 
+                          className="bg-white border border-slate-200 rounded-[1.5rem] p-6 shadow-sm hover:shadow-md transition-all duration-300"
+                          variants={{
+                            hidden: { opacity: 0, y: 10 },
+                            show: { opacity: 1, y: 0, transition: { duration: 0.3 } }
+                          }}
+                        >
                           <div className="mb-5">
                             <div className="inline-block px-3 py-1 bg-primary-50 text-primary-600 text-xs font-bold uppercase rounded-full mb-3 tracking-widest border border-primary-100">
                               {group.label}
@@ -924,7 +969,7 @@ export function PaperStructureView() {
                           <div className={cn(group.label.includes('6න්') ? "grid grid-cols-1 gap-3" : "flex flex-col")}>
                             {group.items.map((item, idx) => (
                               <div key={item.q} className={cn("flex gap-3 py-4", idx > 0 && !group.label.includes('6න්') && "border-t border-slate-100")}>
-                                <div className="bg-slate-50 border border-slate-100 text-slate-600 text-sm font-bold px-3 h-9 rounded-lg flex items-center justify-center shrink-0">
+                                <div className="bg-slate-50 border border-slate-100 text-slate-600 text-sm font-bold px-3 h-9 rounded-lg flex items-center justify-center shrink-0 shadow-sm">
                                   {item.q}
                                 </div>
                                 <div className="flex-1">
@@ -941,9 +986,9 @@ export function PaperStructureView() {
                               </div>
                             ))}
                           </div>
-                        </article>
+                        </motion.article>
                       ))}
-                    </div>
+                    </motion.div>
                   </motion.div>
                 )}
               </AnimatePresence>

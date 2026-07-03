@@ -255,7 +255,7 @@ export function ProfileView() {
           cleaned++;
         }
       }
-      showNotification(`Successfully deleted ${cleaned} orphaned cache video file(s). Space reclaimed!`, 'success');
+      showNotification(`Successfully deleted ${cleaned} orphaned cache file(s). Space reclaimed!`, 'success');
       await loadStorageStats();
     } catch (e) {
       showNotification('Clean command failed.', 'error');
@@ -276,7 +276,7 @@ export function ProfileView() {
     setIsCleaning(true);
     try {
       await clearAllVideoFiles();
-      showNotification('Device offline video storage has been fully purged.', 'success');
+      showNotification('Device offline file storage has been fully purged.', 'success');
       await loadStorageStats();
     } catch (e) {
       showNotification('Purge command failed.', 'error');
@@ -339,9 +339,7 @@ export function ProfileView() {
      };
      updateUsage();
      loadStorageStats();
-     const interval = window.setInterval(() => {
-       if (document.visibilityState === 'visible') updateUsage();
-     }, 30000);
+     const interval = setInterval(updateUsage, 5000);
      return () => clearInterval(interval);
   }, []);
 
@@ -735,7 +733,7 @@ export function ProfileView() {
         </div>
       </motion.div>
 
-      {/* Dynamic Browser Cache & Video Storage Dashboard */}
+      {/* Dynamic Browser Cache & File Storage Dashboard */}
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -748,7 +746,7 @@ export function ProfileView() {
                <i className="fa-solid fa-hard-drive text-slate-500"></i>
              </div>
              <div>
-               <h3 className="font-display font-bold text-slate-800 text-lg">Local Cache & Offline Video Storage</h3>
+               <h3 className="font-display font-bold text-slate-800 text-lg">Local Cache & Offline File Storage</h3>
                <p className="text-xs text-slate-500 font-medium tracking-wide">Manage on-device IndexedDB footprint</p>
              </div>
           </div>
@@ -768,15 +766,15 @@ export function ProfileView() {
            </div>
            
            <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
-              <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider mb-1">Cached Videos</p>
+              <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider mb-1">Cached Files</p>
               <p className="text-2xl font-black text-primary-600 leading-none mb-1">{videoFilesCount}</p>
-              <p className="text-[9px] font-semibold text-slate-400">active downloaded mp4/lecture files</p>
+              <p className="text-[9px] font-semibold text-slate-400">active downloaded lesson files</p>
            </div>
 
            <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
               <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider mb-1">Orphaned Caches</p>
               <p className="text-2xl font-black text-amber-600 leading-none mb-1">{orphanCount}</p>
-              <p className="text-[9px] font-semibold text-slate-400">leaked files not linked to playlists</p>
+              <p className="text-[9px] font-semibold text-slate-400">leaked files not linked to lesson notes</p>
            </div>
         </div>
 
@@ -787,7 +785,7 @@ export function ProfileView() {
                  disabled={isCleaning}
                  className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] text-white text-xs font-black uppercase tracking-wider rounded-xl transition-all border-b-4 border-amber-700 disabled:opacity-50 cursor-pointer"
               >
-                 <i className="fa-solid fa-broom mr-2"></i> Clean {orphanCount} Orphaned Videos ({formatBytes(storageUsage)})
+                 <i className="fa-solid fa-broom mr-2"></i> Clean {orphanCount} Orphaned Files ({formatBytes(storageUsage)})
               </button>
            ) : (
               <button
@@ -803,12 +801,12 @@ export function ProfileView() {
               disabled={isCleaning || videoFilesCount === 0}
               className={`px-5 py-3 ${confirmClearVideos ? "bg-red-500 hover:bg-red-600 text-white" : "bg-red-50 hover:bg-red-100 text-red-600"} active:scale-[0.98] text-xs font-black uppercase tracking-wider rounded-xl transition-all ${confirmClearVideos ? "border-transparent" : "border border-red-200"} disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer`}
            >
-              <i className={isCleaning ? "fa-solid fa-spinner fa-spin mr-2" : "fa-solid fa-trash-can mr-2"}></i> {confirmClearVideos ? "Click Again To Purge" : "Wipe Video Cache"}
+              <i className={isCleaning ? "fa-solid fa-spinner fa-spin mr-2" : "fa-solid fa-trash-can mr-2"}></i> {confirmClearVideos ? "Click Again To Purge" : "Wipe File Cache"}
            </button>
         </div>
 
         <p className="mt-4 text-[10px] text-slate-400 font-medium text-center">
-           Note: Video and lecture files are stored directly in your browser's private database (IndexedDB) for offline playback.
+           Note: Lesson notes and files are stored directly in your browser's private database (IndexedDB) for offline playback.
         </p>
       </motion.div>
 

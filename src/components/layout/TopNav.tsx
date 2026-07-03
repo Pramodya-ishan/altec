@@ -179,7 +179,7 @@ export function TopNav() {
                       <button
                         onClick={() => handleTopicSelect(item.subject, item.topic, 'paper-structure')}
                         className="flex items-center gap-1 bg-primary-50 hover:bg-primary-600 text-primary-700 hover:text-white px-2.5 py-1 rounded-lg text-[9px] font-black transition-colors cursor-pointer border border-primary-100"
-                        title="Jump to Syllabus, Notes and Videos"
+                        title="Jump to Syllabus, Notes and Files"
                       >
                         <i className="fa-solid fa-book"></i>
                         Notes
@@ -195,9 +195,36 @@ export function TopNav() {
     </div>
   );
 
+  const [syncStatus, setSyncStatus] = useState<'Local' | 'Cloud' | 'Syncing'>('Local');
+
+  useEffect(() => {
+    import('../../lib/firebase').then(({ isFirebaseEnabled }) => {
+      const updateOnlineStatus = () => {
+        if (!navigator.onLine) {
+          setSyncStatus('Local');
+        } else if (isFirebaseEnabled) {
+          setSyncStatus('Syncing');
+          setTimeout(() => setSyncStatus('Cloud'), 1500); // Simulate sync finish
+        } else {
+          setSyncStatus('Local');
+        }
+      };
+      
+      window.addEventListener('online', updateOnlineStatus);
+      window.addEventListener('offline', updateOnlineStatus);
+      
+      updateOnlineStatus();
+
+      return () => {
+        window.removeEventListener('online', updateOnlineStatus);
+        window.removeEventListener('offline', updateOnlineStatus);
+      };
+    });
+  }, []);
+
   useEffect(() => {
     const updateCountdown = () => {
-      const targetDate = new Date("August 1, 2026 00:00:00").getTime();
+      const targetDate = new Date("August 10, 2026 00:00:00").getTime();
       const now = new Date().getTime();
       const distance = targetDate - now;
 
@@ -242,6 +269,19 @@ export function TopNav() {
 
 
         <div className="flex items-center gap-4">
+          {/* Sync Indicator */}
+          <div className={cn(
+            "hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full border text-[10px] font-bold uppercase tracking-wider transition-all",
+            syncStatus === 'Cloud' ? "bg-emerald-50 text-emerald-600 border-emerald-200" :
+            syncStatus === 'Syncing' ? "bg-amber-50 text-amber-600 border-amber-200" :
+            "bg-slate-50 text-slate-500 border-slate-200"
+          )} title="Storage Status">
+            {syncStatus === 'Cloud' && <i className="fa-solid fa-cloud-check"></i>}
+            {syncStatus === 'Syncing' && <i className="fa-solid fa-arrows-rotate animate-spin"></i>}
+            {syncStatus === 'Local' && <i className="fa-solid fa-hard-drive"></i>}
+            <span>{syncStatus}</span>
+          </div>
+
           {currentView !== 'admission-predictor' && currentView !== 'focus-todo' && (
             <>
               <div className="hidden sm:block">

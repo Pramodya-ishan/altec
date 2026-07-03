@@ -4,13 +4,19 @@ import crypto from 'crypto';
 import zlib from 'zlib';
 
 const isVercel = process.env.VERCEL === "1" || process.env.VERCEL_ENV || process.env.VERCEL_URL;
-const DB_DIR = isVercel ? "/tmp/data_users" : path.join(process.cwd(), "data_users");
+let DB_DIR = isVercel ? "/tmp/data_users" : path.join(process.cwd(), "data_users");
 let rawKey = process.env.ENCRYPTION_KEY || "default_encryption_key_32_chars!";
 if (rawKey.length > 32) rawKey = rawKey.substring(0, 32);
 if (rawKey.length < 32) rawKey = rawKey.padEnd(32, '0');
 const ENCRYPTION_KEY = rawKey;
 
-if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+try {
+  if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+} catch (e) {
+  console.warn("Could not create DB_DIR, using /tmp fallback", e);
+  DB_DIR = "/tmp/data_users";
+  if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR, { recursive: true });
+}
 
 const SOURCE_DIR = path.join(process.cwd(), "data_users");
 if (isVercel && fs.existsSync(SOURCE_DIR)) {
@@ -57,10 +63,7 @@ export async function syncUserFromFirestore(email: string) {
   try {
     // We use the 'backups' collection, which has public read/write permission (encrypted data)
     const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents/backups/${encodeURIComponent(cleanEmail)}?key=${apiKey}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
+    const res = await fetch(url);
     if (res.status === 200) {
       const data: any = await res.json();
       const userDataEncrypted = data?.fields?.userData?.stringValue;
@@ -127,9 +130,7 @@ export function writeUser(email: string, userData: any) {
   const jsonStr = JSON.stringify(userData);
   const encrypted = encrypt(jsonStr);
   const zipped = zlib.gzipSync(encrypted);
-  const tempFile = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tempFile, zipped);
-  fs.renameSync(tempFile, file);
+  fs.writeFileSync(file, zipped);
 
   // Background backup to Firestore REST API
   if (email && email.includes("@") && apiKey) {
@@ -145,8 +146,7 @@ export function writeUser(email: string, userData: any) {
     fetch(url, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(8000)
+      body: JSON.stringify(payload)
     }).catch(err => {
       console.error("Failed to backup user data to Firestore REST API:", err);
     });

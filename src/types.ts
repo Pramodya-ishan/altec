@@ -1,4 +1,4 @@
-export type Video = { url: string; title: string };
+export type Video = { url: string; title: string; type?: string; };
 
 export type TopicData = {
   checked: boolean;

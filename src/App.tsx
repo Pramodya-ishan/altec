@@ -16,7 +16,7 @@ const PastPapersView = lazy(() => import('./components/views/PastPapersView').th
 const FocusTodoView = lazy(() => import('./components/views/FocusTodoView').then(m => ({ default: m.FocusTodoView })));
 
 import { AddPaperMarksModal } from './components/modals/AddPaperMarksModal';
-import { PlaylistModal } from './components/modals/PlaylistModal';
+import { NotesModal } from './components/modals/NotesModal';
 import { SilencePlayerModal } from './components/modals/SilencePlayerModal';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth } from './lib/firebase';
@@ -540,7 +540,7 @@ function AppContent() {
       </div>
 
       {/* Modals */}
-      <PlaylistModal />
+      <NotesModal />
       <AddPaperMarksModal />
       <SilencePlayerModal />
       
