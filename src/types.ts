@@ -55,7 +55,7 @@ export type AppData = {
 };
 
 export type SubjectKey = 'sft' | 'et' | 'ict';
-export type ViewKey = 'paper-structure' | 'paper-marks' | 'question-marks' | 'lesson-marks' | 'admission-predictor' | 'profile' | 'past-papers' | 'admin-dashboard' | 'focus-todo' | 'study-plan';
+export type ViewKey = 'paper-structure' | 'paper-marks' | 'question-marks' | 'lesson-marks' | 'admission-predictor' | 'profile' | 'past-papers' | 'admin-dashboard' | 'focus-todo' | 'study-plan' | 'clora-x';
 export type ThemeKey = 'blue' | 'emerald' | 'slate';
 
 export type SyllabusTopic = {

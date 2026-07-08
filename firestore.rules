@@ -1,40 +1,56 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 1. Global Safety Net - Default Deny
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // Reuseable global helpers
-    function isSignedIn() {
+    function signedIn() {
       return request.auth != null;
     }
 
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
     function isAdmin() {
-      return isSignedIn() && request.auth.token.admin == true;
+      return signedIn() && request.auth.token.admin == true;
     }
 
-    function isOwner(userId) {
-      return isSignedIn(); // Allow any signed in user (including anonymous fallback)
-    }
-
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    // User Resource Rules
-    match /users/{userId} {
-      allow read, write: if isOwner(userId);
+    match /users/{uid} {
+      allow read, write: if isOwner(uid) || isAdmin();
 
       match /{document=**} {
-        allow read, write: if isOwner(userId);
+        allow read, write: if isOwner(uid) || isAdmin();
       }
     }
 
-    // Backup Resource Rules
-    match /backups/{email} {
-      allow read, write: if true;
+    match /knowledge_sources/{sourceId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /knowledge_chunks/{chunkId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /past_papers/{paperId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /past_questions/{questionId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /generated_images/{uid}/items/{imageId} {
+      allow read, write: if isOwner(uid) || isAdmin();
+    }
+
+    match /backups/{document=**} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

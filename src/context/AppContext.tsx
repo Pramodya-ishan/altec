@@ -3,7 +3,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useRe
 import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
 import { isFirebaseEnabled, db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, deleteDoc } from 'firebase/firestore';
-import { GoogleAuthProvider, signInWithCredential, signInWithPopup, onAuthStateChanged, signInAnonymously } from 'firebase/auth';
+import { GoogleAuthProvider, signInWithCredential, signInWithPopup, onAuthStateChanged, signInAnonymously, signOut } from 'firebase/auth';
 import { calculateSubjectAveragePercent, calculateSubjectZ } from '../lib/scoreUtils';
 
 type ModalsState = {
@@ -77,6 +77,7 @@ type AppContextType = {
   stars: StarItem[];
   triggerStars: () => void;
   fetchUserInfo: (token: string) => Promise<void>;
+  loginWithGooglePopup: () => Promise<void>;
   isAuthLoading: boolean;
   logout: () => void;
   youtubeCookies: string;
@@ -138,7 +139,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const email = rawEmail.toLowerCase();
     if (isFirebaseEnabled && db && auth?.currentUser) {
       try {
-        const docRef = doc(db, 'users', email, 'profile', 'info');
+        const docRef = doc(db, 'users', auth.currentUser.uid, 'profile', 'main');
         const snap = await getDoc(docRef);
         if (snap.exists()) {
           const pData = snap.data() as UserProfile;
@@ -200,7 +201,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const email = rawEmail.toLowerCase();
     if (isFirebaseEnabled && db && auth?.currentUser) {
       try {
-        const docRef = doc(db, 'users', email, 'profile', 'info');
+        const docRef = doc(db, 'users', auth.currentUser.uid, 'profile', 'main');
         await setDoc(docRef, nextProfile, { merge: true });
       } catch (e) {
         console.error("Firestore save profile failed: ", e);
@@ -274,7 +275,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let unsubscribe: () => void = () => {};
     if (isFirebaseEnabled && db && auth?.currentUser) {
       try {
-        const notifCollectionRef = collection(db, 'users', email, 'notifications');
+        const notifCollectionRef = collection(db, 'users', auth.currentUser.uid, 'notifications');
         const notifQuery = query(notifCollectionRef, orderBy('timestamp', 'desc'));
         unsubscribe = onSnapshot(notifQuery, (snapshot) => {
           const notifs: PushNotification[] = [];
@@ -343,7 +344,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (isFirebaseEnabled && db && auth?.currentUser) {
       try {
-        const docRef = doc(db, 'users', email, 'notifications', newNotif.id);
+        const docRef = doc(db, 'users', auth.currentUser.uid, 'notifications', newNotif.id);
         await setDoc(docRef, newNotif);
       } catch (e) {
         console.error("Firestore push trigger failed: ", e);
@@ -371,9 +372,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (isFirebaseEnabled && db) {
+    if (isFirebaseEnabled && db && auth?.currentUser) {
       try {
-        const docRef = doc(db, 'users', user.email, 'notifications', id);
+            const docRef = doc(db, 'users', auth.currentUser.uid, 'notifications', id);
         await setDoc(docRef, { read: true }, { merge: true });
       } catch (e) {
         console.error("Firestore read mark failed: ", e);
@@ -402,7 +403,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         pushNotifications.forEach(async (notif) => {
           if (!notif.read) {
-            const docRef = doc(db, 'users', user.email, 'notifications', notif.id);
+            const docRef = doc(db, 'users', auth.currentUser.uid, 'notifications', notif.id);
             await setDoc(docRef, { read: true }, { merge: true });
           }
         });
@@ -429,7 +430,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (isFirebaseEnabled && db && auth?.currentUser) {
       try {
-        const docRef = doc(db, 'users', user.email, 'notifications', id);
+        const docRef = doc(db, 'users', auth.currentUser.uid, 'notifications', id);
         await deleteDoc(docRef);
       } catch (e) {}
     }
@@ -474,9 +475,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const sendGmailProgressEmail = async (overrideEmail?: string, tokenOverride?: string): Promise<boolean> => {
     const activeUser = user;
-    const token = tokenOverride || activeUser?.token;
-    if (!activeUser || !token) {
-      showNotification("Please login with Google to enable Gmail sending.", "error");
+    if (!activeUser) {
+      showNotification("Please login to send progress email.", "error");
       return false;
     }
 
@@ -576,8 +576,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          token,
-          raw: encodedMessage
+          to: recipient,
+          subject: "A/L Tech Blueprint Auto-Sync Progress Report",
+          html: welcomeHtml,
+          raw: encodedMessage,
+          token: tokenOverride || activeUser?.token
         })
       });
 
@@ -654,12 +657,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setIsAuthLoading(false);
             return;
           }
-          const savedToken = localStorage.getItem('google_access_token') || '';
           setUser({
             email: firebaseUser.email || '',
             name: firebaseUser.displayName || '',
             picture: firebaseUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(firebaseUser.email || '')}`,
-            token: savedToken,
             emailVerified: firebaseUser.emailVerified
           });
 
@@ -693,13 +694,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 await fetchUserDataFromDB(parsedUser.email);
                 await fetchYoutubeCookies(parsedUser.email);
              } catch(e) {}
-          } else {
-             const savedToken = localStorage.getItem('google_access_token');
-             if (savedToken) {
-               await fetchUserInfo(savedToken);
-             }
-          }
-          setIsAuthLoading(false);
+           }
+           setIsAuthLoading(false);
         }
       });
     } else {
@@ -729,12 +725,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setIsAuthLoading(false);
         }
       } else {
-        const savedToken = localStorage.getItem('google_access_token');
-        if (savedToken) {
-           fetchUserInfo(savedToken);
-        } else {
-           setIsAuthLoading(false);
-        }
+        setIsAuthLoading(false);
       }
     }
 
@@ -745,6 +736,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     return () => unsubscribeAutoAuth();
   }, [isFirebaseEnabled]);
+
+  
+  const loginWithGooglePopup = async () => {
+    setIsAuthLoading(true);
+    try {
+      if (isFirebaseEnabled && auth) {
+        const provider = new GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: 'select_account' });
+        provider.addScope('openid');
+        provider.addScope('email');
+        provider.addScope('profile');
+        const result = await signInWithPopup(auth, provider);
+
+        const idToken = await result.user.getIdToken();
+        const res = await apiFetch('/api/auth/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken })
+        });
+        const resData = await res.json();
+        if (res.ok) {
+          setUser({ ...resData.user, token: idToken });
+          setProfile(resData.profile);
+          localStorage.setItem('email_user_session', JSON.stringify({ ...resData.user, token: idToken }));
+          localStorage.setItem('email_user_profile', JSON.stringify(resData.profile));
+          const savedData = localStorage.getItem(`student_progress_data_${resData.user.email.toLowerCase()}`);
+          if (savedData) {
+             try { setData(JSON.parse(savedData)); } catch(e) {}
+          }
+          await fetchUserDataFromDB(resData.user.email);
+          await fetchYoutubeCookies(resData.user.email);
+          showNotification("Successfully logged in with Google!", "success");
+        } else {
+          showNotification(resData.error || "Login failed", "error");
+        }
+      } else {
+         showNotification("Firebase is required for Google login", "error");
+      }
+    } catch (error: any) {
+      console.error("Google Popup Login Error:", error);
+      showNotification("Google login failed or was cancelled.", "error");
+    }
+    setIsAuthLoading(false);
+  };
 
   const fetchUserInfo = async (token: string) => {
     setIsAuthLoading(true);
@@ -791,7 +826,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await fetchUserDataFromDB(data.email);
         await fetchYoutubeCookies(data.email);
       } else {
-        localStorage.removeItem('google_access_token');
       }
     } catch (err) {
       console.error("fetchUserInfo Error (safe to ignore in offline sandbox):", err);
@@ -799,9 +833,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsAuthLoading(false);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    if (auth) { try { await signOut(auth); } catch(e){} }
     setIsAuthLoading(true);
-    localStorage.removeItem('google_access_token');
     localStorage.removeItem('email_user_session');
     localStorage.removeItem('email_user_profile');
     setUser(null);
@@ -814,9 +848,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const email = rawEmail.toLowerCase();
       try {
          // Try fetching from Firestore first if enabled
-         if (isFirebaseEnabled && db) {
+                  if (isFirebaseEnabled && db && auth?.currentUser) {
             try {
-               const docRef = doc(db, 'users', email, 'progress', 'data');
+               const docRef = doc(db, 'users', auth.currentUser.uid, 'progress', 'data');
                const docSnap = await getDoc(docRef);
                if (docSnap.exists()) {
                   const docData = docSnap.data();
@@ -853,7 +887,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                  // Sync Express data back to Firebase so it's not lost
                  if (isFirebaseEnabled && db) {
                     try {
-                       const docRef = doc(db, 'users', email, 'progress', 'data');
+                       const docRef = doc(db, 'users', auth.currentUser.uid, 'progress', 'data');
                        await setDoc(docRef, {
                           email: email,
                           data: result.data,
@@ -890,7 +924,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
      const email = rawEmail.toLowerCase();
      if (isFirebaseEnabled && db && auth?.currentUser) {
         try {
-           const docRef = doc(db, 'users', email, 'bypass', 'config');
+           const docRef = doc(db, 'users', auth.currentUser.uid, 'bypass', 'config');
            const snap = await getDoc(docRef);
            if (snap.exists() && snap.data()?.cookies) {
               const loadedCookies = snap.data().cookies;
@@ -937,7 +971,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
      
      if (isFirebaseEnabled && db && auth?.currentUser) {
         try {
-           const docRef = doc(db, 'users', email, 'bypass', 'config');
+            const docRef = doc(db, 'users', auth.currentUser.uid, 'bypass', 'config');
            await setDoc(docRef, {
               email: email,
               cookies,
@@ -1024,7 +1058,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           if (isFirebaseEnabled && db && auth?.currentUser) {
             try {
-              const docRef = doc(db, 'users', email, 'progress', 'data');
+              const docRef = doc(db, 'users', auth.currentUser.uid, 'progress', 'data');
               await setDoc(docRef, {
                  email: email,
                  data: unsyncedData,
@@ -1066,6 +1100,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [user, isFirebaseEnabled]);
 
+  const saveTimeoutRef = useRef<any>(null);
+
   const saveData = async (newData: AppData) => {
     if (isAuthLoading) {
        console.warn("Attempted to save data while auth is loading, aborting to prevent overwrite.");
@@ -1073,34 +1109,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     setData(newData);
     let rawEmail = adminTargetEmail || user?.email;
-    if (!rawEmail) {
-       return;
-    }
+    if (!rawEmail) return;
     const currentUserEmail = rawEmail.toLowerCase();
     localStorage.setItem(`student_progress_data_${currentUserEmail}`, JSON.stringify(newData));
 
-    if (isFirebaseEnabled && db) {
-       try {
-          const docRef = doc(db, 'users', currentUserEmail, 'progress', 'data');
-          await setDoc(docRef, {
-             email: currentUserEmail,
-             data: JSON.parse(JSON.stringify(newData)),
-             updatedAt: new Date().toISOString()
-          }, { merge: true });
-       } catch (fsErr: any) {
-          console.error("Failed to sync progress to Firebase Firestore:", fsErr);
-       }
-    }
-
-    try {
-      await apiFetch('/api/data', {
-         method: 'POST',
-         headers: { 'Content-Type': 'application/json' },
-         body: JSON.stringify({ email: currentUserEmail, data: newData })
-      });
-    } catch (e) {
-      console.error('Failed to sync data to Express backend', e);
-    }
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    
+    saveTimeoutRef.current = setTimeout(async () => {
+      try {
+        await apiFetch('/api/data', {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify({ email: currentUserEmail, data: newData })
+        });
+      } catch (err) {}
+    }, 30000);
   };
 
   const clearLocalStorage = async () => {
@@ -1109,7 +1132,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (isFirebaseEnabled && db && auth?.currentUser) {
        try {
-          const docRef = doc(db, 'users', user.email, 'progress', 'data');
+          const docRef = doc(db, 'users', auth.currentUser.uid, 'progress', 'data');
           await setDoc(docRef, {
              email: user.email,
              data: defaultData,
@@ -1406,6 +1429,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         stars,
         triggerStars,
         fetchUserInfo,
+        loginWithGooglePopup,
         isAuthLoading,
         logout,
         youtubeCookies,

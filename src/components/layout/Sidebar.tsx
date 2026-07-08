@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { cn } from '../../lib/utils';
 import { ViewKey, SubjectKey } from '../../types';
-import { useGoogleLogin } from '@react-oauth/google';
+
 import JSZip from 'jszip';
 
 export function Sidebar() {
@@ -14,23 +14,14 @@ export function Sidebar() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  const loginWithGoogle = useGoogleLogin({
-    scope: "openid email profile",
-    onSuccess: async (tokenResponse) => {
-      localStorage.setItem('google_access_token', tokenResponse.access_token);
-      showNotification('Successfully logged in with Google!', 'success');
-      await fetchUserInfo(tokenResponse.access_token);
-    },
-    onError: (error) => {
-      console.error('Login Failed', error);
-      showNotification('Google login failed.', 'error');
-    }
-  });
+  const { loginWithGooglePopup } = useApp();
 
-  const menuItems: { id: ViewKey; label: string; icon: string }[] = [
+  const menuItems: { id: ViewKey | 'ai-chat'; label: string; icon: string }[] = [
+    { id: 'admission-predictor', label: 'Z Core & Analytics', icon: 'fa-solid fa-graduation-cap' },
+    { id: 'ai-chat', label: 'Clora X Assistant', icon: 'fa-solid fa-robot' },
     { id: 'paper-structure', label: 'Paper Structure', icon: 'fa-solid fa-layer-group' },
     { id: 'paper-marks', label: 'Past Paper Marks', icon: 'fa-solid fa-chart-line' },
-    { id: 'admission-predictor', label: 'Z Core & Analytics', icon: 'fa-solid fa-graduation-cap' }
+    { id: 'past-papers', label: 'Past Papers DB', icon: 'fa-solid fa-file-pdf' }
   ];
 
   if (profile?.email === 'ishanstc123@gmail.com' || user?.email === 'ishanstc123@gmail.com') {
@@ -152,15 +143,15 @@ export function Sidebar() {
                       ? "gap-3.5 px-4 py-3 text-left justify-start" 
                       : "px-0 py-3.5 justify-center text-center mx-auto w-12",
                     isActive
-                      ? "bg-red-50 text-red-800 shadow-md ring-1 ring-red-100"
+                      ? "bg-primary-50 text-primary-800 shadow-md ring-1 ring-primary-100"
                       : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
                   )}
                 >
                   <i className={cn(item.icon, "text-center shrink-0 transition-transform duration-300 drop-shadow-sm", isActive ? "scale-110 drop-shadow-md" : "group-hover:scale-110", isSidebarOpen ? "w-5" : "text-xl")}></i>
                   {isSidebarOpen ? (
-                    <span className="truncate animate-in fade-in duration-200 font-bold">{item.label}</span>
+                    <span className="truncate font-bold">{item.label}</span>
                   ) : (
-                    <div className="absolute left-full ml-4 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-red-50 text-red-800 border border-red-100 text-xs font-bold rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 whitespace-nowrap shadow-md z-[99]">
+                    <div className="absolute left-full ml-4 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-primary-50 text-primary-800 border border-primary-100 text-xs font-bold rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 whitespace-nowrap shadow-md z-[99]">
                       {item.label}
                     </div>
                   )}
@@ -200,7 +191,7 @@ export function Sidebar() {
 
                 <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 px-2">Data Management</h4>
                 <div className="flex flex-col gap-2 px-2 text-sm text-slate-500 font-medium">
-                  <p>Cloud synchronization is currently active.</p>
+                  <p>Synchronization is currently active.</p>
                 </div>
               </div>
             </>

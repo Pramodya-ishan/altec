@@ -14,21 +14,20 @@ function SubjectToggle({ layoutIdPrefix, currentSubject, setCurrentSubject }: { 
           id={`${layoutIdPrefix}-toggle-btn-${sub}`}
           onClick={() => setCurrentSubject(sub)}
           className={cn(
-            "relative px-4 sm:px-6 py-1.5 rounded-full text-sm font-display font-bold uppercase transition-colors duration-200 cursor-pointer flex-1 sm:flex-none text-center z-10",
+            "relative px-4 sm:px-6 py-1.5 rounded-full text-sm font-display font-bold uppercase transition-colors duration-300 cursor-pointer flex-1 sm:flex-none text-center z-10",
             currentSubject === sub
               ? "text-primary-700"
               : "text-slate-500 hover:text-slate-900 hover:bg-slate-200/50"
           )}
         >
           {currentSubject === sub && (
-             <motion.div
-               layoutId={`${layoutIdPrefix}-active-subject`}
-               className="absolute inset-0 bg-white shadow-sm border border-slate-200/60 rounded-full"
-               transition={{ type: 'spring', bounce: 0.2, duration: 0.5 }}
-               style={{ zIndex: -1 }}
-             />
+            <motion.div
+              layoutId={`${layoutIdPrefix}-active-subject`}
+              className="absolute inset-0 bg-white shadow-sm border border-slate-200/60 rounded-full -z-10"
+              transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+            />
           )}
-          {sub}
+          <span className="relative z-10">{sub}</span>
         </button>
       ))}
     </div>
@@ -52,7 +51,7 @@ export function TopNav() {
     logout
   } = useApp();
 
-  const [countdown, setCountdown] = useState('Calculating...');
+  const [countdown, setCountdown] = useState({ days: 0, hours: 0, active: false });
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [showProfilePopup, setShowProfilePopup] = useState(false);
 
@@ -150,7 +149,12 @@ export function TopNav() {
         {showSearchResults && searchQuery && (
           <>
             <div className="fixed inset-0 z-10" onClick={() => setShowSearchResults(false)} />
-            <div className="absolute left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden divide-y divide-slate-100 animate-in fade-in slide-in-from-top-1 duration-150">
+            <motion.div 
+              initial={{ opacity: 0, y: -5 }} 
+              animate={{ opacity: 1, y: 0 }} 
+              exit={{ opacity: 0, y: -5 }} 
+              transition={{ duration: 0.15 }}
+              className="absolute left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden divide-y divide-slate-100 origin-top">
               {filteredResults.length === 0 ? (
                 <div className="p-3 text-center text-xs font-medium text-slate-400">
                   No matching syllabus topics found.
@@ -188,7 +192,7 @@ export function TopNav() {
                   </div>
                 ))
               )}
-            </div>
+            </motion.div>
           </>
         )}
       </AnimatePresence>
@@ -229,13 +233,13 @@ export function TopNav() {
       const distance = targetDate - now;
 
       if (distance < 0) {
-        setCountdown("Exams active!");
+        setCountdown({ days: 0, hours: 0, active: true });
         return;
       }
       const days = Math.floor(distance / (1000 * 60 * 60 * 24));
       const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
       
-      setCountdown(`${days}d ${hours}h to A/L`);
+      setCountdown({ days, hours, active: false });
     };
 
     updateCountdown();
@@ -262,7 +266,14 @@ export function TopNav() {
           <div className="flex flex-col">
             <span className="text-sm font-semibold text-primary-600 tracking-wider flex items-center gap-1.5">
               <i className="fa-regular fa-clock"></i>
-              <span>{countdown}</span>
+              {countdown.active ? (
+                <span>Exams active!</span>
+              ) : (
+                <>
+                  <span className="sm:hidden">{countdown.days}d</span>
+                  <span className="hidden sm:inline">{countdown.days}d {countdown.hours}h to A/L</span>
+                </>
+              )}
             </span>
           </div>
         </div>
@@ -279,10 +290,10 @@ export function TopNav() {
             {syncStatus === 'Cloud' && <i className="fa-solid fa-cloud-check"></i>}
             {syncStatus === 'Syncing' && <i className="fa-solid fa-arrows-rotate animate-spin"></i>}
             {syncStatus === 'Local' && <i className="fa-solid fa-hard-drive"></i>}
-            <span>{syncStatus}</span>
+            {syncStatus !== 'Cloud' && <span>{syncStatus}</span>}
           </div>
 
-          {currentView !== 'admission-predictor' && currentView !== 'focus-todo' && (
+          {currentView !== 'admission-predictor' && currentView !== 'focus-todo' && currentView !== 'clora-x' && (
             <>
               <div className="hidden sm:block">
                 <SubjectToggle layoutIdPrefix="desktop" currentSubject={currentSubject} setCurrentSubject={setCurrentSubject} />
@@ -295,14 +306,7 @@ export function TopNav() {
 
           {/* Quick Profile Icon Access with Dropdown Popup */}
           <div className="flex items-center gap-3">
-            <button
-               onClick={() => setAdvisorOpen(true)}
-               className="hidden sm:flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold text-xs tracking-wider uppercase hover:bg-indigo-100 hover:border-indigo-300 transition-colors shadow-sm cursor-pointer"
-               title="1st Edition"
-            >
-              <i className="fa-solid fa-robot"></i>
-              <span>1st Edition</span>
-            </button>
+            
             <div className="relative">
               <button
                 onClick={() => setShowProfilePopup(!showProfilePopup)}
@@ -323,23 +327,30 @@ export function TopNav() {
               />
             </button>
 
+                        <AnimatePresence>
             {showProfilePopup && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowProfilePopup(false)} />
-                <div className="absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 p-3 flex flex-col gap-2.5 animate-in fade-in zoom-in-95 duration-150">
-                  <div className="flex items-center gap-2 px-1 pb-2 border-b border-slate-100">
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                  transition={{ type: "spring", stiffness: 350, damping: 25 }}
+                  className="absolute right-0 mt-3 w-64 bg-white border border-slate-200 rounded-[1.25rem] shadow-2xl shadow-slate-200/50 z-50 p-1.5 flex flex-col origin-top-right">
+                  
+                  <div className="flex items-center gap-3 px-3 py-3 mb-1 border-b border-slate-100/80 bg-slate-50/50 rounded-t-xl">
                     <img
                       src={profile?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profile?.username || 'LocalStudent')}`}
                       alt="Profile"
-                      className="w-8 h-8 rounded-full bg-slate-100 object-cover"
+                      className="w-10 h-10 rounded-full bg-slate-200 object-cover shadow-sm ring-2 ring-white"
                       referrerPolicy="no-referrer"
                       onError={(e) => {
                         e.currentTarget.src = `https://api.dicebear.com/7.x/bottts/svg?seed=LocalStudent`;
                       }}
                     />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">Logged In As</p>
-                      <p className="text-xs font-black text-slate-800 truncate mt-1">@{profile?.username || user?.name || 'Student'}</p>
+                    <div className="flex-1 min-w-0 flex flex-col justify-center">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider leading-none">Logged In As</p>
+                      <p className="text-sm font-black text-slate-800 truncate mt-1 leading-tight">@{profile?.username || user?.name || 'Student'}</p>
                     </div>
                   </div>
                   
@@ -348,23 +359,33 @@ export function TopNav() {
                       navigate('/profile');
                       setShowProfilePopup(false);
                     }}
-                    className="flex items-center gap-2 w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-700 text-xs font-bold transition-all cursor-pointer"
+                    className="flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl hover:bg-slate-50 text-slate-700 text-sm font-bold transition-all cursor-pointer group active:scale-[0.98]"
                   >
-                    <i className="fa-solid fa-user text-slate-400"></i> View Profile
+                    <div className="w-7 h-7 rounded-lg bg-slate-100 flex items-center justify-center text-slate-500 group-hover:bg-primary-50 group-hover:text-primary-600 transition-colors">
+                      <i className="fa-solid fa-user-astronaut"></i>
+                    </div>
+                    <span className="flex-1 group-hover:text-primary-700 transition-colors">My Profile</span>
+                    <i className="fa-solid fa-chevron-right text-[10px] text-slate-300 group-hover:text-primary-400 transition-colors"></i>
                   </button>
-
+                  
+                  <div className="h-px w-full bg-slate-100 my-1"></div>
+                  
                   <button
                     onClick={() => {
                       logout();
                       setShowProfilePopup(false);
                     }}
-                    className="flex items-center gap-2 w-full text-left px-2 py-1.5 rounded-lg hover:bg-red-50 text-red-600 text-xs font-bold transition-all border border-transparent hover:border-red-100 cursor-pointer"
+                    className="flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl hover:bg-rose-50 text-rose-600 text-sm font-bold transition-all cursor-pointer group active:scale-[0.98]"
                   >
-                    <i className="fa-solid fa-right-from-bracket text-xs"></i> Log Out
+                    <div className="w-7 h-7 rounded-lg bg-rose-50 flex items-center justify-center text-rose-400 group-hover:bg-rose-100 group-hover:text-rose-600 transition-colors">
+                      <i className="fa-solid fa-power-off"></i>
+                    </div>
+                    <span className="group-hover:text-rose-700 transition-colors">Sign Out</span>
                   </button>
-                </div>
+                </motion.div>
               </>
             )}
+            </AnimatePresence>
             </div>
           </div>
         </div>
@@ -372,7 +393,7 @@ export function TopNav() {
 
 
       {/* Bottom Row: Mobile Subject Toggle */}
-      {currentView !== 'admission-predictor' && currentView !== 'focus-todo' && (
+      {currentView !== 'admission-predictor' && currentView !== 'focus-todo' && currentView !== 'clora-x' && (
         <div className="flex justify-center sm:hidden pb-1">
           <SubjectToggle layoutIdPrefix="mobile" currentSubject={currentSubject} setCurrentSubject={setCurrentSubject} />
         </div>

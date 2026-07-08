@@ -113,8 +113,12 @@ export function readUser(email: string) {
   }
   try {
     const raw = fs.readFileSync(file);
-    const unzipped = zlib.gunzipSync(raw).toString("utf-8");
-    let jsonStr = unzipped;
+    let jsonStr: string;
+    try {
+      jsonStr = zlib.gunzipSync(raw).toString("utf-8");
+    } catch {
+      jsonStr = raw.toString("utf-8");
+    }
     if (!jsonStr.startsWith("{")) {
       jsonStr = decrypt(jsonStr);
     }

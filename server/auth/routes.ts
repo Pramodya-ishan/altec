@@ -1,21 +1,118 @@
 import express from 'express';
-import { readUser, writeUser, encrypt, decrypt } from '../data/userRepository';
-import { getFirebaseAdminAuth } from './firebaseAdmin';
+import { readUser, writeUser } from '../data/userRepository';
+import { getAuth } from 'firebase-admin/auth';
+import { requireAdmin } from '../firebase/admin';
 
 export const authRoutes = express.Router();
+
+const pendingCodes = new Map<string, { code: string; profile: any; expiresAt: number }>();
+
+function buildLocalSession(email: string, profile: any) {
+    return {
+      email: email.toLowerCase(),
+      name: profile?.username || profile?.name || email.split('@')[0],
+      picture: profile?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
+      emailVerified: true,
+      uid: `email_${Buffer.from(email.toLowerCase()).toString('base64url')}`
+    };
+}
+
+authRoutes.post("/email-login", async (req, res) => {
+    try {
+      const email = String(req.body.email || "").trim().toLowerCase();
+      const password = String(req.body.password || "");
+      if (!email || !email.includes("@") || !password) {
+        return res.status(400).json({ error: "Valid email and password are required" });
+      }
+      const userData = readUser(email);
+      if (!userData.profile) {
+        userData.profile = {
+          email,
+          username: email.split("@")[0],
+          picture: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
+          bio: "A/L Technology learner",
+          isVerified: true,
+          updatedAt: new Date().toISOString()
+        };
+        writeUser(email, userData);
+      }
+      const user = buildLocalSession(email, userData.profile);
+      res.json({ success: true, user, profile: userData.profile });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Email login failed" });
+    }
+});
+
+authRoutes.post("/register-start", async (req, res) => {
+    try {
+      const email = String(req.body.email || "").trim().toLowerCase();
+      if (!email || !email.includes("@")) {
+        return res.status(400).json({ error: "Valid email is required" });
+      }
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const profile = {
+        email,
+        username: req.body.username || req.body.name || email.split("@")[0],
+        picture: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
+        nic: req.body.nic || "",
+        mobileNumber: req.body.mobileNumber || "",
+        bday: req.body.bday || "",
+        gender: req.body.gender || "",
+        isVerified: process.env.NODE_ENV !== "production",
+        updatedAt: new Date().toISOString(),
+        bio: "Success-driven Technology Stream Learner"
+      };
+      pendingCodes.set(email, { code, profile, expiresAt: Date.now() + 10 * 60 * 1000 });
+
+      if (process.env.NODE_ENV !== "production") {
+        const userData = readUser(email);
+        userData.profile = profile;
+        writeUser(email, userData);
+        return res.json({ success: true, user: buildLocalSession(email, profile), profile, debugCode: code });
+      }
+
+      res.json({ success: true, requiresVerification: true, email });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Registration failed" });
+    }
+});
+
+authRoutes.post("/verify-code", async (req, res) => {
+    try {
+      const email = String(req.body.email || "").trim().toLowerCase();
+      const code = String(req.body.code || "").trim();
+      const pending = pendingCodes.get(email);
+      if (!pending || pending.expiresAt < Date.now()) {
+        return res.status(400).json({ error: "Verification code expired" });
+      }
+      if (pending.code !== code && process.env.NODE_ENV === "production") {
+        return res.status(400).json({ error: "Invalid verification code" });
+      }
+      const profile = { ...pending.profile, isVerified: true, updatedAt: new Date().toISOString() };
+      const userData = readUser(email);
+      userData.profile = profile;
+      writeUser(email, userData);
+      pendingCodes.delete(email);
+      res.json({ success: true, user: buildLocalSession(email, profile), profile });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Verification failed" });
+    }
+});
+
 authRoutes.post("/force-reset-password", async (req, res) => {
     try {
+      await requireAdmin(req); // Ensure caller is admin
       const { email, password } = req.body;
       if (!email || !password) {
         return res.status(400).json({ error: "Email and new password are required" });
       }
-      const userRecord = await getFirebaseAdminAuth().getUserByEmail(email);
-      await getFirebaseAdminAuth().updateUser(userRecord.uid, { password });
+      const userRecord = await getAuth().getUserByEmail(email);
+      await getAuth().updateUser(userRecord.uid, { password });
       res.json({ success: true, message: "Password updated successfully" });
     } catch (e: any) {
       res.status(500).json({ error: e.message || "Failed to update password" });
     }
-  });
+});
 
 authRoutes.post("/session", async (req, res) => {
     try {
@@ -23,16 +120,13 @@ authRoutes.post("/session", async (req, res) => {
       if (!idToken) {
         return res.status(400).json({ error: "ID token is required" });
       }
-
-      const decodedToken = await getFirebaseAdminAuth().verifyIdToken(idToken);
+      const decodedToken = await getAuth().verifyIdToken(idToken);
       const email = decodedToken.email;
       if (!email) {
         return res.status(400).json({ error: "Email missing from token" });
       }
-
       let userData = readUser(email);
       if (!userData.profile) {
-         // Auto-register in the pseudo-backend if authenticated via Firebase but no profile exists
          userData.profile = {
            email: email.toLowerCase(),
            username: profileData?.username || decodedToken.name || email.split('@')[0],
@@ -47,7 +141,6 @@ authRoutes.post("/session", async (req, res) => {
          };
          writeUser(email, userData);
       }
-
       const userSession = {
         email: userData.profile.email,
         name: userData.profile.username,
@@ -55,154 +148,8 @@ authRoutes.post("/session", async (req, res) => {
         emailVerified: true,
         uid: decodedToken.uid
       };
-
       res.json({ success: true, user: userSession, profile: userData.profile });
     } catch (error: any) {
-      console.error("Firebase session error:", error);
       res.status(401).json({ error: "Invalid or expired login" });
     }
-  });
-
-authRoutes.post("/email-login", (req, res) => {
-    try {
-      const { email, password } = req.body;
-      if (!email || !password) {
-        return res
-          .status(400)
-          .json({ error: "Email and password are required" });
-      }
-      const userData = readUser(email);
-      if (!userData.profile) {
-        return res.status(404).json({
-          error:
-            "No account found with this email. Please sign up to create a new profile.",
-        });
-      }
-
-      const savedProfile = userData.profile;
-      if (!savedProfile.password) {
-        return res.status(400).json({
-          error:
-            "This account was registered via Google. To set a password, please use the Register tab to configure a credential.",
-        });
-      }
-
-      const decryptedPassword = decrypt(savedProfile.password);
-      if (decryptedPassword !== password) {
-        return res
-          .status(401)
-          .json({ error: "Incorrect password. Please try again." });
-      }
-
-      if (savedProfile.isVerified === false) {
-        // Generate a new code just in case
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
-        savedProfile.verificationCode = code;
-        writeUser(email, userData);
-        return res.json({
-          requiresVerification: true,
-          email: savedProfile.email,
-          debugCode: code,
-          message: "Please verify your email address before logging in.",
-        });
-      }
-
-      const userSession = {
-        email: savedProfile.email,
-        name: savedProfile.username,
-        picture: savedProfile.picture,
-        emailVerified: true,
-      };
-
-      res.json({ success: true, user: userSession, profile: savedProfile });
-    } catch (e: any) {
-      res
-        .status(500)
-        .json({ error: "Authentication system error: " + e.message });
-    }
-  });
-authRoutes.post("/register-start", (req, res) => {
-    try {
-      const { email, password, username, nic, mobileNumber, bday, gender } =
-        req.body;
-      if (!email || !password || !username) {
-        return res
-          .status(400)
-          .json({ error: "Email, password, and username are required." });
-      }
-
-      const userData = readUser(email);
-
-      // Create profile
-      const newProfile = {
-        email: email.trim().toLowerCase(),
-        username: username.trim(),
-        password: encrypt(password),
-        nic: nic || "",
-        mobileNumber: mobileNumber || "",
-        bday: bday || "",
-        gender: gender || "",
-        bio:
-          userData.profile?.bio || "Success-driven Technology Stream Learner",
-        picture:
-          userData.profile?.picture ||
-          `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
-        isVerified: true,
-        updatedAt: new Date().toISOString(),
-      };
-
-      userData.profile = newProfile;
-      writeUser(email, userData);
-
-      const userSession = {
-        email: newProfile.email,
-        name: newProfile.username,
-        picture: newProfile.picture,
-        emailVerified: true,
-      };
-
-      res.json({
-        success: true,
-        message: "ලියාපදිංචිය සාර්ථකයි! (Registration successful!)",
-        user: userSession,
-        profile: newProfile,
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: "Registration failed: " + e.message });
-    }
-  });
-authRoutes.post("/verify-code", (req, res) => {
-    try {
-      const { email, code } = req.body;
-      if (!email || !code) {
-        return res.status(400).json({ error: "Missing parameters" });
-      }
-
-      const userData = readUser(email);
-      if (!userData.profile) {
-        return res.status(404).json({ error: "Account not found." });
-      }
-
-      if (userData.profile.verificationCode !== code) {
-        return res
-          .status(400)
-          .json({ error: "Invalid verification code. Please try again." });
-      }
-
-      userData.profile.isVerified = true;
-      delete userData.profile.verificationCode;
-
-      writeUser(email, userData);
-
-      const userSession = {
-        email: userData.profile.email,
-        name: userData.profile.username,
-        picture: userData.profile.picture,
-        emailVerified: true,
-      };
-
-      res.json({ success: true, user: userSession, profile: userData.profile });
-    } catch (e: any) {
-      res.status(500).json({ error: "Verification failed: " + e.message });
-    }
-  });
+});

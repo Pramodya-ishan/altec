@@ -1,6 +1,7 @@
 import { getApp, getApps, initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 import localConfig from '../../firebase-applet-config.json';
 
 const firebaseConfig = {
@@ -17,6 +18,7 @@ const activeConfig = (firebaseConfig.apiKey && firebaseConfig.apiKey.trim() !== 
 let firebaseApp: any = null;
 let db: any = null;
 let auth: any = null;
+let storage: any = null;
 let isFirebaseEnabled = false;
 
 if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
@@ -25,6 +27,7 @@ if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
     let dbId = (activeConfig as any).firestoreDatabaseId || "ai-studio-c097068e-a4a9-4ea3-9b00-0b3195093c42";
     db = getFirestore(firebaseApp, dbId);
     auth = getAuth(firebaseApp);
+    storage = getStorage(firebaseApp);
     isFirebaseEnabled = true;
     console.log("Firebase client initialized successfully.");
   } catch (error) {
@@ -34,7 +37,7 @@ if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
   console.info("Firebase API Key is missing. Operating in client-server DB file synchronization mode.");
 }
 
-export { firebaseApp, db, auth, isFirebaseEnabled };
+export { firebaseApp, db, auth, storage, isFirebaseEnabled };
 
 // Standardized Firestore error logger as specified in SKILL.md
 export enum OperationType {

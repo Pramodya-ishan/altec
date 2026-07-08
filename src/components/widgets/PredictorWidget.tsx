@@ -217,7 +217,7 @@ export function PredictorWidget() {
 
       {/* COLLAPSIBLE DETAILS AREA */}
       {!isCollapsed && (
-        <div className="flex flex-col gap-4 mt-6 animate-in slide-in-from-top-3 duration-200">
+        <div className="flex flex-col gap-4 mt-6 ">
           <div className="flex flex-col gap-4 md:gap-6 items-center w-full">
             
             {/* LEFT SIDE: FINAL PERCENTAGE ACCENT CARD */}

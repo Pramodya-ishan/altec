@@ -1,10 +1,7 @@
 import { Request, Response } from 'express';
-import { GoogleGenAI } from '@google/genai';
+import { getAIClient, AI_MODELS } from './client';
 import { enqueueGeminiTask } from './queue';
-
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || "dummy",
-});
+import { getCloraSystemPrompt } from './prompts';
 
 export const handleAIStream = async (req: Request, res: Response) => {
   const { sessionId } = req.params;
@@ -32,10 +29,9 @@ export const handleAIStream = async (req: Request, res: Response) => {
     
     // Simulate pipeline
     sendEvent('status', { phase: 'organizing_sft', message: 'Organizing subject lessons...' });
-    sendEvent('status', { phase: 'checking_zscore_history', message: 'Reviewing progress history...' });
     
-    const targetModel = chatMode || 'gemini-2.5-flash';
-
+    const targetModel = chatMode || AI_MODELS.default;
+    
     const historyContents = history.map((msg: any) => ({
       role: msg.sender === 'user' ? 'user' : 'model',
       parts: [{ text: msg.text || '-' }]
@@ -46,69 +42,48 @@ export const handleAIStream = async (req: Request, res: Response) => {
        basePrompt += `Requirements: ${JSON.stringify(requirementAnswers)}\n`;
     }
 
-    const isRegenerate = /regenerate|improve|add more/i.test(message || "");
-    let tryModelsStream = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
-    if (chatMode) { tryModelsStream = [chatMode, ...tryModelsStream]; }
-
-    if (isRegenerate) {
-       sendEvent('status', { phase: 'running_final_writer', message: 'Enhancing the response...' });
-
-       let lastError = null;
-       let success = false;
-       for (const m of tryModelsStream) {
-         try {
-           await enqueueGeminiTask(async () => {
-             const finalStream = await ai.models.generateContentStream({
-               model: m,
-               contents: [...historyContents, { role: 'user', parts: [{ text: basePrompt + `\n\nEnhance the previous response according to the user's latest message. Strictly output Markdown.` }] }],
-               config: { systemInstruction: "You are 1st Edition, an elite GCE A/L advisor. Format beautifully in Markdown. IMPORTANT: Always refer to the physics heat formulas ($Q = mc\\theta$, $Q = mL$) when discussing/answering energy or heat calculations in SFT. Mention that 'විභාගය පැවැත්වෙන්නේ 2026 අගෝස්තු මස 01 වනදාය. ඔබට ඉතිරිව ඇත්තේ තත්පරයෙන් තත්පරය ගෙවී යන දින 47ක් පමණි.' with strict conviction. Do not use informal terms like 'Ayya', 'Malli', 'Nangi', or 'Akka'." }
-             });
-             for await (const chunk of finalStream) {
-                if (chunk.text) {
-                   sendEvent('final_chunk', { text: chunk.text });
-                }
-             }
-           });
-           success = true;
-           break;
-         } catch (e: any) {
-           lastError = e;
-           console.warn(`Final stream regenerate failed on ${m}`, e.message);
-         }
-       }
-       if (!success) throw lastError;
-
-       sendEvent('final_complete', { success: true });
-       sendEvent('done', { success: true });
-       return res.end();
-    }
-
     sendEvent('status', { phase: 'running_final_writer', message: 'Preparing your personalized plan...' });
     
     // FINAL RESPONSE
     let lastError = null;
     let success = false;
-    for (const m of tryModelsStream) {
-      try {
-        await enqueueGeminiTask(async () => {
-          const finalStream = await ai.models.generateContentStream({
-            model: m,
-            contents: [...historyContents, { role: 'user', parts: [{ text: basePrompt + `\n\nProvide the response strictly in Markdown.` }] }],
-            config: { systemInstruction: "You are 1st Edition, an elite strategic advisor for A/L students. Format beautifully in Markdown. IMPORTANT: Always refer to the physics heat formulas ($Q = mc\\theta$, $Q = mL$) when discussing heat or any energy calculation in SFT. Do not use informal headings like 'Ayya', 'Nangi', 'Akka'. You MUST explicitly output this exact warning statement: '($Q = mc\\theta$, $Q = mL$) විභාගය පැවැත්වෙන්නේ 2026 අගෝස්තු මස 01 වනදාය. ඔබට ඉතිරිව ඇත්තේ තත්පරයෙන් තත්පරය ගෙවී යන දින 47ක් පමණි.**' with absolute conviction." }
-          });
-          for await (const chunk of finalStream) {
-             if (chunk.text) {
-                sendEvent('final_chunk', { text: chunk.text });
-             }
-          }
+    
+    // Calculate remaining days properly
+    const examDate = process.env.AL_EXAM_START_DATE || '2026-08-11';
+    const tz = process.env.APP_TIME_ZONE || 'Asia/Colombo';
+    const nowStr = new Date().toLocaleString("en-US", {timeZone: tz});
+    const now = new Date(nowStr);
+    const examD = new Date(examDate);
+    const diffTime = Math.abs(examD.getTime() - now.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    const systemPrompt = `You are Clora X, a Sinhala-first personal AI tutor for Sri Lankan G.C.E. A/L Engineering Technology stream.
+    Format beautifully in Markdown.
+    The exam is scheduled for ${examDate}. Currently there are roughly ${diffDays} days left. 
+    Use user data gracefully.`;
+
+    const ai = getAIClient();
+    
+    try {
+      await enqueueGeminiTask(async () => {
+        const finalStream = await ai.models.generateContentStream({
+          model: targetModel,
+          contents: [...historyContents, { role: 'user', parts: [{ text: basePrompt + `\n\nProvide the response strictly in Markdown.` }] }],
+          config: { systemInstruction: systemPrompt }
         });
-        success = true;
-        break;
-      } catch (e: any) {
-         lastError = e;
-         console.warn(`Final stream failed on ${m}`, e.message);
-      }
+
+        for await (const chunk of finalStream) {
+           if (chunk.text) {
+              sendEvent('final_chunk', { text: chunk.text });
+           }
+        }
+      });
+      success = true;
+    } catch (e: any) {
+       lastError = e;
+       console.warn(`Final stream failed on ${targetModel}`, e.message);
     }
+    
     if (!success) throw lastError;
 
     sendEvent('final_complete', { success: true });
@@ -116,10 +91,13 @@ export const handleAIStream = async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Stream error:', error);
     let msg = error.message || 'Generation failed';
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === "dummy") {
-      msg = "Configuration Error: GEMINI_API_KEY is missing in Vercel Environment Variables. Please add it in your Vercel Dashboard.";
+    
+    if (msg.includes('Prepayment Credits Depleted')) {
+       msg = "Prepayment Credits Depleted. Please check Google Cloud billing.";
     }
+
     sendEvent('error', { message: msg });
+    sendEvent('done', { success: false });
   } finally {
     res.end();
   }

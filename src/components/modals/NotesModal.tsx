@@ -1,322 +1,346 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
+import { cn } from '../../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
-import { saveVideoFile, deleteVideoFile, getVideoFile } from '../../lib/indexedDB';
 import Markdown from 'react-markdown';
+import { apiFetch } from '../../lib/api';
 
 export function NotesModal() {
-  const { modals, setModals, data, currentSubject, saveData, showNotification } = useApp();
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [url, setUrl] = useState('');
-  const [title, setTitle] = useState('');
+  const { data, currentSubject, saveData, showNotification, modals, setModals } = useApp();
+  const isOpen = modals?.playlist?.open;
+  const topic = modals?.playlist?.topic || '';
+  
+  const close = () => {
+    if (setModals) {
+      setModals(prev => ({ ...prev, playlist: { ...prev.playlist, open: false } }));
+    }
+  };
+  const [textNotes, setTextNotes] = useState('');
   const [isPreviewMode, setIsPreviewMode] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<'notes' | 'attachments'>('notes');
+  
   const contentRef = useRef<HTMLDivElement>(null);
 
-  const { open, topic } = modals.playlist;
-  if (!open) return null;
+  useEffect(() => {
+    setTextNotes(data[currentSubject]?.topics[topic]?.notes || '');
+  }, [topic, currentSubject, data]);
 
-  const subjectData = data[currentSubject];
-  const topicData = subjectData.topics[topic] || { checked: false, videos: [], notes: '' };
-  const files = topicData.videos || [];
-  const textNotes = topicData.notes || '';
-
-  const close = () => {
-    setModals(prev => ({ ...prev, playlist: { open: false, topic: '' } }));
-    setShowAddForm(false);
-    setUrl('');
-    setTitle('');
-  };
-
+  
   const handleNotesChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const nextData = structuredClone(data);
-    if (!nextData[currentSubject].topics[topic]) {
-      nextData[currentSubject].topics[topic] = { checked: false, videos: [], notes: '' };
-    }
-    nextData[currentSubject].topics[topic].notes = e.target.value;
-    saveData(nextData);
+    setTextNotes(e.target.value);
   };
 
-  const handleAddLink = () => {
-    if (!url.trim()) {
-      showNotification('Please enter a valid URL', 'error');
+  const saveNotes = (content: string) => {
+    if (!topic.trim()) {
+      showNotification('Select a valid lesson topic before saving notes.', 'error');
       return;
     }
-    const finalTitle = title.trim() !== '' ? title.trim() : `Link ${files.length + 1}`;
-    
     const nextData = structuredClone(data);
+    if (!nextData[currentSubject]) {
+       nextData[currentSubject] = { topics: {}, paperMarks: [], questionMarks: {}, lessonHistory: [] } as any;
+    }
     if (!nextData[currentSubject].topics[topic]) {
       nextData[currentSubject].topics[topic] = { checked: false, videos: [], notes: '' };
     }
-    nextData[currentSubject].topics[topic].videos.push({ url: url.trim(), title: finalTitle });
+    nextData[currentSubject].topics[topic].notes = content;
     saveData(nextData);
-    setUrl('');
-    setTitle('');
-    setShowAddForm(false);
-    showNotification('Link added to notes', 'success');
+  };
+  
+  // Save on blur
+  const handleNotesBlur = () => {
+    if(topic) saveNotes(textNotes);
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const id = Date.now().toString(36) + Math.random().toString(36).substring(2);
-      await saveVideoFile(id, file); // Reusing indexedDB generic file save
-      const finalTitle = title.trim() !== '' ? title.trim() : file.name;
+  const insertText = (tag: string) => {
+    setTextNotes(prev => prev + tag);
+  };
+
+  const handleGenerateAI = async () => {
+    if (!topic.trim()) {
+      showNotification('Select a valid lesson topic before generating notes.', 'error');
+      return;
+    }
+    setIsGenerating(true);
+    showNotification('AI generating notes...', 'info');
+    try {
+      const response = await apiFetch('/api/ai/respond-stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          prompt: `Create a clean, well-structured, detailed educational summary study note in Sinhala and English about: ${topic}. Use bullets, markdown, code blocks if relevant.`,
+          activeSubject: currentSubject,
+          mode: 'tutor_explanation'
+        })
+      });
+      if (!response.ok) throw new Error('AI generation failed');
       
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      if (!reader) throw new Error('Failed to get stream reader');
+
+      let generated = '';
+      const initialText = textNotes;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const text = decoder.decode(value, { stream: true });
+        
+        const events = text.split("\n\n");
+        for (const raw of events) {
+          const eventName = raw.match(/^event:\s*(.+)$/m)?.[1]?.trim();
+          const dataText = raw.match(/^data:\s*(.+)$/m)?.[1];
+          if (eventName === 'chunk' && dataText) {
+            try {
+              const data = JSON.parse(dataText);
+              generated += data.text || '';
+              setTextNotes(initialText + generated);
+            } catch (e) {}
+          }
+        }
+      }
+      
+      saveNotes(initialText + generated);
+      showNotification('AI notes generated!', 'success');
+    } catch (err: any) {
+      console.error(err);
+      showNotification(err.message || 'AI notes generation failed', 'error');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+        return;
+    }
+    if (!topic.trim()) {
+        showNotification('Select a valid lesson topic before uploading files.', 'error');
+        e.target.value = '';
+        return;
+    }
+
+    setIsUploading(true);
+    showNotification('Uploading file...', 'info');
+    
+    try {
+      setUploadProgress(10);
+      
+      const response = await apiFetch(`/api/upload-proxy?name=${encodeURIComponent('files/' + Date.now() + '_' + file.name)}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream'
+        },
+        body: file
+      });
+      
+      if (!response.ok) throw new Error('Upload failed');
+      const { url: downloadURL } = await response.json();
+      
+      setUploadProgress(100);
+      
+      const finalTitle = file.name;
       const nextData = structuredClone(data);
+      if (!nextData[currentSubject]) {
+         nextData[currentSubject] = { topics: {}, paperMarks: [], questionMarks: {}, lessonHistory: [] } as any;
+      }
       if (!nextData[currentSubject].topics[topic]) {
         nextData[currentSubject].topics[topic] = { checked: false, videos: [], notes: '' };
       }
-      nextData[currentSubject].topics[topic].videos.push({ url: `localdb://${id}`, title: finalTitle, type: file.type });
+      if (!nextData[currentSubject].topics[topic].videos) {
+        nextData[currentSubject].topics[topic].videos = [];
+      }
+      nextData[currentSubject].topics[topic].videos.push({ url: downloadURL, title: finalTitle, type: file.type || 'application/pdf' });
       saveData(nextData);
-      
-      setUrl('');
-      setTitle('');
-      setShowAddForm(false);
-      showNotification('Local file attached successfully!', 'success');
-    }
-  };
-
-  const removeFile = async (index: number) => {
-    try {
-      const targetFile = data[currentSubject]?.topics[topic]?.videos?.[index];
-      if (targetFile && typeof targetFile.url === 'string' && targetFile.url.startsWith('localdb://')) {
-        const fileId = targetFile.url.replace('localdb://', '');
-        if (fileId) {
-          await deleteVideoFile(fileId);
-        }
-      }
+      showNotification('File uploaded and attached!', 'success');
+      setIsUploading(false);
+      setUploadProgress(null);
     } catch (err) {
-      console.warn("Failed to flush local file on removal:", err);
-    }
-    const nextData = structuredClone(data);
-    nextData[currentSubject].topics[topic].videos.splice(index, 1);
-    saveData(nextData);
-    showNotification('File removed', 'info');
-  };
-
-  const openAddForm = () => {
-    setShowAddForm(true);
-    setTimeout(() => {
-      contentRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-    }, 100);
-  };
-
-  const handlePaste = async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].type.indexOf('image') !== -1 || items[i].type === 'application/pdf') {
-        const file = items[i].getAsFile();
-        if (file) {
-           const id = Date.now().toString(36) + Math.random().toString(36).substring(2);
-           await saveVideoFile(id, file);
-           const finalTitle = `Pasted ${file.type.includes('pdf') ? 'PDF' : 'Image'}`;
-           const nextData = structuredClone(data);
-           if (!nextData[currentSubject].topics[topic]) {
-             nextData[currentSubject].topics[topic] = { checked: false, videos: [], notes: '' };
-           }
-           nextData[currentSubject].topics[topic].videos.push({ url: `localdb://${id}`, title: finalTitle, type: file.type });
-           saveData(nextData);
-           showNotification(`Pasted file attached!`, 'success');
-        }
-      }
+      console.error(err);
+      showNotification('Upload error occurred.', 'error');
+      setIsUploading(false);
+      setUploadProgress(null);
     }
   };
 
-  const openFile = async (fileUrl: string) => {
-    if (fileUrl.startsWith('localdb://')) {
-       const id = fileUrl.replace('localdb://', '');
-       try {
-         const blob = await getVideoFile(id);
-         if (blob) {
-           const blobUrl = URL.createObjectURL(blob);
-           window.open(blobUrl, '_blank');
-         } else {
-           showNotification('File not found in local storage.', 'error');
-         }
-       } catch (err) {
-         showNotification('Error opening file.', 'error');
-       }
-    } else {
-       window.open(fileUrl, '_blank');
-    }
-  };
+  const videos = data[currentSubject]?.topics[topic]?.videos || [];
 
-  const getFileIcon = (file: any) => {
-    if (file.type?.includes('pdf') || file.title.toLowerCase().endsWith('.pdf')) return 'fa-file-pdf text-red-500';
-    if (file.type?.includes('image') || file.url.match(/\.(jpeg|jpg|gif|png)$/i)) return 'fa-image text-emerald-500';
-    if (file.url.includes('youtube') || file.url.includes('youtu.be')) return 'fa-youtube text-red-500';
-    return 'fa-link text-blue-500';
-  };
+  if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-[10000] backdrop-blur-sm p-4">
-      <div className="bg-white w-full max-w-2xl rounded-2xl shadow-xl overflow-hidden flex flex-col max-h-[90vh]">
-        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-white">
-          <h2 className="text-lg font-extrabold text-slate-900 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 shadow-inner">
-              <i className="fa-solid fa-book-open"></i>
+    <div className="fixed inset-0 bg-slate-900/60 flex items-end sm:items-center justify-center z-[10000] backdrop-blur-sm p-2 sm:p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="bg-white w-full sm:max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] sm:h-[85vh]"
+      >
+        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-white shrink-0 shadow-sm z-10 relative">
+          <h2 className="text-xl font-black text-slate-900 flex items-center gap-3 tracking-tight min-w-0 pr-4">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-rose-100 to-rose-50 border border-rose-200 flex items-center justify-center text-rose-600 shadow-sm shrink-0">
+              <i className="fa-solid fa-file-pdf"></i>
             </div>
-            <span className="truncate">Lesson Notes: {topic}</span>
+            <span className="truncate hidden sm:inline">Lesson Notes: {topic}</span>
+            <span className="truncate sm:hidden text-lg">Notes</span>
           </h2>
           <div className="flex items-center gap-2">
-            <button onClick={close} className="w-8 h-8 flex items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-red-500 transition-colors">
+            <button onClick={close} className="w-9 h-9 flex items-center justify-center rounded-full text-slate-400 hover:bg-rose-50 hover:text-rose-500 transition-colors shrink-0">
               <i className="fa-solid fa-xmark text-lg"></i>
             </button>
           </div>
         </div>
-
-        <div className="flex-1 p-6 overflow-y-auto flex flex-col gap-6 relative" ref={contentRef} onPaste={handlePaste}>
+        
+        
+        <div className="flex-1 overflow-hidden flex flex-col relative bg-slate-50/50">
+          <div className="flex items-center gap-2 px-6 pt-4 border-b border-slate-200">
+            <button
+              onClick={() => setActiveTab('notes')}
+              className={cn("px-4 py-3 text-sm font-bold border-b-2 transition-colors cursor-pointer", activeTab === 'notes' ? "border-amber-500 text-amber-600" : "border-transparent text-slate-500 hover:text-slate-700")}
+            >
+              Smart Notes
+            </button>
+            <button
+              onClick={() => setActiveTab('attachments')}
+              className={cn("px-4 py-3 text-sm font-bold border-b-2 transition-colors cursor-pointer", activeTab === 'attachments' ? "border-amber-500 text-amber-600" : "border-transparent text-slate-500 hover:text-slate-700")}
+            >
+              Attachments
+            </button>
+          </div>
           
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                <i className="fa-solid fa-pen"></i> Quick Text Notes
-              </label>
-              {textNotes.trim() && (
-                <button
-                  onClick={() => setIsPreviewMode(!isPreviewMode)}
-                  className="text-[11px] font-bold text-slate-500 hover:text-amber-600 transition-colors uppercase tracking-wider"
-                >
-                  <i className={`fa-solid ${isPreviewMode ? 'fa-pen-to-square' : 'fa-eye'} mr-1`}></i>
-                  {isPreviewMode ? 'Edit' : 'Preview'}
-                </button>
-              )}
-            </div>
-            {isPreviewMode && textNotes.trim() ? (
-              <div className="w-full min-h-[8rem] p-4 bg-white border border-slate-200 rounded-xl overflow-hidden transition-all text-sm text-slate-800 prose prose-sm prose-amber max-w-none">
-                <div className="markdown-body">
-                  <Markdown>{textNotes}</Markdown>
-                </div>
-              </div>
-            ) : (
-              <textarea 
-                value={textNotes}
-                onChange={handleNotesChange}
-                placeholder="Type your study notes here. You can also paste images directly into this window..."
-                className="w-full h-32 p-4 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-amber-500 focus:ring-4 focus:ring-amber-50 transition-all resize-y text-sm"
-              />
-            )}
-          </div>
-
-          <div className="flex items-center justify-between mt-2">
-            <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
-              <i className="fa-solid fa-paperclip"></i> Attached Files & Links
-            </label>
-            {!showAddForm && (
-              <button 
-                onClick={openAddForm} 
-                className="px-3 py-1.5 flex items-center gap-2 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors text-xs font-bold"
-              >
-                <i className="fa-solid fa-plus"></i> Add Attachment
-              </button>
-            )}
-          </div>
-
-          <AnimatePresence>
-            {showAddForm && (
-              <motion.div 
-                initial={{ opacity: 0, height: 0, marginBottom: 0 }}
-                animate={{ opacity: 1, height: 'auto', marginBottom: 16 }}
-                exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-                className="overflow-hidden"
-              >
-                <div className="bg-slate-50 p-5 rounded-xl border border-slate-200 flex flex-col gap-4 relative">
-                  <button 
-                    onClick={() => setShowAddForm(false)}
-                    className="absolute top-3 right-3 w-6 h-6 flex items-center justify-center rounded-full bg-slate-200 text-slate-500 hover:bg-red-100 hover:text-red-500 transition-colors text-xs"
-                  >
-                    <i className="fa-solid fa-xmark"></i>
-                  </button>
-                  <h3 className="text-sm font-bold text-slate-700 tracking-tight flex items-center gap-2">
-                    <i className="fa-solid fa-paperclip text-amber-500"></i> Attach Link or File
-                  </h3>
-                  <div className="flex flex-col gap-3">
-                    <input
-                      type="text"
-                      placeholder="Title (Optional)"
-                      value={title}
-                      onChange={e => setTitle(e.target.value)}
-                      className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg text-sm outline-none focus:border-amber-500 focus:ring-4 focus:ring-amber-50 transition-all font-medium"
-                    />
-                    <div className="flex flex-col gap-2">
-                      <div className="flex gap-2">
-                        <input
-                          type="url"
-                          placeholder="Web Link (URL)"
-                          value={url}
-                          onChange={e => setUrl(e.target.value)}
-                          className="flex-1 px-4 py-2.5 bg-white border border-slate-300 rounded-lg text-sm outline-none focus:border-amber-500 focus:ring-4 focus:ring-amber-50 transition-all"
-                        />
-                        <button
-                          onClick={handleAddLink}
-                          className="px-5 py-2.5 bg-amber-600 text-white font-bold rounded-lg hover:bg-amber-700 active:scale-[0.98] transition-all whitespace-nowrap shadow-sm"
-                        >
-                          Add Link
-                        </button>
-                      </div>
-                      <div className="text-center font-bold text-slate-400 text-xs my-0.5">OR</div>
-                      <input 
-                        type="file" 
-                        accept="image/*,application/pdf" 
-                        ref={fileInputRef} 
-                        className="hidden" 
-                        onChange={handleFileChange} 
-                      />
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6" ref={contentRef}>
+            
+              {activeTab === 'notes' && (
+                <div className={cn("transition-opacity duration-200 flex flex-col gap-3 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm", activeTab !== 'notes' && "hidden")}>
+                  <div className="flex items-center justify-between flex-wrap gap-4 border-b border-slate-100 pb-4">
+                    <div className="flex items-center gap-3">
+                      <h3 className="text-sm font-black text-slate-800 flex items-center gap-2 uppercase tracking-wide">
+                        <i className="fa-solid fa-pen text-amber-500"></i> Smart Notes
+                      </h3>
                       <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className="w-full px-4 py-2.5 bg-white border-2 border-dashed border-slate-300 text-slate-600 font-bold text-sm rounded-lg hover:bg-slate-50 hover:border-amber-400 hover:text-amber-600 transition-all flex items-center justify-center gap-2"
+                        onClick={handleGenerateAI}
+                        disabled={isGenerating}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 border border-indigo-100 text-indigo-700 text-xs font-bold rounded-lg transition-all shadow-sm disabled:opacity-50 cursor-pointer"
                       >
-                        <i className="fa-solid fa-upload"></i> Upload PDF / Image
+                        {isGenerating ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-wand-magic-sparkles"></i>}
+                        {isGenerating ? "Generating..." : "AI Perfect Note"}
                       </button>
                     </div>
-                  </div>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <ul className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {files.length === 0 ? (
-              <div 
-                onClick={() => fileInputRef.current?.click()}
-                className="col-span-full text-center py-8 bg-slate-50 hover:bg-slate-100 cursor-pointer border-2 border-dashed border-slate-300 hover:border-primary-400 transition-colors rounded-xl flex flex-col items-center justify-center gap-2 group"
-              >
-                <div className="w-10 h-10 bg-slate-200 group-hover:bg-primary-100 group-hover:text-primary-600 text-slate-400 rounded-full flex items-center justify-center text-lg transition-colors">
-                  <i className="fa-solid fa-cloud-arrow-up"></i>
-                </div>
-                <p className="text-slate-500 group-hover:text-primary-600 text-xs font-bold transition-colors">Click to upload files or add links.</p>
-              </div>
-            ) : (
-              files.map((file, index) => (
-                <li key={index} className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-xl shadow-sm hover:shadow-md transition-shadow group">
-                  <div 
-                    className="flex items-center gap-3 overflow-hidden cursor-pointer flex-1"
-                    onClick={() => openFile(file.url)}
-                  >
-                    <div className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0">
-                      <i className={`fa-solid ${getFileIcon(file)} text-xl`}></i>
-                    </div>
-                    <div className="flex flex-col min-w-0 flex-1">
-                      <span className="font-bold text-slate-800 text-sm truncate">{file.title}</span>
-                      <span className="text-[10px] text-slate-400 truncate">{file.url.startsWith('localdb://') ? 'Local File' : file.url}</span>
+                    
+                    <div className="flex gap-2 items-center">
+                      {!isPreviewMode && (
+                        <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-1 border border-slate-200 hidden sm:flex">
+                          <button onClick={() => insertText('- ')} className="w-8 h-8 rounded-md flex items-center justify-center text-slate-600 hover:bg-white hover:shadow-sm transition-all cursor-pointer" title="Add Bullet">
+                            <i className="fa-solid fa-list-ul text-xs"></i>
+                          </button>
+                          <button onClick={() => insertText('1. ')} className="w-8 h-8 rounded-md flex items-center justify-center text-slate-600 hover:bg-white hover:shadow-sm transition-all cursor-pointer" title="Add Number">
+                            <i className="fa-solid fa-list-ol text-xs"></i>
+                          </button>
+                          <button onClick={() => insertText('**Bold**')} className="w-8 h-8 rounded-md flex items-center justify-center text-slate-600 hover:bg-white hover:shadow-sm transition-all cursor-pointer" title="Bold text">
+                            <i className="fa-solid fa-bold text-xs"></i>
+                          </button>
+                          <button onClick={() => insertText('`Code`')} className="w-8 h-8 rounded-md flex items-center justify-center text-slate-600 hover:bg-white hover:shadow-sm transition-all cursor-pointer" title="Inline code">
+                            <i className="fa-solid fa-code text-xs"></i>
+                          </button>
+                        </div>
+                      )}
+                      {textNotes.trim() && (
+                        <button
+                          onClick={() => setIsPreviewMode(!isPreviewMode)}
+                          className="text-xs px-3 py-1.5 bg-slate-800 text-white rounded-lg font-bold hover:bg-slate-700 transition-colors shadow-sm flex items-center gap-2 cursor-pointer"
+                        >
+                          <i className={`fa-solid ${isPreviewMode ? 'fa-pen-to-square' : 'fa-eye'}`}></i>
+                          {isPreviewMode ? 'Edit Mode' : 'Preview'}
+                        </button>
+                      )}
                     </div>
                   </div>
-                  <button
-                    onClick={() => removeFile(index)}
-                    className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors shrink-0 ml-2"
-                    title="Remove File"
-                  >
-                    <i className="fa-solid fa-trash-can text-sm"></i>
-                  </button>
-                </li>
-              ))
-            )}
-          </ul>
+                  
+                  <div className="pt-2 relative">
+                    {isPreviewMode && textNotes.trim() ? (
+                      <div className="w-full min-h-[16rem] p-4 sm:p-6 bg-slate-50/50 border border-slate-200 rounded-xl overflow-hidden transition-all text-sm text-slate-800 prose prose-sm prose-amber max-w-none shadow-inner">
+                        <div className="markdown-body">
+                          <Markdown>{textNotes}</Markdown>
+                        </div>
+                      </div>
+                    ) : (
+                      <textarea
+                        value={textNotes}
+                        onChange={handleNotesChange}
+                        onBlur={handleNotesBlur}
+                        placeholder="Type your study notes here or generate a perfect note with AI..."
+                        className="w-full h-64 sm:h-96 p-4 sm:p-5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-amber-500 focus:ring-4 focus:ring-amber-50 transition-all resize-none text-sm font-medium leading-relaxed placeholder:text-slate-400 shadow-inner"
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              {activeTab === 'attachments' && (
+                <div className={cn("transition-opacity duration-200 flex flex-col gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm", activeTab !== 'attachments' && "hidden")}>
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                    <h3 className="text-sm font-black text-slate-800 flex items-center gap-2 uppercase tracking-wide">
+                      <i className="fa-solid fa-paperclip text-slate-400"></i> Attachments & PDFs
+                    </h3>
+                    
+                    <div className="relative">
+                      <input
+                        type="file"
+                        accept="application/pdf,image/*"
+                        onChange={handleFileUpload}
+                        className="hidden"
+                        id="attachment-upload"
+                        disabled={isUploading}
+                      />
+                      <label
+                        htmlFor="attachment-upload"
+                        className="cursor-pointer bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-colors flex items-center gap-2"
+                      >
+                        {isUploading ? (
+                          <><i className="fa-solid fa-circle-notch fa-spin"></i> {Math.round(uploadProgress || 0)}%</>
+                        ) : (
+                          <><i className="fa-solid fa-cloud-arrow-up"></i> Upload PDF/Image</>
+                        )}
+                      </label>
+                    </div>
+                  </div>
+                  
+                  {videos.length === 0 ? (
+                    <div className="py-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                      <i className="fa-solid fa-file-pdf text-3xl text-slate-300 mb-2"></i>
+                      <p className="text-sm font-medium text-slate-500">No attachments yet. Upload PDFs or reference images here.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {videos.map((vid, idx) => (
+                        <a
+                          key={idx}
+                          href={vid.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-emerald-300 hover:shadow-md transition-all bg-white group cursor-pointer"
+                        >
+                          <div className="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center shrink-0 group-hover:bg-emerald-50 transition-colors">
+                            <i className={`fa-solid ${vid.type?.includes('pdf') || vid.title.endsWith('.pdf') ? 'fa-file-pdf text-rose-500' : 'fa-file-image text-emerald-500'} text-lg`}></i>
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-bold text-slate-800 truncate group-hover:text-emerald-700 transition-colors">{vid.title}</p>
+                            <p className="text-[10px] text-slate-400 uppercase tracking-wider font-medium">{vid.type?.includes('pdf') ? 'PDF Document' : 'Image'}</p>
+                          </div>
+                          <i className="fa-solid fa-arrow-up-right-from-square text-slate-300 group-hover:text-emerald-500 text-xs px-2"></i>
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            
+          </div>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }

@@ -1,6 +1,8 @@
 import { GoogleGenAI } from '@google/genai';
 export const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || 'dummy-key-for-build',
+  vertexai: true,
+  project: process.env.GOOGLE_CLOUD_PROJECT || "al-ai-chat",
+  location: process.env.GOOGLE_CLOUD_LOCATION || "global"
 });
 export const RPM_LIMIT = 15;
 export const RPD_LIMIT = 1500;

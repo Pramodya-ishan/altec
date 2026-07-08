@@ -1,19 +1,21 @@
 import React, { useEffect, Suspense, lazy } from 'react';
 import { Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { AppProvider, useApp } from './context/AppContext';
-import { useGoogleLogin } from '@react-oauth/google';
+
 import { TopNav } from './components/layout/TopNav';
 import { Sidebar } from './components/layout/Sidebar';
-import { CloraAdvisorDrawer } from './components/layout/CloraAdvisorDrawer';
+
 
 // Lazy loaded views
 const PaperStructureView = lazy(() => import('./components/views/PaperStructureView').then(m => ({ default: m.PaperStructureView })));
 const PaperMarksView = lazy(() => import('./components/views/PaperMarksView').then(m => ({ default: m.PaperMarksView })));
 const ProfileView = lazy(() => import('./components/views/ProfileView').then(m => ({ default: m.ProfileView })));
+const PastPapersView = lazy(() => import('./components/views/PastPapersView').then(m => ({ default: m.PastPapersView })));
 const AdmissionPredictorView = lazy(() => import('./components/views/AdmissionPredictorView').then(m => ({ default: m.AdmissionPredictorView })));
 const AdminDashboardView = lazy(() => import('./components/views/AdminDashboardView').then(m => ({ default: m.AdminDashboardView })));
-const PastPapersView = lazy(() => import('./components/views/PastPapersView').then(m => ({ default: m.PastPapersView })));
+
 const FocusTodoView = lazy(() => import('./components/views/FocusTodoView').then(m => ({ default: m.FocusTodoView })));
+const CloraXView = lazy(() => import('./components/views/CloraXView').then(m => ({ default: m.CloraXView })));
 
 import { AddPaperMarksModal } from './components/modals/AddPaperMarksModal';
 import { NotesModal } from './components/modals/NotesModal';
@@ -138,120 +140,16 @@ function OnlineStatus() {
 function AuthOverlay() {
   const { 
     user, 
-    fetchUserInfo, 
-    showNotification, 
-    isAuthLoading,
-    loginWithEmailAndPassword,
-    registerWithEmailAndDetails,
-    verifyEmailCode
+    loginWithGooglePopup,
+    isAuthLoading
   } = useApp();
 
-  const [activeTab, setActiveTab] = React.useState<'login' | 'register' | 'forgot' | 'verify'>('login');
-  const [email, setEmail] = React.useState('');
-  const [password, setPassword] = React.useState('');
-  const [newPassword, setNewPassword] = React.useState('');
-  const [verificationCode, setVerificationCode] = React.useState('');
-  const [verificationEmail, setVerificationEmail] = React.useState('');
-  const [debugCode, setDebugCode] = React.useState('');
-  
   const [actionLoading, setActionLoading] = React.useState(false);
-  const [formError, setFormError] = React.useState('');
 
-  const handleForgotSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email.trim() || !newPassword.trim()) {
-      setFormError("Email and new password are required.");
-      return;
-    }
-    setFormError('');
+  const handleGoogleLogin = async () => {
     setActionLoading(true);
-
     try {
-      const response = await fetch('/api/auth/force-reset-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password: newPassword.trim() })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Failed to reset password");
-      
-      showNotification('Password updated successfully! You can now log in.', 'success');
-      setActiveTab('login');
-      setPassword('');
-      setNewPassword('');
-    } catch (e: any) {
-      setFormError(e.message || "Failed to update password.");
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleLoginSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email.trim() || !password.trim()) {
-      setFormError("Email and password are required.");
-      return;
-    }
-    setFormError('');
-    setActionLoading(true);
-
-    try {
-      const res = await loginWithEmailAndPassword(email.trim(), password.trim());
-      if (res.error) {
-        setFormError(res.error);
-      } else if (res.requiresVerification) {
-        setVerificationEmail(res.email || email.trim());
-        setDebugCode(res.debugCode || '');
-        setActiveTab('verify');
-      }
-    } catch (e: any) {
-      setFormError(e.message || "Failed to log in.");
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleRegisterSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!email.trim() || !password.trim()) {
-      setFormError("Email and password are required.");
-      return;
-    }
-    setFormError('');
-    setActionLoading(true);
-
-    try {
-      const res = await registerWithEmailAndDetails({
-         email: email.trim(),
-         password: password.trim(),
-         username: email.split('@')[0]
-      });
-      if (res.error) {
-        setFormError(res.error);
-      }
-    } catch (e: any) {
-      setFormError(e.message || "Failed to create account.");
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleVerifySubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!verificationCode.trim()) {
-      setFormError("Verification code is required.");
-      return;
-    }
-    setFormError('');
-    setActionLoading(true);
-
-    try {
-      const res = await verifyEmailCode(verificationEmail || email.trim(), verificationCode.trim());
-      if (res.error) {
-        setFormError(res.error);
-      }
-    } catch (e: any) {
-      setFormError(e.message || "Failed to verify email.");
+      await loginWithGooglePopup();
     } finally {
       setActionLoading(false);
     }
@@ -260,7 +158,7 @@ function AuthOverlay() {
   if (isAuthLoading) {
     return (
       <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[999999] flex items-center justify-center p-4">
-        <div className="bg-white rounded-[2rem] border border-slate-200/50 shadow-2xl p-10 max-w-sm w-full text-center flex flex-col items-center gap-6 animate-in zoom-in-95 duration-200">
+        <div className="bg-white rounded-[2rem] border border-slate-200/50 shadow-2xl p-10 max-w-sm w-full text-center flex flex-col items-center gap-6 ">
            <div className="relative flex items-center justify-center w-20 h-20">
               <div className="absolute inset-0 rounded-full border-4 border-slate-100"></div>
               <div className="absolute inset-0 rounded-full border-4 border-primary-600 border-t-transparent animate-spin"></div>
@@ -279,205 +177,39 @@ function AuthOverlay() {
 
   return (
     <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[999999] flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-[2rem] border border-slate-200/50 shadow-2xl p-6 sm:p-8 max-w-md w-full text-left flex flex-col gap-6 animate-in zoom-in-95 duration-200 my-8">
+      <div className="bg-white rounded-[2rem] border border-slate-200/50 shadow-2xl p-6 sm:p-8 max-w-md w-full text-center flex flex-col gap-6 my-8">
         
-        <div className="text-center flex flex-col items-center gap-3">
-          <div className="w-14 h-14 rounded-2xl bg-primary-100 text-primary-600 flex items-center justify-center text-2xl shadow-md border border-primary-200/50">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-16 h-16 rounded-2xl bg-primary-100 text-primary-600 flex items-center justify-center text-3xl shadow-md border border-primary-200/50">
             <i className="fa-solid fa-graduation-cap"></i>
           </div>
           <div className="space-y-1">
-            <p className="text-xs font-bold text-slate-500 max-w-xs leading-relaxed">
-              {activeTab === 'login' ? 'Please log in to your account.' :
-               activeTab === 'forgot' ? 'Reset your password to continue.' :
-               activeTab === 'verify' ? `We sent a verification code to ${verificationEmail || email}.` :
-               'Create a new account.'}
+            <h2 className="text-2xl font-black text-slate-900 font-display">Clora X</h2>
+            <p className="text-sm font-bold text-slate-500 max-w-xs leading-relaxed">
+              Sign in with your Google account to access your personalized A/L dashboard.
             </p>
           </div>
         </div>
 
-        {activeTab !== 'verify' && (
-          <div className="bg-slate-100 p-1.5 rounded-2xl flex gap-1 border border-slate-200/30">
-            <button
-               onClick={() => { setActiveTab('login'); setFormError(''); }}
-               className={`flex-1 text-center py-2 px-3 text-xs font-black rounded-xl transition-all ${activeTab === 'login' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-            >
-               SIGN IN
-            </button>
-            <button
-               onClick={() => { setActiveTab('register'); setFormError(''); }}
-               className={`flex-1 text-center py-2 px-3 text-xs font-black rounded-xl transition-all ${activeTab === 'register' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-            >
-               SIGN UP
-            </button>
-          </div>
-        )}
-
-        {formError && (
-          <div className="bg-red-50 text-red-700 text-xs font-bold p-3.5 rounded-2xl border border-red-200 flex items-center gap-2">
-            <i className="fa-solid fa-circle-exclamation text-red-500"></i>
-            {formError}
-          </div>
-        )}
-
-        {activeTab === 'login' && (
-          <form onSubmit={handleLoginSubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Email Address</label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@example.com"
-                className="w-full text-xs font-bold p-3 border border-slate-200 rounded-xl bg-slate-50/50 focus:border-primary-600 focus:bg-white outline-none transition-all placeholder:text-slate-400"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center">
-                <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Password</label>
-                <button 
-                  type="button" 
-                  onClick={() => { setActiveTab('forgot'); setFormError(''); }}
-                  className="text-[10px] uppercase font-black text-primary-600 hover:text-primary-700 tracking-wider"
-                >
-                  Forgot Password?
-                </button>
-              </div>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full text-xs font-bold p-3 border border-slate-200 rounded-xl bg-slate-50/50 focus:border-primary-600 focus:bg-white outline-none transition-all placeholder:text-slate-400"
-              />
-            </div>
-            
-            <button
-              type="submit"
-              disabled={actionLoading}
-              className="w-full bg-slate-900 text-white font-black py-3 px-5 rounded-2xl cursor-pointer hover:bg-slate-800 active:scale-[0.98] transition-all text-xs tracking-wider flex items-center justify-center gap-2"
-            >
-              {actionLoading ? <i className="fa-solid fa-spinner animate-spin"></i> : 'SIGN IN'}
-            </button>
-          </form>
-        )}
-
-        {activeTab === 'forgot' && (
-          <form onSubmit={handleForgotSubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Email Address</label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@example.com"
-                className="w-full text-xs font-bold p-3 border border-slate-200 rounded-xl bg-slate-50/50 focus:border-primary-600 focus:bg-white outline-none transition-all placeholder:text-slate-400"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">New Password</label>
-              <input
-                type="password"
-                required
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full text-xs font-bold p-3 border border-slate-200 rounded-xl bg-slate-50/50 focus:border-primary-600 focus:bg-white outline-none transition-all placeholder:text-slate-400"
-              />
-            </div>
-            
-            <button
-              type="submit"
-              disabled={actionLoading}
-              className="w-full bg-slate-900 text-white font-black py-3 px-5 rounded-2xl cursor-pointer hover:bg-slate-800 active:scale-[0.98] transition-all text-xs tracking-wider flex items-center justify-center gap-2"
-            >
-              {actionLoading ? <i className="fa-solid fa-spinner animate-spin"></i> : 'UPDATE PASSWORD & LOGIN'}
-            </button>
-
-            <button
-               type="button"
-               onClick={() => { setActiveTab('login'); setFormError(''); }}
-               className="w-full text-xs font-bold text-slate-500 border border-slate-200 py-2.5 rounded-xl hover:bg-slate-50"
-            >
-               Back to Login
-            </button>
-          </form>
-        )}
-
-        {activeTab === 'register' && (
-          <form onSubmit={handleRegisterSubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Email Address</label>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@example.com"
-                className="w-full text-xs font-bold p-3 border border-slate-200 rounded-xl bg-slate-50/50 focus:border-primary-600 focus:bg-white outline-none transition-all placeholder:text-slate-400"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Set Password</label>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full text-xs font-bold p-3 border border-slate-200 rounded-xl bg-slate-50/50 focus:border-primary-600 focus:bg-white outline-none transition-all placeholder:text-slate-400"
-              />
-            </div>
-            
-            <button
-              type="submit"
-              disabled={actionLoading}
-              className="w-full bg-slate-900 text-white font-black py-3 px-5 rounded-2xl cursor-pointer hover:bg-slate-800 active:scale-[0.98] transition-all text-xs tracking-wider flex items-center justify-center gap-2"
-            >
-              {actionLoading ? <i className="fa-solid fa-spinner animate-spin"></i> : 'CREATE ACCOUNT'}
-            </button>
-          </form>
-        )}
-
-        {activeTab === 'verify' && (
-          <form onSubmit={handleVerifySubmit} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] uppercase font-black text-slate-500 tracking-wider">Verification Code</label>
-              <input
-                type="text"
-                required
-                value={verificationCode}
-                onChange={(e) => setVerificationCode(e.target.value)}
-                placeholder="Enter 6-digit code"
-                className="w-full text-xs font-bold p-3 border border-slate-200 rounded-xl bg-slate-50/50 focus:border-primary-600 focus:bg-white outline-none transition-all placeholder:text-slate-400"
-              />
-            </div>
-
-            {debugCode && (
-              <div className="bg-emerald-50 text-emerald-800 text-xs font-bold p-3 rounded-xl border border-emerald-200">
-                💡 Local testing code: <code className="bg-white px-2 py-0.5 rounded border border-emerald-300 font-mono text-xs">{debugCode}</code>
-              </div>
-            )}
-            
-            <button
-              type="submit"
-              disabled={actionLoading}
-              className="w-full bg-slate-900 text-white font-black py-3 px-5 rounded-2xl cursor-pointer hover:bg-slate-800 active:scale-[0.98] transition-all text-xs tracking-wider flex items-center justify-center gap-2"
-            >
-              {actionLoading ? <i className="fa-solid fa-spinner animate-spin"></i> : 'VERIFY CODE'}
-            </button>
-
-            <button
-               type="button"
-               onClick={() => { setActiveTab('login'); setFormError(''); }}
-               className="w-full text-xs font-bold text-slate-500 border border-slate-200 py-2.5 rounded-xl hover:bg-slate-50"
-            >
-               Back to Sign In
-            </button>
-          </form>
-        )}
+        <button
+          onClick={handleGoogleLogin}
+          disabled={actionLoading}
+          className="w-full bg-white border-2 border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-800 font-black py-4 px-6 rounded-2xl cursor-pointer active:scale-[0.98] transition-all text-sm tracking-wide flex items-center justify-center gap-3 shadow-sm"
+        >
+          {actionLoading ? (
+            <i className="fa-solid fa-spinner animate-spin text-slate-400"></i>
+          ) : (
+            <>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="w-6 h-6">
+                <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
+                <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
+                <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
+                <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
+              </svg>
+              Sign in with Google
+            </>
+          )}
+        </button>
 
       </div>
     </div>
@@ -506,17 +238,17 @@ function AppContent() {
       <div className={cn("flex flex-col min-h-screen transition-all duration-300", isSidebarOpen ? "lg:pl-72" : "lg:pl-16 pl-0")}>
         <TopNav />
         <main className={`relative w-full mx-auto flex-1 flex flex-col ${
-          location.pathname === '/past-papers' ? 'max-w-full px-0 py-0' : 
+          
           location.pathname === '/focus-todo' ? 'max-w-full px-0 py-0' :
           'max-w-7xl px-4 sm:px-6 lg:px-8 py-8 md:py-12'
         }`}>
           <AnimatePresence mode="wait">
             <motion.div
               key={location.pathname}
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -15, scale: 0.99 }}
-              transition={{ duration: 0.3, ease: 'easeOut' }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15, ease: 'linear' }}
               className="relative w-full h-full flex-1 flex flex-col"
             >
               <Suspense fallback={<div className="flex-1 flex justify-center items-center py-24"><i className="fa-solid fa-spinner animate-spin text-4xl text-primary-600"></i></div>}>
@@ -527,10 +259,11 @@ function AppContent() {
                   <Route path="/paper-marks" element={<PaperMarksView />} />
                   <Route path="/lesson-marks" element={<Navigate to="/admission-predictor" replace />} />
                   <Route path="/admission-predictor" element={<AdmissionPredictorView />} />
-                  <Route path="/ai-chat" element={<Navigate to="/admission-predictor" replace />} />
+                  <Route path="/ai-chat" element={<CloraXView />} />
                   <Route path="/profile" element={<ProfileView />} />
+                  <Route path="/past-papers" element={<PastPapersView />} />
                   <Route path="/admin-dashboard" element={<AdminDashboardView />} />
-                  <Route path="/past-papers" element={<Navigate to="/paper-marks" replace />} />
+                  
                   <Route path="/focus-todo" element={<Navigate to="/paper-structure" replace />} />
                 </Routes>
               </Suspense>
@@ -545,7 +278,7 @@ function AppContent() {
       <SilencePlayerModal />
       
       {/* Global AI Advisor */}
-      <CloraAdvisorDrawer />
+      
     </div>
   );
 }
