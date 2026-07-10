@@ -1,304 +1,304 @@
-import { SYLLABUS } from "../../src/constants/syllabus";
-import { readUser } from "../data/userRepository";
+import { readUser, syncUserFromFirestore } from "../data/userRepository";
 import { getAdminDb } from "./admin";
 
 const contextCache = new Map<string, { data: any; timestamp: number }>();
-const CACHE_TTL = 10000;
-const SUBJECTS = ["sft", "et", "ict"] as const;
-
-function unwrapProgressDoc(value: any) {
-  if (!value) return null;
-  return value.data || value.appData || value;
-}
-
-function mergeDefined(...items: any[]) {
-  return items.reduce((acc, item) => {
-    if (item && typeof item === "object") {
-      Object.assign(acc, item);
-    }
-    return acc;
-  }, {} as any);
-}
-
-function collectSyllabusTopics(subject: string) {
-  const def = (SYLLABUS as any)[subject];
-  const topics = new Map<string, { count: number; refs: string[] }>();
-  const add = (title: string, count = 1, ref = "") => {
-    if (!title) return;
-    const existing = topics.get(title) || { count: 0, refs: [] };
-    existing.count += count || 1;
-    if (ref) existing.refs.push(ref);
-    topics.set(title, existing);
-  };
-
-  def?.mcqItems?.forEach((item: any) => add(item.title, item.count || 1, `MCQ ${item.q}`));
-  def?.partAItems?.forEach((item: any) => {
-    const weight = item.max || 1;
-    (item.topics || [item.title]).forEach((topic: string) => add(topic, weight, `Part A ${item.q}`));
-  });
-  def?.partBCDItems?.forEach((item: any) => {
-    const weight = item.max || 1;
-    (item.topics || [item.title]).forEach((topic: string) => add(topic, weight, item.q));
-  });
-  def?.bcdGroups?.forEach((group: any) => {
-    group.items?.forEach((item: any) => {
-      const weight = item.max || 1;
-      (item.topics || [item.title]).forEach((topic: string) => add(topic, weight, `${group.label} ${item.q}`));
-    });
-  });
-
-  return topics;
-}
-
-function scoreFromQuestionMark(mark: any) {
-  const values = [mark?.total, mark?.mcqRaw, mark?.partARaw, mark?.partBcdRaw, mark?.mcqPer, mark?.partAPer, mark?.partBcdPer]
-    .filter((value) => typeof value === "number");
-  if (typeof mark?.total === "number") return mark.total;
-  if (values.length) return values.reduce((sum, value) => sum + value, 0);
-  return 0;
-}
-
-function buildProgressFromAppData(appData: any) {
-  const weakMap = new Map<string, any>();
-  const recentProgress: any[] = [];
-  const latestMarks: any[] = [];
-  const paperMarks: any[] = [];
-  const questionMarks: any[] = [];
-  const lessonHistory: any[] = [];
-
-  for (const subject of SUBJECTS) {
-    const subjectData = appData?.[subject] || {};
-    const topics = subjectData.topics || {};
-    const syllabusTopics = collectSyllabusTopics(subject);
-    const allTopicNames = new Set([...Object.keys(topics), ...syllabusTopics.keys()]);
-    const completedTopics = [...allTopicNames].filter((topic) => topics[topic]?.checked);
-
-    recentProgress.push({
-      subject,
-      totalTopics: allTopicNames.size,
-      completedTopics: completedTopics.length,
-      coveragePercent: allTopicNames.size > 0 ? Math.round((completedTopics.length / allTopicNames.size) * 100) : 0,
-    });
-
-    (subjectData.lessonHistory || []).forEach((item: any) => {
-      lessonHistory.push({ ...item, subject });
-    });
-
-    (subjectData.paperMarks || []).forEach((mark: any) => {
-      const normalized = { ...mark, subject };
-      paperMarks.push(normalized);
-      latestMarks.push(normalized);
-    });
-
-    Object.entries(subjectData.questionMarks || {}).forEach(([topic, marks]) => {
-      (Array.isArray(marks) ? marks : []).forEach((mark: any) => {
-        const normalized = { ...mark, subject, topic };
-        questionMarks.push(normalized);
-        const score = scoreFromQuestionMark(mark);
-        if (score > 0 && score < 45) {
-          const key = `${subject}:${topic}`;
-          weakMap.set(key, {
-            subject,
-            topic,
-            lesson: topic,
-            reason: `Low question score (${score})${mark?.title ? ` on ${mark.title}` : ""}`,
-            priorityWeight: Math.max(syllabusTopics.get(topic)?.count || 1, 1),
-            marksWeakness: true,
-            lastDoneStatus: topics[topic]?.checked ? "completed" : "incomplete",
-          });
-        }
-      });
-    });
-
-    allTopicNames.forEach((topic) => {
-      const topicInfo = topics[topic] || {};
-      const syllabus = syllabusTopics.get(topic);
-      const key = `${subject}:${topic}`;
-      const notes = String(topicInfo.notes || "");
-      const weakKeywords = [
-        "hard", "difficult", "fail", "forget", "weak", "revise", "doubt", "wrong",
-        "problem", "amaru", "baha", "patalila", "puluwan na", "mathaka na", "patali",
-      ];
-      const weakNote = weakKeywords.find((kw) => notes.toLowerCase().includes(kw));
-
-      if (weakNote) {
-        weakMap.set(key, {
-          ...(weakMap.get(key) || {}),
-          subject,
-          topic,
-          lesson: topic,
-          reason: `User note indicates weakness: ${notes.slice(0, 160)}`,
-          notes,
-          priorityWeight: Math.max(syllabus?.count || 1, 1),
-          lastDoneStatus: topicInfo.checked ? "completed" : "incomplete",
-        });
-      }
-
-      if (!topicInfo.checked && syllabus && syllabus.count >= 2) {
-        weakMap.set(key, {
-          ...(weakMap.get(key) || {}),
-          subject,
-          topic,
-          lesson: topic,
-          reason: weakMap.get(key)?.reason || "Incomplete high-weight syllabus topic",
-          priorityWeight: Math.max(syllabus.count, 1),
-          lastDoneStatus: "incomplete",
-          syllabusRefs: syllabus.refs.slice(0, 5),
-        });
-      }
-    });
-  }
-
-  const zHistory = Array.isArray(appData?.zScoreHistory) ? appData.zScoreHistory : [];
-  const latestZEntry = zHistory[zHistory.length - 1] || null;
-
-  return {
-    weakLessons: [...weakMap.values()].sort((a, b) => (b.priorityWeight || 0) - (a.priorityWeight || 0)).slice(0, 25),
-    recentProgress,
-    latestMarks: latestMarks.slice(-15),
-    paperMarks,
-    questionMarks,
-    lessonHistory,
-    latestZ: latestZEntry?.zScore ?? appData?.latestZScore ?? appData?.currentZScore ?? null,
-    subjectZScores: latestZEntry?.subjectZScores || appData?.subjectZScores || null,
-  };
-}
+const CACHE_TTL = 10000; // 10 seconds cache to be responsive to changes
 
 export async function loadUserAIContext(uid: string, email?: string) {
-  const normalizedEmail = email?.toLowerCase();
-  const cacheKey = `${uid}_${normalizedEmail || ""}`;
+  const cacheKey = `${uid}_${email || ""}`;
   const now = Date.now();
   const cached = contextCache.get(cacheKey);
   if (cached && now - cached.timestamp < CACHE_TTL) {
     return cached.data;
   }
 
-  const diagnostics: any = {
-    uid,
-    email: normalizedEmail || null,
-    oldPathFound: false,
-    newPathFound: false,
-    localExportFound: false,
-    migratedLegacyProgress: false,
-    progressRecordsChecked: 0,
-    lessonHistoryCount: 0,
-    paperMarksCount: 0,
-    questionMarksCount: 0,
-  };
-
   try {
     const db = getAdminDb();
-    const uidRef = db.collection("users").doc(uid);
-    const emailRef = normalizedEmail ? db.collection("users").doc(normalizedEmail) : null;
+    
+    // 1. References for dual-path reading
+    const userUidRef = db.collection("users").doc(uid);
+    const userEmailRef = email ? db.collection("users").doc(email.toLowerCase()) : null;
 
-    const [
-      uidRoot,
-      emailRoot,
-      uidProfile,
-      emailProfile,
-      uidProgress,
-      emailProgress,
-      uidSettings,
-      emailSettings,
-    ] = await Promise.all([
-      uidRef.get().catch(() => null),
-      emailRef ? emailRef.get().catch(() => null) : null,
-      uidRef.collection("profile").doc("main").get().catch(() => null),
-      emailRef ? emailRef.collection("profile").doc("info").get().catch(() => null) : null,
-      uidRef.collection("progress").doc("data").get().catch(() => null),
-      emailRef ? emailRef.collection("progress").doc("data").get().catch(() => null) : null,
-      uidRef.collection("settings").doc("main").get().catch(() => null),
-      emailRef ? emailRef.collection("settings").doc("main").get().catch(() => null) : null,
+    // 2. Fetch both profile snapshots
+    const [uidSnap, emailSnap] = await Promise.all([
+      userUidRef.get().catch(() => null),
+      userEmailRef ? userEmailRef.get().catch(() => null) : null
     ]);
 
-    diagnostics.newPathFound = Boolean(uidRoot?.exists || uidProfile?.exists || uidProgress?.exists);
-    diagnostics.oldPathFound = Boolean(emailRoot?.exists || emailProfile?.exists || emailProgress?.exists);
-
-    const uidProgressData = uidProgress?.exists ? unwrapProgressDoc(uidProgress.data()) : null;
-    const emailProgressData = emailProgress?.exists ? unwrapProgressDoc(emailProgress.data()) : null;
-    const uidRootData = uidRoot?.exists ? uidRoot.data() : null;
-    const emailRootData = emailRoot?.exists ? emailRoot.data() : null;
-
-    let appData = uidProgressData
-      || emailProgressData
-      || uidRootData?.appData
-      || uidRootData?.data
-      || emailRootData?.appData
-      || emailRootData?.data;
-
-    if (!appData && normalizedEmail) {
-      const localUser = readUser(normalizedEmail);
-      appData = localUser?.data || localUser?.appData || null;
-      diagnostics.localExportFound = Boolean(appData);
+    let profileData: any = {};
+    if (uidSnap && uidSnap.exists) {
+      profileData = { ...profileData, ...uidSnap.data() };
+    }
+    if (emailSnap && emailSnap.exists) {
+      profileData = { ...profileData, ...emailSnap.data() };
+    }
+    
+    // 2.5 LOAD FROM LOCAL DB EXPORT (OLD SCHEMA)
+    let localDbData: any = null;
+    if (email) {
+      try {
+        await syncUserFromFirestore(email);
+        localDbData = readUser(email);
+        if (localDbData && Object.keys(localDbData).length > 0) {
+          if (localDbData.profile) profileData = { ...localDbData.profile, ...profileData };
+        }
+      } catch (e) {
+        console.warn("Failed to read local user data:", e);
+      }
     }
 
-    if (!uidProgressData && emailProgressData) {
-      await uidRef.collection("progress").doc("data").set({
-        data: emailProgressData,
-        migratedFromEmail: normalizedEmail,
-        migratedAt: new Date().toISOString(),
-      }, { merge: true }).catch(() => null);
-      diagnostics.migratedLegacyProgress = true;
+    // 3. Extract AppData
+    let appData: any = null;
+    let loadedFrom = "none";
+    
+    // 1. Root data
+    if (profileData.appData) { appData = profileData.appData; loadedFrom = "root_appData"; }
+    else if (profileData.data) { appData = profileData.data; loadedFrom = "root_data"; }
+
+    // 2. Subcollections
+    if (!appData) {
+      const [uidProg, emailProg] = await Promise.all([
+        userUidRef.collection("progress").doc("data").get().catch(() => null),
+        userEmailRef ? userEmailRef.collection("progress").doc("data").get().catch(() => null) : null
+      ]);
+
+      if (uidProg && uidProg.exists) {
+        const p = uidProg.data();
+        appData = p?.data || p;
+        loadedFrom = "uid_progress_data";
+      } else if (emailProg && emailProg.exists) {
+        const p = emailProg.data();
+        appData = p?.data || p;
+        loadedFrom = "email_progress_data";
+      }
+    }
+    
+    // 3. Local DB Fallback
+    if (!appData && localDbData && (localDbData.data || localDbData.appData)) {
+      appData = localDbData.data || localDbData.appData;
+      loadedFrom = "local_db_fallback";
     }
 
-    const profileData = mergeDefined(
-      emailRootData,
-      emailProfile?.exists ? emailProfile.data() : null,
-      uidRootData,
-      uidProfile?.exists ? uidProfile.data() : null,
-    );
-
-    if (normalizedEmail && uidProfile && !uidProfile.exists && (emailProfile?.exists || profileData.email || profileData.username)) {
-      await uidRef.collection("profile").doc("main").set({
-        ...profileData,
-        email: normalizedEmail,
-        migratedFromEmail: normalizedEmail,
-        migratedAt: new Date().toISOString(),
-      }, { merge: true }).catch(() => null);
-    }
-
-    const parsed = buildProgressFromAppData(appData);
-    diagnostics.progressRecordsChecked = parsed.recentProgress.length;
-    diagnostics.lessonHistoryCount = parsed.lessonHistory.length;
-    diagnostics.paperMarksCount = parsed.paperMarks.length;
-    diagnostics.questionMarksCount = parsed.questionMarks.length;
-
-    const [memoryUid, memoryEmail, chatUid, chatEmail] = await Promise.all([
-      uidRef.collection("ai_memory").limit(20).get().catch(() => ({ docs: [] })),
-      emailRef ? emailRef.collection("ai_memory").limit(20).get().catch(() => ({ docs: [] })) : { docs: [] },
-      uidRef.collection("chat_history").orderBy("createdAt", "desc").limit(15).get().catch(() => ({ docs: [] })),
-      emailRef ? emailRef.collection("chat_history").orderBy("createdAt", "desc").limit(15).get().catch(() => ({ docs: [] })) : { docs: [] },
+    // 4. Fetch memory and chat history from both paths (uniquely merged)
+    const [memoryUid, memoryEmail] = await Promise.all([
+      userUidRef.collection("ai_memory").limit(20).get().catch(() => ({ docs: [] })),
+      userEmailRef ? userEmailRef.collection("ai_memory").limit(20).get().catch(() => ({ docs: [] })) : { docs: [] }
     ]);
 
+    const [chatUid, chatEmail] = await Promise.all([
+      userUidRef.collection("chat_history").orderBy("createdAt", "desc").limit(15).get().catch(() => ({ docs: [] })),
+      userEmailRef ? userEmailRef.collection("chat_history").orderBy("createdAt", "desc").limit(15).get().catch(() => ({ docs: [] })) : { docs: [] }
+    ]);
+
+    // Merge unique docs
     const memoryDocs = [...(memoryUid as any).docs, ...(memoryEmail as any).docs];
-    const chatDocs = [...(chatUid as any).docs, ...(chatEmail as any).docs];
+    const aiMemory = Array.from(new Map(memoryDocs.map(d => [d.id, d.data()])).values());
 
+    const chatDocs = [...(chatUid as any).docs, ...(chatEmail as any).docs];
+    const chatHistoryLast10 = Array.from(new Map(chatDocs.map(d => [d.id, d.data()])).values())
+      .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+      .slice(-10);
+
+    // 5. Parse AppData to find weak lessons and progress summary
+    const weakLessons: any[] = [];
+    const progressSummary: any[] = [];
+
+    if (appData) {
+      for (const subject of ['sft', 'et', 'ict'] as const) {
+        const subjectData = appData[subject];
+        if (!subjectData) continue;
+
+        const topics = subjectData.topics || {};
+        const topicKeys = Object.keys(topics);
+        const checkedKeys = topicKeys.filter(k => topics[k]?.checked);
+        const totalCount = topicKeys.length;
+        const checkedCount = checkedKeys.length;
+        const percent = totalCount > 0 ? Math.round((checkedCount / totalCount) * 100) : 0;
+
+        const completedLessonNames = checkedKeys;
+        const pendingLessonNames = topicKeys.filter(k => !topics[k]?.checked);
+        progressSummary.push({
+          subject,
+          totalTopics: totalCount,
+          completedTopics: checkedCount,
+          coveragePercent: percent,
+          completedLessonNames,
+          pendingLessonNames
+        });
+
+        // Extract weak lessons
+        topicKeys.forEach(topicName => {
+          const topicInfo = topics[topicName];
+          if (!topicInfo) return;
+
+          let isWeak = false;
+          let reason = "";
+
+          // Check notes
+          if (topicInfo.notes) {
+            const notesLower = topicInfo.notes.toLowerCase();
+            const weakKeywords = [
+              "hard", "difficult", "fail", "forget", "weak", "revise", "doubt", "wrong", 
+              "problem", "amaru", "baha", "patalila", "puluwan na", "mathaka na", "epawa",
+              "patali", "vadiyen", "karanna oni", "amaruida"
+            ];
+            const foundKeyword = weakKeywords.find(kw => notesLower.includes(kw));
+            if (foundKeyword) {
+              isWeak = true;
+              reason = `User noted: "${topicInfo.notes}"`;
+            }
+          }
+
+          // Check low score in question marks
+          const qMarks = subjectData.questionMarks?.[topicName] || [];
+          if (qMarks.length > 0) {
+            qMarks.forEach((q: any) => {
+              const score = q.total !== undefined ? q.total : ((q.mcqRaw || 0) + (q.partARaw || 0) + (q.partBcdRaw || 0));
+              if (score > 0 && score < 45) {
+                isWeak = true;
+                reason = `Low score (${score}) on question: "${q.title}"`;
+              }
+            });
+          }
+
+          if (isWeak) {
+            weakLessons.push({
+              subject,
+              topic: topicName,
+              reason,
+              notes: topicInfo.notes || ""
+            });
+          }
+        });
+      }
+    }
+
+    const latestMarks = appData ? [
+      ...(appData.sft?.paperMarks || []).map((m: any) => ({ ...m, subject: 'sft' })),
+      ...(appData.et?.paperMarks || []).map((m: any) => ({ ...m, subject: 'et' })),
+      ...(appData.ict?.paperMarks || []).map((m: any) => ({ ...m, subject: 'ict' }))
+    ] : [];
+
+    
+    // ----------------------------------------------------------------------
+    // 1. Z-SCORE DATA LOADER
+    // ----------------------------------------------------------------------
+    const zScoreContext: any = {
+      hasZScoreData: false,
+      zScoreHistory: [],
+      dataSources: [loadedFrom]
+    };
+
+    // Extract target Z-score
+    const targetZ = profileData.targetZScore ?? profileData.targetZ ?? profileData.zTarget ?? 
+                    appData?.targetZScore ?? appData?.targetZ ?? appData?.zTarget;
+    if (targetZ !== undefined && targetZ !== null) {
+       zScoreContext.targetZScore = Number(targetZ);
+       zScoreContext.hasZScoreData = true;
+    }
+
+    // Extract current/estimated Z-score from flat fields
+    let currentZ = profileData.estimatedZScore ?? profileData.currentZScore ?? profileData.zScore ?? profileData.overallZScore ?? profileData.predictedZScore ?? profileData.latestZScore ?? profileData.latestEstimate ?? profileData.latestResult ??
+                   appData?.estimatedZScore ?? appData?.currentZScore ?? appData?.zScore ?? appData?.overallZScore ?? appData?.predictedZScore ?? appData?.latestZScore ?? appData?.latestEstimate ?? appData?.latestResult;
+
+    if (currentZ !== undefined && currentZ !== null) {
+       zScoreContext.latestOverallZScore = Number(currentZ);
+       zScoreContext.hasZScoreData = true;
+    }
+
+    // Extract subjects
+    const subjZ = profileData.subjectZScores ?? appData?.subjectZScores;
+    const flatSubjZ = {
+       sft: profileData.sftZ ?? appData?.sftZ ?? subjZ?.sft,
+       et: profileData.etZ ?? appData?.etZ ?? subjZ?.et,
+       ict: profileData.ictZ ?? appData?.ictZ ?? subjZ?.ict,
+    };
+    if (flatSubjZ.sft || flatSubjZ.et || flatSubjZ.ict) {
+       zScoreContext.subjectZScores = {
+         sft: flatSubjZ.sft ? Number(flatSubjZ.sft) : undefined,
+         et: flatSubjZ.et ? Number(flatSubjZ.et) : undefined,
+         ict: flatSubjZ.ict ? Number(flatSubjZ.ict) : undefined,
+       };
+       zScoreContext.hasZScoreData = true;
+    }
+
+    // Ranks
+    const ranks = profileData.rankEstimate ?? appData?.rankEstimate;
+    const flatRanks = {
+       districtRank: profileData.districtRank ?? appData?.districtRank ?? ranks?.districtRank,
+       islandRank: profileData.islandRank ?? appData?.islandRank ?? ranks?.islandRank,
+       district: profileData.district ?? appData?.district ?? ranks?.district,
+    };
+    if (flatRanks.districtRank || flatRanks.islandRank) {
+       zScoreContext.rankEstimate = {
+         districtRank: flatRanks.districtRank ? Number(flatRanks.districtRank) : undefined,
+         islandRank: flatRanks.islandRank ? Number(flatRanks.islandRank) : undefined,
+         district: flatRanks.district
+       };
+       zScoreContext.hasZScoreData = true;
+    }
+
+    // Extract history arrays
+    let rawHistory = profileData.zScoreHistory ?? profileData.zHistory ?? profileData.predictions ?? profileData.admissionPrediction ??
+                     appData?.zScoreHistory ?? appData?.zHistory ?? appData?.predictions ?? appData?.admissionPrediction;
+    
+    if (Array.isArray(rawHistory) && rawHistory.length > 0) {
+       zScoreContext.zScoreHistory = rawHistory.map((r: any) => ({
+          date: r.date ?? r.createdAt ?? r.timestamp,
+          overall: r.overall ?? r.zScore ?? r.overallZScore,
+          sft: r.sft ?? r.sftZ,
+          et: r.et ?? r.etZ,
+          ict: r.ict ?? r.ictZ,
+          source: r.source ?? 'history_array'
+       })).filter((r: any) => r.overall !== undefined);
+
+
+       if (zScoreContext.zScoreHistory.length > 0) {
+          zScoreContext.hasZScoreData = true;
+          // Sort by date if available
+          zScoreContext.zScoreHistory.sort((a:any, b:any) => {
+             if (a.date && b.date) return new Date(a.date).getTime() - new Date(b.date).getTime();
+             return 0;
+          });
+          const latestHist = zScoreContext.zScoreHistory[zScoreContext.zScoreHistory.length - 1];
+          if (!zScoreContext.latestOverallZScore || (latestHist.date && new Date(latestHist.date).getTime() > 0)) {
+             zScoreContext.latestOverallZScore = latestHist.overall;
+             zScoreContext.latestUpdatedAt = latestHist.date;
+             
+             if (!zScoreContext.subjectZScores && (latestHist.sft || latestHist.et || latestHist.ict)) {
+                zScoreContext.subjectZScores = {
+                   sft: latestHist.sft,
+                   et: latestHist.et,
+                   ict: latestHist.ict
+                };
+             }
+          }
+       }
+    }
+
+    if (zScoreContext.targetZScore !== undefined && zScoreContext.latestOverallZScore !== undefined) {
+       zScoreContext.gapToTarget = Number((zScoreContext.targetZScore - zScoreContext.latestOverallZScore).toFixed(4));
+    }
+    // ----------------------------------------------------------------------
     const contextData = {
+      loadedFrom,
       profile: {
         uid,
-        name: profileData?.name || profileData?.username || profileData?.displayName || (normalizedEmail ? normalizedEmail.split("@")[0] : "Student"),
-        email: normalizedEmail || profileData?.email,
-        stream: profileData?.stream || "G.C.E. A/L Technology",
+        name: profileData?.name || profileData?.username || profileData?.displayName || (email ? email.split('@')[0] : "Student"),
+        email: email || profileData?.email,
+        stream: profileData?.stream || "Technology",
         district: profileData?.district || "Unknown",
       },
-      preferences: mergeDefined(emailSettings?.exists ? emailSettings.data() : null, uidSettings?.exists ? uidSettings.data() : null, profileData?.preferences),
-      appData,
-      latestMarks: parsed.latestMarks,
-      paperMarks: parsed.paperMarks,
-      questionMarks: parsed.questionMarks,
-      lessonHistory: parsed.lessonHistory.slice(-30),
-      weakLessons: parsed.weakLessons,
-      recentProgress: parsed.recentProgress,
-      latestZ: parsed.latestZ,
-      subjectZScores: parsed.subjectZScores,
-      aiMemory: Array.from(new Map(memoryDocs.map((doc: any) => [doc.id, doc.data()])).values()),
-      chatHistoryLast10: Array.from(new Map(chatDocs.map((doc: any) => [doc.id, { id: doc.id, ...doc.data() }])).values())
-        .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-        .slice(-10),
+      preferences: profileData?.preferences || {},
+      latestMarks,
+      weakLessons,
+      recentProgress: progressSummary,
+      aiMemory,
+      chatHistoryLast10,
       examDates: profileData?.examDates || {},
-      targetZ: appData?.targetZScore ?? appData?.targetZ ?? profileData?.targetZScore ?? profileData?.targetZ ?? null,
-      currentTimeAsiaColombo: new Date().toLocaleString("en-US", { timeZone: process.env.APP_TIME_ZONE || "Asia/Colombo" }),
-      diagnostics,
+      targetZ: appData?.targetZ || profileData?.targetZ,
+      zScoreContext,
+      currentTimeAsiaColombo: new Date().toLocaleString("en-US", {timeZone: process.env.APP_TIME_ZONE || "Asia/Colombo"})
     };
 
     contextCache.set(cacheKey, { data: contextData, timestamp: now });
@@ -306,22 +306,15 @@ export async function loadUserAIContext(uid: string, email?: string) {
   } catch (e) {
     console.error("loadUserAIContext error", e);
     return {
-      profile: { uid, name: "Student", email: normalizedEmail },
+      profile: { uid, name: "Student", email },
       preferences: {},
-      appData: null,
       latestMarks: [],
-      paperMarks: [],
-      questionMarks: [],
-      lessonHistory: [],
       weakLessons: [],
       recentProgress: [],
-      latestZ: null,
-      subjectZScores: null,
       aiMemory: [],
       chatHistoryLast10: [],
       examDates: {},
-      currentTimeAsiaColombo: new Date().toLocaleString("en-US", { timeZone: "Asia/Colombo" }),
-      diagnostics,
+      currentTimeAsiaColombo: new Date().toLocaleString("en-US", {timeZone: "Asia/Colombo"})
     };
   }
 }

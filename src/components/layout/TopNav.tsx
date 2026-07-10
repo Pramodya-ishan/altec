@@ -1,9 +1,12 @@
+import { Menu, Search, Bell, X, LogOut, User, ChevronRight, XCircle, Book, Clock, Cloud, RefreshCw, HardDrive } from "lucide-react";
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { cn, calculateCurrentGradeFromData } from '../../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { SYLLABUS } from '../../constants/syllabus';
+
+import { isFirebaseEnabled } from '../../lib/firebase';
 
 function SubjectToggle({ layoutIdPrefix, currentSubject, setCurrentSubject }: { layoutIdPrefix: string, currentSubject: string, setCurrentSubject: (s: any) => void }) {
   return (
@@ -140,7 +143,7 @@ export function TopNav() {
             }}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
           >
-            <i className="fa-solid fa-circle-xmark text-xs sm:text-sm"></i>
+            <XCircle className="w-4 h-4" />
           </button>
         )}
       </div>
@@ -185,7 +188,7 @@ export function TopNav() {
                         className="flex items-center gap-1 bg-primary-50 hover:bg-primary-600 text-primary-700 hover:text-white px-2.5 py-1 rounded-lg text-[9px] font-black transition-colors cursor-pointer border border-primary-100"
                         title="Jump to Syllabus, Notes and Files"
                       >
-                        <i className="fa-solid fa-book"></i>
+                        <Book className="w-4 h-4" />
                         Notes
                       </button>
                     </div>
@@ -202,28 +205,26 @@ export function TopNav() {
   const [syncStatus, setSyncStatus] = useState<'Local' | 'Cloud' | 'Syncing'>('Local');
 
   useEffect(() => {
-    import('../../lib/firebase').then(({ isFirebaseEnabled }) => {
-      const updateOnlineStatus = () => {
-        if (!navigator.onLine) {
-          setSyncStatus('Local');
-        } else if (isFirebaseEnabled) {
-          setSyncStatus('Syncing');
-          setTimeout(() => setSyncStatus('Cloud'), 1500); // Simulate sync finish
-        } else {
-          setSyncStatus('Local');
-        }
-      };
-      
-      window.addEventListener('online', updateOnlineStatus);
-      window.addEventListener('offline', updateOnlineStatus);
-      
-      updateOnlineStatus();
+    const updateOnlineStatus = () => {
+      if (!navigator.onLine) {
+        setSyncStatus('Local');
+      } else if (isFirebaseEnabled) {
+        setSyncStatus('Syncing');
+        setTimeout(() => setSyncStatus('Cloud'), 1500); // Simulate sync finish
+      } else {
+        setSyncStatus('Local');
+      }
+    };
+    
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    
+    updateOnlineStatus();
 
-      return () => {
-        window.removeEventListener('online', updateOnlineStatus);
-        window.removeEventListener('offline', updateOnlineStatus);
-      };
-    });
+    return () => {
+      window.removeEventListener('online', updateOnlineStatus);
+      window.removeEventListener('offline', updateOnlineStatus);
+    };
   }, []);
 
   useEffect(() => {
@@ -261,11 +262,11 @@ export function TopNav() {
             aria-label="Open Menu"
             title="Open Menu"
           >
-            <i className="fa-solid fa-bars text-lg"></i>
+            <Menu className="w-5 h-5" />
           </button>
           <div className="flex flex-col">
             <span className="text-sm font-semibold text-primary-600 tracking-wider flex items-center gap-1.5">
-              <i className="fa-regular fa-clock"></i>
+              <Clock className="w-4 h-4" />
               {countdown.active ? (
                 <span>Exams active!</span>
               ) : (
@@ -280,18 +281,7 @@ export function TopNav() {
 
 
         <div className="flex items-center gap-4">
-          {/* Sync Indicator */}
-          <div className={cn(
-            "hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full border text-[10px] font-bold uppercase tracking-wider transition-all",
-            syncStatus === 'Cloud' ? "bg-emerald-50 text-emerald-600 border-emerald-200" :
-            syncStatus === 'Syncing' ? "bg-amber-50 text-amber-600 border-amber-200" :
-            "bg-slate-50 text-slate-500 border-slate-200"
-          )} title="Storage Status">
-            {syncStatus === 'Cloud' && <i className="fa-solid fa-cloud-check"></i>}
-            {syncStatus === 'Syncing' && <i className="fa-solid fa-arrows-rotate animate-spin"></i>}
-            {syncStatus === 'Local' && <i className="fa-solid fa-hard-drive"></i>}
-            {syncStatus !== 'Cloud' && <span>{syncStatus}</span>}
-          </div>
+
 
           {currentView !== 'admission-predictor' && currentView !== 'focus-todo' && currentView !== 'clora-x' && (
             <>
@@ -362,10 +352,10 @@ export function TopNav() {
                     className="flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl hover:bg-slate-50 text-slate-700 text-sm font-bold transition-all cursor-pointer group active:scale-[0.98]"
                   >
                     <div className="w-7 h-7 rounded-lg bg-slate-100 flex items-center justify-center text-slate-500 group-hover:bg-primary-50 group-hover:text-primary-600 transition-colors">
-                      <i className="fa-solid fa-user-astronaut"></i>
+                      <User className="w-4 h-4" />
                     </div>
                     <span className="flex-1 group-hover:text-primary-700 transition-colors">My Profile</span>
-                    <i className="fa-solid fa-chevron-right text-[10px] text-slate-300 group-hover:text-primary-400 transition-colors"></i>
+                    <ChevronRight className="w-3 h-3 text-slate-300 group-hover:text-indigo-400 transition-colors" />
                   </button>
                   
                   <div className="h-px w-full bg-slate-100 my-1"></div>
@@ -378,7 +368,7 @@ export function TopNav() {
                     className="flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-xl hover:bg-rose-50 text-rose-600 text-sm font-bold transition-all cursor-pointer group active:scale-[0.98]"
                   >
                     <div className="w-7 h-7 rounded-lg bg-rose-50 flex items-center justify-center text-rose-400 group-hover:bg-rose-100 group-hover:text-rose-600 transition-colors">
-                      <i className="fa-solid fa-power-off"></i>
+                      <LogOut className="w-4 h-4" />
                     </div>
                     <span className="group-hover:text-rose-700 transition-colors">Sign Out</span>
                   </button>

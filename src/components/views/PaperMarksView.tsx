@@ -3,12 +3,13 @@ import { useApp } from '../../context/AppContext';
 import { calculateGrade, cn } from '../../lib/utils';
 import { SubjectKey, PaperMark } from '../../types';
 import {
- LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
-import { PastPapersView } from './PastPapersView';
+import PastPapersView from './PastPapersView';
+import { ResponsiveChartShell } from '../ui/ResponsiveChartShell';
 
-export function PaperMarksView() {
+export default function PaperMarksView() {
  const { data, currentSubject, setModals, saveData, showNotification } = useApp();
  const marks = data[currentSubject].paperMarks || [];
 
@@ -114,7 +115,8 @@ export function PaperMarksView() {
  </button>
  </div>
  <div className="w-full h-[280px]">
- <ResponsiveContainer width="100%" height="100%">
+ <ResponsiveChartShell minHeight={280}>
+ <ResponsiveContainer width="100%" height={300}>
  <LineChart data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
  <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 12 ? v.substring(0, 12) + '...' : v} dy={10} />
@@ -124,6 +126,7 @@ export function PaperMarksView() {
  <Line connectNulls type="monotone" dataKey="total" name="Total Marks" stroke="var(--primary-600)" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: '#fff', strokeWidth: 2 }} activeDot={{ r: 6, stroke: '#fff', strokeWidth: 2 }} />
  </LineChart>
  </ResponsiveContainer>
+ </ResponsiveChartShell>
  </div>
  </div>
 
@@ -134,7 +137,8 @@ export function PaperMarksView() {
  <i className="fa-solid fa-circle text-[8px] text-amber-500"></i> MCQ Marks <span className="text-slate-300">/</span> {maxSubScale}
  </h3>
  <div className="w-full h-[200px]">
- <ResponsiveContainer width="100%" height="100%">
+ <ResponsiveChartShell minHeight={200}>
+ <ResponsiveContainer width="100%" height={300}>
  <LineChart data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
  <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 10 ? v.substring(0, 10) + '...' : v} dy={10} />
@@ -143,6 +147,7 @@ export function PaperMarksView() {
  <Line connectNulls type="monotone" dataKey="mcq" name="MCQ" stroke="#f59e0b" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: '#fff', strokeWidth: 2 }} activeDot={{ r: 6, stroke: '#fff', strokeWidth: 2 }} />
  </LineChart>
  </ResponsiveContainer>
+ </ResponsiveChartShell>
  </div>
  </div>
  <div className="p-6 h-[280px] hover:bg-slate-50/50 transition-colors">
@@ -150,7 +155,8 @@ export function PaperMarksView() {
  <i className="fa-solid fa-circle text-[8px] text-emerald-500"></i> Essay Marks <span className="text-slate-300">/</span> {maxSubScale}
  </h3>
  <div className="w-full h-[200px]">
- <ResponsiveContainer width="100%" height="100%">
+ <ResponsiveChartShell minHeight={200}>
+ <ResponsiveContainer width="100%" height={300}>
  <LineChart data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
  <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 10 ? v.substring(0, 10) + '...' : v} dy={10} />
@@ -159,6 +165,7 @@ export function PaperMarksView() {
  <Line connectNulls type="monotone" dataKey="essay" name="Essay" stroke="#10b981" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: '#fff', strokeWidth: 2 }} activeDot={{ r: 6, stroke: '#fff', strokeWidth: 2 }} />
  </LineChart>
  </ResponsiveContainer>
+ </ResponsiveChartShell>
  </div>
  </div>
  </div>

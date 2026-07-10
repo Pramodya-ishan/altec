@@ -11,6 +11,7 @@ const firebaseConfig = {
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  firestoreDatabaseId: import.meta.env.VITE_FIRESTORE_DATABASE_ID,
 };
 
 const activeConfig = (firebaseConfig.apiKey && firebaseConfig.apiKey.trim() !== "") ? firebaseConfig : localConfig;
@@ -24,10 +25,16 @@ let isFirebaseEnabled = false;
 if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
   try {
     firebaseApp = getApps().length ? getApp() : initializeApp(activeConfig);
-    let dbId = (activeConfig as any).firestoreDatabaseId || "ai-studio-c097068e-a4a9-4ea3-9b00-0b3195093c42";
-    db = getFirestore(firebaseApp, dbId);
+    let dbId = (activeConfig as any).firestoreDatabaseId;
+    if (dbId) {
+      db = getFirestore(firebaseApp, dbId);
+    } else {
+      db = getFirestore(firebaseApp);
+    }
     auth = getAuth(firebaseApp);
     storage = getStorage(firebaseApp);
+    storage.maxOperationRetryTime = 2000;
+    storage.maxUploadRetryTime = 5000;
     isFirebaseEnabled = true;
     console.log("Firebase client initialized successfully.");
   } catch (error) {

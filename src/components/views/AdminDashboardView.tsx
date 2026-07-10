@@ -4,13 +4,44 @@ import { motion } from 'motion/react';
 import { db, isFirebaseEnabled } from '../../lib/firebase';
 import { collection, getDocs, doc, setDoc, getDoc } from 'firebase/firestore';
 
-export function AdminDashboardView() {
+export default function AdminDashboardView() {
  const { user, showNotification } = useApp();
  const [users, setUsers] = useState<any[]>([]);
  const [loading, setLoading] = useState(true);
  const [selectedUserEmail, setSelectedUserEmail] = useState<string | null>(null);
  const [userDataCache, setUserDataCache] = useState<any>(null);
  const [jsonInput, setJsonInput] = useState('');
+
+  const [ragStats, setRagStats] = useState<any>(null);
+  
+  const fetchRagStats = async () => {
+    try {
+      const { apiFetch } = await import('../../lib/api');
+      const response = await apiFetch('/api/rag/debug');
+      const res = await response.json();
+      if (res.ok) setRagStats(res.stats);
+    } catch (e: any) {
+      showNotification('Failed to fetch stats: ' + e.message, 'error');
+    }
+  };
+
+  const handleRagIngest = async (endpoint: string) => {
+    showNotification('Ingestion started...', 'info');
+    try {
+      const { apiFetch } = await import('../../lib/api');
+      const response = await apiFetch('/api/rag/' + endpoint, { method: 'POST', body: JSON.stringify({}), headers: { 'Content-Type': 'application/json' }});
+      const res = await response.json();
+      if (res.ok) {
+        showNotification(`Success! Sources: ${res.sourceCount}, Chunks: ${res.chunkCount}`, 'success');
+        fetchRagStats();
+      } else {
+        showNotification(res.error || 'Ingest failed', 'error');
+      }
+    } catch (e: any) {
+      showNotification(e.message, 'error');
+    }
+  };
+
 
  useEffect(() => {
  fetchUsers();
@@ -100,8 +131,18 @@ export function AdminDashboardView() {
  </h2>
  <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
  {loading ? (
- <div className="p-4 text-center text-slate-400 font-bold text-sm">Loading users from Firestore...</div>
- ) : users.length === 0 ? (
+ <div className="space-y-3">
+   {[1, 2, 3, 4, 5].map((i) => (
+     <div key={i} className="flex items-center gap-3 p-3.5 rounded-2xl bg-white border border-slate-100 animate-pulse">
+       <div className="w-8 h-8 rounded-full bg-slate-200"></div>
+       <div className="space-y-2 flex-1">
+         <div className="h-3 bg-slate-200 rounded w-1/2"></div>
+         <div className="h-2 bg-slate-100 rounded w-3/4"></div>
+       </div>
+     </div>
+   ))}
+ </div>
+) : users.length === 0 ? (
  <div className="p-4 text-center text-slate-400 font-bold text-sm">No users found.</div>
  ) : (
  users.map(u => (

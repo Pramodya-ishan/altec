@@ -1,48 +1,49 @@
-import { onAuthStateChanged } from "firebase/auth";
-import { auth } from "./firebase";
-
-let authReadyPromise: Promise<void> | null = null;
-
-export function waitForFirebaseAuthReady(timeoutMs = 4000): Promise<void> {
-  if (!auth) return Promise.resolve();
-  if (auth.currentUser) return Promise.resolve();
-  if (!authReadyPromise) {
-    authReadyPromise = new Promise((resolve) => {
-      let unsubscribe = () => {};
-      const timer = window.setTimeout(() => {
-        unsubscribe();
-        resolve();
-      }, timeoutMs);
-      unsubscribe = onAuthStateChanged(auth, () => {
-        window.clearTimeout(timer);
-        unsubscribe();
-        resolve();
-      });
-    });
-  }
-  return authReadyPromise;
-}
+import { auth } from './firebase';
 
 export async function getAuthToken(): Promise<string | null> {
-  await waitForFirebaseAuthReady();
-  if (!auth?.currentUser) return null;
-  try {
-    return await auth.currentUser.getIdToken();
-  } catch (e) {
-    console.warn("Failed to get Firebase ID token", e);
-    return null;
+  if (!auth) return null;
+  if (auth.currentUser) {
+    try {
+      return await auth.currentUser.getIdToken();
+    } catch (e) {
+      console.warn("Failed to get Firebase ID token", e);
+    }
   }
+  
+  // Wait for auth state if not loaded
+  return new Promise((resolve) => {
+    const unsubscribe = auth.onAuthStateChanged(async (user: any) => {
+      unsubscribe();
+      if (user) {
+        try {
+          resolve(await user.getIdToken());
+        } catch (e) {
+          resolve(null);
+        }
+      } else {
+        resolve(null);
+      }
+    });
+  });
 }
 
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const options = init || {};
+  const headers = new Headers(options.headers || {});
+  
   const token = await getAuthToken();
-  const headers = new Headers(init?.headers || {});
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
+  const isFormData = options.body instanceof FormData;
+  if (!isFormData && options.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  // Ensure options.headers matches the Headers object
   return globalThis.fetch(input, {
-    ...init,
-    headers,
+    ...options,
+    headers
   });
 }

@@ -4,53 +4,83 @@ service cloud.firestore {
     function signedIn() {
       return request.auth != null;
     }
-
-    function isOwner(uid) {
-      return signedIn() && request.auth.uid == uid;
+    function isUidOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
     }
-
-    function isAdmin() {
-      return signedIn() && request.auth.token.admin == true;
+    function isEmailOwner(userId) {
+      return signedIn()
+        && request.auth.token.email != null
+        && request.auth.token.email == userId;
     }
-
-    match /users/{uid} {
-      allow read, write: if isOwner(uid) || isAdmin();
-
-      match /{document=**} {
-        allow read, write: if isOwner(uid) || isAdmin();
-      }
+    function isOwner(userId) {
+      return isUidOwner(userId) || isEmailOwner(userId);
     }
-
-    match /knowledge_sources/{sourceId} {
+    match /users/{userId}/{document=**} {
+      allow read, write: if isOwner(userId);
+    }
+    // And allow 26002ishan@gmail.com to read syllabus resources anywhere
+    match /users/{userId}/syllabus_resources/{docId} {
+      allow read, write: if isOwner(userId) || (signedIn() && request.auth.token.email == "26002ishan@gmail.com");
+    }
+    match /users/{userId}/syllabus_chunks/{docId} {
+      allow read, write: if isOwner(userId) || (signedIn() && request.auth.token.email == "26002ishan@gmail.com");
+    }
+    
+    match /rag_sources/{id} {
+      allow read: if signedIn() && (
+        resource.data.visibility in ["official", "shared"] ||
+        resource.data.ownerUid == request.auth.uid ||
+        request.auth.token.email == "26002ishan@gmail.com"
+      );
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if signedIn()
+        && resource.data.ownerUid == request.auth.uid;
+    }
+    match /rag_chunks/{id} {
+      allow read: if signedIn() && (
+        resource.data.visibility in ["official", "shared"] ||
+        resource.data.ownerUid == request.auth.uid ||
+        request.auth.token.email == "26002ishan@gmail.com"
+      );
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if signedIn()
+        && resource.data.ownerUid == request.auth.uid;
+    }
+    match /past_papers/{id} {
       allow read: if signedIn();
-      allow write: if isAdmin();
+      allow create: if signedIn() && (request.resource.data.ownerUid == request.auth.uid || request.auth.token.email == "26002ishan@gmail.com");
+      allow update, delete: if signedIn() && (resource.data.ownerUid == request.auth.uid || request.auth.token.email == "26002ishan@gmail.com");
     }
-
-    match /knowledge_chunks/{chunkId} {
+    match /knowledge_sources/{id} {
       allow read: if signedIn();
-      allow write: if isAdmin();
+      allow write: if signedIn() && request.auth.token.email == "26002ishan@gmail.com";
     }
-
-    match /past_papers/{paperId} {
+    match /knowledge_chunks/{id} {
       allow read: if signedIn();
-      allow write: if isAdmin();
+      allow write: if signedIn() && request.auth.token.email == "26002ishan@gmail.com";
     }
 
-    match /past_questions/{questionId} {
+    match /exam_question_index/{id} {
       allow read: if signedIn();
-      allow write: if isAdmin();
+      allow write: if signedIn() && request.auth.token.email == "26002ishan@gmail.com";
     }
-
-    match /generated_images/{uid}/items/{imageId} {
-      allow read, write: if isOwner(uid) || isAdmin();
+    match /syllabus_nodes/{id} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.token.email == "26002ishan@gmail.com";
     }
-
-    match /backups/{document=**} {
-      allow read, write: if false;
+    match /exam_pattern_reports/{id} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.token.email == "26002ishan@gmail.com";
     }
-
-    match /{document=**} {
-      allow read, write: if false;
+    match /prediction_reports/{id} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.token.email == "26002ishan@gmail.com";
+    }
+    match /pdf_question_cache/{id} {
+      allow read: if signedIn();
+      allow write: if signedIn();
     }
   }
 }

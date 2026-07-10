@@ -27,11 +27,10 @@ export async function searchPastPapers(req: any, res: any) {
       const matchYear = !yearMatch || pExam.includes(yearMatch.toString());
 
       if (matchSubject && matchYear) {
-        const paperYear = pExam.match(/\b(20\d{2}|19\d{2})\b/)?.[1] || yearMatch || "unknown";
         sourceCards.push({
           source: "Local Database",
           title: `${pExam} - ${pSubjectFull} MCQ Answer Key`,
-          url: `/api/past-papers/local/${pSubject.toLowerCase()}/${paperYear}`,
+          url: `/api/past-papers/local/${pSubject.toLowerCase()}/${yearMatch || "2024"}`,
           type: "Answer Sheet",
           snippet: `Official MCQ answer sheet keys for ${pExam} ${pSubjectFull} (${p.metadata.medium || "Sinhala"} medium). Contains ${p.answers.length} verified MCQ answers.`
         });
@@ -40,7 +39,7 @@ export async function searchPastPapers(req: any, res: any) {
 
     // Step 2: Firestore Search (from past_papers collection)
     try {
-      let fRef: any = db.collection("past_papers");
+      let fRef: any = db.collection("ragSources");
       if (subjectMatch) {
         fRef = fRef.where("subject", "==", subjectMatch.toLowerCase());
       }
@@ -76,7 +75,7 @@ export async function searchPastPapers(req: any, res: any) {
     // Formulate clean Sinhalese target search query
     const googleQuery = `GCE A/L ${yearStr} ${subjectStr} past paper marking scheme Sinhala Medium PDF ${searchQuery}`;
     
-    if (process.env.ENABLE_GOOGLE_SEARCH_GROUNDING === "true") try {
+    try {
       const ai = getAIClient();
       const response = await ai.models.generateContent({
         model: process.env.GEMINI_DEFAULT_MODEL || "gemini-2.5-flash",
@@ -148,10 +147,7 @@ export async function searchPastPapers(req: any, res: any) {
       query: searchQuery,
       yearMatch: yearMatch || null,
       subjectMatch: subjectMatch || null,
-      sourceCards: uniqueSourceCards,
-      message: uniqueSourceCards.length
-        ? "Verified source cards found."
-        : "No verified PDF or local paper was found. Upload a paper/source file to index it."
+      sourceCards: uniqueSourceCards
     });
 
   } catch (error: any) {

@@ -18,7 +18,71 @@ const PRESET_AVATARS = [
  'https://api.dicebear.com/7.x/bottts/svg?seed=Saman',
 ];
 
-export function ProfileView() {
+
+function ZScoreBrainCard({ data, user, onAskClora }: { data: any, user: any, onAskClora: () => void }) {
+  const [targetZ, setTargetZ] = useState<string>(String(data.targetZ || 1.85));
+  const [saving, setSaving] = useState(false);
+  const { showNotification, setData } = useApp();
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const z = parseFloat(targetZ);
+      const res = await apiFetch("/api/profile/target-zscore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetZScore: z })
+      });
+      if (res.ok) {
+        showNotification("Target Z-Score saved!", "success");
+        setData({ ...data, targetZ: z });
+      } else {
+        showNotification("Failed to save", "error");
+      }
+    } catch(e) {
+      showNotification("Error saving", "error");
+    }
+    setSaving(false);
+  };
+
+  const estimatedZ = data?.zScore || data?.estimatedZScore || 0;
+  const gap = ((parseFloat(targetZ) || 0) - estimatedZ).toFixed(4);
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-slate-900 text-slate-100 rounded-2xl p-6 border border-slate-700/50 shadow-xl relative overflow-hidden">
+      <div className="absolute top-0 right-0 p-32 bg-blue-500/10 rounded-full blur-3xl -z-10"></div>
+      
+      <div className="flex justify-between items-start mb-6">
+        <div>
+          <h2 className="text-xl font-bold font-sans tracking-tight mb-1">Z-Score Brain</h2>
+          <p className="text-slate-400 text-sm font-sans">Firebase Sync & Prediction Engine</p>
+        </div>
+        <button onClick={onAskClora} className="px-4 py-2 bg-indigo-500/20 text-indigo-300 font-medium text-sm rounded-lg hover:bg-indigo-500/30 transition-colors">
+          Ask Clora
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+        <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
+          <p className="text-xs text-slate-400 font-medium mb-1 uppercase tracking-wider">Latest Z-Score</p>
+          <div className="text-2xl font-mono text-white">{estimatedZ ? estimatedZ.toFixed(4) : "N/A"}</div>
+        </div>
+        <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
+          <p className="text-xs text-slate-400 font-medium mb-1 uppercase tracking-wider">Target Z-Score</p>
+          <div className="flex items-center gap-2">
+            <input type="number" step="0.05" value={targetZ} onChange={e=>setTargetZ(e.target.value)} className="bg-slate-950/50 text-white text-xl font-mono w-24 px-2 py-1 rounded border border-slate-700 outline-none focus:border-blue-500 transition-colors" />
+            <button onClick={handleSave} disabled={saving} className="text-xs bg-blue-600 hover:bg-blue-500 px-3 py-1.5 rounded-lg font-medium transition-colors">Save</button>
+          </div>
+        </div>
+        <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 col-span-2 md:col-span-1">
+          <p className="text-xs text-slate-400 font-medium mb-1 uppercase tracking-wider">Gap to Target</p>
+          <div className="text-2xl font-mono text-emerald-400">{gap}</div>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+export default function ProfileView() {
  const {
  user,
  profile,
@@ -38,6 +102,14 @@ export function ProfileView() {
 
  const [apiUsage, setApiUsage] = useState({ rpm: 0, rpd: 0, rpmLimit: 15, rpdLimit: 1500 });
  const [adminInput, setAdminInput] = useState('');
+  const { setCurrentView } = useApp();
+  const handleAskCloraZScore = () => {
+     // Switch view to clora and send message
+     setCurrentView('clora-x');
+     // To actually send the message we'd need a global event or context, but just switching view is okay for now, or we can use custom event
+     window.dispatchEvent(new CustomEvent('clora-send', { detail: 'mage zscore eka kiyanna' }));
+  };
+
 
  const [showRawEditor, setShowRawEditor] = useState(false);
  const [rawJsonData, setRawJsonData] = useState('');
@@ -597,220 +669,6 @@ export function ProfileView() {
  </div>
  </motion.div>
 
- {/* EXPORT / IMPORT RAW JSON BACKUP */}
- <motion.div
- initial={{ opacity: 0, scale: 0.95 }}
- animate={{ opacity: 1, scale: 1 }}
- transition={{ duration: 0.3, delay: 0.08 }}
- className="bg-white border border-slate-200/80 rounded-[2.5rem] shadow-sm p-8 relative overflow-hidden text-left mt-6"
- >
- <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-indigo-400 to-purple-500" />
- 
- <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
- <div className="flex items-start gap-4 text-left">
- <div className="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center shrink-0">
- <i className="fa-solid fa-database text-indigo-600 text-lg"></i>
- </div>
- <div>
- <h3 className="font-display font-black text-slate-900 text-base sm:text-lg tracking-tight">
- Raw App Data Backup Sync
- </h3>
- <p className="text-slate-600 text-xs sm:text-sm mt-1 leading-relaxed max-w-2xl">
- Export and Import your raw AppData JSON file. Imported files will be instantly synced and saved to Firebase Firestore.
- </p>
- </div>
- </div>
-
- <div className="flex flex-col sm:flex-row gap-3 md:w-auto w-full">
- <button
- onClick={() => {
- try {
- const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
- const url = URL.createObjectURL(blob);
- const link = document.createElement('a');
- link.href = url;
- link.download = `GCE_AL_Raw_AppData_${profile?.username || 'Backup'}.json`;
- document.body.appendChild(link);
- link.click();
- document.body.removeChild(link);
- URL.revokeObjectURL(url);
- showNotification("Raw data exported successfully!", "success");
- } catch(e: any) {
- showNotification("Export failed: " + e.message, "error");
- }
- }}
- className="w-full sm:w-auto px-6 py-4 bg-slate-100 hover:bg-slate-200 text-slate-800 font-extrabold text-sm rounded-xl transition-all shadow-sm active:scale-95 flex items-center justify-center gap-2 cursor-pointer shrink-0"
- >
- <i className="fa-solid fa-download text-base"></i>
- Export Raw
- </button>
- <label
- className="w-full sm:w-auto px-6 py-4 bg-indigo-500 hover:bg-indigo-600 font-extrabold text-sm rounded-xl text-white transition-all shadow-md active:scale-95 flex items-center justify-center gap-2 cursor-pointer shrink-0"
- >
- <i className="fa-solid fa-upload text-base"></i>
- Import JSON
- <input
- type="file"
- accept=".json"
- className="hidden"
- onChange={(e) => {
- const file = e.target.files?.[0];
- if (!file) return;
- const reader = new FileReader();
- reader.onload = async (evt) => {
- try {
- const jsonStr = evt.target?.result as string;
- const parsed = JSON.parse(jsonStr);
- if (parsed && typeof parsed === 'object') {
- await saveData(parsed);
- showNotification("Data imported and saved to Firebase successfully!", "success");
- window.location.reload();
- } else {
- throw new Error("Invalid json object");
- }
- } catch(err: any) {
- showNotification("Failed to import JSON: " + err.message, "error");
- }
- };
- reader.readAsText(file);
- }}
- />
- </label>
- </div>
- </div>
- </motion.div>
-
- {/* API Usage Metrics Dashboard */}
- <motion.div
- initial={{ opacity: 0, scale: 0.95 }}
- animate={{ opacity: 1, scale: 1 }}
- transition={{ duration: 0.3, delay: 0.1 }}
- className="bg-white rounded-[2rem] border border-slate-200/90 shadow-sm p-6 sm:p-8 relative overflow-hidden"
- >
- <div className="flex items-center gap-3 mb-6">
- <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center border border-slate-200">
- <i className="fa-solid fa-server text-slate-500"></i>
- </div>
- <div>
- <h3 className="font-display font-bold text-slate-800 text-lg">API Usage Metrics</h3>
- <p className="text-xs text-slate-500 font-medium tracking-wide">Real-time server capacity</p>
- </div>
- </div>
-
- <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
- {/* Per minute */}
- <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
- <div className="flex justify-between items-center mb-2">
- <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Requests Per Min</span>
- <span className="text-[10px] font-bold text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full">Target: {apiUsage.rpmLimit} RPM</span>
- </div>
- <div className="flex items-end gap-2 mb-2">
- <span className="text-3xl font-display font-black text-slate-800 leading-none">{apiUsage.rpm}</span>
- <span className="text-sm font-bold text-slate-400 mb-1">/ {apiUsage.rpmLimit}</span>
- </div>
- <div className="w-full h-2 rounded-full bg-slate-200 overflow-hidden">
- <div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, (apiUsage.rpm / apiUsage.rpmLimit) * 100)}%` }}></div>
- </div>
- </div>
- 
- {/* Daily limit */}
- <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
- <div className="flex justify-between items-center mb-2">
- <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Free Tier (Daily)</span>
- <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">{apiUsage.rpdLimit} RPD</span>
- </div>
- <div className="flex items-end gap-2 mb-2">
- <span className="text-3xl font-display font-black text-slate-800 leading-none">{apiUsage.rpd}</span>
- <span className="text-sm font-bold text-slate-400 mb-1">/ {apiUsage.rpdLimit}</span>
- </div>
- <div className="w-full h-2 rounded-full bg-slate-200 overflow-hidden">
- <div className="h-full bg-primary-500 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, (apiUsage.rpd / apiUsage.rpdLimit) * 100)}%` }}></div>
- </div>
- </div>
- </div>
- <div className="mt-4 text-[10px] text-slate-400 font-medium text-center italic">
- Note: Tracked directly from the AI queue.
- </div>
- </motion.div>
-
- {/* Dynamic Browser Cache & File Storage Dashboard */}
- <motion.div
- initial={{ opacity: 0, scale: 0.95 }}
- animate={{ opacity: 1, scale: 1 }}
- transition={{ duration: 0.3, delay: 0.15 }}
- className="bg-white rounded-[2rem] border border-slate-200/90 shadow-sm p-6 sm:p-8 relative overflow-hidden"
- >
- <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
- <div className="flex items-center gap-3">
- <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center border border-slate-200">
- <i className="fa-solid fa-hard-drive text-slate-500"></i>
- </div>
- <div>
- <h3 className="font-display font-bold text-slate-800 text-lg">Local Cache & Offline File Storage</h3>
- <p className="text-xs text-slate-500 font-medium tracking-wide">Manage on-device IndexedDB footprint</p>
- </div>
- </div>
- <button
- onClick={loadStorageStats}
- className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all cursor-pointer active:scale-95 border border-slate-200"
- >
- <i className="fa-solid fa-arrows-rotate mr-1"></i> Refresh Stats
- </button>
- </div>
-
- <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
- <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
- <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider mb-1">Estimated Disk Space</p>
- <p className="text-2xl font-black text-slate-800 leading-none mb-1">{formatBytes(storageUsage)}</p>
- <p className="text-[9px] font-semibold text-slate-400">out of {formatBytes(storageQuota)} quota</p>
- </div>
- 
- <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
- <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider mb-1">Cached Files</p>
- <p className="text-2xl font-black text-primary-600 leading-none mb-1">{videoFilesCount}</p>
- <p className="text-[9px] font-semibold text-slate-400">active downloaded lesson files</p>
- </div>
-
- <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
- <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider mb-1">Orphaned Caches</p>
- <p className="text-2xl font-black text-amber-600 leading-none mb-1">{orphanCount}</p>
- <p className="text-[9px] font-semibold text-slate-400">leaked files not linked to lesson notes</p>
- </div>
- </div>
-
- <div className="flex flex-col sm:flex-row gap-3">
- {orphanCount > 0 ? (
- <button
- onClick={handleCleanOrphans}
- disabled={isCleaning}
- className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] text-white text-xs font-black uppercase tracking-wider rounded-xl transition-all border-b-4 border-amber-700 disabled:opacity-50 cursor-pointer"
- >
- <i className="fa-solid fa-broom mr-2"></i> Clean {orphanCount} Orphaned Files ({formatBytes(storageUsage)})
- </button>
- ) : (
- <button
- disabled
- className="flex-1 py-3 bg-slate-100 text-slate-400 text-xs font-black uppercase tracking-wider rounded-xl border border-slate-200 cursor-not-allowed"
- >
- <i className="fa-solid fa-circle-check mr-2"></i> Local Cache is Fully Optimized
- </button>
- )}
-
- <button
- onClick={handleClearAllVideos}
- disabled={isCleaning || videoFilesCount === 0}
- className={`px-5 py-3 ${confirmClearVideos ? "bg-red-500 hover:bg-red-600 text-white" : "bg-red-50 hover:bg-red-100 text-red-600"} active:scale-[0.98] text-xs font-black uppercase tracking-wider rounded-xl transition-all ${confirmClearVideos ? "border-transparent" : "border border-red-200"} disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer`}
- >
- <i className={isCleaning ? "fa-solid fa-spinner fa-spin mr-2" : "fa-solid fa-trash-can mr-2"}></i> {confirmClearVideos ? "Click Again To Purge" : "Wipe File Cache"}
- </button>
- </div>
-
- <p className="mt-4 text-[10px] text-slate-400 font-medium text-center">
- Note: Lesson notes and files are stored directly in your browser's private database (IndexedDB) for offline playback.
- </p>
- </motion.div>
-
- {/* Admin Panel has been moved to AdminDashboardView */}
  </div>
  );
 }

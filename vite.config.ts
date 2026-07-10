@@ -18,7 +18,8 @@ export default defineConfig(() => {
           workbox: {
              maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
              clientsClaim: true,
-             skipWaiting: true
+             skipWaiting: true,
+             cleanupOutdatedCaches: true
           },
           devOptions: {
              enabled: false
@@ -50,6 +51,18 @@ export default defineConfig(() => {
     },
     build: {
       outDir: 'dist',
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes("node_modules/firebase")) return "firebase";
+            if (id.includes("node_modules/recharts") || id.includes("node_modules/chart.js") || id.includes("node_modules/react-chartjs-2")) return "charts";
+            if (id.includes("node_modules/katex") || id.includes("rehype-katex") || id.includes("remark-math")) return "math";
+            if (id.includes("node_modules/pdfjs-dist")) return "pdf";
+            if (id.includes("AdmissionPredictorView")) return "admission-predictor";
+            if (id.includes("PaperStructureView")) return "paper-structure";
+          }
+        }
+      }
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

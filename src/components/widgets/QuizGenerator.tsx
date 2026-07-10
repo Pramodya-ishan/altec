@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
 import { useApp } from '../../context/AppContext';
+import { auth } from '../../lib/firebase';
 
 interface QuizGeneratorProps {
   currentSubject: string;
@@ -36,12 +37,16 @@ export function QuizGenerator({ currentSubject, isOpen, onClose }: QuizGenerator
     setLoading(true);
     setError('');
     try {
-      const response = await apiFetch('/api/quiz', {
+      const response = await fetch('/api/ai/respond', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${auth?.currentUser ? await auth.currentUser.getIdToken() : ''}`
+        },
         body: JSON.stringify({
-          subject: currentSubject,
-          topic: "mixed revision"
+          prompt: "Generate a practice quiz with 3 MCQ questions for " + currentSubject + ". Return the result in a valid JSON array format where each object has: 'question' (string), 'options' (array of 4 strings), 'correctIndex' (number 0-3), and 'explanation' (string). Provide NO other text, only the raw JSON array. Use Sinhala.",
+          activeSubject: currentSubject,
+          mode: 'quiz_generation'
         })
       });
 
@@ -49,7 +54,17 @@ export function QuizGenerator({ currentSubject, isOpen, onClose }: QuizGenerator
         throw new Error(`Failed to generate (${response.status})`);
       }
       const data = await response.json();
-      setQuizResults(data.quiz || data.quizObject?.questions || []);
+      const aiText = data.text || data.response;
+      
+      let parsed;
+      try {
+        const cleaned = aiText.replace(/\n/g, "").replace(/```json/g, "").replace(/```/g, "").trim();
+        parsed = JSON.parse(cleaned);
+      } catch (e) {
+        throw new Error("Failed to parse AI response into quiz format.");
+      }
+      
+      setQuizResults(parsed);
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'An error occurred');

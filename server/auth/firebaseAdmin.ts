@@ -12,8 +12,18 @@ export function getFirebaseAdminAuth() {
         const projectId = process.env.FIREBASE_PROJECT_ID;
         const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
         let privateKey = process.env.FIREBASE_PRIVATE_KEY;
+        const saJson = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
 
-        if (projectId && clientEmail && privateKey) {
+        if (saJson) {
+          let jsonString = saJson.trim();
+          if (!jsonString.startsWith('{')) jsonString = '{' + jsonString;
+          if (!jsonString.endsWith('}')) jsonString = jsonString + '}';
+          const serviceAccount = JSON.parse(jsonString);
+          initializeApp({
+            credential: cert(serviceAccount)
+          });
+          console.log("Firebase Admin initialized via GOOGLE_APPLICATION_CREDENTIALS_JSON.");
+        } else if (projectId && clientEmail && privateKey) {
           privateKey = privateKey.replace(/\\n/g, "\n");
           initializeApp({
             credential: cert({

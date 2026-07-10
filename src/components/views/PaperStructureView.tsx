@@ -1,3 +1,4 @@
+import { calculateSubjectAveragePercent, calculateSubjectZ } from '../../lib/scoreUtils';
 import { apiFetch } from "../../lib/api";
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
@@ -6,26 +7,26 @@ import { cn } from '../../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { PredictorWidget } from '../widgets/PredictorWidget';
 
-export function PaperStructureView() {
+export default function PaperStructureView() {
  const { currentSubject, data, toggleTopic, setModals, currentView, saveData, showNotification, triggerStars } = useApp();
  const def = SYLLABUS[currentSubject];
  const subjectData = data[currentSubject];
 
  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() => {
- return {
- mcq: data.collapsedStates?.paperStructure_mcq ?? false,
- partA: data.collapsedStates?.paperStructure_partA ?? false,
- partBCD: data.collapsedStates?.paperStructure_partBCD ?? false,
- };
- });
+   return {
+     mcq: data.collapsedStates?.paperStructure_mcq ?? false,
+     partA: data.collapsedStates?.paperStructure_partA ?? false,
+     partBCD: data.collapsedStates?.paperStructure_partBCD ?? false,
+   };
+  });
 
- useEffect(() => {
- setCollapsedSections({
- mcq: data.collapsedStates?.paperStructure_mcq ?? false,
- partA: data.collapsedStates?.paperStructure_partA ?? false,
- partBCD: data.collapsedStates?.paperStructure_partBCD ?? false,
- });
- }, [data.collapsedStates]);
+  useEffect(() => {
+   setCollapsedSections({
+     mcq: data.collapsedStates?.paperStructure_mcq ?? false,
+     partA: data.collapsedStates?.paperStructure_partA ?? false,
+     partBCD: data.collapsedStates?.paperStructure_partBCD ?? false,
+   });
+  }, [data.collapsedStates]);
 
  // Quiz Modal State Variables
  const [quizModalOpen, setQuizModalOpen] = useState(false);
@@ -53,7 +54,6 @@ export function PaperStructureView() {
  partA: false,
  partBCD: false,
  });
-
  const timer = setTimeout(() => {
  const element = document.getElementById(`topic-card-${highlightTopic}`);
  if (element) {
@@ -171,7 +171,6 @@ export function PaperStructureView() {
  bestIndex = idx;
  }
  });
-
  if (bestIndex !== -1 && bestOverlapCount >= 1) {
  matchedIndex = bestIndex;
  }
@@ -194,8 +193,8 @@ export function PaperStructureView() {
  if (syllabusDef && syllabusDef.mcqItems) {
  syllabusDef.mcqItems.forEach(item => {
  if (item.title === topicName) mcqMax = item.count || 10;
- });
- }
+   });
+   }
  return mcqMax;
  };
 
@@ -403,7 +402,8 @@ export function PaperStructureView() {
  topicMarks.push(newEntry);
  topicMarks.sort((a: any, b: any) => a.time - b.time);
  
- import('../../lib/scoreUtils').then(({ calculateSubjectAveragePercent, calculateSubjectZ }) => {
+ {
+
  const sftMark = calculateSubjectAveragePercent('sft', nextData);
  const etMarkBase = calculateSubjectAveragePercent('et', nextData);
  const etMark = Math.min(100, (etMarkBase * 0.75) + 25);
@@ -419,10 +419,11 @@ export function PaperStructureView() {
  zScore: overallZScore,
  subjectZScores: { sft: sftZ, et: etZ, ict: ictZ },
  reason: `Finished Quick Test: ${selectedTopic} - Z-score updated`
- });
+      });
+
 
  saveData(nextData);
- });
+ }
  if (showNotification) {
  showNotification(`Quick test complete! Normalised score: ${finalNormalizedScore}/${mcqMax}`, 'success');
  }
@@ -577,15 +578,23 @@ export function PaperStructureView() {
 
  {/* Loader */}
  {loadingQuiz && !isTopicSelectionMode && (
- <div className="flex-1 py-20 flex flex-col items-center justify-center space-y-4">
- <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
- <div className="text-center space-y-1">
- <h4 className="text-sm font-bold text-slate-800">Assessing Knowledge Gaps...</h4>
- <p className="text-xs text-slate-500 max-w-xs px-4">
- The AI is tailoring 5 A/L style questions targeted specifically on your weak syllabus milestone.
- </p>
- </div>
- </div>
+ <div className="flex-1 p-6 space-y-6 w-full animate-pulse">
+  {/* Progress Header Skeleton */}
+  <div className="flex items-center justify-between">
+    <div className="w-24 h-4 bg-slate-200 rounded-full"></div>
+    <div className="w-12 h-4 bg-slate-200 rounded-full"></div>
+  </div>
+  
+  {/* Question Context Skeleton */}
+  <div className="w-full h-32 bg-slate-100 rounded-2xl border border-slate-200 mt-4"></div>
+  
+  {/* Options Skeleton */}
+  <div className="space-y-3 mt-8">
+    {[...Array(4)].map((_, i) => (
+      <div key={i} className="w-full h-14 bg-slate-100 border border-slate-200 rounded-2xl"></div>
+    ))}
+  </div>
+</div>
  )}
 
  {/* Error State */}
@@ -893,7 +902,7 @@ export function PaperStructureView() {
  <div className="bg-white border border-slate-200 text-slate-800 text-sm font-bold px-3 py-1.5 rounded-lg flex items-center justify-center shrink-0 shadow-sm h-fit">
   {item.q}
 </div>
-<div className="flex-1 bg-slate-50 rounded-2xl p-5 border border-slate-100">
+<div className="flex-1 bg-white rounded-2xl p-5 border border-slate-100">
   {item.subTitle && <h3 className="text-sm font-bold text-slate-800 mb-3">{item.subTitle}</h3>}
   <ul className="flex flex-col gap-3">
     {item.topics?.map(topic => (
@@ -974,7 +983,7 @@ export function PaperStructureView() {
  <div className="bg-white border border-slate-200 text-slate-800 text-sm font-bold px-3 py-1.5 rounded-lg flex items-center justify-center shrink-0 shadow-sm h-fit">
   {item.q}
 </div>
-<div className="flex-1 bg-slate-50 rounded-2xl p-4 sm:p-5 border border-slate-100">
+<div className="flex-1 bg-white rounded-2xl p-4 sm:p-5 border border-slate-100">
   {item.subTitle && <h3 className="text-sm font-bold text-slate-800 mb-3">{item.subTitle}</h3>}
   <ul className="flex flex-col gap-3">
     {item.topics?.map(topic => (

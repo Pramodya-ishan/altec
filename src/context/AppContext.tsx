@@ -1,9 +1,10 @@
+import { calculateCurrentGradeFromData } from '../lib/utils';
 import { apiFetch } from "../lib/api";
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
 import { isFirebaseEnabled, db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, deleteDoc } from 'firebase/firestore';
-import { GoogleAuthProvider, signInWithCredential, signInWithPopup, onAuthStateChanged, signInAnonymously, signOut } from 'firebase/auth';
+import { GoogleAuthProvider, signInWithCredential, signInWithPopup, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { calculateSubjectAveragePercent, calculateSubjectZ } from '../lib/scoreUtils';
 
 type ModalsState = {
@@ -139,7 +140,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const email = rawEmail.toLowerCase();
     if (isFirebaseEnabled && db && auth?.currentUser) {
       try {
-        const docRef = doc(db, 'users', auth.currentUser.uid, 'profile', 'main');
+        const docRef = doc(db, 'users', email, 'profile', 'info');
         const snap = await getDoc(docRef);
         if (snap.exists()) {
           const pData = snap.data() as UserProfile;
@@ -201,7 +202,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const email = rawEmail.toLowerCase();
     if (isFirebaseEnabled && db && auth?.currentUser) {
       try {
-        const docRef = doc(db, 'users', auth.currentUser.uid, 'profile', 'main');
+        const docRef = doc(db, 'users', email, 'profile', 'info');
         await setDoc(docRef, nextProfile, { merge: true });
       } catch (e) {
         console.error("Firestore save profile failed: ", e);
@@ -275,7 +276,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let unsubscribe: () => void = () => {};
     if (isFirebaseEnabled && db && auth?.currentUser) {
       try {
-        const notifCollectionRef = collection(db, 'users', auth.currentUser.uid, 'notifications');
+        if (auth?.currentUser && auth.currentUser.email && auth.currentUser.email.toLowerCase() !== email.toLowerCase()) {
+          console.warn("Skipping direct firestore notification read because auth.currentUser.email does not match requested email");
+          return;
+        }
+        const notifCollectionRef = collection(db, 'users', email, 'notifications');
         const notifQuery = query(notifCollectionRef, orderBy('timestamp', 'desc'));
         unsubscribe = onSnapshot(notifQuery, (snapshot) => {
           const notifs: PushNotification[] = [];
@@ -344,7 +349,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (isFirebaseEnabled && db && auth?.currentUser) {
       try {
-        const docRef = doc(db, 'users', auth.currentUser.uid, 'notifications', newNotif.id);
+        const docRef = doc(db, 'users', email, 'notifications', newNotif.id);
         await setDoc(docRef, newNotif);
       } catch (e) {
         console.error("Firestore push trigger failed: ", e);
@@ -372,9 +377,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (isFirebaseEnabled && db && auth?.currentUser) {
+    if (isFirebaseEnabled && db) {
       try {
-            const docRef = doc(db, 'users', auth.currentUser.uid, 'notifications', id);
+        const docRef = doc(db, 'users', user.email, 'notifications', id);
         await setDoc(docRef, { read: true }, { merge: true });
       } catch (e) {
         console.error("Firestore read mark failed: ", e);
@@ -403,7 +408,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         pushNotifications.forEach(async (notif) => {
           if (!notif.read) {
-            const docRef = doc(db, 'users', auth.currentUser.uid, 'notifications', notif.id);
+            const docRef = doc(db, 'users', user.email, 'notifications', notif.id);
             await setDoc(docRef, { read: true }, { merge: true });
           }
         });
@@ -430,7 +435,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (isFirebaseEnabled && db && auth?.currentUser) {
       try {
-        const docRef = doc(db, 'users', auth.currentUser.uid, 'notifications', id);
+        const docRef = doc(db, 'users', user.email, 'notifications', id);
         await deleteDoc(docRef);
       } catch (e) {}
     }
@@ -475,16 +480,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const sendGmailProgressEmail = async (overrideEmail?: string, tokenOverride?: string): Promise<boolean> => {
     const activeUser = user;
-    if (!activeUser) {
-      showNotification("Please login to send progress email.", "error");
+    const token = tokenOverride || activeUser?.token;
+    if (!activeUser || !token) {
+      showNotification("Please login with Google to enable Gmail sending.", "error");
       return false;
     }
 
     const recipient = overrideEmail || activeUser.email;
 
     try {
-      const { calculateCurrentGradeFromData } = await import('../lib/utils');
-      
+            
       const sftGradeInfo = calculateCurrentGradeFromData(data, 'sft');
       const etGradeInfo = calculateCurrentGradeFromData(data, 'et');
       const ictGradeInfo = calculateCurrentGradeFromData(data, 'ict');
@@ -576,11 +581,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          to: recipient,
-          subject: "A/L Tech Blueprint Auto-Sync Progress Report",
-          html: welcomeHtml,
-          raw: encodedMessage,
-          token: tokenOverride || activeUser?.token
+          token,
+          raw: encodedMessage
         })
       });
 
@@ -657,10 +659,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setIsAuthLoading(false);
             return;
           }
+          const savedToken = localStorage.getItem('google_access_token') || '';
           setUser({
             email: firebaseUser.email || '',
             name: firebaseUser.displayName || '',
             picture: firebaseUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(firebaseUser.email || '')}`,
+            token: savedToken,
             emailVerified: firebaseUser.emailVerified
           });
 
@@ -694,8 +698,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 await fetchUserDataFromDB(parsedUser.email);
                 await fetchYoutubeCookies(parsedUser.email);
              } catch(e) {}
-           }
-           setIsAuthLoading(false);
+          } else {
+             const savedToken = localStorage.getItem('google_access_token');
+             if (savedToken) {
+               await fetchUserInfo(savedToken);
+             }
+          }
+          setIsAuthLoading(false);
         }
       });
     } else {
@@ -725,7 +734,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setIsAuthLoading(false);
         }
       } else {
-        setIsAuthLoading(false);
+        const savedToken = localStorage.getItem('google_access_token');
+        if (savedToken) {
+           fetchUserInfo(savedToken);
+        } else {
+           setIsAuthLoading(false);
+        }
       }
     }
 
@@ -743,11 +757,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       if (isFirebaseEnabled && auth) {
         const provider = new GoogleAuthProvider();
-        provider.setCustomParameters({ prompt: 'select_account' });
+        
+        // Remove unnecessary sensitive scopes and keep only standard ones
         provider.addScope('openid');
-        provider.addScope('email');
-        provider.addScope('profile');
+        provider.addScope('https://www.googleapis.com/auth/userinfo.email');
+        provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
+        
+        provider.setCustomParameters({ prompt: 'select_account' });
         const result = await signInWithPopup(auth, provider);
+        
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        const accessToken = credential?.accessToken;
+        if (accessToken) {
+          localStorage.setItem('google_access_token', accessToken);
+        }
 
         const idToken = await result.user.getIdToken();
         const res = await apiFetch('/api/auth/session', {
@@ -757,9 +780,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
         const resData = await res.json();
         if (res.ok) {
-          setUser({ ...resData.user, token: idToken });
+          setUser({ ...resData.user, token: accessToken || resData.user.token });
           setProfile(resData.profile);
-          localStorage.setItem('email_user_session', JSON.stringify({ ...resData.user, token: idToken }));
+          localStorage.setItem('email_user_session', JSON.stringify({ ...resData.user, token: accessToken || resData.user.token }));
           localStorage.setItem('email_user_profile', JSON.stringify(resData.profile));
           const savedData = localStorage.getItem(`student_progress_data_${resData.user.email.toLowerCase()}`);
           if (savedData) {
@@ -826,6 +849,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         await fetchUserDataFromDB(data.email);
         await fetchYoutubeCookies(data.email);
       } else {
+        localStorage.removeItem('google_access_token');
       }
     } catch (err) {
       console.error("fetchUserInfo Error (safe to ignore in offline sandbox):", err);
@@ -836,6 +860,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     if (auth) { try { await signOut(auth); } catch(e){} }
     setIsAuthLoading(true);
+    localStorage.removeItem('google_access_token');
     localStorage.removeItem('email_user_session');
     localStorage.removeItem('email_user_profile');
     setUser(null);
@@ -848,9 +873,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const email = rawEmail.toLowerCase();
       try {
          // Try fetching from Firestore first if enabled
-                  if (isFirebaseEnabled && db && auth?.currentUser) {
+         if (isFirebaseEnabled && db) {
             try {
-               const docRef = doc(db, 'users', auth.currentUser.uid, 'progress', 'data');
+               
+               if (auth?.currentUser && auth.currentUser.email && auth.currentUser.email.toLowerCase() !== email) {
+                   console.warn("Skipping direct firestore read because auth.currentUser.email does not match requested email");
+                   return;
+               }
+               const docRef = doc(db, 'users', email, 'progress', 'data');
                const docSnap = await getDoc(docRef);
                if (docSnap.exists()) {
                   const docData = docSnap.data();
@@ -887,7 +917,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                  // Sync Express data back to Firebase so it's not lost
                  if (isFirebaseEnabled && db) {
                     try {
-                       const docRef = doc(db, 'users', auth.currentUser.uid, 'progress', 'data');
+                       const docRef = doc(db, 'users', email, 'progress', 'data');
                        await setDoc(docRef, {
                           email: email,
                           data: result.data,
@@ -924,7 +954,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
      const email = rawEmail.toLowerCase();
      if (isFirebaseEnabled && db && auth?.currentUser) {
         try {
-           const docRef = doc(db, 'users', auth.currentUser.uid, 'bypass', 'config');
+           const docRef = doc(db, 'users', email, 'bypass', 'config');
            const snap = await getDoc(docRef);
            if (snap.exists() && snap.data()?.cookies) {
               const loadedCookies = snap.data().cookies;
@@ -971,7 +1001,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
      
      if (isFirebaseEnabled && db && auth?.currentUser) {
         try {
-            const docRef = doc(db, 'users', auth.currentUser.uid, 'bypass', 'config');
+           const docRef = doc(db, 'users', email, 'bypass', 'config');
            await setDoc(docRef, {
               email: email,
               cookies,
@@ -1058,7 +1088,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           if (isFirebaseEnabled && db && auth?.currentUser) {
             try {
-              const docRef = doc(db, 'users', auth.currentUser.uid, 'progress', 'data');
+              const docRef = doc(db, 'users', email, 'progress', 'data');
               await setDoc(docRef, {
                  email: email,
                  data: unsyncedData,
@@ -1132,7 +1162,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (isFirebaseEnabled && db && auth?.currentUser) {
        try {
-          const docRef = doc(db, 'users', auth.currentUser.uid, 'progress', 'data');
+          if (auth.currentUser.email && auth.currentUser.email.toLowerCase() !== user.email.toLowerCase()) {
+              console.warn("Skipping direct firestore write because auth.currentUser.email does not match requested email");
+              return;
+          }
+          const docRef = doc(db, 'users', user.email, 'progress', 'data');
           await setDoc(docRef, {
              email: user.email,
              data: defaultData,
@@ -1151,55 +1185,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   const toggleTopic = (topic: string) => {
-    import('../lib/utils').then(({ calculateCurrentGradeFromData }) => {
-      const prevGrade = calculateCurrentGradeFromData(data, currentSubject);
-      const nextData = structuredClone(data);
-      if (!nextData[currentSubject].topics[topic]) {
-        nextData[currentSubject].topics[topic] = { checked: true, videos: [] };
-      } else {
-        nextData[currentSubject].topics[topic].checked = !nextData[currentSubject].topics[topic].checked;
-      }
-      
-      const isDone = nextData[currentSubject].topics[topic].checked;
-      if (!nextData[currentSubject].lessonHistory) {
-      	nextData[currentSubject].lessonHistory = [];
-      }
-      nextData[currentSubject].lessonHistory.push({
-      	topic,
-      	done: isDone,
-      	date: new Date().toISOString()
-      });
-      
-      const nextGrade = calculateCurrentGradeFromData(nextData, currentSubject);
-      if (nextGrade.level > prevGrade.level) {
-        triggerStars();
-        showNotification(`Subject Grade Upgraded to ${nextGrade.grade}!`, 'success');
-      } else {
-        showNotification(`Status updated: ${topic}`, 'success');
-      }
-      
-      const sftMark = calculateSubjectAveragePercent('sft', nextData);
-      const etMarkBase = calculateSubjectAveragePercent('et', nextData);
-      const etMark = Math.min(100, (etMarkBase * 0.75) + 25);
-      const ictMark = calculateSubjectAveragePercent('ict', nextData);
-      const sftZ = calculateSubjectZ('sft', sftMark);
-      const etZ = calculateSubjectZ('et', etMark);
-      const ictZ = calculateSubjectZ('ict', ictMark);
-      const overallZScore = Number(((sftZ + etZ + ictZ) / 3).toFixed(3));
-
-      if (!nextData.zScoreHistory) {
-         nextData.zScoreHistory = [];
-      }
-      
-      nextData.zScoreHistory.push({
-         date: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
-         zScore: overallZScore,
-         subjectZScores: { sft: sftZ, et: etZ, ict: ictZ },
-         reason: `${isDone ? 'Completed' : 'Reset'} ${topic} - Z-score updated`
-      });
-
-      saveData(nextData);
+    const prevGrade = calculateCurrentGradeFromData(data, currentSubject);
+    const nextData = structuredClone(data);
+    if (!nextData[currentSubject].topics[topic]) {
+      nextData[currentSubject].topics[topic] = { checked: true, videos: [] };
+    } else {
+      nextData[currentSubject].topics[topic].checked = !nextData[currentSubject].topics[topic].checked;
+    }
+    
+    const isDone = nextData[currentSubject].topics[topic].checked;
+    if (!nextData[currentSubject].lessonHistory) {
+      nextData[currentSubject].lessonHistory = [];
+    }
+    nextData[currentSubject].lessonHistory.push({
+      topic,
+      done: isDone,
+      date: new Date().toISOString()
     });
+    
+    const nextGrade = calculateCurrentGradeFromData(nextData, currentSubject);
+    if (nextGrade.level > prevGrade.level) {
+      triggerStars();
+      showNotification(`Subject Grade Upgraded to ${nextGrade.grade}!`, 'success');
+    } else {
+      showNotification(`Status updated: ${topic}`, 'success');
+    }
+    
+    const sftMark = calculateSubjectAveragePercent('sft', nextData);
+    const etMarkBase = calculateSubjectAveragePercent('et', nextData);
+    const etMark = Math.min(100, (etMarkBase * 0.75) + 25);
+    const ictMark = calculateSubjectAveragePercent('ict', nextData);
+    const sftZ = calculateSubjectZ('sft', sftMark);
+    const etZ = calculateSubjectZ('et', etMark);
+    const ictZ = calculateSubjectZ('ict', ictMark);
+    const overallZScore = Number(((sftZ + etZ + ictZ) / 3).toFixed(3));
+
+    if (!nextData.zScoreHistory) {
+       nextData.zScoreHistory = [];
+    }
+    
+    nextData.zScoreHistory.push({
+       date: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
+       zScore: overallZScore,
+       subjectZScores: { sft: sftZ, et: etZ, ict: ictZ },
+       reason: `${isDone ? 'Completed' : 'Reset'} ${topic} - Z-score updated`
+    });
+
+    saveData(nextData);
   };
 
   const updateTopicNotes = (topic: string, notes: string) => {
@@ -1217,7 +1249,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsAuthLoading(true);
     try {
       if (isFirebaseEnabled && auth) {
-        const { signInWithEmailAndPassword } = await import('firebase/auth');
         const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
         const idToken = await credential.user.getIdToken();
         
@@ -1295,7 +1326,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsAuthLoading(true);
     try {
       if (isFirebaseEnabled && auth) {
-        const { createUserWithEmailAndPassword } = await import('firebase/auth');
         const credential = await createUserWithEmailAndPassword(auth, params.email.trim(), params.password);
         const idToken = await credential.user.getIdToken();
 

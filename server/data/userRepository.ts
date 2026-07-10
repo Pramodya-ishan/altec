@@ -58,7 +58,17 @@ export async function syncUserFromFirestore(email: string) {
   if (!email || !email.includes("@") || !apiKey) return;
   const cleanEmail = email.trim().toLowerCase();
   const file = getUserFile(cleanEmail);
-  if (fs.existsSync(file)) return; // Already exists locally
+  if (fs.existsSync(file)) {
+    try {
+      const data = fs.readFileSync(file);
+      const unzipped = zlib.gunzipSync(data).toString("utf-8");
+      // Basic check
+      if (unzipped.length > 0) return; 
+    } catch (e) {
+      console.warn("Local file is corrupted, re-syncing from Firestore:", file);
+      fs.unlinkSync(file);
+    }
+  }
 
   try {
     // We use the 'backups' collection, which has public read/write permission (encrypted data)
@@ -113,12 +123,8 @@ export function readUser(email: string) {
   }
   try {
     const raw = fs.readFileSync(file);
-    let jsonStr: string;
-    try {
-      jsonStr = zlib.gunzipSync(raw).toString("utf-8");
-    } catch {
-      jsonStr = raw.toString("utf-8");
-    }
+    const unzipped = zlib.gunzipSync(raw).toString("utf-8");
+    let jsonStr = unzipped;
     if (!jsonStr.startsWith("{")) {
       jsonStr = decrypt(jsonStr);
     }

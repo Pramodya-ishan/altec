@@ -14,7 +14,7 @@ A specialized, personalized AI tutor for Sri Lankan G.C.E. A/L Technology stream
 
 1. **Sinhala-First RAG Pipeline:** Retrieves from syllabus, past papers, and NotebookLM mirrors to construct highly accurate, personalized answers.
 2. **Contextual Memory:** Uses actual logged-in Firebase user profiles, recent marks, and identified weak lessons to drive the tutoring strategy.
-3. **Vertex AI ADC Auth:** Uses Service Account JSON (`GOOGLE_APPLICATION_CREDENTIALS_JSON`) directly without relying on free-tier AI Studio keys, avoiding "Prepayment Credits Depleted" errors.
+3. **Vertex AI ADC Auth:** Controls authentication mode purely via `GEMINI_USE_VERTEX=true` and `GOOGLE_APPLICATION_CREDENTIALS_JSON` without relying on free-tier AI Studio keys, avoiding "Prepayment Credits Depleted" errors.
 4. **Google Search Grounding:** Dynamic fallback to search the web for latest past papers, marking schemes, and syllabus PDFs.
 5. **Reduced Firestore Quota Burn:** Writes are optimized.
 
@@ -23,15 +23,20 @@ A specialized, personalized AI tutor for Sri Lankan G.C.E. A/L Technology stream
 Ensure these environment variables are set in your `.env`:
 
 ```env
+APP_DEPLOY_TARGET=aistudio_applet
+GEMINI_USE_VERTEX=true
 GOOGLE_CLOUD_PROJECT=al-ai-chat
 GOOGLE_CLOUD_LOCATION=global
 GOOGLE_APPLICATION_CREDENTIALS_JSON={"type": "service_account", ...}
+
 GEMINI_DEFAULT_MODEL=gemini-3.5-flash
-ENABLE_GOOGLE_SEARCH_GROUNDING=true
-ENABLE_FIRESTORE_CLIENT_WRITES=false
-ENABLE_SERVER_FIRESTORE_BACKUP=false
-AL_EXAM_START_DATE=2026-08-11
-APP_TIME_ZONE=Asia/Colombo
+GEMINI_FAST_MODEL=gemini-3.5-flash
+GEMINI_PDF_QA_MODEL=gemini-3.5-flash
+GEMINI_FINAL_MODEL=gemini-3.1-pro-preview
+
+ENABLE_TTS=false
+ENABLE_AUTO_OCR=false
+ENABLE_IMAGE_GENERATION=false
 ```
 
 ## Running the App

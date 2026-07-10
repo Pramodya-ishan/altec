@@ -3,7 +3,7 @@ import { classifyAIError } from "./errors";
 import { classifyMode, requiresGoogleSearch } from "./modes";
 import { getCloraSystemPrompt } from "./prompts";
 import { loadUserAIContext } from "../firebase/userContext";
-import { retrieveRelevantKnowledge } from "../knowledge/retrieve";
+import { retrieveRelevantKnowledge } from "../rag/retrieve";
 import { getAdminDb } from "../firebase/admin";
 
 export async function processAIRequest(req: any) {
@@ -20,14 +20,7 @@ export async function processAIRequest(req: any) {
     const mode = classifyMode(prompt, explicitMode);
 
     // 3. Retrieve knowledge
-    const knowledgeChunks = await retrieveRelevantKnowledge({
-      prompt,
-      activeSubject,
-      mode,
-      uid,
-      email: req.user?.email,
-      userContext: contextData,
-    });
+    const knowledgeChunks = await retrieveRelevantKnowledge({ prompt, activeSubject, mode });
 
     // 4. Determine search
     const useSearch = requiresGoogleSearch(mode, prompt);
@@ -123,7 +116,6 @@ async function saveChatToHistory(uid: string, prompt: string, response: string, 
     batch.set(userMsgRef, {
       role: "user",
       text: prompt,
-      content: prompt,
       mode,
       subject: subject || null,
       createdAt: new Date().toISOString()
@@ -133,7 +125,6 @@ async function saveChatToHistory(uid: string, prompt: string, response: string, 
     batch.set(aiMsgRef, {
       role: "assistant",
       text: response,
-      content: response,
       mode,
       subject: subject || null,
       createdAt: new Date().toISOString()

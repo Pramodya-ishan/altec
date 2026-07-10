@@ -194,7 +194,7 @@ export function PredictorWidget() {
   };
 
   return (
-    <section className="bg-white border border-transparent rounded-[22px] p-4 sm:p-8 shadow-sm overflow-hidden text-left">
+    <section className="bg-gradient-to-b from-white to-indigo-50/30 border border-slate-200/60 rounded-3xl p-6 sm:p-8 shadow-lg overflow-hidden text-left">
       {/* COLLAPSE TRIGGER AS AN ACCESSIBLE BUTTON */}
       <button
         type="button"
@@ -221,7 +221,7 @@ export function PredictorWidget() {
           <div className="flex flex-col gap-4 md:gap-6 items-center w-full">
             
             {/* LEFT SIDE: FINAL PERCENTAGE ACCENT CARD */}
-            <div className="flex flex-col items-center justify-between p-4 sm:p-5 bg-slate-50/50 rounded-2xl border border-slate-200 w-full">
+            <div className="flex flex-col items-center justify-between p-6 bg-white rounded-2xl border border-slate-100 shadow-sm w-full">
               <div className="flex flex-col items-center text-center w-full">
                 <h3 className="text-[10px] text-slate-500 uppercase tracking-widest font-extrabold mb-1">
                   Final Projected

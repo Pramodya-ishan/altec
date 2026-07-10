@@ -1,3 +1,4 @@
+import { calculateSubjectAveragePercent, calculateSubjectZ } from '../../lib/scoreUtils';
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { calculateGrade } from '../../lib/utils';
@@ -101,7 +102,8 @@ export function AddPaperMarksModal() {
     
     nextData[currentSubject].paperMarks.sort((a, b) => a.time - b.time);
     
-    import('../../lib/scoreUtils').then(({ calculateSubjectAveragePercent, calculateSubjectZ }) => {
+    {
+
       const sftMark = calculateSubjectAveragePercent('sft', nextData);
       const etMarkBase = calculateSubjectAveragePercent('et', nextData);
       const etMark = Math.min(100, (etMarkBase * 0.75) + 25);
@@ -119,10 +121,11 @@ export function AddPaperMarksModal() {
          reason: `Added/Updated Paper Marks: ${title} - Z-score updated`
       });
 
+
       saveData(nextData);
       showNotification('Paper Marks saved successfully!', 'success');
       close();
-    });
+    }
   };
 
   const isET = currentSubject === 'et';

@@ -4,7 +4,7 @@ import { getStorage } from "firebase-admin/storage";
 
 export async function generateEducationalImage(req: any) {
   try {
-    const { prompt, subject, lesson, style, mode } = req.body;
+    const { prompt, subject, lesson, style, mode, aspectRatio = "1:1", quality } = req.body;
     const uid = req.user.uid;
 
     if (!prompt) throw new Error("Prompt is required");
@@ -12,10 +12,13 @@ export async function generateEducationalImage(req: any) {
     // Build educational Sinhalese/English exam-focused prompt
     const finalPrompt = `Create a clean Sinhala G.C.E. A/L Technology exam-focused diagram. Clear labels. Minimal clutter. Accurate educational layout. No watermark. Sinhala labels where useful. Subject: ${subject || "Technology"}. Lesson: ${lesson || "General"}. User request: ${prompt}`;
 
-    const configuredModel = process.env.GEMINI_IMAGE_MODEL || process.env.NANO_BANANA_MODEL || "imagen-3.0-generate-001";
-    const fallbackModel = process.env.GEMINI_IMAGE_PRO_MODEL || process.env.NANO_BANANA_PRO_MODEL || "imagen-3.0-generate-001";
+    let configuredModel = AI_MODELS.image;
+    if (mode === "studio" || mode === "pro" || quality === "high" || quality === "4K") {
+      configuredModel = AI_MODELS.imagePro;
+    }
+    const fallbackModel = "imagen-3.0-generate-001";
 
-    const modelsToTry = [configuredModel, fallbackModel, "imagen-3.0-generate-001"];
+    const modelsToTry = [configuredModel, fallbackModel, "gemini-3.1-flash-image", "gemini-3-pro-image", "imagen-3.0-generate-001"];
     const uniqueModels = Array.from(new Set(modelsToTry));
 
     let imageBase64: string | undefined;
@@ -27,40 +30,23 @@ export async function generateEducationalImage(req: any) {
     for (const modelName of uniqueModels) {
       try {
         modelUsed = modelName;
-        if (modelName.toLowerCase().startsWith("imagen")) {
-          // Imagen text-to-image API
+        if (modelName.toLowerCase().startsWith("imagen") || modelName.toLowerCase().includes("image")) {
+          // generateImages API works for both imagen-3.0 and gemini-*-image
           const response = await ai.models.generateImages({
             model: modelName,
             prompt: finalPrompt,
             config: {
               numberOfImages: 1,
               outputMimeType: "image/jpeg",
-              aspectRatio: "1:1"
+              aspectRatio: aspectRatio
             }
           });
 
           if (response && response.generatedImages && response.generatedImages.length > 0) {
             imageBase64 = response.generatedImages[0].image?.imageBytes;
           }
-        } else if (modelName.toLowerCase().includes("gemini") && modelName.toLowerCase().includes("image")) {
-          // Gemini multimodal text+image generation
-          const response = await ai.models.generateContent({
-            model: modelName,
-            contents: finalPrompt,
-            config: {
-              responseModalities: ["TEXT", "IMAGE"]
-            }
-          });
-
-          const parts = response.candidates?.[0]?.content?.parts || [];
-          for (const part of parts) {
-            if (part.inlineData && part.inlineData.data) {
-              imageBase64 = part.inlineData.data;
-              break;
-            }
-          }
-        }
-
+        } 
+        
         if (imageBase64) {
           break; // Successfully got image bytes!
         }
@@ -86,7 +72,7 @@ export async function generateEducationalImage(req: any) {
 
     // Upload to Firebase Storage
     try {
-      const bucket = getStorage().bucket();
+      const bucket = getStorage().bucket("al-ai-chat.firebasestorage.app");
       const path = `generated_images/${uid}/${imageId}.jpg`;
       const file = bucket.file(path);
       await file.save(Buffer.from(imageBase64, 'base64'), {
@@ -94,11 +80,9 @@ export async function generateEducationalImage(req: any) {
           contentType: "image/jpeg"
         }
       });
-
       try {
         await file.makePublic();
       } catch (e) {}
-
       imageUrl = `https://storage.googleapis.com/${bucket.name}/${path}`;
       storagePath = path;
     } catch (storageErr) {
@@ -108,7 +92,7 @@ export async function generateEducationalImage(req: any) {
     // Save to Firestore
     try {
       const db = getAdminDb();
-      const imageRef = db.collection("users").doc(uid).collection("generated_images").doc(imageId);
+      const imageRef = db.collection("generated_images").doc(uid).collection("items").doc(imageId);
       await imageRef.set({
         uid,
         subject: subject || null,

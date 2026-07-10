@@ -120,9 +120,218 @@
         }
       },
       "required": ["id", "title", "message", "type", "read", "timestamp"]
+    },
+    "PdfQuestionCache": {
+      "title": "PDF Question Cache",
+      "description": "Cached answers for specific questions within a PDF source to reduce API calls.",
+      "type": "object",
+      "properties": {
+        "sourceId": { "type": "string" },
+        "questionId": { "type": "string" },
+        "answer": { "type": "string" },
+        "evidenceChunks": { "type": "array" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["sourceId", "questionId", "answer", "timestamp"]
+    },
+    "ExamQuestionIndex": {
+      "title": "Exam Question Index",
+      "description": "Metadata for extracted questions from exam papers.",
+      "type": "object",
+      "properties": {
+        "sourceId": { "type": "string" },
+        "sourceTitle": { "type": "string" },
+        "subject": { "type": "string" },
+        "year": { "type": "string" },
+        "paperType": { "type": "string" },
+        "questionType": { "type": "string" },
+        "questionNo": { "type": "integer" },
+        "partNo": { "type": "string" },
+        "marks": { "type": "number" },
+        "compulsory": { "type": "boolean" },
+        "lesson": { "type": "string" },
+        "subtopic": { "type": "string" },
+        "concept": { "type": "string" },
+        "skillType": { "type": "string" },
+        "calculationType": { "type": "string" },
+        "diagramRequired": { "type": "boolean" },
+        "formulaRequired": { "type": "boolean" },
+        "questionText": { "type": "string" },
+        "options": { "type": "array" },
+        "answer": { "type": "string" },
+        "markingPoints": { "type": "array" },
+        "pageNumber": { "type": "integer" },
+        "extractionMethod": { "type": "string" },
+        "confidence": { "type": "number" },
+        "verified": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "SyllabusNode": {
+      "title": "Syllabus Node",
+      "description": "Information about a specific syllabus topic and its importance.",
+      "type": "object",
+      "properties": {
+        "subject": { "type": "string" },
+        "lesson": { "type": "string" },
+        "subtopic": { "type": "string" },
+        "syllabusWeight": { "type": "number" },
+        "prerequisites": { "type": "array" },
+        "relatedPastQuestions": { "type": "array" },
+        "difficulty": { "type": "string" },
+        "importance": { "type": "string" },
+        "lastAskedYear": { "type": "string" },
+        "frequency": { "type": "number" }
+      }
+    },
+    "MistakeNotebook": {
+      "title": "Mistake Notebook Entry",
+      "description": "Tracks a student's mistake on a specific question.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "subject": { "type": "string" },
+        "lesson": { "type": "string" },
+        "subtopic": { "type": "string" },
+        "questionType": { "type": "string" },
+        "questionText": { "type": "string" },
+        "userAnswer": { "type": "string" },
+        "correctAnswer": { "type": "string" },
+        "mistakeType": { "type": "string" },
+        "explanation": { "type": "string" },
+        "retryDate": { "type": "string", "format": "date-time" },
+        "repeatCount": { "type": "integer" },
+        "mastered": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "StudentWarPlan": {
+      "title": "Student 30-Day War Plan",
+      "description": "A generated intensive study plan.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "target": { "type": "string" },
+        "daysRemaining": { "type": "integer" },
+        "currentRisk": { "type": "string" },
+        "realisticForecast": { "type": "object" },
+        "dailyPlan": { "type": "array" },
+        "weeklyMilestones": { "type": "array" },
+        "mustDoLessons": { "type": "array" },
+        "skipOrLowPriorityLessons": { "type": "array" },
+        "mockTestSchedule": { "type": "array" },
+        "revisionCycles": { "type": "array" },
+        "warnings": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "StudentForecast": {
+      "title": "Student Mark Forecast",
+      "description": "AI predicted mark trajectory for a student.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "currentMarkEstimate": { "type": "number" },
+        "forecast7Day": { "type": "number" },
+        "forecast30Day": { "type": "number" },
+        "a3Chance": { "type": "string" },
+        "mustFix": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ExamPatternReport": {
+      "title": "Exam Pattern Report",
+      "description": "Aggregated statistics and trends for a subject.",
+      "type": "object",
+      "properties": {
+        "subject": { "type": "string" },
+        "yearsAnalyzed": { "type": "array" },
+        "lessonFrequencyTable": { "type": "array" },
+        "marksByLesson": { "type": "array" },
+        "mcqFrequency": { "type": "array" },
+        "structuredFrequency": { "type": "array" },
+        "essayFrequency": { "type": "array" },
+        "repeatedConcepts": { "type": "array" },
+        "rareConcepts": { "type": "array" },
+        "notAskedRecently": { "type": "array" },
+        "trendChangesLastFiveYears": { "type": "array" },
+        "highProbabilityTopics": { "type": "array" },
+        "lowProbabilityTopics": { "type": "array" },
+        "confidence": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "PredictionReport": {
+      "title": "Exam Prediction Report",
+      "description": "AI generated prediction for upcoming exams.",
+      "type": "object",
+      "properties": {
+        "subject": { "type": "string" },
+        "year": { "type": "string" },
+        "mode": { "type": "string" },
+        "paperMode": { "type": "string" },
+        "questions": { "type": "array" },
+        "answerKey": { "type": "array" },
+        "evidenceMap": { "type": "array" },
+        "confidenceReport": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "MockResult": {
+      "title": "Mock Test Result",
+      "description": "Result of a mock test taken by the student.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "subject": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "mcqMarks": { "type": "number" },
+        "structuredMarks": { "type": "number" },
+        "essayMarks": { "type": "number" },
+        "totalMarks": { "type": "number" },
+        "timeTaken": { "type": "number" },
+        "weakLessons": { "type": "array" }
+      }
     }
   },
   "firestore": {
+    "exam_question_index/{questionId}": {
+      "schema": "ExamQuestionIndex",
+      "description": "Global index of exam questions"
+    },
+    "syllabus_nodes/{nodeId}": {
+      "schema": "SyllabusNode",
+      "description": "Syllabus topic metadata"
+    },
+    "exam_pattern_reports/{reportId}": {
+      "schema": "ExamPatternReport",
+      "description": "Subject pattern trends"
+    },
+    "prediction_reports/{reportId}": {
+      "schema": "PredictionReport",
+      "description": "Generated exam predictions"
+    },
+    "/users/{userId}/mistake_notebook/{mistakeId}": {
+      "schema": "MistakeNotebook",
+      "description": "Student mistake tracking"
+    },
+    "/users/{userId}/war_plans/{planId}": {
+      "schema": "StudentWarPlan",
+      "description": "Personalized 30-day plans"
+    },
+    "/users/{userId}/forecasts/{forecastId}": {
+      "schema": "StudentForecast",
+      "description": "Personalized mark forecasts"
+    },
+    "/users/{userId}/mock_results/{resultId}": {
+      "schema": "MockResult",
+      "description": "Student mock test history"
+    },
+    "pdf_question_cache/{cacheId}": {
+      "schema": "PdfQuestionCache",
+      "description": "Global cache for PDF question answers"
+    },
     "/users/{userId}/progress/data": {
       "schema": "UserProgress",
       "description": "Path to student academic tracker data"

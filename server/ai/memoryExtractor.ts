@@ -1,7 +1,15 @@
 import { getAIClient, AI_MODELS } from "./client";
 import { getAdminDb } from "../firebase/admin";
 
-export async function extractStableMemoryIfUseful(params: {uid: string, prompt: string, answer: string, userContext: any}) {
+export async function extractStableMemoryIfUseful(params: {uid: string, email?: string, prompt: string, answer: string, userContext: any}) {
+  if (process.env.ENABLE_MEMORY_EXTRACTION !== "true") {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "MEMORY_EXTRACTION_DISABLED"
+    };
+  }
+
   try {
     const ai = getAIClient();
     const extractionPrompt = `
@@ -21,7 +29,10 @@ Assistant Answer: ${params.answer}
     const response = await ai.models.generateContent({
       model: AI_MODELS.default,
       contents: extractionPrompt,
-      config: { temperature: 0.1 }
+      config: { 
+        temperature: 0.1,
+        responseMimeType: "application/json"
+      }
     });
 
     let text = response.text || "[]";
@@ -46,8 +57,13 @@ Assistant Answer: ${params.answer}
       await batch.commit();
       return items;
     }
-  } catch (e) {
-    console.warn("Memory extraction failed", e);
+  } catch (e: any) {
+    if (e?.status === 429 || e?.code === 429) {
+      console.warn("MEMORY_EXTRACTION_SKIPPED_QUOTA");
+      return { ok: false, skipped: true, reason: "RESOURCE_EXHAUSTED" };
+    }
+    console.warn("MEMORY_EXTRACTION_FAILED", e?.message || e);
+    return { ok: false, skipped: true, reason: "FAILED" };
   }
   return [];
 }

@@ -1,244 +1,638 @@
-import { SYLLABUS } from "../../src/constants/syllabus";
-import { pastPapersData } from "../../src/data/pastPapersData";
+
 import { getAdminDb } from "../firebase/admin";
 
-export type KnowledgeChunk = {
-  title: string;
-  subject?: string;
-  topic?: string;
-  type: "syllabus" | "past_paper" | "note" | "firebase_progress" | "notebooklm" | "web";
-  url?: string;
-  text: string;
-  score: number;
-};
-
-type RetrieveParams = {
-  prompt: string;
-  activeSubject?: string;
-  mode?: string;
-  limit?: number;
+export async function retrieveRelevantKnowledge({
+  query,
+  uid,
+  subject,
+  limit = 8
+}: {
+  query: string;
   uid?: string;
-  email?: string;
-  userContext?: any;
-};
-
-function tokens(value: string) {
-  return new Set(
-    String(value || "")
-      .toLowerCase()
-      .split(/[^\p{L}\p{N}]+/u)
-      .filter((token) => token.length >= 2)
-  );
-}
-
-function scoreText(promptTokens: Set<string>, text: string, subject?: string, activeSubject?: string) {
-  const lower = String(text || "").toLowerCase();
-  let score = 0;
-  promptTokens.forEach((token) => {
-    if (lower.includes(token)) score += token.length > 3 ? 2 : 1;
-  });
-  if (activeSubject && subject && subject.toLowerCase() === activeSubject.toLowerCase()) score += 4;
-  return score;
-}
-
-function addLocalSyllabusChunks(chunks: KnowledgeChunk[], promptTokens: Set<string>, activeSubject?: string) {
-  Object.entries(SYLLABUS as any).forEach(([subject, def]: [string, any]) => {
-    if (activeSubject && subject !== activeSubject) return;
-
-    def.mcqItems?.forEach((item: any) => {
-      const text = `Subject ${subject.toUpperCase()} MCQ syllabus ${item.q}: ${item.title}. Expected MCQ count: ${item.count || 1}.`;
-      chunks.push({
-        title: `${subject.toUpperCase()} ${item.q} ${item.title}`,
-        subject,
-        topic: item.title,
-        type: "syllabus",
-        text,
-        score: scoreText(promptTokens, text, subject, activeSubject),
-      });
-    });
-
-    const essayItems = [
-      ...(def.partAItems || []).map((item: any) => ({ ...item, section: "Part A" })),
-      ...(def.partBCDItems || []).map((item: any) => ({ ...item, section: "Essay" })),
-      ...((def.bcdGroups || []).flatMap((group: any) => (group.items || []).map((item: any) => ({ ...item, section: group.label })))),
-    ];
-
-    essayItems.forEach((item: any) => {
-      const topics = (item.topics || [item.title]).join(", ");
-      const text = `Subject ${subject.toUpperCase()} ${item.section} ${item.q}: ${item.subTitle || item.title}. Topics: ${topics}. Max marks: ${item.max || "not set"}.`;
-      chunks.push({
-        title: `${subject.toUpperCase()} ${item.section} ${item.q}`,
-        subject,
-        topic: topics,
-        type: "syllabus",
-        text,
-        score: scoreText(promptTokens, text, subject, activeSubject),
-      });
-    });
-  });
-}
-
-function addUserContextChunks(chunks: KnowledgeChunk[], promptTokens: Set<string>, context: any, activeSubject?: string) {
-  context?.recentProgress?.forEach((item: any) => {
-    const text = `${item.subject?.toUpperCase()} progress: ${item.completedTopics}/${item.totalTopics} lessons completed (${item.coveragePercent}%).`;
-    chunks.push({
-      title: `${item.subject?.toUpperCase()} progress summary`,
-      subject: item.subject,
-      type: "firebase_progress",
-      text,
-      score: scoreText(promptTokens, text, item.subject, activeSubject) + 3,
-    });
-  });
-
-  context?.weakLessons?.slice(0, 20).forEach((lesson: any) => {
-    const text = `${lesson.subject?.toUpperCase()} weak/incomplete lesson: ${lesson.topic || lesson.lesson}. Reason: ${lesson.reason || "not recorded"}. Priority weight: ${lesson.priorityWeight || 1}. Last status: ${lesson.lastDoneStatus || "unknown"}.`;
-    chunks.push({
-      title: `${lesson.subject?.toUpperCase()} weak lesson ${lesson.topic || lesson.lesson}`,
-      subject: lesson.subject,
-      topic: lesson.topic || lesson.lesson,
-      type: "firebase_progress",
-      text,
-      score: scoreText(promptTokens, text, lesson.subject, activeSubject) + (lesson.priorityWeight || 1),
-    });
-  });
-
-  context?.paperMarks?.slice(-20).forEach((mark: any) => {
-    const text = `${mark.subject?.toUpperCase()} paper mark: ${mark.title || "untitled"} total ${mark.total ?? "unknown"}, MCQ ${mark.mcq ?? mark.mcqRaw ?? "unknown"}, essay ${mark.essay ?? "unknown"}, grade ${mark.grade || "unknown"}.`;
-    chunks.push({
-      title: `${mark.subject?.toUpperCase()} mark ${mark.title || ""}`.trim(),
-      subject: mark.subject,
-      type: "firebase_progress",
-      text,
-      score: scoreText(promptTokens, text, mark.subject, activeSubject) + 2,
-    });
-  });
-
-  const appData = context?.appData;
-  if (!appData) return;
-  ["sft", "et", "ict"].forEach((subject) => {
-    if (activeSubject && activeSubject !== subject) return;
-    const topics = appData[subject]?.topics || {};
-    Object.entries(topics).forEach(([topic, data]: [string, any]) => {
-      const notes = String(data?.notes || "").trim();
-      if (!notes) return;
-      const text = `${subject.toUpperCase()} user note for ${topic}: ${notes.slice(0, 1200)}`;
-      chunks.push({
-        title: `${subject.toUpperCase()} note ${topic}`,
-        subject,
-        topic,
-        type: "note",
-        text,
-        score: scoreText(promptTokens, text, subject, activeSubject) + 5,
-      });
-    });
-  });
-}
-
-function addPastPaperChunks(chunks: KnowledgeChunk[], promptTokens: Set<string>, activeSubject?: string) {
-  (pastPapersData.papers || []).forEach((paper: any) => {
-    const subject = paper.metadata?.subjectKey || "";
-    if (activeSubject && subject !== activeSubject) return;
-    const answers = (paper.answers || []).slice(0, 50).map((item: any) => `Q${item.question}:${item.answer}`).join(", ");
-    const text = `${paper.metadata?.exam} ${paper.metadata?.subject} ${paper.metadata?.medium || ""} MCQ answer key. Answers: ${answers}`;
-    chunks.push({
-      title: `${paper.metadata?.exam} ${paper.metadata?.subject} answer key`,
-      subject,
-      type: "past_paper",
-      url: `/api/past-papers/local/${subject}/${String(paper.metadata?.exam || "").match(/\b(20\d{2}|19\d{2})\b/)?.[1] || "unknown"}`,
-      text,
-      score: scoreText(promptTokens, text, subject, activeSubject),
-    });
-  });
-}
-
-async function addFirestoreChunks(chunks: KnowledgeChunk[], params: RetrieveParams, promptTokens: Set<string>) {
+  subject?: string;
+  limit?: number;
+}) {
   const db = getAdminDb();
-  const activeSubject = params.activeSubject;
+  const chunks: Array<{
+    sourceType: string;
+    title: string;
+    text: string;
+    confidence: number;
+    year?: string;
+    lesson?: string;
+    subject?: string;
+    id?: string;
+    url?: string;
+  }> = [];
+
+  const lowerQ = query.toLowerCase();
 
   try {
-    let query: any = db.collection("knowledge_chunks");
-    if (activeSubject) query = query.where("subject", "==", activeSubject);
-    const snap = await query.limit(60).get();
-    snap.docs.forEach((doc: any) => {
-      const data = doc.data();
-      const text = String(data.text || data.content || data.summary || "");
-      if (!text) return;
-      chunks.push({
-        title: data.title || data.sourceTitle || `Knowledge ${doc.id}`,
-        subject: data.subject,
-        topic: data.topic,
-        type: data.type || "syllabus",
-        url: data.url || data.sourceUrl,
-        text: text.slice(0, 1800),
-        score: scoreText(promptTokens, `${data.title || ""} ${data.topic || ""} ${text}`, data.subject, activeSubject) + (data.score || 0),
-      });
-    });
-  } catch (e) {
-    console.warn("knowledge_chunks retrieval failed:", e);
-  }
-
-  if (!params.uid) return;
-  const refs = [
-    db.collection("users").doc(params.uid),
-    params.email ? db.collection("users").doc(params.email.toLowerCase()) : null,
-  ].filter(Boolean);
-
-  for (const ref of refs as any[]) {
-    try {
-      const notesSnap = await ref.collection("notes").limit(30).get();
-      notesSnap.docs.forEach((doc: any) => {
-        const data = doc.data();
-        const text = String(data.text || data.content || data.notes || "");
-        if (!text) return;
-        chunks.push({
-          title: data.title || `Saved note ${doc.id}`,
-          subject: data.subject,
-          topic: data.topic,
-          type: "note",
-          url: data.url,
-          text: text.slice(0, 1200),
-          score: scoreText(promptTokens, `${data.title || ""} ${data.topic || ""} ${text}`, data.subject, activeSubject) + 4,
-        });
-      });
-    } catch (e) {
-      console.warn("user notes retrieval failed:", e);
+    // 0. Active chat temporary PDFs
+    let activePdfSourceIds: string[] = [];
+    if (uid) {
+      try {
+        const chatContextDoc = await db.collection("users").doc(uid).collection("chat_context").doc("current").get();
+        if (chatContextDoc.exists) {
+          const data = chatContextDoc.data();
+          if (data && Array.isArray(data.temporaryPdfs)) {
+            activePdfSourceIds = data.temporaryPdfs.map((pdf: any) => pdf.sourceId);
+          }
+        }
+      } catch (err: any) {
+        console.warn("Failed to retrieve temporary PDFs context:", err.message);
+      }
     }
 
-    try {
-      const filesSnap = await ref.collection("files").limit(30).get();
-      filesSnap.docs.forEach((doc: any) => {
-        const data = doc.data();
-        const text = String(data.extractedText || data.summary || data.title || "");
-        if (!text && !data.url) return;
-        chunks.push({
-          title: data.title || data.name || `Uploaded source ${doc.id}`,
-          subject: data.subject,
-          topic: data.topic,
-          type: data.notebookLmUrl ? "notebooklm" : "web",
-          url: data.notebookLmUrl || data.url || data.downloadURL,
-          text: (text || "Uploaded file metadata; text was not extracted yet.").slice(0, 1200),
-          score: scoreText(promptTokens, `${data.title || ""} ${data.topic || ""} ${text}`, data.subject, activeSubject) + 2,
-        });
-      });
-    } catch (e) {
-      console.warn("user files retrieval failed:", e);
+    if (uid && activePdfSourceIds.length > 0) {
+      try {
+        for (const sId of activePdfSourceIds) {
+          const sourceSnap = await db.collection("rag_sources").doc(sId).get();
+          const sourceTitle = sourceSnap.exists ? (sourceSnap.data()?.title || sourceSnap.data()?.fileName || "Uploaded PDF") : "Uploaded PDF";
+          
+          const chunksSnap = await db.collection("rag_chunks")
+            .where("sourceId", "==", sId)
+            .get();
+            
+          chunksSnap.docs.forEach((doc: any) => {
+            const data = doc.data();
+            const textLower = (data.text || "").toLowerCase();
+            const matchesSearch = textLower.includes(lowerQ) || 
+              (data.tags && data.tags.some((t: string) => lowerQ.includes(t.toLowerCase())));
+              
+            chunks.push({
+              sourceType: "Uploaded PDF",
+              title: sourceTitle,
+              text: data.text,
+              confidence: matchesSearch ? 1.0 : 0.82,
+              subject: data.subject,
+              lesson: data.lesson,
+              year: data.year,
+              id: doc.id
+            });
+          });
+        }
+      } catch (err: any) {
+        console.warn("Failed to retrieve chunks for active temporary PDFs:", err.message);
+      }
     }
+
+    // 1. Explicitly check for an uploaded PDF in the chat prompt
+    const uploadedPdfMatch = query.match(/\[Uploaded PDF:\s*([^\]]+)\]/i);
+    if (uploadedPdfMatch && uid) {
+       const uploadedFileName = uploadedPdfMatch[1].trim();
+       try {
+          const sourcesSnap = await db.collection("rag_sources")
+             .where("ownerUid", "==", uid)
+             .where("fileName", "==", uploadedFileName)
+             .limit(1)
+             .get();
+          
+          let sourceId = "";
+          let sourceTitle = uploadedFileName;
+          if (!sourcesSnap.empty) {
+             sourceId = sourcesSnap.docs[0].id;
+             sourceTitle = sourcesSnap.docs[0].data().title || uploadedFileName;
+          } else {
+             const recentSources = await db.collection("rag_sources")
+                .where("ownerUid", "==", uid)
+                .orderBy("createdAt", "desc")
+                .limit(1)
+                .get();
+             if (!recentSources.empty) {
+                sourceId = recentSources.docs[0].id;
+                sourceTitle = recentSources.docs[0].data().title || recentSources.docs[0].data().fileName;
+             }
+          }
+          
+          if (sourceId) {
+             const chunksSnap = await db.collection("rag_chunks")
+                .where("sourceId", "==", sourceId)
+                .limit(limit)
+                .get();
+             chunksSnap.docs.forEach((doc: any) => {
+                const data = doc.data();
+                chunks.push({
+                   sourceType: "Uploaded PDF",
+                   title: sourceTitle,
+                   text: data.text,
+                   confidence: 1.0,
+                   subject: data.subject,
+                   lesson: data.lesson,
+                   year: data.year,
+                   id: doc.id
+                });
+             });
+          }
+       } catch (pdfErr: any) {
+          console.warn("Failed to retrieve chunks for uploaded PDF:", pdfErr.message);
+       }
+    }
+
+    // 2. Syllabus owner private search first
+    if (uid && chunks.length < limit) {
+       const userDoc = await db.collection("users").doc(uid).get();
+       const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "26002ishan@gmail.com";
+       const isOwner = userDoc.data()?.email?.toLowerCase() === ownerEmail.toLowerCase();
+       
+       if (isOwner) {
+          const sylSnap = await db.collection("users").doc(uid).collection("syllabus_chunks")
+             .where("subject", "==", subject || null)
+             .limit(limit)
+             .get();
+             
+          sylSnap.docs.forEach((doc: any) => {
+             const data = doc.data();
+             if (data.text?.toLowerCase().includes(lowerQ) || lowerQ.includes(data.subject?.toLowerCase() || "")) {
+                chunks.push({
+                   sourceType: "Syllabus Library",
+                   title: data.tags?.[0] || data.subject || "Private Syllabus",
+                   text: data.text,
+                   confidence: 1,
+                   subject: data.subject,
+                   lesson: data.lesson,
+                   year: data.year,
+                   id: doc.id
+                });
+             }
+          });
+       }
+    }
+
+    // 3. User's own private RAG chunks search (for private PDFs/custom uploads)
+    if (uid && chunks.length < limit) {
+       try {
+         const userChunksSnap = await db.collection("rag_chunks")
+           .where("ownerUid", "==", uid)
+           .limit(limit * 2)
+           .get();
+         userChunksSnap.docs.forEach((doc: any) => {
+           const data = doc.data();
+           const matchesSearch = data.text?.toLowerCase().includes(lowerQ) || 
+             (data.tags && data.tags.some((t: string) => lowerQ.includes(t.toLowerCase())));
+           if (matchesSearch) {
+              chunks.push({
+                 sourceType: data.sourceScope === "owner_syllabus" ? "Syllabus Library" : "My Uploaded PDF",
+                 title: data.tags?.[0] || "My Document",
+                 text: data.text,
+                 confidence: 0.95,
+                 subject: data.subject,
+                 lesson: data.lesson,
+                 year: data.year,
+                 id: doc.id
+              });
+           }
+         });
+       } catch (err: any) {
+         console.warn("User private chunks search failed:", err.message);
+       }
+    }
+
+    // 4. Fallback to normal RAG chunks
+    if (chunks.length < limit) {
+       let ragQuery = db.collection("rag_chunks")
+         .where("visibility", "in", ["official", "shared"]);
+       
+       const ragSnap = await ragQuery.limit(limit).get();
+       ragSnap.docs.forEach((doc: any) => {
+         const data = doc.data();
+         if (data.text?.toLowerCase().includes(lowerQ)) {
+            chunks.push({
+               sourceType: data.sourceScope === "owner_syllabus" ? "Syllabus Library" : "RAG DB",
+               title: data.tags?.[0] || "RAG Resource",
+               text: data.text,
+               confidence: 0.9,
+               subject: data.subject,
+               lesson: data.lesson,
+               year: data.year,
+               id: doc.id
+            });
+         }
+       });
+    }
+    
+    // Sort and return
+    chunks.sort((a, b) => b.confidence - a.confidence);
+    
+    return {
+      chunks: chunks.slice(0, limit),
+      sources: chunks.slice(0, limit).map(c => ({ title: c.title, url: c.url, confidence: c.confidence, sourceType: c.sourceType })),
+      status: "success"
+    };
+
+  } catch (e: any) {
+    console.warn("Firestore retrieve failed:", e.message);
+    return {
+      chunks: [],
+      sources: [],
+      status: "firestore_unavailable",
+      errorCode: e.code || "PERMISSION_DENIED",
+      usedFallback: true
+    };
   }
 }
 
-export async function retrieveRelevantKnowledge(params: RetrieveParams): Promise<KnowledgeChunk[]> {
-  const limit = Math.max(1, Math.min(params.limit || 8, 20));
-  const promptTokens = tokens(`${params.prompt || ""} ${params.activeSubject || ""} ${params.mode || ""}`);
-  const chunks: KnowledgeChunk[] = [];
+export async function retrieveUploadedPdfQuestion({
+  uid,
+  uploadedFileName,
+  sourceId,
+  questionNo,
+  query,
+  limit = 8
+}: {
+  uid: string;
+  uploadedFileName?: string;
+  sourceId?: string;
+  questionNo?: string;
+  query?: string;
+  limit?: number;
+}) {
+  const db = getAdminDb();
+  let activeSourceId = sourceId;
+  let sourceData: any = null;
 
-  addLocalSyllabusChunks(chunks, promptTokens, params.activeSubject);
-  addPastPaperChunks(chunks, promptTokens, params.activeSubject);
-  addUserContextChunks(chunks, promptTokens, params.userContext, params.activeSubject);
-  await addFirestoreChunks(chunks, params, promptTokens);
+  // Search order:
+  // 1. users/{uid}/chat_context/current.activePdf.sourceId
+  if (!activeSourceId) {
+    try {
+      const chatCtxDoc = await db.collection("users").doc(uid).collection("chat_context").doc("current").get();
+      if (chatCtxDoc.exists) {
+        const data = chatCtxDoc.data();
+        if (data && data.activePdf && data.activePdf.sourceId) {
+          activeSourceId = data.activePdf.sourceId;
+          sourceData = data.activePdf;
+        }
+      }
+    } catch (err: any) {
+      console.warn("Failed to read activePdf from chat_context/current:", err.message);
+    }
+  }
 
-  const deduped = Array.from(new Map(chunks.map((chunk) => [`${chunk.type}:${chunk.title}:${chunk.url || ""}:${chunk.text.slice(0, 80)}`, chunk])).values());
-  return deduped
-    .map((chunk) => ({ ...chunk, score: chunk.score || 0 }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+  // 2. temporaryPdfs matching uploadedFileName
+  if (!activeSourceId && uploadedFileName) {
+    try {
+      const chatCtxDoc = await db.collection("users").doc(uid).collection("chat_context").doc("current").get();
+      if (chatCtxDoc.exists) {
+        const data = chatCtxDoc.data();
+        if (data && Array.isArray(data.temporaryPdfs)) {
+          const matchedPdf = data.temporaryPdfs.find((pdf: any) => 
+            (pdf.fileName && pdf.fileName.toLowerCase() === uploadedFileName.toLowerCase()) ||
+            (pdf.title && pdf.title.toLowerCase() === uploadedFileName.toLowerCase())
+          );
+          if (matchedPdf) {
+            activeSourceId = matchedPdf.sourceId;
+            sourceData = matchedPdf;
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn("Failed to check temporaryPdfs:", err.message);
+    }
+  }
+
+  // 3. rag_sources where ownerUid == uid and fileName == uploadedFileName
+  if (!activeSourceId && uploadedFileName) {
+    try {
+      const sourcesSnap = await db.collection("rag_sources")
+        .where("ownerUid", "==", uid)
+        .where("fileName", "==", uploadedFileName)
+        .limit(1)
+        .get();
+      if (!sourcesSnap.empty) {
+        activeSourceId = sourcesSnap.docs[0].id;
+        sourceData = sourcesSnap.docs[0].data();
+      }
+    } catch (err: any) {
+      console.warn("Failed to query rag_sources by fileName:", err.message);
+    }
+  }
+
+  // 4. latest rag_sources ownerUid == uid only as final fallback
+  if (!activeSourceId) {
+    try {
+      const recentSources = await db.collection("rag_sources")
+        .where("ownerUid", "==", uid)
+        .orderBy("createdAt", "desc")
+        .limit(1)
+        .get();
+      if (!recentSources.empty) {
+        activeSourceId = recentSources.docs[0].id;
+        sourceData = recentSources.docs[0].data();
+      }
+    } catch (err: any) {
+      console.warn("Failed fallback to recent rag_sources:", err.message);
+    }
+  }
+
+  // Retrieve source if we only have sourceId
+  if (activeSourceId && !sourceData) {
+    try {
+      const srcSnap = await db.collection("rag_sources").doc(activeSourceId).get();
+      if (srcSnap.exists) {
+        sourceData = srcSnap.data();
+      }
+    } catch (err) {
+      console.warn("Failed to retrieve rag_source doc:", err);
+    }
+  }
+
+  if (!activeSourceId) {
+    return {
+      chunks: [],
+      source: null,
+      hasExactQuestionText: false,
+      needsOcr: false
+    };
+  }
+
+  const needsOcr = !!sourceData?.needsOcr;
+
+  // Retrieve chunks
+  let chunks: any[] = [];
+  try {
+    const chunksSnap = await db.collection("rag_chunks")
+      .where("sourceId", "==", activeSourceId)
+      .get();
+    
+    chunks = chunksSnap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+  } catch (err) {
+    console.warn("Failed to retrieve rag_chunks:", err);
+  }
+
+  // Process exact match and ranking
+  let hasExactQuestionText = false;
+  const scoredChunks = chunks.map(c => {
+    let score = 0;
+    const lowerText = (c.text || "").toLowerCase();
+
+    // Exact question match
+    if (questionNo && c.questionNo === questionNo) {
+      score += 1000;
+      hasExactQuestionText = true;
+    } else if (questionNo) {
+      // QuestionNo fallback match in text
+      const isQ1 = questionNo === "Q1" && (
+        lowerText.includes("q1") ||
+        lowerText.includes("question 1") ||
+        lowerText.includes("question 01") ||
+        lowerText.includes("ප්‍රශ්නය 1") ||
+        lowerText.includes("ප්‍රශ්නය 01") ||
+        lowerText.includes("ප්රශ්නය 1") ||
+        lowerText.includes("ප්රශ්නය 01") ||
+        lowerText.includes("පළමු") ||
+        lowerText.includes("පළවෙනි") ||
+        /(?:^|\s|\n)0?1\.\s/.test(lowerText)
+      );
+
+      const isQ2 = questionNo === "Q2" && (
+        lowerText.includes("q2") ||
+        lowerText.includes("question 2") ||
+        lowerText.includes("question 02") ||
+        lowerText.includes("ප්‍රශ්නය 2") ||
+        lowerText.includes("ප්‍රශ්නය 02") ||
+        lowerText.includes("ප්රශ්නය 2") ||
+        lowerText.includes("ප්රශ්නය 02") ||
+        lowerText.includes("දෙවන") ||
+        lowerText.includes("දෙවෙනි") ||
+        /(?:^|\s|\n)0?2\.\s/.test(lowerText)
+      );
+
+      const isQ3 = questionNo === "Q3" && (
+        lowerText.includes("q3") ||
+        lowerText.includes("question 3") ||
+        lowerText.includes("question 03") ||
+        lowerText.includes("ප්‍රශ්නය 3") ||
+        lowerText.includes("ප්‍රශ්නය 03") ||
+        lowerText.includes("ප්රශ්නය 3") ||
+        lowerText.includes("ප්රශ්නය 03") ||
+        lowerText.includes("තුන්වන") ||
+        lowerText.includes("තුන්වෙනි") ||
+        /(?:^|\s|\n)0?3\.\s/.test(lowerText)
+      );
+
+      if (isQ1 || isQ2 || isQ3) {
+        score += 500;
+        hasExactQuestionText = true;
+      }
+    }
+
+    // Page-based scores
+    if (c.pageNumber) {
+      if (c.pageNumber === 1) score += 100;
+      else if (c.pageNumber === 2) score += 50;
+      else if (c.pageNumber === 3) score += 20;
+    } else {
+      if (c.chunkIndex === 0) score += 80;
+      else if (c.chunkIndex === 1) score += 40;
+    }
+
+    // Keyword relevance
+    if (query) {
+      const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      queryWords.forEach(w => {
+        if (lowerText.includes(w)) {
+          score += 10;
+        }
+      });
+    }
+
+    return { chunk: c, score };
+  });
+
+  // Sort by score descending
+  scoredChunks.sort((a, b) => b.score - a.score);
+
+  // Return the top ones up to limit
+  const finalChunks = scoredChunks.slice(0, limit).map(sc => ({
+    sourceType: "Uploaded PDF",
+    title: sourceData?.title || sourceData?.fileName || "Uploaded PDF",
+    text: sc.chunk.text,
+    confidence: sc.score > 0 ? 1.0 : 0.8,
+    pageNumber: sc.chunk.pageNumber || null,
+    questionNo: sc.chunk.questionNo || null,
+    id: sc.chunk.id
+  }));
+
+  return {
+    chunks: finalChunks,
+    source: {
+      id: activeSourceId,
+      title: sourceData?.title || sourceData?.fileName || "Uploaded PDF",
+      fileName: sourceData?.fileName || "uploaded_source.pdf",
+      storagePath: sourceData?.storagePath || "",
+      ownerUid: sourceData?.ownerUid || uid,
+    },
+    hasExactQuestionText,
+    needsOcr
+  };
+}
+
+export function checkBadTextQuality(text: string): boolean {
+  if (!text) return true;
+  
+  // 1. Replacement char count / ratio
+  const replacementCharCount = (text.match(/\uFFFD/g) || []).length;
+  if (replacementCharCount > 3) {
+    const ratio = replacementCharCount / text.length;
+    if (ratio > 0.015 || replacementCharCount > 10) return true;
+  }
+  
+  // 2. Count Sinhala unicode chars if the text contains some Sinhala indicators
+  const hasSinhalaChars = /[\u0D80-\u0DFF]/.test(text);
+  if (hasSinhalaChars) {
+    const sinhalaCount = (text.match(/[\u0D80-\u0DFF]/g) || []).length;
+    if (sinhalaCount < 15 && replacementCharCount > 2) {
+      return true;
+    }
+  }
+
+  // 3. Excessive consecutive punctuation or non-alphanumeric (garbage pattern)
+  const garbageSymbolsCount = (text.match(/[^a-zA-Z0-9\s\.,\?\!\"'\(\)\u0D80-\u0DFF\-\+\=\/\*]/g) || []).length;
+  if (text.length > 50 && (garbageSymbolsCount / text.length > 0.25)) {
+    return true;
+  }
+
+  return false;
+}
+
+export async function retrieveExactPaperQuestion({
+  uid,
+  sourceId,
+  subject,
+  year,
+  questionNo,
+  questionType
+}: {
+  uid: string;
+  sourceId: string;
+  subject?: string;
+  year?: string;
+  questionNo?: string;
+  questionType?: string;
+}) {
+  const db = getAdminDb();
+  let sourceDoc: any = null;
+  let sourceData: any = null;
+
+  // Fetch source details from past_papers or rag_sources
+  try {
+    const ragSnap = await db.collection("rag_sources").doc(sourceId).get();
+    if (ragSnap.exists) {
+      sourceDoc = ragSnap;
+      sourceData = ragSnap.data();
+    } else {
+      const ppSnap = await db.collection("past_papers").doc(sourceId).get();
+      if (ppSnap.exists) {
+        sourceDoc = ppSnap;
+        sourceData = ppSnap.data();
+      }
+    }
+  } catch (err) {
+    console.warn("retrieveExactPaperQuestion: failed to fetch source document:", err);
+  }
+
+  if (!sourceData) {
+    return {
+      source: null,
+      chunks: [],
+      hasExactQuestionText: false,
+      badTextQuality: false,
+      needsOcr: false,
+      needsLegacyConversion: false,
+      reason: "Source details not found in library."
+    };
+  }
+
+  const chunkCount = Number(sourceData.chunkCount || 0);
+  const needsOcr = sourceData.needsOcr === true || sourceData.indexStatus === "needs_ocr" || chunkCount === 0;
+  const needsLegacyConversion = sourceData.needsLegacyConversion === true || sourceData.indexStatus === "needs_legacy_conversion";
+
+  if (needsOcr || chunkCount === 0) {
+    return {
+      source: sourceData,
+      chunks: [],
+      hasExactQuestionText: false,
+      badTextQuality: false,
+      needsOcr: true,
+      needsLegacyConversion,
+      reason: "No chunks indexed or needs OCR."
+    };
+  }
+
+  // Query rag_chunks only where sourceId == selected sourceId
+  let chunks: any[] = [];
+  try {
+    const chunkSnap = await db.collection("rag_chunks")
+      .where("sourceId", "==", sourceId)
+      .get();
+    chunks = chunkSnap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+  } catch (err) {
+    console.warn("retrieveExactPaperQuestion: failed to fetch rag_chunks:", err);
+  }
+
+  // Filter chunks for exact MCQ matching
+  let matchedChunks: any[] = [];
+  let hasExactQuestionText = false;
+  let badTextQuality = false;
+
+  const numOnly = questionNo ? questionNo.replace(/\D/g, "") : "";
+
+  if (numOnly) {
+    // Exact patterns requested:
+    // "10." or "10)" or "(10)" or "MCQ 10" or "ප්රශ්නය 10" or "10 වන" or "10 වෙනි"
+    const patterns = [
+      new RegExp(`\\b${numOnly}\\.\\s`),
+      new RegExp(`\\b${numOnly}\\)`),
+      new RegExp(`\\(${numOnly}\\)`),
+      new RegExp(`mcq\\s*${numOnly}\\b`, "i"),
+      new RegExp(`(?:ප්‍රශ්නය|ප්රශ්නය)\\s*${numOnly}\\b`),
+      new RegExp(`${numOnly}\\s*වන`),
+      new RegExp(`${numOnly}\\s*වෙනි`)
+    ];
+
+    matchedChunks = chunks.filter(c => {
+      const text = c.text || "";
+      const lower = text.toLowerCase();
+
+      // Check metadata first if present
+      if (c.questionNo && String(c.questionNo).replace(/\D/g, "") === numOnly) {
+        return true;
+      }
+
+      // Check text regex patterns
+      const matchedText = patterns.some(p => p.test(text) || p.test(lower));
+      return matchedText;
+    });
+
+    if (matchedChunks.length > 0) {
+      hasExactQuestionText = true;
+      // Check if matched chunks have bad quality
+      const allGarbage = matchedChunks.every(c => checkBadTextQuality(c.text));
+      if (allGarbage) {
+        badTextQuality = true;
+      }
+    }
+  } else {
+    // If no specific questionNo, return top chunks
+    matchedChunks = chunks.slice(0, 5);
+    if (matchedChunks.length > 0) {
+      const allGarbage = matchedChunks.every(c => checkBadTextQuality(c.text));
+      if (allGarbage) {
+        badTextQuality = true;
+      }
+    }
+  }
+
+  return {
+    source: {
+      id: sourceId,
+      ...sourceData
+    },
+    chunks: matchedChunks,
+    hasExactQuestionText,
+    badTextQuality,
+    needsOcr,
+    needsLegacyConversion,
+    reason: matchedChunks.length > 0 ? "Exact matching chunks successfully retrieved." : "Exact question chunks missing from index."
+  };
 }

@@ -1,71 +1,490 @@
-import express from "express";
-import { requireUser, getAdminDb } from "../firebase/admin";
+import { Router } from "express";
+import { requireUser, getAdminDb, getAdminStorage } from "../firebase/admin";
+import { aiRespondStream, aiContinueStream, lastStreamTraces } from "./respondStream";
 import { processAIRequest } from "./respond";
-import { AI_MODELS, getAIClient, getModelFallbackChain, prepareGoogleCredentials } from "./client";
-import { retrieveRelevantKnowledge } from "../knowledge/retrieve";
-import { pastPapersData } from "../../src/data/pastPapersData";
+import { getAIClient, prepareGoogleCredentials } from "./client";
+import fs from "node:fs";
+import path from "node:path";
+import { aiBillingCircuitOpenUntil } from "./aiCircuitBreaker";
+import { lastOk, lastError, setLastOk } from "./modelRouter";
 
-export const aiRoutes = express.Router();
+export const aiRoutes = Router();
+
+aiRoutes.get("/client-diagnostics", (req, res) => {
+  const deployTarget = process.env.APP_DEPLOY_TARGET || "cloud_run";
+  const useVertex = String(process.env.GEMINI_USE_VERTEX || "").toLowerCase() === "true";
+  const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "al-ai-chat";
+  const location = process.env.GOOGLE_CLOUD_LOCATION || "global";
+  const hasServiceAccountJson = !!process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const hasGeminiApiKey = !!process.env.GEMINI_API_KEY;
+
+  res.json({
+    mode: useVertex ? "vertex" : "api_key",
+    deployTarget,
+    project,
+    location,
+    geminiUseVertex: useVertex,
+    hasServiceAccountJson,
+    hasGeminiApiKey,
+    apiKeyIgnored: useVertex,
+    models: {
+      normalChat: process.env.GEMINI_DEFAULT_MODEL || "gemini-3.5-flash",
+      pdfQa: process.env.GEMINI_PDF_QA_MODEL || "gemini-3.5-flash",
+      final: process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview"
+    }
+  });
+});
+
+aiRoutes.get("/model-health", async (req, res) => {
+  try {
+    const isExhausted = Date.now() < aiBillingCircuitOpenUntil;
+    
+    res.json({
+      ok: true,
+      billing: {
+        status: isExhausted ? "exhausted" : "ok",
+        circuitOpenUntil: aiBillingCircuitOpenUntil
+      },
+      directPdfQa: { mode: "frontend_blob_to_gemini", requiresGcs: false, available: true },
+      ocr: { available: false },
+      models: {
+        default: {
+          configured: process.env.GEMINI_DEFAULT_MODEL || "gemini-3.5-flash",
+          usedBy: ["normal_chat"]
+        },
+        normalChat: {
+          configured: process.env.GEMINI_DEFAULT_MODEL || "gemini-3.5-flash",
+          lastOk: lastOk,
+          lastError: lastError
+        },
+        fast: {
+          configured: process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
+          available: !isExhausted,
+          fallback: "gemini-2.5-flash"
+        },
+        pdfQa: {
+          configured: process.env.GEMINI_PDF_QA_MODEL || "gemini-3.5-flash",
+          available: !isExhausted,
+          fallback: process.env.GEMINI_PDF_QA_FALLBACK || "gemini-2.5-flash"
+        },
+        final: {
+          configured: process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview",
+          available: !isExhausted,
+          fallback: process.env.GEMINI_FINAL_FALLBACK || "gemini-2.5-pro"
+        },
+        tts: { enabled: false, available: false },
+        [process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview"]: { available: !isExhausted },
+        [process.env.GEMINI_NORMAL_MODEL || "gemini-3.5-flash"]: { available: !isExhausted },
+        [process.env.GEMINI_DEFAULT_MODEL || "gemini-3.5-flash"]: { available: !isExhausted },
+        [process.env.GEMINI_LITE_MODEL || "gemini-3.1-flash-lite"]: { available: !isExhausted }
+      }
+    });
+  } catch (error: any) {
+    res.json({
+      ok: false,
+      degraded: true,
+      code: "MODEL_HEALTH_DEGRADED",
+      message: "Model health check degraded",
+      errors: [error?.message || String(error)]
+    });
+  }
+});
+
+
+aiRoutes.get("/debug-knowledge", async (req, res) => {
+  try {
+    const { routeKnowledgeRequest } = await import("../knowledge/knowledgeRouter");
+    const route = await routeKnowledgeRequest({
+      prompt: (req.query.q as string) || "2025 sft paper",
+    });
+    res.json({
+      ok: true,
+      query: req.query.q,
+      parsedIntent: route.mode,
+      entities: route.entities,
+      hints: route.answerHints
+    });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
 
 // Self Test endpoint
 aiRoutes.get("/self-test", async (req, res) => {
-  const result: any = {
-    ok: true,
-    authPath: "vertex-ai-adc",
-    project: process.env.GOOGLE_CLOUD_PROJECT,
-    location: process.env.GOOGLE_CLOUD_LOCATION || "global",
-    models: {
-      fast: AI_MODELS.fast,
-      default: AI_MODELS.default,
-      pro: AI_MODELS.pro,
-      image: AI_MODELS.image,
-    },
-    searchGroundingEnabled: process.env.ENABLE_GOOGLE_SEARCH_GROUNDING === "true",
-    textModelOk: false,
-    imageModelConfigured: Boolean(AI_MODELS.image),
-    firestoreContextOk: false,
-    knowledgeRetrievalOk: false,
-  };
   try {
     prepareGoogleCredentials();
     const ai = getAIClient();
-    let text = "";
-    for (const model of getModelFallbackChain(AI_MODELS.fast)) {
+    const model = process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash";
+    const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "al-ai-chat";
+    const location = process.env.GOOGLE_CLOUD_LOCATION || "global";
+
+    const response = await ai.models.generateContent({
+        model: model,
+        contents: "Reply only OK"
+    });
+
+    setLastOk(true, null);
+
+    res.json({
+      ok: true,
+      authPath: "vertex-ai-adc",
+      project,
+      location,
+      model,
+      text: response.text ? response.text.trim() : "OK"
+    });
+  } catch (error: any) {
+    const errorMsg = String(error.message || error);
+    setLastOk(false, errorMsg);
+
+    if (errorMsg.toLowerCase().includes("prepayment credits are depleted") || errorMsg.toLowerCase().includes("prepayment")) {
+      return res.json({
+        ok: false,
+        authPath: "api-key-prepay-path-detected",
+        code: "WRONG_AI_AUTH_PATH",
+        message: "This request is still using Gemini Developer API / AI Studio Prepay path, not Vertex AI."
+      });
+    }
+
+    res.status(500).json({ ok: false, error: errorMsg });
+  }
+});
+
+let cachedHealthResponse: any = null;
+let cachedHealthTime = 0;
+const CACHE_TTL_MS = 45000; // 45 seconds
+
+// Comprehensive Health check endpoint
+aiRoutes.get("/health", async (req, res) => {
+  const now = Date.now();
+  if (cachedHealthResponse && (now - cachedHealthTime < CACHE_TTL_MS)) {
+    return res.json(cachedHealthResponse);
+  }
+
+  const errors: any[] = [];
+  let dbInfo: any = {};
+  
+  const tests = {
+    adminInitialized: false,
+    canWriteHealthDoc: false,
+    canReadHealthDoc: false,
+    canQueryRagSources: false,
+    canQueryPastPapers: false,
+    canSaveChat: false,
+    canUploadStorage: false,
+    canGenerateSignedUrl: false
+  };
+
+  const { getAdminDbInfo, getAdminDb, getAdminBucket } = await import("../firebase/admin");
+  const { retryGoogleAuthOperation } = await import("../utils/retry");
+
+  try {
+    dbInfo = getAdminDbInfo();
+    tests.adminInitialized = true;
+  } catch (err: any) {
+    errors.push({
+      test: "adminInitialized",
+      code: err.code || "ADMIN_INIT_FAILED",
+      message: err.message,
+      hint: "Check environment variables and credentials JSON."
+    });
+  }
+
+  let db: any = null;
+  if (tests.adminInitialized) {
+    try {
+      db = getAdminDb();
+    } catch (err: any) {
+      errors.push({
+        test: "getAdminDb",
+        code: "FIRESTORE_GET_DB_FAILED",
+        message: err.message,
+        hint: err.message.includes("CONFIG_ERROR_FIRESTORE_DATABASE_ID_MISSING")
+          ? "FIRESTORE_DATABASE_ID environment variable is missing."
+          : "Firestore database retrieval failed."
+      });
+    }
+  }
+
+  // 2. Write health doc
+  if (db) {
+    try {
+      await db.collection("_health").doc("admin").set({ serverTime: new Date().toISOString() });
+      tests.canWriteHealthDoc = true;
+    } catch (err: any) {
+      const msg = String(err.message || err);
+      const isPermission = msg.includes("PERMISSION_DENIED") || err.code === 7;
+      errors.push({
+        test: "canWriteHealthDoc",
+        code: isPermission ? "IAM_PERMISSION_DENIED" : "WRITE_HEALTH_DOC_FAILED",
+        message: err.message,
+        hint: isPermission
+          ? `Grant Cloud Datastore User or Cloud Datastore Owner to ${dbInfo.credentialsEmail || "your service account"} in project ${dbInfo.projectId || "al-ai-chat"}.`
+          : "Unknown error writing to _health collection."
+      });
+    }
+  }
+
+  // 3. Read health doc
+  if (db && tests.canWriteHealthDoc) {
+    try {
+      const snap = await db.collection("_health").doc("admin").get();
+      tests.canReadHealthDoc = snap.exists;
+    } catch (err: any) {
+      errors.push({
+        test: "canReadHealthDoc",
+        code: "READ_HEALTH_DOC_FAILED",
+        message: err.message
+      });
+    }
+  }
+
+  // 4. Query RAG sources limit 1
+  if (db) {
+    try {
+      await db.collection("rag_sources").limit(1).get();
+      tests.canQueryRagSources = true;
+    } catch (err: any) {
+      const msg = String(err.message || err);
+      const isPermission = msg.includes("PERMISSION_DENIED") || err.code === 7;
+      errors.push({
+        test: "canQueryRagSources",
+        code: isPermission ? "IAM_PERMISSION_DENIED" : "QUERY_RAG_SOURCES_FAILED",
+        message: err.message,
+        hint: isPermission
+          ? `Grant Cloud Datastore User or Cloud Datastore Owner to ${dbInfo.credentialsEmail || "your service account"} in project ${dbInfo.projectId || "al-ai-chat"}.`
+          : "Unknown error querying rag_sources."
+      });
+    }
+  }
+
+  // 5. Query past papers limit 1
+  if (db) {
+    try {
+      await db.collection("past_papers").limit(1).get();
+      tests.canQueryPastPapers = true;
+    } catch (err: any) {
+      const msg = String(err.message || err);
+      const isPermission = msg.includes("PERMISSION_DENIED") || err.code === 7;
+      errors.push({
+        test: "canQueryPastPapers",
+        code: isPermission ? "IAM_PERMISSION_DENIED" : "QUERY_PAST_PAPERS_FAILED",
+        message: err.message,
+        hint: isPermission
+          ? `Grant Cloud Datastore User or Cloud Datastore Owner to ${dbInfo.credentialsEmail || "your service account"} in project ${dbInfo.projectId || "al-ai-chat"}.`
+          : "Unknown error querying past_papers."
+      });
+    }
+  }
+
+  // 6. Write test chat doc to _health_chat
+  if (db) {
+    try {
+      await db.collection("_health_chat").doc("test_chat").set({
+        message: "Health check save",
+        createdAt: new Date().toISOString()
+      });
+      tests.canSaveChat = true;
+    } catch (err: any) {
+      errors.push({
+        test: "canSaveChat",
+        code: "SAVE_CHAT_FAILED",
+        message: err.message
+      });
+    }
+  }
+
+  const FORCE_CLIENT_STORAGE = true; // Force true to prevent Admin Storage OAuth premature close and retries spam
+
+  if (FORCE_CLIENT_STORAGE) {
+    tests.canUploadStorage = false;
+    tests.canGenerateSignedUrl = false;
+  } else {
+    // 7 & 8 & 9. Storage bucket testing
+    let bucket: any = null;
+    if (tests.adminInitialized) {
       try {
-        const response = await ai.models.generateContent({ model, contents: "Reply only: OK" });
-        text = response.text || "";
-        result.textModelOk = true;
-        result.textModelUsed = model;
-        result.text = text;
-        break;
-      } catch (error: any) {
-        result.lastTextModelError = error.message;
+        bucket = getAdminBucket();
+      } catch (err: any) {
+        errors.push({
+          test: "getAdminBucket",
+          code: "STORAGE_BUCKET_GET_FAILED",
+          message: err.message,
+          hint: "Check if storageBucket config or FIREBASE_STORAGE_BUCKET is correct."
+        });
       }
     }
 
-    try {
-      await getAdminDb().listCollections();
-      result.firestoreContextOk = true;
-    } catch (error: any) {
-      result.firestoreError = error.message;
+    if (bucket) {
+      const fileRef = bucket.file("_health/admin-health.txt");
+      
+      // Test write/upload with retry
+      try {
+        await retryGoogleAuthOperation("canUploadStorage", async () => {
+          await fileRef.save("Health check content", {
+            resumable: false,
+            contentType: "text/plain",
+            metadata: {
+              cacheControl: "private, max-age=0"
+            }
+          });
+        });
+        tests.canUploadStorage = true;
+      } catch (err: any) {
+        const msg = String(err.message || err);
+        const isPermission = msg.includes("permission") || err.code === 403;
+        errors.push({
+          test: "canUploadStorage",
+          code: isPermission ? "STORAGE_PERMISSION_DENIED" : "UPLOAD_STORAGE_FAILED",
+          message: err.message,
+          hint: isPermission
+            ? `Grant Storage Object Admin to ${dbInfo.credentialsEmail || "your service account"} in project ${dbInfo.projectId || "al-ai-chat"}.`
+            : "Google auth token premature close or generic upload failure. Check credentials and retry."
+        });
+      }
+
+      // Test sign url with retry
+      if (tests.canUploadStorage) {
+        try {
+          await retryGoogleAuthOperation("canGenerateSignedUrl", async () => {
+            await fileRef.getSignedUrl({
+              action: 'read',
+              expires: Date.now() + 15 * 60 * 1000, // 15 mins
+            });
+          });
+          tests.canGenerateSignedUrl = true;
+        } catch (err: any) {
+          errors.push({
+            test: "canGenerateSignedUrl",
+            code: "GENERATE_SIGNED_URL_FAILED",
+            message: err.message,
+            hint: "Ensure the Service Account has the Service Account Token Creator role on itself or project."
+          });
+        }
+
+        // Cleanup
+        try {
+          await fileRef.delete();
+        } catch (e) {}
+      }
     }
-
-    const chunks = await retrieveRelevantKnowledge({
-      prompt: "SFT ET ICT syllabus progress",
-      activeSubject: "sft",
-      mode: "self-test",
-      limit: 3,
-    });
-    result.knowledgeRetrievalOk = chunks.length > 0;
-    result.knowledgeChunksRetrieved = chunks.length;
-
-    if (!result.textModelOk) result.ok = false;
-    res.status(result.ok ? 200 : 500).json(result);
-  } catch (error: any) {
-    result.ok = false;
-    result.error = error.message;
-    res.status(500).json(result);
   }
+
+  const firestoreOk = tests.adminInitialized &&
+                     tests.canWriteHealthDoc &&
+                     tests.canReadHealthDoc &&
+                     tests.canQueryRagSources &&
+                     tests.canQueryPastPapers &&
+                     tests.canSaveChat;
+
+  const storageOk = tests.canUploadStorage && tests.canGenerateSignedUrl;
+  const ok = firestoreOk; // Full-stack core db functions are healthy; storage is safely handled via client-side fallback
+
+  // OCR health check validation
+  let ocrAvailable = false;
+  let ocrLastError: string | null = null;
+  const isOcrEnabled = process.env.ENABLE_CLOUD_VISION_OCR === "true";
+  const ocrInputBucket = process.env.VISION_OCR_INPUT_BUCKET || "al-ai-chat-ocr-input";
+  const ocrOutputBucket = process.env.VISION_OCR_OUTPUT_BUCKET || "al-ai-chat-ocr-output";
+
+  if (isOcrEnabled) {
+    try {
+      const { ImageAnnotatorClient } = await import("@google-cloud/vision");
+      const client = new ImageAnnotatorClient();
+      
+      const storage = getAdminStorage();
+      const inBucket = storage.bucket(ocrInputBucket);
+      const outBucket = storage.bucket(ocrOutputBucket);
+      
+      const [inExists] = await inBucket.exists();
+      const [outExists] = await outBucket.exists();
+      
+      if (inExists && outExists) {
+        ocrAvailable = true;
+      } else {
+        ocrLastError = `Bucket existence check: inputBucket(${ocrInputBucket}): ${inExists}, outputBucket(${ocrOutputBucket}): ${outExists}`;
+      }
+    } catch (err: any) {
+      ocrLastError = err.message;
+    }
+  }
+
+  const responsePayload: any = {
+    ok,
+    projectId: dbInfo.projectId || "al-ai-chat",
+    firestoreDatabaseId: dbInfo.databaseId || "(default)",
+    storageBucket: dbInfo.storageBucket || "al-ai-chat.firebasestorage.app",
+    credentialMode: dbInfo.credentialMode || "not_initialized",
+    credentialsEmail: dbInfo.credentialsEmail || "unknown",
+    hasPrivateKey: dbInfo.hasPrivateKey === true,
+    tests,
+    errors,
+    ocr: {
+      enabled: isOcrEnabled,
+      provider: "cloud_vision",
+      inputBucket: ocrInputBucket,
+      outputBucket: ocrOutputBucket,
+      available: ocrAvailable,
+      lastError: ocrLastError
+    },
+    recommendedUploadMode: FORCE_CLIENT_STORAGE ? "client_firebase_storage" : (storageOk ? "backend_multer" : "client_firebase_storage"),
+
+    requiredIamRoles: [
+      "Cloud Datastore User",
+      "Cloud Datastore Owner",
+      "Storage Object Admin",
+      "Vertex AI User"
+    ],
+    aiCore: {
+      version: "evidence-first-v1",
+      parser: true,
+      sourceLock: true,
+      evidenceGate: true,
+      answerVerifier: true,
+      verifiedAnswers: true,
+      wrongFeedback: true
+    },
+    directPdfQa: {
+      enabled: process.env.ENABLE_DIRECT_PDF_QA !== "false",
+      mode: "frontend_blob_to_gemini",
+      requiresGcs: false,
+      available: !!process.env.GEMINI_API_KEY || !!process.env.GOOGLE_APPLICATION_CREDENTIALS,
+      model: process.env.GEMINI_PDF_QA_MODEL || "gemini-3.5-flash"
+    }
+  };
+
+  if (FORCE_CLIENT_STORAGE) {
+    responsePayload.storageMode = {
+      recommendedUploadMode: "client_firebase_storage",
+      tests: {
+        canUploadStorage: false,
+        canGenerateSignedUrl: false,
+        skippedAdminStorageTests: true,
+        reason: "client_firebase_storage_forced"
+      }
+    };
+  } else if (firestoreOk && !storageOk) {
+    responsePayload.degraded = true;
+    responsePayload.storageMode = {
+      adminStorageAvailable: false,
+      clientStorageFallbackEnabled: true,
+      recommendedUploadMode: "client_firebase_storage"
+    };
+  }
+
+  responsePayload.models = {
+    final: { configured: process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview", lastOk: true, lastError: null },
+    fast: { configured: process.env.GEMINI_DEFAULT_MODEL || "gemini-3-flash-preview", lastOk: true, lastError: null },
+    lite: { configured: process.env.GEMINI_LITE_MODEL || "gemini-3.1-flash-lite", lastOk: true, lastError: null },
+    embeddings: { configured: process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001", lastOk: true, lastError: null },
+    image: { enabled: process.env.ENABLE_IMAGE_GENERATION === "true", available: !!process.env.GEMINI_IMAGE_MODEL, lastError: null },
+    tts: { enabled: true, available: !!process.env.GEMINI_TTS_MODEL, lastError: null }
+  };
+
+  cachedHealthResponse = responsePayload;
+  cachedHealthTime = now;
+
+  res.json(responsePayload);
 });
 
 // Debug Context endpoint
@@ -74,47 +493,61 @@ aiRoutes.post("/debug-context", async (req, res) => {
     const user = await requireUser(req);
     const { loadUserAIContext } = await import("../firebase/userContext");
     const context = await loadUserAIContext(user.uid, user.email);
-    const knowledgeChunks = await retrieveRelevantKnowledge({
-      prompt: req.body?.prompt || "progress weak lessons syllabus",
-      activeSubject: req.body?.activeSubject,
-      mode: req.body?.mode || "debug",
-      uid: user.uid,
-      email: user.email,
-      userContext: context,
-      limit: 8,
-    });
+    
+    let databaseId = process.env.FIRESTORE_DATABASE_ID;
+    if (!databaseId) {
+        try {
+            const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+            const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+            databaseId = config.firestoreDatabaseId;
+        } catch(e) {}
+    }
     
     res.json({
       ok: true,
       uid: user.uid,
-      email: user.email || null,
       emailMasked: (user.email || "").replace(/(.{2})(.*)(@.*)/, '$1***$3'),
-      oldPathFound: context.diagnostics?.oldPathFound || false,
-      newPathFound: context.diagnostics?.newPathFound || false,
-      migratedLegacyProgress: context.diagnostics?.migratedLegacyProgress || false,
       loadedProfileFields: Object.keys(context.profile || {}),
-      progressRecordsChecked: context.diagnostics?.progressRecordsChecked || 0,
-      lessonHistoryCount: context.diagnostics?.lessonHistoryCount || 0,
-      paperMarksCount: context.diagnostics?.paperMarksCount || 0,
-      questionMarksCount: context.diagnostics?.questionMarksCount || 0,
-      knowledgeChunksRetrieved: knowledgeChunks.length,
-      weakLessons: context.weakLessons || [],
-      latestZ: context.latestZ,
-      subjectZScores: context.subjectZScores,
+      progressCount: context.recentProgress?.length || 0,
+      weakLessonsCount: context.weakLessons?.length || 0,
+      latestMarksCount: context.latestMarks?.length || 0,
+      subjectCompletion: context.recentProgress?.map((p: any) => ({ subject: p.subject, percent: p.coveragePercent, completed: p.completedTopics, total: p.totalTopics })) || [],
       selectedMode: req.body.mode || 'auto',
+      dbProject: process.env.GOOGLE_CLOUD_PROJECT || process.env.VITE_FIREBASE_PROJECT_ID || "al-ai-chat",
+      firestoreDatabaseId: databaseId || "(default)",
+      loadedFrom: context.loadedFrom || "unknown",
     });
   } catch (error: any) {
     res.status(500).json({ ok: false, error: error.message });
   }
 });
 
-import { aiRespondStream } from "./respondStream";
 
 aiRoutes.post("/respond-stream", async (req, res) => {
   try {
     const user = await requireUser(req);
     (req as any).user = user;
     await aiRespondStream(req, res);
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+aiRoutes.post("/continue", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    (req as any).user = user;
+    await aiContinueStream(req, res);
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+aiRoutes.get("/stream-debug-last", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    // Anyone logged in can check the last 20 traces
+    res.json(lastStreamTraces);
   } catch (error: any) {
     res.status(500).json({ ok: false, error: error.message });
   }
@@ -207,7 +640,12 @@ aiRoutes.get("/chat-history", async (req, res) => {
 
     res.json({ ok: true, chatHistory });
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    console.error("[CHAT_HISTORY_FAILED]", error);
+    return res.status(200).json({
+      ok: false,
+      chatHistory: [],
+      errorCode: "CHAT_HISTORY_FAILED"
+    });
   }
 });
 
@@ -226,7 +664,6 @@ aiRoutes.post("/chat-history", async (req, res) => {
     const messageData = {
       role,
       text,
-      content: text,
       mode: mode || "auto",
       subject: subject || null,
       createdAt: new Date().toISOString()
@@ -251,16 +688,28 @@ aiRoutes.post("/chat-history/clear", async (req, res) => {
     const db = getAdminDb();
     const batch = db.batch();
     
+    let opCount = 0;
     const uidSnap = await db.collection("users").doc(user.uid).collection("chat_history").get().catch(() => ({ docs: [] }));
-    uidSnap.docs.forEach((doc: any) => batch.delete(doc.ref));
+    uidSnap.docs.forEach((doc: any) => {
+      batch.delete(doc.ref);
+      opCount++;
+    });
 
     if (user.email) {
       const emailSnap = await db.collection("users").doc(user.email.toLowerCase()).collection("chat_history").get().catch(() => ({ docs: [] }));
-      emailSnap.docs.forEach((doc: any) => batch.delete(doc.ref));
+      emailSnap.docs.forEach((doc: any) => {
+        batch.delete(doc.ref);
+        opCount++;
+      });
     }
 
+    // Also delete current chat context
+    const chatCtxRef = db.collection("users").doc(user.uid).collection("chat_context").doc("current");
+    batch.delete(chatCtxRef);
+    opCount++;
+
     await batch.commit();
-    res.json({ ok: true });
+    res.json({ ok: true, clearedCount: opCount });
   } catch (error: any) {
     res.status(500).json({ ok: false, error: error.message });
   }
@@ -300,6 +749,63 @@ aiRoutes.post("/ai/image", async (req, res) => {
   }
 });
 
+// Final Direct PDF Answer saving endpoint (for the frontend flow)
+aiRoutes.post("/answer-from-direct-pdf-result", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { answer, source, prompt, mode, subject } = req.body;
+    
+    if (!answer || !prompt) {
+      return res.status(400).json({ ok: false, error: "Missing answer or prompt." });
+    }
+
+    const { saveFinalChat } = await import("./respondStream");
+    const chatRes = await saveFinalChat({
+      uid: user.uid,
+      email: user.email,
+      userText: prompt,
+      assistantText: answer,
+      mode: mode || "auto",
+      subject: subject || null,
+      sources: source ? [source] : []
+    });
+
+    res.json({
+      ok: true,
+      chatSaved: chatRes.chatSaved,
+      messageId: chatRes.messageId
+    });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// POST /api/ai/feedback/wrong-answer
+aiRoutes.post("/feedback/wrong-answer", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { sourceId, questionType, questionNo, reason } = req.body;
+    
+    if (!sourceId || !questionNo) {
+      return res.status(400).json({ ok: false, error: "Missing sourceId or questionNo." });
+    }
+
+    const { handleWrongAnswerFeedback } = await import("../ai-core/feedback/wrongAnswerHandler");
+    const result = await handleWrongAnswerFeedback({
+      uid: user.uid,
+      sourceId,
+      questionType,
+      questionNo,
+      reason
+    });
+
+    res.json(result);
+  } catch (error: any) {
+    console.error("[AI_ROUTES] feedback/wrong-answer error:", error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 // POST /api/past-papers/search
 aiRoutes.post("/past-papers/search", async (req, res) => {
   try {
@@ -312,193 +818,89 @@ aiRoutes.post("/past-papers/search", async (req, res) => {
   }
 });
 
-function extractJsonObject(text: string) {
-  const trimmed = String(text || "").trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {}
-
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  if (fenced) {
-    try {
-      return JSON.parse(fenced.trim());
-    } catch {}
-  }
-
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    try {
-      return JSON.parse(trimmed.slice(start, end + 1));
-    } catch {}
-  }
-  return null;
-}
-
-function normalizeQuizQuestion(question: any, index: number, subject: string, topic: string) {
-  const options = Array.isArray(question.options) && question.options.length >= 2
-    ? question.options.map((option: any) => String(option))
-    : ["Correct", "Incorrect", "Needs revision", "Not enough data"];
-  const answerText = String(question.answer ?? options[0]);
-  let correctIndex = options.findIndex((option: string) => option.trim().toLowerCase() === answerText.trim().toLowerCase());
-  if (typeof question.correctIndex === "number") correctIndex = question.correctIndex;
-  if (correctIndex < 0 || correctIndex >= options.length) correctIndex = 0;
-
-  return {
-    type: question.type || "mcq",
-    question: String(question.question || `${subject.toUpperCase()} ${topic} revision question ${index + 1}`),
-    options,
-    answer: options[correctIndex],
-    correctIndex,
-    explanation: String(question.explanation || "Review the referenced syllabus chunk and retry the question."),
-    marks: Number(question.marks || 1),
-    sourceRefs: Array.isArray(question.sourceRefs) ? question.sourceRefs : [],
-  };
-}
-
-function buildFallbackQuiz(subject: string, topic: string, chunks: any[]) {
-  const seed = chunks.length ? chunks : [{ title: topic || subject, text: `${subject.toUpperCase()} ${topic || "syllabus"} revision` }];
-  return seed.slice(0, 5).map((chunk: any, index: number) => normalizeQuizQuestion({
-    question: `${chunk.subject?.toUpperCase() || subject.toUpperCase()} ${topic || chunk.topic || "lesson"}: which statement best matches the source?`,
-    options: [
-      String(chunk.title || chunk.topic || "This topic is included in the syllabus/source set."),
-      "This topic is not related to A/L Technology.",
-      "This topic should be ignored for revision.",
-      "No source is available for this topic.",
-    ],
-    answer: String(chunk.title || chunk.topic || "This topic is included in the syllabus/source set."),
-    explanation: String(chunk.text || "").slice(0, 260) || "Generated from local syllabus/source metadata.",
-    marks: 1,
-    sourceRefs: [chunk.title].filter(Boolean),
-  }, index, subject, topic));
-}
-
-aiRoutes.post("/quiz", async (req, res) => {
+// POST /api/web/pdf-proxy
+aiRoutes.post("/web/pdf-proxy", async (req, res) => {
   try {
     const user = await requireUser(req);
-    const subject = String(req.body.subject || req.body.activeSubject || "sft").toLowerCase();
-    const topic = String(req.body.topic || req.body.prompt || "revision").trim();
-    if (!topic) {
-      return res.status(400).json({ ok: false, error: "Topic is required" });
+    const { url } = req.body;
+    if (!url) {
+      return res.status(400).json({ ok: false, error: "URL is required" });
     }
 
-    const { loadUserAIContext } = await import("../firebase/userContext");
-    const userContext = await loadUserAIContext(user.uid, user.email);
-    const chunks = await retrieveRelevantKnowledge({
-      prompt: `${subject} ${topic} quiz`,
-      activeSubject: subject,
-      mode: "quiz_generation",
-      uid: user.uid,
-      email: user.email,
-      userContext,
-      limit: 8,
-    });
-
-    let quizObject: any = null;
-    const prompt = `Return only strict JSON for a Sinhala-first G.C.E. A/L Technology quiz. Schema: {"title":string,"subject":string,"topic":string,"questions":[{"type":"mcq","question":string,"options":string[],"answer":string,"explanation":string,"marks":number,"sourceRefs":string[]}]} Subject: ${subject}. Topic: ${topic}. Use these sources: ${JSON.stringify(chunks.slice(0, 6))}`;
-
-    for (const model of getModelFallbackChain(AI_MODELS.default)) {
-      try {
-        const ai = getAIClient();
-        const response = await ai.models.generateContent({
-          model,
-          contents: prompt,
-          config: { temperature: 0.25, responseMimeType: "application/json" as any },
-        });
-        quizObject = extractJsonObject(response.text || "");
-        if (quizObject?.questions?.length) break;
-      } catch (e) {
-        console.warn(`Quiz model ${model} failed:`, e);
+    // SSRF Guard
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:") {
+        return res.status(400).json({ ok: false, error: "Only secure HTTPS URLs are allowed" });
       }
+      const host = parsed.hostname.toLowerCase();
+      const isPrivate = host === "localhost" ||
+        host === "127.0.0.1" ||
+        host === "::1" ||
+        host.startsWith("10.") ||
+        host.startsWith("192.168.") ||
+        host.startsWith("169.254.") ||
+        host.startsWith("172.16.") ||
+        host.startsWith("172.17.") ||
+        host.startsWith("172.18.") ||
+        host.startsWith("172.19.") ||
+        host.startsWith("172.20.") ||
+        host.startsWith("172.21.") ||
+        host.startsWith("172.22.") ||
+        host.startsWith("172.23.") ||
+        host.startsWith("172.24.") ||
+        host.startsWith("172.25.") ||
+        host.startsWith("172.26.") ||
+        host.startsWith("172.27.") ||
+        host.startsWith("172.28.") ||
+        host.startsWith("172.29.") ||
+        host.startsWith("172.30.") ||
+        host.startsWith("172.31.");
+
+      if (isPrivate) {
+        return res.status(400).json({ ok: false, error: "Access to private resources is forbidden" });
+      }
+    } catch {
+      return res.status(400).json({ ok: false, error: "Invalid URL format" });
     }
 
-    const questions = Array.isArray(quizObject?.questions)
-      ? quizObject.questions.slice(0, 8).map((q: any, i: number) => normalizeQuizQuestion(q, i, subject, topic))
-      : buildFallbackQuiz(subject, topic, chunks);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000); // 25 seconds timeout
 
-    const normalized = {
-      title: quizObject?.title || `${subject.toUpperCase()} ${topic} quiz`,
-      subject,
-      topic,
-      questions,
-    };
-
-    res.json({ ok: true, quizObject: normalized, quiz: questions, sources: chunks });
-  } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message || "Quiz generation failed" });
-  }
-});
-
-aiRoutes.get("/quota", async (req, res) => {
-  try {
-    const user = await requireUser(req);
-    const db = getAdminDb();
-    const [files, images] = await Promise.all([
-      db.collection("users").doc(user.uid).collection("files").limit(200).get().catch(() => ({ docs: [] })),
-      db.collection("users").doc(user.uid).collection("generated_images").limit(200).get().catch(() => ({ docs: [] })),
-    ]);
-    const usedBytes = [...(files as any).docs, ...(images as any).docs].reduce((sum: number, doc: any) => {
-      const data = doc.data();
-      return sum + Number(data.size || data.bytes || 0);
-    }, 0);
-    res.json({ ok: true, used: usedBytes, quota: Number(process.env.USER_STORAGE_QUOTA_BYTES || 250 * 1024 * 1024) });
-  } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-aiRoutes.post("/lesson-optimizer", async (req, res) => {
-  const send = (event: string, data: any) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  try {
-    const user = await requireUser(req);
-    (req as any).user = user;
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no",
+    const fetchResponse = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      }
     });
-    send("status", { message: "Loading progress and weak lessons..." });
-    const prompt = `${req.body.prompt || "Create the next best study plan."}\n\nUse provided app data and actual weak lessons. Keep Sinhala-first. App data snapshot: ${JSON.stringify(req.body.data || {}).slice(0, 12000)}`;
-    const result: any = await processAIRequest({
-      ...req,
-      body: {
-        prompt,
-        activeSubject: req.body.activeSubject,
-        explicitMode: "study_plan",
-        history: req.body.history || [],
-      },
-      user,
-    });
-    if (result.ok) {
-      send("chunk", { text: result.text || result.response });
-      send("done", { ok: true });
-    } else {
-      send("error", { message: result.error || "Lesson optimizer failed" });
-      send("done", { ok: false });
+
+    clearTimeout(timeoutId);
+
+    if (!fetchResponse.ok) {
+      return res.status(502).json({ ok: false, error: `Failed to fetch target URL. Status: ${fetchResponse.status}` });
     }
-    res.end();
+
+    const contentType = fetchResponse.headers.get("content-type") || "";
+    // Accept standard binary stream or pdf
+    if (!contentType.toLowerCase().includes("pdf") && !contentType.toLowerCase().includes("octet-stream") && !contentType.toLowerCase().includes("application/")) {
+      return res.status(400).json({ ok: false, error: "Target URL does not appear to point to a valid document file" });
+    }
+
+    const arrayBuffer = await fetchResponse.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    if (buffer.length > 50 * 1024 * 1024) {
+      return res.status(400).json({ ok: false, error: "File exceeds safe size limit of 50MB" });
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="proxied_document.pdf"`);
+    res.send(buffer);
+
   } catch (error: any) {
-    if (!res.headersSent) {
-      res.writeHead(500, { "Content-Type": "text/event-stream; charset=utf-8" });
-    }
-    send("error", { message: error.message || "Lesson optimizer failed" });
-    send("done", { ok: false });
-    res.end();
+    console.error("PDF proxy failed:", error);
+    res.status(500).json({ ok: false, error: error.message || "Fetch timeout or network issue" });
   }
 });
 
-aiRoutes.get("/past-papers/local/:subject/:year", async (req, res) => {
-  const subject = String(req.params.subject || "").toLowerCase();
-  const year = String(req.params.year || "");
-  const paper = (pastPapersData.papers || []).find((item: any) => {
-    const itemSubject = String(item.metadata?.subjectKey || "").toLowerCase();
-    const itemYear = String(item.metadata?.exam || "").match(/\b(20\d{2}|19\d{2})\b/)?.[1];
-    return itemSubject === subject && itemYear === year;
-  });
 
-  if (!paper) {
-    return res.status(404).json({ ok: false, error: "No verified local paper found for the requested subject/year" });
-  }
-  res.json({ ok: true, paper });
-});

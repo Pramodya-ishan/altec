@@ -1,9 +1,5 @@
-import { GoogleGenAI } from '@google/genai';
-export const ai = new GoogleGenAI({
-  vertexai: true,
-  project: process.env.GOOGLE_CLOUD_PROJECT || "al-ai-chat",
-  location: process.env.GOOGLE_CLOUD_LOCATION || "global"
-});
+import { getAIClient } from './client';
+export const ai = getAIClient();
 export const RPM_LIMIT = 15;
 export const RPD_LIMIT = 1500;
 export let requestCountPM = 0;
