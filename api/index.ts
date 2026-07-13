@@ -1,4 +1,5 @@
-// Keep the runtime specifier as .js. TypeScript resolves this to server.ts at
-// build time, while Vercel's emitted ESM function resolves server.js at runtime.
-import app from '../server.js';
+// Vercel transpiles TypeScript without rewriting extensionless imports in the
+// backend dependency graph. Import the esbuild-generated ESM bundle instead so
+// the function always boots from one fully-resolved JavaScript module.
+import app from '../vercel-runtime/server.mjs';
 export default app;
