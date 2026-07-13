@@ -16,6 +16,6 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "server", "server.ts"],
+  "include": ["src", "server", "server.ts", "api"],
   "exclude": ["node_modules", "dist", "scripts/archive", "patch*.js", "patch*.cjs", "test*.js", "test*.cjs"]
 }
