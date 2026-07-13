@@ -106,6 +106,26 @@ function OnlineStatus() {
   );
 }
 
+function NotFoundView() {
+  return (
+    <section className="flex min-h-[60vh] flex-1 items-center justify-center px-6 py-16 text-center">
+      <div className="max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-400">404</p>
+        <h1 className="mt-3 text-2xl font-semibold text-slate-950">Page not found</h1>
+        <p className="mt-3 text-sm leading-6 text-slate-500">
+          This address is not an application page. Check the URL or return to the dashboard.
+        </p>
+        <a
+          href="/"
+          className="mt-6 inline-flex rounded-full bg-slate-950 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800"
+        >
+          Return home
+        </a>
+      </div>
+    </section>
+  );
+}
+
 function AuthOverlay() {
   const { user, loginWithGooglePopup, isAuthLoading } = useApp();
   const [actionLoading, setActionLoading] = React.useState(false);
@@ -236,7 +256,7 @@ function AppContent() {
                   <Route path="/pdf-intel-admin" element={<PdfIntelAdmin />} />
                   
                   <Route path="/focus-todo" element={<Navigate to="/paper-structure" replace />} />
-                  <Route path="*" element={<Navigate to="/admission-predictor" replace />} />
+                  <Route path="*" element={<NotFoundView />} />
                 </Routes>
               </Suspense>
             </motion.div>

@@ -1,10 +1,13 @@
 import { builtinModules } from "node:module";
-import { readFile, unlink } from "node:fs/promises";
+import { access, readFile, unlink } from "node:fs/promises";
 
 const runtimePath = new URL("../vercel-runtime/server.mjs", import.meta.url);
 const metafilePath = new URL("../vercel-runtime/server.meta.json", import.meta.url);
+const protoAssetPath = new URL("../vercel-runtime/google-gax-protos/google/longrunning/operations.proto", import.meta.url);
+const vercelConfigPath = new URL("../vercel.json", import.meta.url);
 const source = await readFile(runtimePath, "utf8");
 const metafile = JSON.parse(await readFile(metafilePath, "utf8"));
+const vercelConfig = JSON.parse(await readFile(vercelConfigPath, "utf8"));
 const runtimeOutput = Object.entries(metafile.outputs).find(([path]) => path.endsWith("vercel-runtime/server.mjs"));
 
 if (!runtimeOutput) {
@@ -25,16 +28,11 @@ const optionalRuntimeImports = new Set([
   "supports-color",
   "utf-8-validate",
 ]);
-const requiredRuntimeImports = new Set(["google-gax"]);
-const isRequiredRuntimeImport = (specifier) => (
-  [...requiredRuntimeImports].some((packageName) => specifier === packageName || specifier.startsWith(`${packageName}/`))
-);
 const thirdPartyImports = [...importSpecifiers].filter((specifier) => (
   !specifier.startsWith(".")
   && !specifier.startsWith("/")
   && !builtins.has(specifier)
   && !optionalRuntimeImports.has(specifier)
-  && !isRequiredRuntimeImport(specifier)
 ));
 
 if (thirdPartyImports.length > 0) {
@@ -51,9 +49,18 @@ if (!source.includes("__createNodeRequire(import.meta.url)")) {
   throw new Error("Vercel runtime is missing the ESM require bridge needed by CommonJS dependencies.");
 }
 
-for (const requiredImport of requiredRuntimeImports) {
-  if (![...importSpecifiers].some((specifier) => specifier === requiredImport || specifier.startsWith(`${requiredImport}/`))) {
-    throw new Error(`Expected native runtime dependency is missing: ${requiredImport}`);
+if (!source.includes("google-gax-protos")) {
+  throw new Error("Bundled google-gax protobuf lookup is missing from the Vercel runtime.");
+}
+
+await access(protoAssetPath);
+
+for (const functionConfig of Object.values(vercelConfig.functions || {})) {
+  const includeFiles = Array.isArray(functionConfig.includeFiles)
+    ? functionConfig.includeFiles
+    : [functionConfig.includeFiles];
+  if (!includeFiles.includes("vercel-runtime/google-gax-protos/**")) {
+    throw new Error("Every Vercel API function must include the bundled google-gax protobuf assets.");
   }
 }
 

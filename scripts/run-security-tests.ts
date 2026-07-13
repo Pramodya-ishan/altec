@@ -2,6 +2,8 @@ import { computeSourceCapabilities, AuthContext, AppRole } from "../server/utils
 import { applyConfiguredAdminRoles } from "../server/utils/configuredRoles";
 import fs from "fs";
 import path from "path";
+import { generateKeyPairSync } from "node:crypto";
+import { parseGoogleServiceAccountJson } from "../server/utils/googleCredentials";
 
 function logTest(name: string, passed: boolean, details?: string) {
   console.log(`[${passed ? "PASS" : "FAIL"}] ${name}${details ? ` - ${details}` : ""}`);
@@ -168,6 +170,46 @@ async function runTests() {
   } finally {
     if (previousAdminEmails === undefined) delete process.env.ADMIN_EMAILS;
     else process.env.ADMIN_EMAILS = previousAdminEmails;
+  }
+
+  // Group D: Service-account parsing must be strict because malformed Vercel
+  // secrets otherwise make every serverless route crash at runtime.
+  try {
+    console.log("\n--- Group D: Google Credential Validation Tests ---");
+    const { privateKey } = generateKeyPairSync("rsa", {
+      modulusLength: 2048,
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      publicKeyEncoding: { type: "spki", format: "pem" },
+    });
+    const serviceAccount = {
+      type: "service_account",
+      project_id: "al-ai-chat",
+      client_email: "test@al-ai-chat.iam.gserviceaccount.com",
+      private_key: privateKey,
+    };
+
+    const parsed = parseGoogleServiceAccountJson(JSON.stringify(serviceAccount));
+    const doubleEncoded = parseGoogleServiceAccountJson(JSON.stringify(JSON.stringify(serviceAccount)));
+    let placeholderRejected = false;
+    try {
+      parseGoogleServiceAccountJson("PASTE_SERVICE_ACCOUNT_JSON_HERE");
+    } catch {
+      placeholderRejected = true;
+    }
+
+    if (
+      parsed.project_id === serviceAccount.project_id
+      && doubleEncoded.client_email === serviceAccount.client_email
+      && placeholderRejected
+    ) {
+      logTest("Strict Google service-account parsing", true);
+    } else {
+      logTest("Strict Google service-account parsing", false);
+      allPassed = false;
+    }
+  } catch (err: any) {
+    console.error("Group D failed with error:", err);
+    allPassed = false;
   }
 
   console.log("\n==========================================");

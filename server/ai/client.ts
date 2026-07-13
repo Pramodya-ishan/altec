@@ -1,6 +1,10 @@
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
 import { checkAiBillingCircuit, handleAiError } from "./aiCircuitBreaker";
+import {
+  getGoogleServiceAccountFromEnvironment,
+  serializeGoogleServiceAccount,
+} from "../utils/googleCredentials";
 
 let cachedClient: GoogleGenAI | null = null;
 let hasLoggedDiagnostics = false;
@@ -17,19 +21,11 @@ function shouldUseVertex(): boolean {
 }
 
 export function prepareGoogleCredentials() {
-  const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
-  if (raw && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+  const serviceAccount = getGoogleServiceAccountFromEnvironment();
+  if (serviceAccount && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
     const filePath = "/tmp/google-credentials.json";
-    try {
-      let credStr = raw.trim();
-      if (!credStr.startsWith('{')) credStr = '{' + credStr;
-      if (!credStr.endsWith('}')) credStr = credStr + '}';
-      JSON.parse(credStr);
-      fs.writeFileSync(filePath, credStr, { mode: 0o600 });
-      process.env.GOOGLE_APPLICATION_CREDENTIALS = filePath;
-    } catch (e) {
-      console.error("Failed to parse and write GOOGLE_APPLICATION_CREDENTIALS_JSON", e);
-    }
+    fs.writeFileSync(filePath, serializeGoogleServiceAccount(serviceAccount), { mode: 0o600 });
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = filePath;
   }
 }
 

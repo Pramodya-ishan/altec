@@ -5,10 +5,12 @@
   "outputDirectory": "dist",
   "functions": {
     "api/index.ts": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "vercel-runtime/google-gax-protos/**"
     },
     "api/[...path].ts": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "vercel-runtime/google-gax-protos/**"
     }
   },
   "headers": [

@@ -2,14 +2,31 @@ process.env.NODE_ENV = "production";
 process.env.VERCEL = "1";
 
 import { once } from "node:events";
+import { cp, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const timeout = setTimeout(() => {
   console.error("Vercel runtime smoke test timed out during ESM module initialization.");
   process.exit(1);
 }, 60_000);
+let isolatedDirectory;
 
 try {
-  const runtime = await import("../vercel-runtime/server.mjs");
+  // Import from outside the repository so Node cannot silently resolve a
+  // dependency from the root node_modules directory. This mirrors Vercel's
+  // traced function filesystem and catches incomplete bundles before deploy.
+  isolatedDirectory = await mkdtemp(path.join(tmpdir(), "altec-vercel-runtime-"));
+  const isolatedRuntimePath = path.join(isolatedDirectory, "server.mjs");
+  await cp(new URL("../vercel-runtime/server.mjs", import.meta.url), isolatedRuntimePath);
+  await cp(
+    new URL("../vercel-runtime/google-gax-protos/", import.meta.url),
+    path.join(isolatedDirectory, "google-gax-protos"),
+    { recursive: true },
+  );
+
+  const runtime = await import(pathToFileURL(isolatedRuntimePath).href);
   if (typeof runtime.default !== "function") {
     throw new Error("The Vercel runtime does not export an Express application.");
   }
@@ -31,10 +48,13 @@ try {
   }
 
   clearTimeout(timeout);
-  console.log("Verified pure-ESM boot and JSON API handling for the Vercel runtime.");
-  process.exit(0);
+  console.log("Verified isolated pure-ESM boot and JSON API handling without root node_modules.");
 } catch (error) {
   clearTimeout(timeout);
   console.error("Vercel runtime ESM smoke test failed:", error);
-  process.exit(1);
+  process.exitCode = 1;
+} finally {
+  if (isolatedDirectory) {
+    await rm(isolatedDirectory, { recursive: true, force: true });
+  }
 }

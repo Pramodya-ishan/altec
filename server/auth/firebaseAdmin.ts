@@ -2,6 +2,10 @@ import { cert, initializeApp, getApps } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import fs from 'fs';
 import path from 'path';
+import {
+  getGoogleServiceAccountFromEnvironment,
+  toFirebaseAdminServiceAccount,
+} from '../utils/googleCredentials';
 
 let isInitialized = false;
 
@@ -9,30 +13,13 @@ export function getFirebaseAdminAuth() {
   if (!isInitialized) {
     if (getApps().length === 0) {
       try {
-        const projectId = process.env.FIREBASE_PROJECT_ID;
-        const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-        let privateKey = process.env.FIREBASE_PRIVATE_KEY;
-        const saJson = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+        const serviceAccount = getGoogleServiceAccountFromEnvironment();
 
-        if (saJson) {
-          let jsonString = saJson.trim();
-          if (!jsonString.startsWith('{')) jsonString = '{' + jsonString;
-          if (!jsonString.endsWith('}')) jsonString = jsonString + '}';
-          const serviceAccount = JSON.parse(jsonString);
+        if (serviceAccount) {
           initializeApp({
-            credential: cert(serviceAccount)
+            credential: cert(toFirebaseAdminServiceAccount(serviceAccount))
           });
-          console.log("Firebase Admin initialized via GOOGLE_APPLICATION_CREDENTIALS_JSON.");
-        } else if (projectId && clientEmail && privateKey) {
-          privateKey = privateKey.replace(/\\n/g, "\n");
-          initializeApp({
-            credential: cert({
-              projectId,
-              clientEmail,
-              privateKey,
-            }),
-          });
-          console.log("Firebase Admin initialized via Environment Variables.");
+          console.log("Firebase Admin initialized via validated service-account credentials.");
         } else {
           // Fallback to minimal initialization or JSON file
           let localProjectId = 'al-ai-chat';

@@ -5,6 +5,11 @@ import { getAuth } from "firebase-admin/auth";
 import fs from "node:fs";
 import path from "node:path";
 import { applyConfiguredAdminRoles } from "../utils/configuredRoles";
+import {
+  getGoogleServiceAccountFromEnvironment,
+  parseGoogleServiceAccountJson,
+  toFirebaseAdminServiceAccount,
+} from "../utils/googleCredentials";
 
 let cachedApp: any = null;
 let cachedDb: any = null;
@@ -15,36 +20,28 @@ function ensureCredentialInfo() {
   if (credentialInfo) return;
 
   const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      const hasKey = parsed.private_key 
-        ? parsed.private_key.replace(/\\n/g, "\n").replace(/\\\\n/g, "\n").includes("BEGIN PRIVATE KEY") 
-        : false;
-
-      credentialInfo = {
-        credentialMode: "service_account_json",
-        credentialsEmail: parsed.client_email || "unknown_json",
-        hasPrivateKey: hasKey
-      };
-      return;
-    } catch (e) {
-      console.error("ensureCredentialInfo: Failed to parse GOOGLE_APPLICATION_CREDENTIALS_JSON", e);
-    }
+  const environmentCredential = getGoogleServiceAccountFromEnvironment();
+  if (environmentCredential) {
+    credentialInfo = {
+      credentialMode: raw ? "service_account_json" : "service_account_split",
+      credentialsEmail: environmentCredential.client_email,
+      hasPrivateKey: true,
+    };
+    return;
   }
 
   const filePath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (filePath && fs.existsSync(filePath)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-      const hasKey = parsed.private_key 
-        ? parsed.private_key.replace(/\\n/g, "\n").replace(/\\\\n/g, "\n").includes("BEGIN PRIVATE KEY") 
-        : false;
+      const parsed = parseGoogleServiceAccountJson(
+        fs.readFileSync(filePath, "utf8"),
+        "GOOGLE_APPLICATION_CREDENTIALS file",
+      );
 
       credentialInfo = {
         credentialMode: "service_account_file",
-        credentialsEmail: parsed.client_email || "unknown_file",
-        hasPrivateKey: hasKey
+        credentialsEmail: parsed.client_email,
+        hasPrivateKey: true,
       };
       return;
     } catch (e) {
@@ -62,31 +59,17 @@ function ensureCredentialInfo() {
 function loadCredential() {
   ensureCredentialInfo();
 
-  const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
-
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (!parsed.client_email || !parsed.private_key || !parsed.project_id) {
-        throw new Error("INVALID_GOOGLE_APPLICATION_CREDENTIALS_JSON");
-      }
-
-      parsed.private_key = parsed.private_key.replace(/\\n/g, "\n").replace(/\\\\n/g, "\n");
-
-      return cert(parsed);
-    } catch (e: any) {
-      console.error("Failed to parse GOOGLE_APPLICATION_CREDENTIALS_JSON in loadCredential:", e.message);
-    }
-  }
+  const environmentCredential = getGoogleServiceAccountFromEnvironment();
+  if (environmentCredential) return cert(toFirebaseAdminServiceAccount(environmentCredential));
 
   const filePath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (filePath && fs.existsSync(filePath)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-      if (parsed.private_key) {
-        parsed.private_key = parsed.private_key.replace(/\\n/g, "\n").replace(/\\\\n/g, "\n");
-      }
-      return cert(parsed);
+      const parsed = parseGoogleServiceAccountJson(
+        fs.readFileSync(filePath, "utf8"),
+        "GOOGLE_APPLICATION_CREDENTIALS file",
+      );
+      return cert(toFirebaseAdminServiceAccount(parsed));
     } catch (e: any) {
       console.error("Failed to parse GOOGLE_APPLICATION_CREDENTIALS file in loadCredential:", e.message);
     }

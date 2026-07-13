@@ -24,6 +24,10 @@ export default defineConfig(() => {
                 "**/assets/admission-predictor*",
                 "**/*.map"
              ],
+             // Never let the service worker turn an API request into the SPA.
+             // Unknown SPA routes intentionally redirect to admission-predictor,
+             // which made failed API navigations look like server redirects.
+             navigateFallbackDenylist: [/^\/api(?:\/|$)/],
              clientsClaim: true,
              skipWaiting: true,
              cleanupOutdatedCaches: true
