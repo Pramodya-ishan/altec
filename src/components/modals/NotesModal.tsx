@@ -23,6 +23,8 @@ type UploadTelemetry = UploadProgressSnapshot & {
   fileName: string;
 };
 
+type VideoPermissionState = "loading" | "allowed" | "denied" | "unavailable";
+
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -70,13 +72,14 @@ export function NotesModal() {
   const { data, saveData, currentSubject, modals, setModals, showNotification } = useApp();
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [videoPermission, setVideoPermission] = useState<VideoPermissionState>("loading");
   const [isPaused, setIsPaused] = useState(false);
   const [telemetry, setTelemetry] = useState<UploadTelemetry | null>(null);
   const [playerResource, setPlayerResource] = useState<LessonResource | null>(null);
   const controlsRef = useRef<UploadTaskControls | null>(null);
   const uploadStartedAtRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isAdmin = videoPermission === "allowed";
 
   const topic = modals.playlist.topic;
   const topicData = data[currentSubject]?.topics[topic];
@@ -86,25 +89,48 @@ export function NotesModal() {
   );
 
   useEffect(() => {
+    if (!modals.playlist.open) return;
     let active = true;
     const resolveRole = async () => {
-      const user = auth?.currentUser;
-      if (!user || user.isAnonymous) return active && setIsAdmin(false);
-      const token = await user.getIdTokenResult().catch(() => null);
-      const roles = Array.isArray(token?.claims?.roles) ? token?.claims?.roles as unknown[] : [];
-      let canManage = token?.claims?.admin === true || roles.includes("admin") || roles.includes("content_editor") || roles.includes("ops");
-      if (!canManage) {
-        const response = await apiFetch("/api/auth/context").catch(() => null);
-        const context = await response?.json().catch(() => null);
+      if (active) setVideoPermission("loading");
+      try {
+        const user = auth?.currentUser;
+        if (!user || user.isAnonymous) {
+          if (active) {
+            setVideoPermission("denied");
+          }
+          return;
+        }
+
+        const token = await user.getIdTokenResult().catch(() => null);
+        const roles = Array.isArray(token?.claims?.roles) ? token.claims.roles as unknown[] : [];
+        const claimAllowsUpload = token?.claims?.admin === true
+          || roles.some((role) => ["admin", "content_editor", "ops"].includes(String(role)));
+        if (claimAllowsUpload) {
+          if (active) {
+            setVideoPermission("allowed");
+          }
+          return;
+        }
+
+        const response = await apiFetch("/api/auth/context");
+        const context = await response.json().catch(() => null);
         const serverRoles = Array.isArray(context?.roles) ? context.roles : [];
-        canManage = response?.ok === true && serverRoles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
+        const serverAllowsUpload = response.ok
+          && serverRoles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
+        if (active) {
+          setVideoPermission(response.ok ? (serverAllowsUpload ? "allowed" : "denied") : (response.status === 401 || response.status === 403 ? "denied" : "unavailable"));
+        }
+      } catch {
+        if (active) {
+          setVideoPermission("unavailable");
+        }
       }
-      if (active) setIsAdmin(canManage);
     };
     void resolveRole();
     const unsubscribe = auth?.onAuthStateChanged?.(() => void resolveRole());
     return () => { active = false; unsubscribe?.(); };
-  }, []);
+  }, [modals.playlist.open]);
 
   if (!modals.playlist.open) return null;
 
@@ -147,8 +173,14 @@ export function NotesModal() {
       showNotification(`File size is invalid. ${mediaKind === "video" ? "10 GB" : "50 MB"} limit.`, "error");
       return;
     }
-    if (mediaKind === "video" && !isAdmin) {
-      showNotification("Only an admin or content editor can upload lesson videos.", "error");
+    if (mediaKind === "video" && videoPermission !== "allowed") {
+      if (videoPermission === "loading") {
+        showNotification("Checking video upload permission. Please try again in a moment.", "info");
+      } else if (videoPermission === "unavailable") {
+        showNotification("Could not verify video upload permission. Check your connection and retry.", "error");
+      } else {
+        showNotification("Only an admin or content editor can upload lesson videos.", "error");
+      }
       return;
     }
 
@@ -308,7 +340,7 @@ export function NotesModal() {
                 </div>
                 <input ref={fileInputRef} type="file" accept="application/pdf,image/*,audio/*,video/mp4,video/quicktime,video/webm,.doc,.docx,.ppt,.pptx,.txt" onChange={handleFileInput} className="hidden" id="lesson-resource-upload" disabled={isUploading} />
                 <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isUploading} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 shadow-sm transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60">
-                  <UploadCloud className="h-4 w-4" /> {isUploading ? `${Math.round((telemetry?.progress || 0) * 100)}% uploading` : isAdmin ? "Upload resource / video" : "Upload PDF / image"}
+                  <UploadCloud className="h-4 w-4" /> {isUploading ? `${Math.round((telemetry?.progress || 0) * 100)}% uploading` : isAdmin ? "Upload resource / video" : videoPermission === "loading" ? "Checking upload access…" : "Upload PDF / image"}
                 </button>
               </div>
 

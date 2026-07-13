@@ -1,4 +1,5 @@
 import { computeSourceCapabilities, AuthContext, AppRole } from "../server/utils/authContext";
+import { applyConfiguredAdminRoles } from "../server/utils/configuredRoles";
 import fs from "fs";
 import path from "path";
 
@@ -138,6 +139,35 @@ async function runTests() {
   } catch (err: any) {
     console.error("Group B failed with error:", err);
     allPassed = false;
+  }
+
+  // Group C: Environment-configured owner role bootstrap
+  const previousAdminEmails = process.env.ADMIN_EMAILS;
+  try {
+    console.log("\n--- Group C: Configured Admin Role Tests ---");
+    process.env.ADMIN_EMAILS = "owner@example.com, editor@example.com";
+
+    const verifiedOwnerRoles = applyConfiguredAdminRoles("OWNER@example.com", true, ["student"]);
+    const unverifiedOwnerRoles = applyConfiguredAdminRoles("owner@example.com", false, ["student"]);
+    const unrelatedRoles = applyConfiguredAdminRoles("student@example.com", true, ["student"]);
+
+    const verifiedOwnerIsPrivileged = ["admin", "content_editor", "ops", "reviewer"]
+      .every((role) => verifiedOwnerRoles.includes(role));
+    const unverifiedOwnerIsStudent = unverifiedOwnerRoles.length === 1 && unverifiedOwnerRoles[0] === "student";
+    const unrelatedUserIsStudent = unrelatedRoles.length === 1 && unrelatedRoles[0] === "student";
+
+    if (verifiedOwnerIsPrivileged && unverifiedOwnerIsStudent && unrelatedUserIsStudent) {
+      logTest("Configured admin requires a verified matching Firebase email", true);
+    } else {
+      logTest("Configured admin requires a verified matching Firebase email", false, "Role bootstrap boundary failed");
+      allPassed = false;
+    }
+  } catch (err: any) {
+    console.error("Group C failed with error:", err);
+    allPassed = false;
+  } finally {
+    if (previousAdminEmails === undefined) delete process.env.ADMIN_EMAILS;
+    else process.env.ADMIN_EMAILS = previousAdminEmails;
   }
 
   console.log("\n==========================================");

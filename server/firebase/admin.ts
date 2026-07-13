@@ -4,6 +4,7 @@ import { getStorage } from "firebase-admin/storage";
 import { getAuth } from "firebase-admin/auth";
 import fs from "node:fs";
 import path from "node:path";
+import { applyConfiguredAdminRoles } from "../utils/configuredRoles";
 
 let cachedApp: any = null;
 let cachedDb: any = null;
@@ -271,6 +272,12 @@ export async function verifyFirebaseToken(authHeader: string | undefined) {
     } catch (e) {
       // safe fallback
     }
+
+    roles = applyConfiguredAdminRoles(
+      decodedToken.email,
+      decodedToken.email_verified === true,
+      roles,
+    );
 
     if (roles.includes('admin')) {
       admin = true;

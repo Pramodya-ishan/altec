@@ -1147,31 +1147,55 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [user, isFirebaseEnabled]);
 
-  const saveTimeoutRef = useRef<any>(null);
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSaveRef = useRef<AppData | null>(null);
 
-  const saveData = async (newData: AppData) => {
-    if (isAuthLoading) {
-       console.warn("Attempted to save data while auth is loading, aborting to prevent overwrite.");
-       return;
-    }
+  const saveData = React.useCallback(async (newData: AppData) => {
     setData(newData);
     let rawEmail = adminTargetEmail || user?.email;
-    if (!rawEmail) return;
-    const currentUserEmail = rawEmail.toLowerCase();
-    localStorage.setItem(`student_progress_data_${currentUserEmail}`, JSON.stringify(newData));
+    const currentUserEmail = rawEmail?.toLowerCase();
+    if (currentUserEmail) {
+      localStorage.setItem(`student_progress_data_${currentUserEmail}`, JSON.stringify(newData));
+    }
+
+    if (isAuthLoading) {
+      pendingSaveRef.current = newData;
+      return;
+    }
+
+    if (!currentUserEmail) return;
 
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     
     saveTimeoutRef.current = setTimeout(async () => {
       try {
-        await apiFetch('/api/data', {
+        const response = await apiFetch('/api/data', {
            method: 'POST',
            headers: { 'Content-Type': 'application/json' },
            body: JSON.stringify({ email: currentUserEmail, data: newData })
         });
-      } catch (err) {}
-    }, 30000);
-  };
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.message || payload?.error || `Progress sync failed (${response.status})`);
+        }
+        localStorage.removeItem(`al_blueprint_unsynced_data_${currentUserEmail}`);
+      } catch (err) {
+        localStorage.setItem(`al_blueprint_unsynced_data_${currentUserEmail}`, JSON.stringify(newData));
+        console.warn("Progress was saved locally and queued for cloud synchronization.", err);
+      }
+    }, 1500);
+  }, [adminTargetEmail, user?.email, isAuthLoading]);
+
+  useEffect(() => {
+    if (isAuthLoading || !pendingSaveRef.current) return;
+    const pendingData = pendingSaveRef.current;
+    pendingSaveRef.current = null;
+    void saveData(pendingData);
+  }, [isAuthLoading, saveData]);
+
+  useEffect(() => () => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+  }, []);
 
   const clearLocalStorage = async () => {
     setData(defaultData);

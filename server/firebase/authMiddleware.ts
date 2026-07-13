@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { getAdminAuth, getAdminDb } from "./admin";
 import { AuthContext, AppRole } from "../utils/authContext";
+import { applyConfiguredAdminRoles } from "../utils/configuredRoles";
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -82,6 +83,12 @@ export async function verifyAndExtractUser(req: Request): Promise<any> {
     } catch (e) {
       // safe fallback
     }
+
+    roles = applyConfiguredAdminRoles(
+      decodedToken.email,
+      decodedToken.email_verified === true,
+      roles,
+    );
 
     if (roles.includes("admin")) {
       admin = true;
