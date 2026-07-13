@@ -1,0 +1,11 @@
+{
+  "name": "Clora X",
+  "short_name": "Clora X",
+  "description": "Sinhala-first A/L Technology AI tutor",
+  "start_url": "/clora-x",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#080b14",
+  "theme_color": "#2563eb",
+  "icons": []
+}

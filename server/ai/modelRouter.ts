@@ -62,42 +62,42 @@ export function getModelForTask(task: AITask): ModelConfig {
     case "direct_pdf_extract":
       return {
         primary: process.env.GEMINI_PDF_QA_MODEL || "gemini-3.5-flash",
-        fallback: process.env.GEMINI_PDF_QA_FALLBACK || "gemini-2.5-flash"
+        fallback: process.env.GEMINI_PDF_QA_FALLBACK || "gemini-3.5-flash"
       };
     case "direct_pdf_solve":
       return {
         primary: process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
-        fallback: "gemini-2.5-flash"
+        fallback: "gemini-3.5-flash"
       };
     case "final_answer":
       return {
         primary: process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview",
-        fallback: process.env.GEMINI_FINAL_FALLBACK || "gemini-2.5-pro"
+        fallback: process.env.GEMINI_FINAL_FALLBACK || "gemini-3.1-pro-preview"
       };
     case "normal_chat":
       return {
         primary: process.env.GEMINI_DEFAULT_MODEL || process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
-        fallback: "gemini-2.5-flash"
+        fallback: "gemini-3.5-flash"
       };
     case "fast_background":
       return {
         primary: process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
-        fallback: process.env.GEMINI_LITE_MODEL || "gemini-3.1-flash-lite"
+        fallback: process.env.GEMINI_LITE_MODEL || "gemini-3.5-flash"
       };
     case "embeddings":
       return {
-        primary: process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001",
+        primary: process.env.GEMINI_EMBEDDING_MODEL || "text-embedding-004",
         fallback: "text-embedding-004"
       };
     case "image_understanding":
       return {
-        primary: process.env.GEMINI_VISION_MODEL || "gemini-2.5-flash",
-        fallback: "gemini-2.5-flash-lite"
+        primary: process.env.GEMINI_VISION_MODEL || "gemini-3.5-flash",
+        fallback: "gemini-3.5-flash"
       };
     case "ocr":
       return {
-        primary: process.env.GEMINI_VISION_MODEL || "gemini-2.5-flash",
-        fallback: "gemini-2.5-flash-lite"
+        primary: process.env.GEMINI_VISION_MODEL || "gemini-3.5-flash",
+        fallback: "gemini-3.5-flash"
       };
     case "tts":
       return {
@@ -172,7 +172,7 @@ export async function callGeminiWithFallback(task: AITask, payload: GenerateCont
   }
 }
 
-export async function generateContentStreamWithFallback(task: AITask, payload: GenerateContentParameters, aiClient?: GoogleGenAI) {
+export async function generateContentStreamWithFallback(task: AITask, payload: GenerateContentParameters, aiClient?: GoogleGenAI, signal?: AbortSignal) {
     assertAiAvailable();
     const models = getModelForTask(task);
     const client = aiClient || getAIClient();
@@ -180,6 +180,10 @@ export async function generateContentStreamWithFallback(task: AITask, payload: G
     try {
       console.log(`[modelRouter] Attempting stream with primary model ${models.primary} for task ${task}`);
       payload.model = models.primary;
+      if (signal) {
+        payload.config = payload.config || {};
+        (payload as any).abortSignal = signal;
+      }
       const stream = await client.models.generateContentStream(payload);
       if (task === "normal_chat") {
         lastOk = true;
@@ -210,6 +214,10 @@ export async function generateContentStreamWithFallback(task: AITask, payload: G
         console.log(`[modelRouter] Falling back stream to model ${models.fallback} for task ${task}`);
         try {
           payload.model = models.fallback;
+      if (signal) {
+        payload.config = payload.config || {};
+        (payload as any).abortSignal = signal;
+      }
           const stream = await client.models.generateContentStream(payload);
           return { stream, modelUsed: models.fallback, warning: `Primary model unavailable, used fallback ${models.fallback}` };
         } catch (fallbackErr: any) {

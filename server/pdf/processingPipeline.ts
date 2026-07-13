@@ -1,9 +1,10 @@
-import { getAdminDb } from "../firebase/admin";
+import { getAdminDb, getAdminBucket } from "../firebase/admin";
 import { extractPdfText } from "./extractText";
 import { runCloudVisionPdfOcr } from "../ocr/cloudVisionOcr";
 import { generateSinhalaTextPdf } from "./generateSinhalaTextPdf";
 import { invalidateInventoryCache, computeIndexStatus } from "../sources/sourceInventoryService";
 import { normalizeSubject, detectQuestionNo } from "../rag/routes";
+import { detectLessonForChunk } from "./lessonDetector";
 
 export interface ProcessUploadedPdfParams {
   uid: string;
@@ -16,7 +17,7 @@ export interface ProcessUploadedPdfParams {
   resourceType: string;
   sourceType?: string | null;
   sourceScope: string;
-  buffer: Buffer;
+  buffer?: Buffer;
   forceOcr?: boolean;
 }
 
@@ -29,7 +30,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
   extractionMethod: string;
   error?: string;
 }> {
-  const {
+  let {
     uid,
     sourceId,
     storagePath,
@@ -50,6 +51,17 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
   const sourceRef = db.collection("rag_sources").doc(sourceId);
 
   try {
+    if (!buffer) {
+      if (!storagePath) {
+        throw new Error("Either buffer or storagePath must be provided.");
+      }
+      console.log(`Downloading PDF from ${storagePath} for sourceId: ${sourceId}`);
+      const bucket = getAdminBucket();
+      const file = bucket.file(storagePath);
+      const [downloaded] = await file.download();
+      buffer = downloaded;
+    }
+
     let pages: any[] = [];
     let fullText = "";
     let needsOcr = false;
@@ -59,7 +71,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
     let ocrConfidence = 1.0;
 
     // --- STEP A & B: Text Extraction & Quality Detection ---
-    const extraction = await extractPdfText(buffer);
+    const extraction = await extractPdfText(buffer as Buffer);
     
     pages = extraction.pages || [];
     fullText = extraction.text || "";
@@ -150,7 +162,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
         const ocrResponse = await runCloudVisionPdfOcr({
           sourceId,
           uid,
-          buffer,
+          buffer: buffer as Buffer,
           languageHints: ["si", "en"]
         });
 
@@ -345,19 +357,19 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
   } = params;
 
   const db = getAdminDb();
-  const batch = db.batch();
+  const bulkWriter = db.bulkWriter();
 
   // 1. Delete old chunks from rag_chunks
-  const ragChunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
-  ragChunksSnap.docs.forEach((d: any) => {
-    batch.delete(d.ref);
+  const rag_chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
+  rag_chunksSnap.docs.forEach((d: any) => {
+    bulkWriter.delete(d.ref);
   });
 
   // Delete old syllabus chunks if owner_syllabus
   if (sourceScope === "owner_syllabus") {
     const sylChunksSnap = await db.collection("users").doc(uid).collection("syllabus_chunks").where("sourceId", "==", sourceId).get();
     sylChunksSnap.docs.forEach((d: any) => {
-      batch.delete(d.ref);
+      bulkWriter.delete(d.ref);
     });
   }
 
@@ -388,6 +400,7 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
     for (let j = 0; j < subChunks.length; j++) {
       const chunkTextContent = subChunks[j];
       const questionNo = detectQuestionNo(chunkTextContent);
+      const detectedLesson = detectLessonForChunk(chunkTextContent, normalizedSubjectKey);
       const chunkId = `chunk_${sourceId}_${chunkCount}`;
 
       const rawPreview = p.rawText 
@@ -414,6 +427,7 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
         title,
         fileName,
         subject: normalizedSubjectKey,
+        lesson: detectedLesson,
         resourceType,
         sourceType: sourceType || resourceType,
         year: year ? String(year) : null,
@@ -425,11 +439,11 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
         createdAt: new Date().toISOString()
       };
 
-      batch.set(db.collection("rag_chunks").doc(chunkId), chunkDoc);
+      bulkWriter.set(db.collection("rag_chunks").doc(chunkId), chunkDoc);
 
       if (sourceScope === "owner_syllabus") {
         const sylChunkRef = db.collection("users").doc(uid).collection("syllabus_chunks").doc(chunkId);
-        batch.set(sylChunkRef, { id: chunkId, ...chunkDoc });
+        bulkWriter.set(sylChunkRef, { id: chunkId, ...chunkDoc });
       }
     }
   }
@@ -477,7 +491,7 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
   };
 
   // Write chunks batch
-  await batch.commit();
+  await bulkWriter.close();
   console.log(`Committed ${chunkCount} chunks to Firestore for source: ${sourceId}`);
 
   // Write sources metadata updates

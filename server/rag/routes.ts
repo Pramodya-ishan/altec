@@ -153,280 +153,6 @@ ragRoutes.post("/upload", upload.single("file"), requireNonAnonymousUser, async 
   });
 });
 
-ragRoutes.post("/ingest-uploaded", upload.single("file"), requireNonAnonymousUser, async (req: any, res) => {
-  try {
-    const user = req.user;
-    const {
-      sourceId,
-      storagePath,
-      title,
-      subject,
-      lesson,
-      resourceType,
-      sourceType,
-      sourceScope,
-      year,
-      medium
-    } = req.body;
-
-    if (!req.file) {
-      return res.status(400).json({ ok: false, error: "Missing uploaded file." });
-    }
-    if (!sourceId || !storagePath) {
-      return res.status(400).json({ ok: false, error: "Missing sourceId or storagePath." });
-    }
-
-    const expectedPrefix1 = `users/${user.uid}/`;
-    const expectedPrefix2 = `rag_uploads/${user.uid}/`;
-    if (!storagePath.startsWith(expectedPrefix1) && !storagePath.startsWith(expectedPrefix2)) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid storage path. Must belong to the authenticated user."
-      });
-    }
-
-    // Extract text from the uploaded file buffer
-    const pdfData = req.file.buffer;
-    const extraction = await extractPdfText(pdfData);
-    const fullText = extraction.text;
-    const needsOcr = extraction.needsOcr;
-    const needsLegacyConversion = extraction.needsLegacyConversion || false;
-    const textEncoding = extraction.textEncoding || "unknown";
-
-    const db = getAdminDb();
-    
-    // Create source document
-    const indexStatus = "processing";
-    const textIndexedInit = false;
-
-    const sourceDoc = {
-      ownerUid: user.uid,
-      ownerEmail: user.email || "unknown",
-      title: title || req.file.originalname,
-      fileName: req.file.originalname,
-      storagePath,
-      mimeType: req.file.mimetype,
-      size: pdfData.length,
-      subject: normalizeSubject(subject || ""),
-      lesson: lesson || null,
-      subtopic: null,
-      sourceType: sourceType || resourceType || null,
-      resourceType: resourceType || null,
-      medium: medium || "Sinhala",
-      tags: [title || req.file.originalname, subject].filter(Boolean),
-      year: year ? String(year) : null,
-      paperType: null,
-      sourceScope: sourceScope || "personal",
-      visibility: sourceScope === "official" ? "official" : "private",
-      chunkCount: 0,
-      needsOcr,
-      needsLegacyConversion,
-      textEncoding,
-      textIndexed: textIndexedInit,
-      indexStatus,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-
-    // We write to Firestore
-    try {
-      const sourceRef = db.collection("rag_sources").doc(sourceId);
-      await sourceRef.set(sourceDoc);
-    } catch (e: any) {
-      console.error("Firestore write failed for source metadata:", e);
-      return res.status(500).json({
-        ok: false,
-        code: "FIRESTORE_WRITE_FAILED",
-        message: "PDF Storage upload done, but Firestore metadata failed."
-      });
-    }
-
-    let chunkCount = 0;
-    if (!needsOcr && extraction.pages) {
-      const batch = db.batch();
-
-      for (const p of extraction.pages) {
-        const pageText = p.text.trim();
-        if (!pageText) continue;
-
-        const questionNo = detectQuestionNo(pageText);
-
-        const chunkRef = db.collection("rag_chunks").doc();
-        const chunkId = chunkRef.id;
-
-        const chunkDoc = {
-          sourceId,
-          pageNumber: p.pageNumber,
-          questionNo: questionNo || null,
-          ownerUid: user.uid,
-          ownerEmail: user.email || "unknown",
-          text: pageText,
-          rawTextPreview: p.rawText ? p.rawText.slice(0, 200) : pageText.slice(0, 200),
-          textEncoding: p.textEncoding || "unknown",
-          conversionApplied: p.conversionApplied || false,
-          conversionConfidence: p.conversionConfidence || 0,
-          chunkIndex: chunkCount++,
-          title: title || req.file.originalname,
-          fileName: req.file.originalname,
-          subject: normalizeSubject(subject || ""),
-          lesson: lesson || null,
-          subtopic: null,
-          resourceType: resourceType || null,
-          year: year ? String(year) : null,
-          medium: medium || "Sinhala",
-          tags: [title || req.file.originalname, subject].filter(Boolean),
-          sourceScope: sourceScope || "personal",
-          visibility: sourceScope === "official" ? "official" : "private",
-          embeddingStatus: "none",
-          createdAt: new Date().toISOString()
-        };
-
-        batch.set(chunkRef, chunkDoc);
-
-        if (sourceScope === "owner_syllabus") {
-          const sylChunkRef = db.collection("users").doc(user.uid).collection("syllabus_chunks").doc(chunkId);
-          batch.set(sylChunkRef, {
-            id: chunkId,
-            ...chunkDoc
-          });
-        }
-      }
-
-      if (chunkCount > 0) {
-        try {
-          await batch.commit();
-        } catch (e: any) {
-          console.error("Firestore batch commit failed for chunks:", e);
-          return res.status(500).json({
-            ok: false,
-            code: "FIRESTORE_WRITE_FAILED",
-            message: "PDF Storage upload done, but Firestore chunks failed."
-          });
-        }
-      }
-    }
-
-    // Now always update source metadata across collections
-    const finalIndexStatus = computeIndexStatus({
-      chunkCount,
-      needsOcr,
-      needsLegacyConversion,
-      textEncoding,
-      indexStatus: chunkCount > 0 ? "ready" : "not_indexed"
-    });
-    const finalTextIndexed = chunkCount > 0 && !needsOcr;
-
-    const metaUpdate = {
-      chunkCount,
-      needsOcr,
-      needsLegacyConversion,
-      textEncoding,
-      textIndexed: finalTextIndexed,
-      indexStatus: finalIndexStatus,
-      updatedAt: new Date().toISOString()
-    };
-
-    try {
-      await db.collection("rag_sources").doc(sourceId).update(metaUpdate);
-
-      if (sourceScope === "past_paper") {
-        await db.collection("past_papers").doc(sourceId).set({
-          id: sourceId,
-          sourceId,
-          title: title || req.file.originalname,
-          fileName: req.file.originalname,
-          subject: normalizeSubject(subject || ""),
-          year: year ? String(year) : "",
-          category: "A/L Past Papers",
-          paperType: resourceType || "Full Paper",
-          type: resourceType || "Full Paper",
-          resourceType: resourceType || "past_paper",
-          sourceType: resourceType || "past_paper",
-          sourceScope: "past_paper",
-          storagePath,
-          ownerUid: user.uid,
-          ownerEmail: user.email || "unknown",
-          uploaded: true,
-          ...metaUpdate,
-          createdAt: new Date().toISOString()
-        });
-      } else if (sourceScope === "owner_syllabus") {
-        await db.collection("users").doc(user.uid).collection("syllabus_resources").doc(sourceId).set({
-          id: sourceId,
-          ...sourceDoc,
-          status: finalIndexStatus,
-          ...metaUpdate
-        });
-      } else if (sourceScope === "paper_structure") {
-        await db.collection("rag_sources").doc(sourceId).update({
-          lesson: lesson || null,
-          sourceScope: "paper_structure",
-          resourceType: "paper_structure"
-        });
-      }
-
-      invalidateInventoryCache(user.uid);
-    } catch (e: any) {
-      console.error("Failed to update extra collections metadata:", e);
-    }
-
-    // Store in user's current chat context
-    try {
-      const chatCtxRef = db.collection("users").doc(user.uid).collection("chat_context").doc("current");
-      const chatCtxSnap = await chatCtxRef.get();
-      let temporaryPdfs = [];
-      if (chatCtxSnap.exists) {
-        const ctxData = chatCtxSnap.data();
-        if (ctxData && Array.isArray(ctxData.temporaryPdfs)) {
-          temporaryPdfs = ctxData.temporaryPdfs;
-        }
-      }
-      const activePdf = {
-        sourceId,
-        fileName: req.file.originalname,
-        title: title || req.file.originalname,
-        storagePath,
-        uploadedAt: new Date().toISOString(),
-        subject: subject || null,
-        resourceType: resourceType || null
-      };
-      if (!temporaryPdfs.some((p: any) => p.sourceId === sourceId)) {
-        temporaryPdfs.push({
-          sourceId,
-          fileName: req.file.originalname,
-          title: title || req.file.originalname,
-          storagePath,
-          uploadedAt: new Date().toISOString()
-        });
-      }
-      await chatCtxRef.set({ activePdf, temporaryPdfs }, { merge: true });
-    } catch (ctxErr: any) {
-      console.warn("Failed to save to current chat context in /ingest-uploaded:", ctxErr.message);
-    }
-
-    return res.json({
-      ok: true,
-      sourceId,
-      storagePath,
-      fileName: req.file.originalname,
-      title: title || req.file.originalname,
-      chunkCount,
-      needsOcr,
-      needsLegacyConversion,
-      textEncoding
-    });
-
-  } catch (error: any) {
-    console.error("Error in ingest-uploaded endpoint:", error);
-    res.status(500).json({
-      ok: false,
-      code: "FIRESTORE_WRITE_FAILED",
-      message: "PDF Storage upload done, but Firestore metadata/chunks failed."
-    });
-  }
-});
-
-
 // 3. Create past paper doc
 ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) => {
   try {
@@ -497,8 +223,7 @@ ragRoutes.delete("/past-papers/:id", requireNonAnonymousUser, async (req: any, r
     const db = getAdminDb();
     
     // Verify user owns the paper or is admin
-    const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "26002ishan@gmail.com";
-    const isAdmin = req.user.email?.toLowerCase() === ownerEmail.toLowerCase();
+    const isAdmin = req.user.roles?.includes("admin") || req.user.admin === true;
     
     let storagePath: string | null = null;
     let pastPaperDeleted = false;
@@ -612,8 +337,7 @@ ragRoutes.delete("/sources/:sourceId", requireNonAnonymousUser, async (req: any,
       return res.status(404).json({ ok: false, error: "Source data not found." });
     }
 
-    const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "26002ishan@gmail.com";
-    const isAdmin = user.email?.toLowerCase() === ownerEmail.toLowerCase();
+    const isAdmin = user.roles?.includes("admin") || user.admin === true;
 
     // Check ownership
     if (data.ownerUid !== user.uid && !isAdmin) {
@@ -724,8 +448,7 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
     }
 
     const sourceData = sourceSnap.data();
-    const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "26002ishan@gmail.com";
-    const isAdmin = user.email?.toLowerCase() === ownerEmail.toLowerCase();
+    const isAdmin = user.roles?.includes("admin") || user.admin === true;
     if (sourceData?.ownerUid !== user.uid && !isAdmin) {
       return res.status(403).json({ ok: false, error: "Unauthorized to reindex this source." });
     }
@@ -747,8 +470,8 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
     const batch = db.batch();
 
     // 1. Delete old chunks
-    const ragChunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
-    ragChunksSnap.docs.forEach((d: any) => {
+    const rag_chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
+    rag_chunksSnap.docs.forEach((d: any) => {
       batch.delete(d.ref);
     });
 
@@ -797,7 +520,7 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
           finalPages = extraction.pages;
         }
       } else if (mode === "ocr") {
-        if (!process.env.GEMINI_API_KEY) {
+        if (!process.env.GEMINI_API_KEY && process.env.GEMINI_USE_VERTEX !== 'true') {
           invalidateInventoryCache(user.uid);
           return res.json({
             ok: true,
@@ -813,7 +536,7 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
           const ai = getAIClient();
           const pdfBase64 = pdfData.toString("base64");
           const response = await ai.models.generateContent({
-            model: "gemini-3.5-flash",
+            model: "gemini-2.5-flash",
             contents: [
               {
                 inlineData: {
@@ -877,7 +600,7 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
               const ai = getAIClient();
               const pdfBase64 = pdfData.toString("base64");
               const response = await ai.models.generateContent({
-                model: "gemini-3.5-flash",
+                model: "gemini-2.5-flash",
                 contents: [
                   {
                     inlineData: {
@@ -984,7 +707,7 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
         chunkCount: 0,
         needsOcr: true,
         indexStatus: "needs_ocr",
-        ocrUnavailable: !process.env.GEMINI_API_KEY,
+        ocrUnavailable: (!process.env.GEMINI_API_KEY && process.env.GEMINI_USE_VERTEX !== 'true'),
         message: "OCR provider not configured or PDF empty"
       });
     }

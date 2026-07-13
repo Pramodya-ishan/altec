@@ -28,14 +28,14 @@ export function Sidebar() {
     { id: 'clora-x', label: 'Clora X Assistant', icon: Bot }
   ];
 
-  const syllabusOwnerEmail = import.meta.env.VITE_SYLLABUS_OWNER_EMAIL || '26002ishan@gmail.com';
-  if (profile?.email?.toLowerCase() === syllabusOwnerEmail.toLowerCase() || user?.email?.toLowerCase() === syllabusOwnerEmail.toLowerCase()) {
+  const isAdminUser = profile?.role === 'admin' || profile?.roles?.includes('admin');
+  const isSyllabusEditor = isAdminUser || profile?.role === 'content_editor' || profile?.roles?.includes('content_editor') || profile?.role === 'teacher' || profile?.roles?.includes('teacher');
+
+  if (isSyllabusEditor) {
     menuItems.push({ id: 'syllabus', label: 'Syllabus Library', icon: BookOpen } as any);
   }
-  if (profile?.email === '26002ishan@gmail.com' || user?.email === '26002ishan@gmail.com') {
+  if (isAdminUser) {
     menuItems.push({ id: 'pdf-sources', label: 'PDF Intelligence', icon: FileText } as any);
-  }
-  if (profile?.email === 'ishanstc123@gmail.com' || user?.email === 'ishanstc123@gmail.com') {
     menuItems.push({ id: 'admin-dashboard', label: 'Admin Dashboard', icon: ShieldAlert } as any);
   }
 

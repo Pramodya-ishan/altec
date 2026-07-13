@@ -124,12 +124,11 @@ router.post("/reports/student-weekly", async (req, res) => {
   }
 });
 
-router.post("/admin/repair-data", async (req, res) => {
+import { requireFirebaseUser } from "../firebase/authMiddleware";
+import { requireRole } from "../utils/authGuards";
+
+router.post("/admin/repair-data", requireFirebaseUser, requireRole("admin"), async (req: any, res) => {
   try {
-    const user = await requireUser(req);
-    if (user.email !== "26002ishan@gmail.com") {
-      return res.status(403).json({ error: "Access Denied" });
-    }
     const { getAdminDb } = await import("../../server/firebase/admin");
     const db = getAdminDb();
     

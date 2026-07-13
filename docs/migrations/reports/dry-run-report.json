@@ -1,0 +1,1071 @@
+{
+  "summary": {
+    "totalScanned": 63,
+    "totalFindings": 68,
+    "bySeverity": {
+      "medium": 63,
+      "high": 5
+    },
+    "byType": {
+      "missing_storage": 63,
+      "invalid_owner": 5
+    }
+  },
+  "findings": [
+    {
+      "id": "FIND-1",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "fde0a877-e885-417e-b751-da80d1c40948",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/past_papers/SFT/past_paper/2024/fde0a877-e885-417e-b751-da80d1c40948/2024_Science_for_Technology_Part_I_SM.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-2",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "feed94d6-3a7d-4610-88cc-86e029a3913d",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/feed94d6-3a7d-4610-88cc-86e029a3913d/2025_Science_for_Technology_Full_SM.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-3",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "66a962c4-6136-4652-acd6-c3728d22865a",
+      "details": "Error checking storage: rag_uploads/7kUEmzikv8hat7KQg8pCNGR1ZUd2/66a962c4-6136-4652-acd6-c3728d22865a/ADMISSION_TO_UNDERGRADUATE_COURSES_OF_THE_UNIVERSITIES_IN_SRI_LANKA.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-4",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "0e639a9a-ea5e-4a22-9744-b75bb8beb801",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/syllabus/general/0e639a9a-ea5e-4a22-9744-b75bb8beb801/2025_Science_for_Technology_Full_SM_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-5",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "f63c9e06-c142-4bcc-9423-50bd1d2aeb5c",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/past_paper/2023 Marking /f63c9e06-c142-4bcc-9423-50bd1d2aeb5c/2023-AL-SCIENCE-FOR-TECHNOLOGY-MARKING-SCHEME-SINHALA-MEDIUM-AlevelApi-PDF.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-6",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "f10deb8d-1480-4269-863e-48f79c025d6b",
+      "details": "Error checking storage: rag_uploads/7kUEmzikv8hat7KQg8pCNGR1ZUd2/f10deb8d-1480-4269-863e-48f79c025d6b/2025_Science_for_Technology_Full_SM_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-7",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "9180c38b-2793-4ad7-81ad-3ec9dcc37a9d",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/9180c38b-2793-4ad7-81ad-3ec9dcc37a9d/924cc9a82b974ca7893d50a3dbdcf5dc_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-8",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "e1150340-b92f-4b42-9db9-717639413e9a",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/e1150340-b92f-4b42-9db9-717639413e9a/Speed_Revision_Tute_Balaya_Yanthrika_Shakthiya_Prov_Ques_Model.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-9",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "2e8eab51-0a19-4907-865d-f69bc2354d8b",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/past_paper/2025 /2e8eab51-0a19-4907-865d-f69bc2354d8b/2025_Science_for_Technology_Full_SM_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-10",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "def75c52-b02e-4ba8-b4c9-cf6972f0824d",
+      "details": "Error checking storage: rag_uploads/7kUEmzikv8hat7KQg8pCNGR1ZUd2/def75c52-b02e-4ba8-b4c9-cf6972f0824d/Speed_Revision_Tute_-_Kandanka_Jamithiya_Past_Papers_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-11",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "e708aa3c-c7aa-468a-a345-6fd9a99c373f",
+      "details": "Error checking storage: rag_uploads/7kUEmzikv8hat7KQg8pCNGR1ZUd2/e708aa3c-c7aa-468a-a345-6fd9a99c373f/Speed_Revision_Tute_-_Kandanka_Jamithiya_Past_Papers_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-12",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "bcfe22d9-aa5b-4fec-8ce4-372afaaa9033",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/ET/past_paper/2026/bcfe22d9-aa5b-4fec-8ce4-372afaaa9033/2025_G.C.E_A_L_Engineering_Technology_Full_Sinhala_Medium_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-13",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "df79c3da-1769-482e-b2ac-029368492321",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/past_papers/SFT/past_paper/2026/df79c3da-1769-482e-b2ac-029368492321/20232024-AL-SFT-Paper-Sinhala-Medium.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-14",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "94a01828-5a25-4d5e-844a-01baecd6ea7f",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/94a01828-5a25-4d5e-844a-01baecd6ea7f/0100adc7f9e846b0b72ab0d2014f66f1.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-15",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "3a1cf728-55b6-47d5-b85f-ce1341e2873f",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/3a1cf728-55b6-47d5-b85f-ce1341e2873f/Speed_Revision_Tute_Padarthaye_Yanthrika_Guna_Past_Prove_Papers.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-16",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "2222d86f-456b-4d54-b06d-c88d6f0bb08b",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/2222d86f-456b-4d54-b06d-c88d6f0bb08b/6ff0c87890ff4cc6831681ea30817acb.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-17",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "a72d5244-5e0e-4f01-a76a-203485ff5e66",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/a72d5244-5e0e-4f01-a76a-203485ff5e66/Day_Camp_Tute_2026_-_6_Question_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-18",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "9edf1fdd-4eb6-4a8b-b830-3081fd39d21f",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/past_paper/2026/9edf1fdd-4eb6-4a8b-b830-3081fd39d21f/Speed_Revision_Tute_-_Kandanka_Jamithiya_Model_Papers_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-19",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "fe7c12a3-5f7d-4706-98aa-821392033574",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/fe7c12a3-5f7d-4706-98aa-821392033574/SFT_Revision_Questions_Tute_-_Upul_Weerasinghe_250913_003141.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-20",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "659bfc3e-c36c-4814-8285-ca70ad8f07a4",
+      "details": "Error checking storage: rag_uploads/7kUEmzikv8hat7KQg8pCNGR1ZUd2/659bfc3e-c36c-4814-8285-ca70ad8f07a4/Speed_Revision_Tute_Balaya_Yanthrika_Shakthiya_Prov_Ques_Model_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-21",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "091707f5-a257-487f-94bd-0354aff2afd8",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/091707f5-a257-487f-94bd-0354aff2afd8/2017_Science_for_Technology_Part_II_SM.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-22",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "3211fe95-fd01-41a9-ad15-646979074b8a",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/sft/paper_structure/general/3211fe95-fd01-41a9-ad15-646979074b8a/Speed_Revision_Tute_-_Kandanka_Jamithiya_Model_Papers_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-23",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "efea5066-8558-4750-9bde-726267f8fd5d",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/efea5066-8558-4750-9bde-726267f8fd5d/863ea542b31d4423abefd1c477ea42df.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-24",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "4b5023e4-db9b-4f6a-b111-12a4bfdd16b1",
+      "details": "Error checking storage: rag_uploads/7kUEmzikv8hat7KQg8pCNGR1ZUd2/4b5023e4-db9b-4f6a-b111-12a4bfdd16b1/2021_Science_for_Technology_Part_II_SM.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-25",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "4460c80d-9fb3-44aa-9d52-ed88d2422908",
+      "details": "Error checking storage: users/NanZPuOjldR8NRmqma5EZsbDSPZ2/past_papers/SFT/past_paper/ /4460c80d-9fb3-44aa-9d52-ed88d2422908/cd59f714c3ee42e298b1e6a0e6f68c5e.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-26",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "c75ec0f3-7a26-49fd-9c6c-885bea76007a",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/c75ec0f3-7a26-49fd-9c6c-885bea76007a/Speed_Revision_Tute_-_Yanthrika_Shakthiya_Past_Papers_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-27",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "dcc0c421-3e5f-47f8-8d5a-e03ddb8e00d8",
+      "details": "Error checking storage: users/dJw5DkCVj2NmQZNYYv0P6JTmzA93/syllabus/SFT/paper_structure/general/dcc0c421-3e5f-47f8-8d5a-e03ddb8e00d8/863ea542b31d4423abefd1c477ea42df.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-28",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "94c3962c-07b3-4972-8958-12510c58b3ca",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/94c3962c-07b3-4972-8958-12510c58b3ca/Speed_Revision_Tute_-_Minum_Upakarana_Past_Papers_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-29",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "b1c411cb-c0c8-48ed-bb70-471f6b9914b9",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/b1c411cb-c0c8-48ed-bb70-471f6b9914b9/dff54b64808147c7958fb99ef9f5a382.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-30",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "ffbccc22-fb3a-4137-8653-2f8c3c2d1ce6",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/past_papers/SFT/past_paper/2025/ffbccc22-fb3a-4137-8653-2f8c3c2d1ce6/2025_Science_for_Technology_Full_SM_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-31",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "1596daa5-523b-43e0-a1ab-5583a761096a",
+      "details": "Error checking storage: rag_uploads/7kUEmzikv8hat7KQg8pCNGR1ZUd2/1596daa5-523b-43e0-a1ab-5583a761096a/2018_Engineering_Technology_Full_SM.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-32",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "550a5186-9d7e-4d2e-a915-a559a693f0f6",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/550a5186-9d7e-4d2e-a915-a559a693f0f6/924cc9a82b974ca7893d50a3dbdcf5dc_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-33",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "9b57c200-8beb-4786-84fb-205328a1c4bb",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/9b57c200-8beb-4786-84fb-205328a1c4bb/Speed_Revision_Tute_-_Vidyuthaya_Prove._Model_Papers_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-34",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "d0447e27-cde5-4b7a-a762-fde3ba5218bd",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/past_papers/SFT/model_paper/2026/d0447e27-cde5-4b7a-a762-fde3ba5218bd/Day_Camp_Tute_2026_-_6_Question.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-35",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "3e33c941-92d9-491a-ad16-9443f551f6ea",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/3e33c941-92d9-491a-ad16-9443f551f6ea/9992933a5baf40d8a4c08e11ec9b5bfe.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-36",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "c9bb81fa-e2e7-42b7-9f96-d9f7411ad5db",
+      "details": "Error checking storage: rag_uploads/7kUEmzikv8hat7KQg8pCNGR1ZUd2/c9bb81fa-e2e7-42b7-9f96-d9f7411ad5db/2025_Science_for_Technology_Full_SM_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-37",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "d5bd4d84-3119-439b-b71f-f0538b3a2305",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/d5bd4d84-3119-439b-b71f-f0538b3a2305/Speed_Revision_Tute_-_Balaya_Past_Prove._Papers_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-38",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "5cbcfd7c-7ca1-4c0a-808b-3ca82f07a873",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/past_paper/2026/5cbcfd7c-7ca1-4c0a-808b-3ca82f07a873/2025_Science_for_Technology_Full_SM_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-39",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "f2c49183-f6a2-45e1-9625-f91452fe54d2",
+      "details": "Error checking storage: rag_uploads/7kUEmzikv8hat7KQg8pCNGR1ZUd2/f2c49183-f6a2-45e1-9625-f91452fe54d2/2018_Engineering_Technology_Full_SM.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-40",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "57383bfb-4e3b-48ae-9b87-de6b14e5ec54",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/57383bfb-4e3b-48ae-9b87-de6b14e5ec54/Day_Camp_Past_Papers_2027_-_17_Essay_Structure_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-41",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "06818ae5-a96b-46ad-a8f7-6bcb7b5b9799",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/06818ae5-a96b-46ad-a8f7-6bcb7b5b9799/Day_Camp_Paper_2025_3_Structure_Essay_Past_Papers.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-42",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "ace679a3-6013-4d64-a95d-60dcd6bf630e",
+      "details": "Error checking storage: rag_uploads/7kUEmzikv8hat7KQg8pCNGR1ZUd2/ace679a3-6013-4d64-a95d-60dcd6bf630e/2025_Science_for_Technology_Full_SM_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-43",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "bd053ac9-382e-40f6-a4f4-793d1a56db12",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/past_paper/2025 /bd053ac9-382e-40f6-a4f4-793d1a56db12/2025_Science_for_Technology_Full_SM_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-44",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "dc934f39-e7e5-4e87-a952-bda27f7c3b5d",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/dc934f39-e7e5-4e87-a952-bda27f7c3b5d/Speed_Revision_Tute_-_Chalithaya_Past_Papers_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-45",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "fb915c86-ff40-4654-8d9a-a300f6ec5443",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/past_papers/SFT/past_paper/2026/fb915c86-ff40-4654-8d9a-a300f6ec5443/2023-AL-SCIENCE-FOR-TECHNOLOGY-MARKING-SCHEME-SINHALA-MEDIUM-AlevelApi-PDF.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-46",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "439c537e-5b17-46f5-949b-80893670eb09",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/439c537e-5b17-46f5-949b-80893670eb09/Sankyanaya_Tute_-_Edit_with_Past_Papers_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-47",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "977fed93-8a66-4313-8b72-d0e87eb59f12",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/977fed93-8a66-4313-8b72-d0e87eb59f12/Speed_Revision_Tute_Balaya_Yanthrika_Shakthiya_Prov_Ques_Model_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-48",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "2deba588-86ac-4393-b001-c6fe657a48c3",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/syllabus/general/2deba588-86ac-4393-b001-c6fe657a48c3/sALSyl_SFT.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-49",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "83ffe81f-c16d-42b0-bae7-59f97bf005ff",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/past_papers/SFT/past_paper/2026/83ffe81f-c16d-42b0-bae7-59f97bf005ff/2025_Science_for_Technology_Full_SM_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-50",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "e95ea064-91ea-4c89-8822-07264a10ae62",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/e95ea064-91ea-4c89-8822-07264a10ae62/924cc9a82b974ca7893d50a3dbdcf5dc_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-51",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "rag_sources",
+      "docId": "23698a79-8cc1-4aef-8372-a78be1d06e76",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/paper_structure/general/23698a79-8cc1-4aef-8372-a78be1d06e76/Speed_Revision_Tute_-_Balaya_Past_Prove._Papers_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-52",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "past_papers",
+      "docId": "fde0a877-e885-417e-b751-da80d1c40948",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/past_papers/SFT/past_paper/2024/fde0a877-e885-417e-b751-da80d1c40948/2024_Science_for_Technology_Part_I_SM.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-53",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "past_papers",
+      "docId": "df79c3da-1769-482e-b2ac-029368492321",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/past_papers/SFT/past_paper/2026/df79c3da-1769-482e-b2ac-029368492321/20232024-AL-SFT-Paper-Sinhala-Medium.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-54",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "past_papers",
+      "docId": "4460c80d-9fb3-44aa-9d52-ed88d2422908",
+      "details": "Error checking storage: users/NanZPuOjldR8NRmqma5EZsbDSPZ2/past_papers/SFT/past_paper/ /4460c80d-9fb3-44aa-9d52-ed88d2422908/cd59f714c3ee42e298b1e6a0e6f68c5e.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-55",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "past_papers",
+      "docId": "ffbccc22-fb3a-4137-8653-2f8c3c2d1ce6",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/past_papers/SFT/past_paper/2025/ffbccc22-fb3a-4137-8653-2f8c3c2d1ce6/2025_Science_for_Technology_Full_SM_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-56",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "past_papers",
+      "docId": "d0447e27-cde5-4b7a-a762-fde3ba5218bd",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/past_papers/SFT/model_paper/2026/d0447e27-cde5-4b7a-a762-fde3ba5218bd/Day_Camp_Tute_2026_-_6_Question.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-57",
+      "type": "invalid_owner",
+      "severity": "high",
+      "collection": "past_papers",
+      "docId": "GNM14iSHi2LP5GOi8jLo",
+      "details": "Missing owner UID",
+      "proposedAction": "Assign authoritative owner or administrative UID."
+    },
+    {
+      "id": "FIND-58",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "past_papers",
+      "docId": "GNM14iSHi2LP5GOi8jLo",
+      "details": "Error checking storage: /api/f/7b2270617468223a2266696c65732f313738333437393435383931355f53696e68616c612d5346542032303236204d6f4520506170657220416e73776572732e706466222c22746f6b656e223a2239336262333662352d353239382d343130332d383662642d643138633135326530656633222c226275636b6574223a22616c2d61692d636861742e666972656261736573746f726167652e617070227d",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-59",
+      "type": "invalid_owner",
+      "severity": "high",
+      "collection": "past_papers",
+      "docId": "PM1NfsAjBLfbkPRYFDwc",
+      "details": "Missing owner UID",
+      "proposedAction": "Assign authoritative owner or administrative UID."
+    },
+    {
+      "id": "FIND-60",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "past_papers",
+      "docId": "PM1NfsAjBLfbkPRYFDwc",
+      "details": "Error checking storage: /api/f/7b2270617468223a2266696c65732f313738333438303438393930345f53696e68616c612d5346542032303236204d6f4520506170657220416e73776572732e706466222c22746f6b656e223a2230663264366161372d376535382d346264642d626239372d393433346262376635643536222c226275636b6574223a22616c2d61692d636861742e666972656261736573746f726167652e617070227d",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-61",
+      "type": "invalid_owner",
+      "severity": "high",
+      "collection": "past_papers",
+      "docId": "zvBMDsTejbIxz6kwR07T",
+      "details": "Missing owner UID",
+      "proposedAction": "Assign authoritative owner or administrative UID."
+    },
+    {
+      "id": "FIND-62",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "past_papers",
+      "docId": "zvBMDsTejbIxz6kwR07T",
+      "details": "Error checking storage: /api/f/7b2270617468223a2266696c65732f313738333437393436363532385f32303236204d4f45204554204d6f64656c2050617065722053696e68616c6120416e737765722e706466222c22746f6b656e223a2262363635306532332d353630392d343935322d613738362d346363343931346431343934222c226275636b6574223a22616c2d61692d636861742e666972656261736573746f726167652e617070227d",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-63",
+      "type": "invalid_owner",
+      "severity": "high",
+      "collection": "past_papers",
+      "docId": "0nzfriXXOcQ8lVQBoK3X",
+      "details": "Missing owner UID",
+      "proposedAction": "Assign authoritative owner or administrative UID."
+    },
+    {
+      "id": "FIND-64",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "past_papers",
+      "docId": "0nzfriXXOcQ8lVQBoK3X",
+      "details": "Error checking storage: /api/f/7b2270617468223a2266696c65732f313738333438303530303735385f32303236204d4f45204554204d6f64656c2050617065722053696e68616c6120416e737765722e706466222c22746f6b656e223a2262623164363666322d303232652d346162622d393764332d373464326563653533656164222c226275636b6574223a22616c2d61692d636861742e666972656261736573746f726167652e617070227d",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-65",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "past_papers",
+      "docId": "fb915c86-ff40-4654-8d9a-a300f6ec5443",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/past_papers/SFT/past_paper/2026/fb915c86-ff40-4654-8d9a-a300f6ec5443/2023-AL-SCIENCE-FOR-TECHNOLOGY-MARKING-SCHEME-SINHALA-MEDIUM-AlevelApi-PDF.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-66",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "past_papers",
+      "docId": "83ffe81f-c16d-42b0-bae7-59f97bf005ff",
+      "details": "Error checking storage: users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/past_papers/SFT/past_paper/2026/83ffe81f-c16d-42b0-bae7-59f97bf005ff/2025_Science_for_Technology_Full_SM_1_.pdf",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    },
+    {
+      "id": "FIND-67",
+      "type": "invalid_owner",
+      "severity": "high",
+      "collection": "past_papers",
+      "docId": "D8U0Gs5lEW0ysWRI7Bt6",
+      "details": "Missing owner UID",
+      "proposedAction": "Assign authoritative owner or administrative UID."
+    },
+    {
+      "id": "FIND-68",
+      "type": "missing_storage",
+      "severity": "medium",
+      "collection": "past_papers",
+      "docId": "D8U0Gs5lEW0ysWRI7Bt6",
+      "details": "Error checking storage: /api/f/7b2270617468223a2266696c65732f313738333437383433303336305f53696e68616c612d5346542032303236204d6f4520506170657220416e73776572732e706466222c22746f6b656e223a2237373631613132382d653239372d343234322d386563642d306537626635353431316635222c226275636b6574223a22616c2d61692d636861742e666972656261736573746f726167652e617070227d",
+      "proposedAction": "Investigate original storage or mark as source_missing."
+    }
+  ],
+  "proposedMigrationPlan": [
+    {
+      "legacyId": "fde0a877-e885-417e-b751-da80d1c40948",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "fde0a877-e885-417e-b751-da80d1c40948"
+    },
+    {
+      "legacyId": "feed94d6-3a7d-4610-88cc-86e029a3913d",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "feed94d6-3a7d-4610-88cc-86e029a3913d"
+    },
+    {
+      "legacyId": "66a962c4-6136-4652-acd6-c3728d22865a",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "66a962c4-6136-4652-acd6-c3728d22865a"
+    },
+    {
+      "legacyId": "0e639a9a-ea5e-4a22-9744-b75bb8beb801",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "0e639a9a-ea5e-4a22-9744-b75bb8beb801"
+    },
+    {
+      "legacyId": "f63c9e06-c142-4bcc-9423-50bd1d2aeb5c",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "f63c9e06-c142-4bcc-9423-50bd1d2aeb5c"
+    },
+    {
+      "legacyId": "f10deb8d-1480-4269-863e-48f79c025d6b",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "f10deb8d-1480-4269-863e-48f79c025d6b"
+    },
+    {
+      "legacyId": "9180c38b-2793-4ad7-81ad-3ec9dcc37a9d",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "9180c38b-2793-4ad7-81ad-3ec9dcc37a9d"
+    },
+    {
+      "legacyId": "e1150340-b92f-4b42-9db9-717639413e9a",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "e1150340-b92f-4b42-9db9-717639413e9a"
+    },
+    {
+      "legacyId": "2e8eab51-0a19-4907-865d-f69bc2354d8b",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "2e8eab51-0a19-4907-865d-f69bc2354d8b"
+    },
+    {
+      "legacyId": "def75c52-b02e-4ba8-b4c9-cf6972f0824d",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "def75c52-b02e-4ba8-b4c9-cf6972f0824d"
+    },
+    {
+      "legacyId": "e708aa3c-c7aa-468a-a345-6fd9a99c373f",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "e708aa3c-c7aa-468a-a345-6fd9a99c373f"
+    },
+    {
+      "legacyId": "bcfe22d9-aa5b-4fec-8ce4-372afaaa9033",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "bcfe22d9-aa5b-4fec-8ce4-372afaaa9033"
+    },
+    {
+      "legacyId": "df79c3da-1769-482e-b2ac-029368492321",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "df79c3da-1769-482e-b2ac-029368492321"
+    },
+    {
+      "legacyId": "94a01828-5a25-4d5e-844a-01baecd6ea7f",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "94a01828-5a25-4d5e-844a-01baecd6ea7f"
+    },
+    {
+      "legacyId": "3a1cf728-55b6-47d5-b85f-ce1341e2873f",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "3a1cf728-55b6-47d5-b85f-ce1341e2873f"
+    },
+    {
+      "legacyId": "2222d86f-456b-4d54-b06d-c88d6f0bb08b",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "2222d86f-456b-4d54-b06d-c88d6f0bb08b"
+    },
+    {
+      "legacyId": "a72d5244-5e0e-4f01-a76a-203485ff5e66",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "a72d5244-5e0e-4f01-a76a-203485ff5e66"
+    },
+    {
+      "legacyId": "9edf1fdd-4eb6-4a8b-b830-3081fd39d21f",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "9edf1fdd-4eb6-4a8b-b830-3081fd39d21f"
+    },
+    {
+      "legacyId": "fe7c12a3-5f7d-4706-98aa-821392033574",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "fe7c12a3-5f7d-4706-98aa-821392033574"
+    },
+    {
+      "legacyId": "659bfc3e-c36c-4814-8285-ca70ad8f07a4",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "659bfc3e-c36c-4814-8285-ca70ad8f07a4"
+    },
+    {
+      "legacyId": "091707f5-a257-487f-94bd-0354aff2afd8",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "091707f5-a257-487f-94bd-0354aff2afd8"
+    },
+    {
+      "legacyId": "3211fe95-fd01-41a9-ad15-646979074b8a",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "3211fe95-fd01-41a9-ad15-646979074b8a"
+    },
+    {
+      "legacyId": "efea5066-8558-4750-9bde-726267f8fd5d",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "efea5066-8558-4750-9bde-726267f8fd5d"
+    },
+    {
+      "legacyId": "4b5023e4-db9b-4f6a-b111-12a4bfdd16b1",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "4b5023e4-db9b-4f6a-b111-12a4bfdd16b1"
+    },
+    {
+      "legacyId": "4460c80d-9fb3-44aa-9d52-ed88d2422908",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "4460c80d-9fb3-44aa-9d52-ed88d2422908"
+    },
+    {
+      "legacyId": "c75ec0f3-7a26-49fd-9c6c-885bea76007a",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "c75ec0f3-7a26-49fd-9c6c-885bea76007a"
+    },
+    {
+      "legacyId": "dcc0c421-3e5f-47f8-8d5a-e03ddb8e00d8",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "dcc0c421-3e5f-47f8-8d5a-e03ddb8e00d8"
+    },
+    {
+      "legacyId": "94c3962c-07b3-4972-8958-12510c58b3ca",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "94c3962c-07b3-4972-8958-12510c58b3ca"
+    },
+    {
+      "legacyId": "b1c411cb-c0c8-48ed-bb70-471f6b9914b9",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "b1c411cb-c0c8-48ed-bb70-471f6b9914b9"
+    },
+    {
+      "legacyId": "ffbccc22-fb3a-4137-8653-2f8c3c2d1ce6",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "ffbccc22-fb3a-4137-8653-2f8c3c2d1ce6"
+    },
+    {
+      "legacyId": "1596daa5-523b-43e0-a1ab-5583a761096a",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "1596daa5-523b-43e0-a1ab-5583a761096a"
+    },
+    {
+      "legacyId": "550a5186-9d7e-4d2e-a915-a559a693f0f6",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "550a5186-9d7e-4d2e-a915-a559a693f0f6"
+    },
+    {
+      "legacyId": "9b57c200-8beb-4786-84fb-205328a1c4bb",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "9b57c200-8beb-4786-84fb-205328a1c4bb"
+    },
+    {
+      "legacyId": "d0447e27-cde5-4b7a-a762-fde3ba5218bd",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "d0447e27-cde5-4b7a-a762-fde3ba5218bd"
+    },
+    {
+      "legacyId": "3e33c941-92d9-491a-ad16-9443f551f6ea",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "3e33c941-92d9-491a-ad16-9443f551f6ea"
+    },
+    {
+      "legacyId": "c9bb81fa-e2e7-42b7-9f96-d9f7411ad5db",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "c9bb81fa-e2e7-42b7-9f96-d9f7411ad5db"
+    },
+    {
+      "legacyId": "d5bd4d84-3119-439b-b71f-f0538b3a2305",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "d5bd4d84-3119-439b-b71f-f0538b3a2305"
+    },
+    {
+      "legacyId": "5cbcfd7c-7ca1-4c0a-808b-3ca82f07a873",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "5cbcfd7c-7ca1-4c0a-808b-3ca82f07a873"
+    },
+    {
+      "legacyId": "f2c49183-f6a2-45e1-9625-f91452fe54d2",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "f2c49183-f6a2-45e1-9625-f91452fe54d2"
+    },
+    {
+      "legacyId": "57383bfb-4e3b-48ae-9b87-de6b14e5ec54",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "57383bfb-4e3b-48ae-9b87-de6b14e5ec54"
+    },
+    {
+      "legacyId": "06818ae5-a96b-46ad-a8f7-6bcb7b5b9799",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "06818ae5-a96b-46ad-a8f7-6bcb7b5b9799"
+    },
+    {
+      "legacyId": "ace679a3-6013-4d64-a95d-60dcd6bf630e",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "ace679a3-6013-4d64-a95d-60dcd6bf630e"
+    },
+    {
+      "legacyId": "bd053ac9-382e-40f6-a4f4-793d1a56db12",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "bd053ac9-382e-40f6-a4f4-793d1a56db12"
+    },
+    {
+      "legacyId": "dc934f39-e7e5-4e87-a952-bda27f7c3b5d",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "dc934f39-e7e5-4e87-a952-bda27f7c3b5d"
+    },
+    {
+      "legacyId": "fb915c86-ff40-4654-8d9a-a300f6ec5443",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "fb915c86-ff40-4654-8d9a-a300f6ec5443"
+    },
+    {
+      "legacyId": "439c537e-5b17-46f5-949b-80893670eb09",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "439c537e-5b17-46f5-949b-80893670eb09"
+    },
+    {
+      "legacyId": "977fed93-8a66-4313-8b72-d0e87eb59f12",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "977fed93-8a66-4313-8b72-d0e87eb59f12"
+    },
+    {
+      "legacyId": "2deba588-86ac-4393-b001-c6fe657a48c3",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "2deba588-86ac-4393-b001-c6fe657a48c3"
+    },
+    {
+      "legacyId": "83ffe81f-c16d-42b0-bae7-59f97bf005ff",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "83ffe81f-c16d-42b0-bae7-59f97bf005ff"
+    },
+    {
+      "legacyId": "e95ea064-91ea-4c89-8822-07264a10ae62",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "e95ea064-91ea-4c89-8822-07264a10ae62"
+    },
+    {
+      "legacyId": "23698a79-8cc1-4aef-8372-a78be1d06e76",
+      "collection": "rag_sources",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "23698a79-8cc1-4aef-8372-a78be1d06e76"
+    },
+    {
+      "legacyId": "fde0a877-e885-417e-b751-da80d1c40948",
+      "collection": "past_papers",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "fde0a877-e885-417e-b751-da80d1c40948"
+    },
+    {
+      "legacyId": "df79c3da-1769-482e-b2ac-029368492321",
+      "collection": "past_papers",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "df79c3da-1769-482e-b2ac-029368492321"
+    },
+    {
+      "legacyId": "4460c80d-9fb3-44aa-9d52-ed88d2422908",
+      "collection": "past_papers",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "4460c80d-9fb3-44aa-9d52-ed88d2422908"
+    },
+    {
+      "legacyId": "ffbccc22-fb3a-4137-8653-2f8c3c2d1ce6",
+      "collection": "past_papers",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "ffbccc22-fb3a-4137-8653-2f8c3c2d1ce6"
+    },
+    {
+      "legacyId": "d0447e27-cde5-4b7a-a762-fde3ba5218bd",
+      "collection": "past_papers",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "d0447e27-cde5-4b7a-a762-fde3ba5218bd"
+    },
+    {
+      "legacyId": "GNM14iSHi2LP5GOi8jLo",
+      "collection": "past_papers",
+      "action": "quarantine",
+      "reason": "Missing critical metadata (owner or storage)",
+      "proposedSourceId": "GNM14iSHi2LP5GOi8jLo"
+    },
+    {
+      "legacyId": "PM1NfsAjBLfbkPRYFDwc",
+      "collection": "past_papers",
+      "action": "quarantine",
+      "reason": "Missing critical metadata (owner or storage)",
+      "proposedSourceId": "PM1NfsAjBLfbkPRYFDwc"
+    },
+    {
+      "legacyId": "zvBMDsTejbIxz6kwR07T",
+      "collection": "past_papers",
+      "action": "quarantine",
+      "reason": "Missing critical metadata (owner or storage)",
+      "proposedSourceId": "zvBMDsTejbIxz6kwR07T"
+    },
+    {
+      "legacyId": "0nzfriXXOcQ8lVQBoK3X",
+      "collection": "past_papers",
+      "action": "quarantine",
+      "reason": "Missing critical metadata (owner or storage)",
+      "proposedSourceId": "0nzfriXXOcQ8lVQBoK3X"
+    },
+    {
+      "legacyId": "fb915c86-ff40-4654-8d9a-a300f6ec5443",
+      "collection": "past_papers",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "fb915c86-ff40-4654-8d9a-a300f6ec5443"
+    },
+    {
+      "legacyId": "83ffe81f-c16d-42b0-bae7-59f97bf005ff",
+      "collection": "past_papers",
+      "action": "migrate",
+      "reason": "Valid legacy record",
+      "proposedSourceId": "83ffe81f-c16d-42b0-bae7-59f97bf005ff"
+    },
+    {
+      "legacyId": "D8U0Gs5lEW0ysWRI7Bt6",
+      "collection": "past_papers",
+      "action": "quarantine",
+      "reason": "Missing critical metadata (owner or storage)",
+      "proposedSourceId": "D8U0Gs5lEW0ysWRI7Bt6"
+    }
+  ]
+}

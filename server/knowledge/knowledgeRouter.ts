@@ -5,6 +5,15 @@ import { GoogleGenAI } from "@google/genai";
 
 export type KnowledgeRouterResult = {
   mode:
+
+    | "lesson_question_discussion"
+    | "lesson_theory_explanation"
+    | "official_paper_question"
+    | "past_paper_lesson_search"
+    | "selected_resource_discussion"
+    | "attachment_question"
+    | "model_question_generation"
+    | "continue_grounded_discussion"
     | "normal_chat"
     | "past_paper_search"
     | "web_search"
@@ -141,6 +150,7 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
   ) {
     return {
       mode: "zscore_prediction",
+
       entities: {
         subject: undefined,
         year: undefined,
@@ -197,12 +207,52 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
   }
 
   // 5. Lesson marks intent
+  if (lower === "ehem krmu" || lower === "next" || lower === "continue" || lower === "first question" || lower === "ehem karamu") {
+    return {
+      mode: "continue_grounded_discussion",
+
+      entities: {
+        subject
+      }
+    };
+  }
+  if (lower.includes("model question") || lower.includes("model prashna") || (lower.includes("model") && lower.includes("hadanna")) || lower.includes("practice question")) {
+    return {
+      mode: "model_question_generation",
+
+      entities: {
+        subject
+      }
+    };
+  }
+  if (lower.includes("oya mona awrudde ekd") || lower.includes("awurudda mokakda") || lower.includes("what year is this")) {
+    return {
+      mode: "continue_grounded_discussion",
+
+      entities: { subject }
+    };
+  }
+  if (lower.includes("kelinama past paper prashna walata ymu") || lower.includes("kelinma past paper prashna walata ymu")) {
+    return {
+      mode: "past_paper_lesson_search",
+
+      entities: { subject }
+    };
+  }
+  if (lower.includes("tharala prashna pdf discuss krmu") || lower.includes("prashna pdf discuss") || (lower.includes("pdf") && lower.includes("discuss"))) {
+    return {
+      mode: "lesson_question_discussion",
+
+      entities: { subject }
+    };
+  }
   const isLessonMarks = lower.includes("marks") || lower.includes("ලකුණු") || lower.includes("lkunu") || lower.includes("weighting");
   const isSyllabusOrLesson = lower.includes("lesson") || lower.includes("පාඩම") || lower.includes("විද්‍යුතය") || lower.includes("electrical") || lower.includes("electronics") || lower.includes("python") || lower.includes("networking") || lower.includes("civil");
   
   if (isLessonMarks && isSyllabusOrLesson && !questionNo && !year) {
     return {
       mode: "lesson_marks_intent",
+
       entities: {
         subject,
         lesson: prompt,
@@ -218,6 +268,7 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
     if (isMarkingSchemeTerm) {
       return {
         mode: "marking_scheme_request",
+
         entities: {
           subject,
           year,
@@ -229,6 +280,7 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
     }
     return {
       mode: "paper_question_qa",
+
       entities: {
         subject,
         year,
@@ -244,6 +296,7 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
   if (isDownloadOrLink && (year || isPastPaperTerm || isMarkingSchemeTerm)) {
     return {
       mode: "pdf_link_request",
+
       entities: {
         subject,
         year,
@@ -277,6 +330,7 @@ export async function routeKnowledgeRequest({
   if (deterministic) {
     return {
       mode: deterministic.mode as any,
+
       entities: deterministic.entities as any,
       contextBlocks: [],
       answerHints: {
@@ -292,6 +346,7 @@ export async function routeKnowledgeRequest({
   if (process.env.ENABLE_LLM_ROUTER !== "true") {
     return {
       mode: "normal_chat",
+
       entities: {},
       contextBlocks: [],
       answerHints: {
@@ -309,6 +364,7 @@ export async function routeKnowledgeRequest({
     console.warn("Skipping LLM knowledge routing due to AI billing circuit open.");
     return {
       mode: "normal_chat",
+
       entities: {},
       contextBlocks: [],
       answerHints: {
@@ -334,7 +390,13 @@ Subject mapping:
 Rules:
 - If past paper intent is detected but subject is missing, set needsClarification = true and subject = undefined.
 - paperType can be: "paper", "marking", "mcq", "essay", "structured", "unknown"
-- modes: "normal_chat", "past_paper_search", "web_search", "url_context", "uploaded_pdf_qa", "rag_qa", "image_generation", "pdf_link_request"
+- modes: "lesson_question_discussion", "lesson_theory_explanation", "official_paper_question", "past_paper_lesson_search", "selected_resource_discussion", "attachment_question", "model_question_generation", "marking_scheme_request", "continue_grounded_discussion", "normal_chat", "web_search", "url_context", "pdf_link_request"
+- "lesson_question_discussion": asking to discuss questions from a lesson PDF (e.g., "තරල ප්‍රශ්න PDF discuss කරමු")
+- "lesson_theory_explanation": asking to explain a lesson theory without specific questions
+- "past_paper_lesson_search": asking for past paper questions for a specific lesson without a year (e.g., "තරල past paper ප්‍රශ්න")
+- "official_paper_question": asking for a specific year's past paper question
+- "model_question_generation": asking for a model question to be generated
+- "continue_grounded_discussion": follow-up to continue a previous question discussion (e.g., "ehem krmu", "next", "continue")
 - Set mode to "pdf_link_request" if the user explicitly asks for a PDF file download, file link, or download link of a paper/syllabus.
 - If a URL is in the prompt, extract it to urls array and set mode to url_context.
 - If asking about current events or general knowledge outside syllabus, mode = web_search.
@@ -413,6 +475,7 @@ Respond strictly in this JSON format:
 
     return {
       mode: mode || "normal_chat",
+
       entities,
       contextBlocks: [],
       answerHints: {
@@ -432,6 +495,7 @@ Respond strictly in this JSON format:
     } catch (e) {}
     return {
       mode: "normal_chat",
+
       entities: {},
       contextBlocks: [],
       answerHints: {

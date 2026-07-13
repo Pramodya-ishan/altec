@@ -15,7 +15,11 @@ import { readUrlsWithGemini } from "./tools/urlContext";
 import { groundedSearch } from "./tools/googleSearchGrounding";
 import { ExamResolutionResult } from "./examResourceResolver";
 import { askGeminiDirectPdfStream } from "../pdf/directPdfQa";
+import { getConversationState, updateConversationState } from "../knowledge/conversationState";
+import { retrieveEvidence } from "../knowledge/evidenceRetrieval";
 import { generateContentStreamWithFallback, callGeminiWithFallback, AITask } from "./modelRouter";
+import { resolveAnswerPolicy } from "./answerPolicy";
+import { scoreSource } from "../sources/sourceScoring";
 
 interface StreamTrace {
   requestId: string;
@@ -110,12 +114,12 @@ export async function saveFinalChat(params: {uid: string, email?: string, userTe
   try {
     const db = getAdminDb();
     const batch = db.batch();
-    
+
     const timestamp = new Date().toISOString();
     const requestId = Date.now().toString() + Math.random().toString(36).substring(7);
-    
+
     const { removeUndefinedDeep } = await import("../ai-core/memory/chatSanitizer");
-    const chatData = removeUndefinedDeep({ 
+    const chatData = removeUndefinedDeep({
       requestId,
       userPrompt: params.userText,
       assistantAnswer: params.assistantText,
@@ -134,12 +138,12 @@ export async function saveFinalChat(params: {uid: string, email?: string, userTe
 
     const historyRef = db.collection("users").doc(params.uid).collection("chat_history").doc(requestId);
     batch.set(historyRef, chatData);
-    
+
     if (params.email) {
       const emailRef = db.collection("users").doc(params.email.toLowerCase()).collection("chat_history").doc(requestId);
       batch.set(emailRef, chatData);
     }
-    
+
     await batch.commit();
     return { chatSaved: true, messageId: requestId };
   } catch (e: any) {
@@ -148,9 +152,10 @@ export async function saveFinalChat(params: {uid: string, email?: string, userTe
   }
 }
 
+import { registerRequest, unregisterRequest, cancelRequest } from "./cancellation";
 export async function aiRespondStream(req: any, res: any) {
   const startedAt = Date.now();
-  const requestId = "req_" + Date.now() + "_" + Math.random().toString(36).substring(7);
+  const requestId = req.body?.clientRequestId || "req_" + Date.now() + "_" + Math.random().toString(36).substring(7);
   const trace: StreamTrace = {
     requestId,
     startedAt: new Date().toISOString(),
@@ -170,6 +175,8 @@ export async function aiRespondStream(req: any, res: any) {
     "X-Accel-Buffering": "no",
   });
 
+  const abortController = registerRequest(requestId);
+  const signal = abortController.signal;
   const heartbeatInterval = setInterval(() => {
     try {
       emitSse(res, "heartbeat", { ok: true, requestId, ts: Date.now() });
@@ -178,43 +185,29 @@ export async function aiRespondStream(req: any, res: any) {
       // ignore
     }
   }, 10000);
-
   req.on("close", () => {
+    cancelRequest(requestId);
     console.log(`[STREAM] STREAM_CLIENT_CLOSED requestId=${requestId}`);
     trace.clientClosed = true;
     trace.endedAt = new Date().toISOString();
   });
 
   try {
-    const { prompt, activeSubject, mode: requestedMode = "auto", history = [], image } = req.body;
+    const { prompt, activeSubject, mode: requestedMode = "auto", history = [], image, attachments } = req.body;
     const user = req.user;
 
-    // Check Daily Safety Limit Guardrails
-    const { isDailyLimitExceeded, trackAIUsage } = await import("../cost/usageTracker");
-    const limitCheck = await isDailyLimitExceeded(user.uid);
-    if (limitCheck.exceeded) {
-      emitSse(res, "error", {
-        ok: false,
-        code: "COST_LIMIT_EXCEEDED",
-        error: "Cost Guardrail Limit Exceeded",
-        hint: limitCheck.reason
-      });
-      emitSse(res, "token", { text: `\n\n⚠️ **Daily Safety Limit Exceeded / දෛනික සීමාව ඉක්මවා ඇත**\n\n${limitCheck.reason}` });
-      emitSse(res, "done", { ok: false, completed: false, requestId, chatSaved: false, finishReason: "cost_limit_exceeded" });
-      trace.doneSent = true;
-      trace.lastEvent = "done";
-      return;
-    }
+    // Check Daily Safety Limit Guardrails (REMOVED)
+    const { trackAIUsage } = await import("../cost/usageTracker");
 
     let allSources: any[] = [];
 
     emitSse(res, "status", { step: "started", message: "Starting stream..." });
     emitSse(res, "status", { label: "Thinking" });
-    
+
     // 1. Route Request
     const { detectOfficialPaperCandidate } = await import("../ai-core/intent/paperQuestionParser");
     const paperIntent = detectOfficialPaperCandidate(prompt, activeSubject);
-    
+
     // Check if it's an official paper candidate but subject is missing
     if (paperIntent.isOfficialPaperCandidate && paperIntent.needsSubjectClarification) {
       const msg = `මේ ${paperIntent.year} paper එකේ subject එක මොකක්ද? (SFT / ET / ICT)`;
@@ -268,12 +261,38 @@ export async function aiRespondStream(req: any, res: any) {
       route.mode = "paper_question_qa";
     }
 
+    const policy = resolveAnswerPolicy(prompt, route, activeSubject, attachments);
+    const activeConversationState = await getConversationState(user.uid);
+    const evidence = await retrieveEvidence(user.uid, prompt, route, policy, activeConversationState);
+    // REMOVED: Early evidence apology block (Finding 026)
+    if (evidence.selectedSource) {
+       route.entities.activeSourceId = evidence.selectedSource.id;
+       route.entities.year = evidence.selectedSource.year || route.entities.year;
+    }
+    await updateConversationState(user.uid, {
+      activeSubject: evidence.subject || activeConversationState.activeSubject,
+      lastIntent: evidence.intent
+    });
+    if (policy.intent === "blocked_or_unsafe") {
+        emitSse(res, "token", { text: policy.blockingMessage });
+        trace.completed = true;
+        emitSse(res, "done", { ok: true, completed: true, requestId, messageId: null, chatSaved: false, sources: [] });
+        return;
+    }
+
+    // Disable unused routes based on policy
+    if (!policy.allowSources) {
+      route.answerHints.mustUseRag = false;
+      route.answerHints.mustUseGoogleSearch = false;
+      route.answerHints.mustUseUrlContext = false;
+    }
+
     // [FIX 8] Correction Phrase Detection (e.g., "oka fake")
     const lowerPrompt = prompt.toLowerCase();
     const correctionPhrases = ["oka fake", "werdi", "weradi", "oka newe", "වැරදියි", "ඕක බොරු", "oka boru", "not correct", "fake", "wrong", "boru", "boru kiynn epa", "boru dewal", "බොරු", "මේක බොරු", "නෑ", "not this"];
     const isCorrection = correctionPhrases.some(p => lowerPrompt.includes(p));
 
-    
+
     // Check previous message context for correction
     const lastMsg = (history && history.length > 0) ? history[history.length - 1] : null;
     const lastPaperInfo = lastMsg?.metadata?.paperInfo || lastMsg?.paperInfo;
@@ -281,7 +300,7 @@ export async function aiRespondStream(req: any, res: any) {
     if (isCorrection && lastPaperInfo?.sourceId && lastPaperInfo?.questionNo) {
       console.log(`[AI_RESPOND_STREAM] Correction phrase detected for ${lastPaperInfo.sourceId} Q${lastPaperInfo.questionNo}`);
       emitSse(res, "status", { step: "correction", message: "Processing correction feedback..." });
-      
+
       const { handleWrongAnswerFeedback } = await import("../ai-core/feedback/wrongAnswerHandler");
       await handleWrongAnswerFeedback({
         uid: user.uid,
@@ -295,10 +314,10 @@ export async function aiRespondStream(req: any, res: any) {
         year: lastPaperInfo.year,
         subject: lastPaperInfo.subject
       });
-      
+
       const correctionMsg = "⚠️ **Feedback Received:** ස්තූතියි! මම එම පිළිතුර වැරදි ලෙස සලකුණු කර Admin review එකට යොමු කළා. මම නැවත වතාවක් Direct PDF QA හරහා source එක පරීක්ෂා කර සත්‍යාපනය කරන්නම්.";
       emitSse(res, "token", { text: correctionMsg });
-      
+
       // Force direct PDF QA path for the correction
       route.mode = "paper_question_qa";
       route.entities.year = lastPaperInfo.year;
@@ -306,20 +325,20 @@ export async function aiRespondStream(req: any, res: any) {
       route.entities.questionNo = lastPaperInfo.questionNo;
       route.entities.questionType = lastPaperInfo.questionType || "MCQ";
     }
-    
+
     // If it asks for clarification
     if (route.answerHints.mustAskClarification && route.entities.clarificationQuestion) {
       emitSse(res, "token", { text: route.entities.clarificationQuestion });
       trace.lastEvent = "token";
       let chatRes: any = { chatSaved: false };
       try {
-        chatRes = await saveFinalChat({ 
-          uid: user.uid, 
-          email: user.email, 
-          userText: prompt, 
-          assistantText: route.entities.clarificationQuestion, 
-          mode: route.mode, 
-          subject: activeSubject 
+        chatRes = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: route.entities.clarificationQuestion,
+          mode: route.mode,
+          subject: activeSubject
         });
       } catch (err: any) {
         console.warn("CHAT_SAVE_SKIPPED", err);
@@ -337,7 +356,7 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     emitSse(res, "status", { step: "profile", status: "reading" });
-    
+
     const userContext = await safeCall("loadUserAIContext", () => loadUserAIContext(user.uid, user.email), { activeSubject } as any, res);
     userContext.activeSubject = activeSubject;
 
@@ -349,7 +368,7 @@ export async function aiRespondStream(req: any, res: any) {
           let fastAns = `Firebase data අනුව ඔයාගේ latest estimated Z-score එක: **${zctx.latestOverallZScore ?? 'N/A'}**.\n`;
           fastAns += `Target Z-score එක: **${zctx.targetZScore ?? 'N/A'}**.\n`;
           if (zctx.gapToTarget) fastAns += `Target එකට තව අවශ්‍ය gap එක: **${zctx.gapToTarget}**.\n\n`;
-          
+
           fastAns += `**Subject Z (Estimated):**\n`;
           fastAns += `- SFT: ${zctx.subjectZScores?.sft ?? 'N/A'}\n`;
           fastAns += `- ET: ${zctx.subjectZScores?.et ?? 'N/A'}\n`;
@@ -360,15 +379,15 @@ export async function aiRespondStream(req: any, res: any) {
             fastAns += `- District Rank: ${zctx.rankEstimate.districtRank}\n`;
             fastAns += `- Island Rank: ${zctx.rankEstimate.islandRank ?? 'N/A'}\n\n`;
           }
-          
+
           fastAns += `*History records: ${zctx.zScoreHistory?.length ?? 0}*\n`;
           if (zctx.latestUpdatedAt) fastAns += `*Last updated: ${new Date(zctx.latestUpdatedAt).toLocaleString()}*\n\n`;
           fastAns += `Z-score එක වෙනස් වීමට හේතු: ඔබ ලබාගත් ලකුණු ප්‍රමාණයන් සහ සපුරන ලද පාඩම්වල ප්‍රගතිය (progress) මෙයට බලපා ඇත. ඊළඟට Z-score වැඩි කරන්න, ඔයාගේ weak lessons ටික revise කරමුද?`;
 
           emitSse(res, "token", { text: fastAns });
           trace.lastEvent = "token";
-          let chatRes = await saveFinalChat({ 
-             uid: user.uid, email: user.email, userText: prompt, assistantText: fastAns, mode: "zscore_prediction", subject: activeSubject 
+          let chatRes = await saveFinalChat({
+             uid: user.uid, email: user.email, userText: prompt, assistantText: fastAns, mode: "zscore_prediction", subject: activeSubject
           });
           if (chatRes && chatRes.chatSaved) {
             trace.chatSaved = true;
@@ -418,8 +437,8 @@ export async function aiRespondStream(req: any, res: any) {
 
       emitSse(res, "token", { text: stripRawVisualBlocks(ansText) });
       trace.lastEvent = "token";
-      let chatRes = await saveFinalChat({ 
-         uid: user.uid, email: user.email, userText: prompt, assistantText: ansText, mode: "lesson_marks_intent", subject: requestedSubject 
+      let chatRes = await saveFinalChat({
+         uid: user.uid, email: user.email, userText: prompt, assistantText: ansText, mode: "lesson_marks_intent", subject: requestedSubject
       });
       if (chatRes && chatRes.chatSaved) {
         trace.chatSaved = true;
@@ -439,7 +458,7 @@ export async function aiRespondStream(req: any, res: any) {
 
       const uid = user.uid;
       const userEmail = (user.email || "").toLowerCase();
-      const isAdmin = userEmail === "26002ishan@gmail.com";
+      const isAdmin = user.roles?.includes("admin") || user.admin === true;
 
       const { getSourceInventory } = await import("../sources/sourceInventoryService");
       const inventory = await getSourceInventory({
@@ -570,16 +589,17 @@ export async function aiRespondStream(req: any, res: any) {
 
       if (requestedSubject && requestedYear) {
         emitSse(res, "status", { step: "exam_db", status: "searching" });
-        
+
         let paperSource: any = null;
         let resolution: any = { sources: [], paperSource: null };
-        
+
         const { resolveStrictSource } = await import("../ai-core/sources/sourceResolver");
         const { getSourceInventory } = await import("../sources/sourceInventoryService");
-        
-        const inventory = await getSourceInventory({ uid: user.uid, subject: requestedSubject, isAdmin: user.email === "26002ishan@gmail.com" });
+
+        const isAdminUser = user.roles?.includes("admin") || user.admin === true;
+        const inventory = await getSourceInventory({ uid: user.uid, subject: requestedSubject, isAdmin: isAdminUser });
         const allAvailableSources = [...inventory.groups.pastPapers, ...inventory.groups.markingSchemes, ...inventory.groups.syllabus, ...inventory.groups.uploadedPdfs];
-        
+
         const strictRes = resolveStrictSource(allAvailableSources, {
           year: requestedYear,
           subject: requestedSubject,
@@ -592,7 +612,7 @@ export async function aiRespondStream(req: any, res: any) {
            paperSource = strictRes.selectedSource;
            // CLEAR ALL OTHER SOURCES if locked
            allSources = [{
-             id: paperSource.id || paperSource.sourceId,
+             sourceId: paperSource.id || paperSource.sourceId,
              title: paperSource.title,
              url: paperSource.url || null,
              storagePath: paperSource.storagePath || null,
@@ -610,9 +630,9 @@ export async function aiRespondStream(req: any, res: any) {
                message: msg
              });
              emitSse(res, "token", { text: msg });
-             emitSse(res, "done", { 
-               ok: false, 
-               completed: true, 
+             emitSse(res, "done", {
+               ok: false,
+               completed: true,
                requestId,
                finishReason: "blocked_no_source_lock"
              });
@@ -638,13 +658,13 @@ export async function aiRespondStream(req: any, res: any) {
 
         if (paperSource) {
           if (!allSources.find((s: any) => s.id === paperSource.id)) {
-            allSources.push({ id: paperSource.id, title: paperSource.title, url: paperSource.url, storagePath: paperSource.storagePath, badge: "Locked Source" });
+            allSources.push({ sourceId: paperSource.id, title: paperSource.title, url: paperSource.url, storagePath: paperSource.storagePath, badge: "Locked Source" });
           }
           emitSse(res, "sources", { sources: allSources });
         }
         const hasPaperSource = !!paperSource;
         const questionId = (paperSource?.id && requestedQuestionNo) ? `${paperSource.id}_${paperIntent.questionType || 'MCQ'}_${requestedQuestionNo}`.replace(/\//g, "_") : null;
-        
+
         if (hasPaperSource && route.mode !== "pdf_link_request") {
           const db = getAdminDb();
           const { retrieveEvidenceForPaperQuestion } = await import("../ai-core/evidence/evidenceRetriever");
@@ -659,14 +679,14 @@ export async function aiRespondStream(req: any, res: any) {
               year: requestedYear!,
               subject: requestedSubject!
             });
-            
+
             if (evidenceResult.ok && evidenceResult.evidence?.answer) {
               const evidence = evidenceResult.evidence;
               console.log(`[AI_RESPOND_STREAM] Evidence Found for ${questionId}`);
-              
+
               const methodLabel = evidence.extractionMethod === "manual_verified" ? "Verified by Teacher" : "Found in PDF";
               emitSse(res, "status", { step: "evidence", message: `${methodLabel}...` });
-              
+
               let finalAnswer: string = String(evidence.answer || evidence.officialAnswer || evidence.estimatedAnswer || "Answer extracted from PDF.");
               if (evidence.explanationSinhala) {
                 finalAnswer += `\n\n🧠 **Explanation:**\n${evidence.explanationSinhala}`;
@@ -675,17 +695,17 @@ export async function aiRespondStream(req: any, res: any) {
               emitSse(res, "token", { text: stripRawVisualBlocks(finalAnswer) });
               trace.lastEvent = "token";
 
-              const chatRes = await saveFinalChat({ 
-                uid: user.uid, email: user.email, userText: prompt, assistantText: finalAnswer, 
-                mode: route.mode, subject: requestedSubject, sources: allSources 
+              const chatRes = await saveFinalChat({
+                uid: user.uid, email: user.email, userText: prompt, assistantText: finalAnswer,
+                mode: route.mode, subject: requestedSubject, sources: allSources
               });
 
-              emitSse(res, "done", { 
-                ok: true, 
-                completed: true, 
-                requestId, 
-                messageId: chatRes?.messageId || null, 
-                chatSaved: chatRes.chatSaved, 
+              emitSse(res, "done", {
+                ok: true,
+                completed: true,
+                requestId,
+                messageId: chatRes?.messageId || null,
+                chatSaved: chatRes.chatSaved,
                 sources: allSources,
                 paperInfo: {
                   sourceId: paperSource.id,
@@ -726,18 +746,18 @@ export async function aiRespondStream(req: any, res: any) {
                   badTextQuality = true;
                 }
                 healthyChunks = exactResult.chunks;
-                
+
                 // --- EVIDENCE GATE CHECK ---
                 if (requestedQuestionNo && paperIntent.isOfficialPaperCandidate) {
                    const chunkText = (healthyChunks || []).map((c: any) => c.text).join("\n");
-                   
+
                    // [FIX 10] Stricter Chunk Quality Check
                    const qNoMarker = new RegExp(`\\b${requestedQuestionNo}\\b`);
                    const hasQuestionMarker = qNoMarker.test(chunkText);
                    const hasOptions = /1\)|2\)|3\)|4\)|5\)/.test(chunkText) || /\(1\)|\(2\)|\(3\)|\(4\)|\(5\)/.test(chunkText);
-                   
+
                    const isHealthy = hasQuestionMarker && (paperIntent.questionType === "MCQ" ? hasOptions : true);
-                   
+
                    if (!isHealthy || chunkText.length < 50) {
                       console.log(`[AI_CORE] Evidence Gate Failed for Chunks: ${paperSource.id} Q${requestedQuestionNo}`);
                       badTextQuality = true; // Force Direct PDF QA or OCR
@@ -752,7 +772,7 @@ export async function aiRespondStream(req: any, res: any) {
           // 1.3 If chunks are missing or bad, trigger Frontend Direct PDF QA (Zero-GCS-Auth Path)
           if (noChunks || badTextQuality || needsOcr) {
             console.log(`[AI_RESPOND_STREAM] Direct PDF QA required for ${paperSource.id}. Emitting event...`);
-            
+
             emitSse(res, "direct_pdf_handoff_required", {
               sourceId: paperSource.id || paperSource.sourceId,
               storagePath: paperSource.storagePath,
@@ -765,7 +785,7 @@ export async function aiRespondStream(req: any, res: any) {
               reason: "DIRECT_PDF_QA_REQUIRES_CLIENT_FILE",
               message: "PDF scan කරන්න client file handoff අවශ්‍යයි."
             });
-            
+
             // [FIX 1] Emit explicit done event for pending Direct PDF QA
             emitSse(res, "done", {
               ok: true,
@@ -947,7 +967,7 @@ export async function aiRespondStream(req: any, res: any) {
 
       if (retrieveResult.source) {
         allSources.push({
-          id: retrieveResult.source.id,
+          sourceId: retrieveResult.source.id,
           title: retrieveResult.source.title,
           fileName: retrieveResult.source.fileName,
           storagePath: retrieveResult.source.storagePath,
@@ -991,7 +1011,7 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     // 3. RAG Search
-    if (route.mode !== "uploaded_pdf_question_qa" && (route.answerHints.mustUseRag || route.mode === "normal_chat" || hasUploadedPdf)) {
+    if (requestedMode === "deep_search" || (route.mode !== "uploaded_pdf_question_qa" && (route.answerHints.mustUseRag || route.mode === "normal_chat" || hasUploadedPdf))) {
       emitSse(res, "status", { step: "rag", status: "searching" });
       const retrieveResult: any = await safeCall("retrieveRelevantKnowledge", () => retrieveRelevantKnowledge({
         query: prompt,
@@ -1002,19 +1022,30 @@ export async function aiRespondStream(req: any, res: any) {
       const chunksList = Array.isArray(retrieveResult) ? retrieveResult : (retrieveResult?.chunks || []);
       if (chunksList.length > 0) {
         chunksList.forEach((c: any, i: number) => {
-          allSources.push({ title: c.title, id: c.id || c.sourceId, sourceType: c.sourceType || 'rag', sourceScope: c.sourceScope || 'personal', confidence: c.confidence, badge: "RAG" });
+          const score = scoreSource(c, {
+            subject: route.entities.subject || activeSubject,
+            year: route.entities.year,
+            resourceType: route.entities.resourceType || route.entities.paperType ? "past_paper" : undefined,
+            paperType: route.entities.questionType,
+            keywords: prompt.split(" ")
+          });
+
+          if (policy.intent === "official_paper_question" && score < 75) return;
+          if (policy.intent === "syllabus_lesson_explanation" && score < 55) return;
+
+          allSources.push({ title: c.title, sourceId: c.sourceId || c.id, pageNumber: c.metadata?.pageNumber || c.page, sourceType: c.sourceType || 'rag', sourceScope: c.sourceScope || 'personal', confidence: c.confidence, badge: "RAG" });
           contextBlocksText += `\n[RAG SOURCE ${i+1}] ${c.title}:\n${c.text.substring(0, 1000)}\n`;
         });
       }
     }
 
     // 4. Web Search
-    if (route.mode !== "uploaded_pdf_question_qa" && route.answerHints.mustUseGoogleSearch) {
+    if (requestedMode === "web_search" || requestedMode === "deep_search" || (route.mode !== "uploaded_pdf_question_qa" && route.answerHints.mustUseGoogleSearch)) {
       emitSse(res, "status", { step: "web_search", status: "searching", query: prompt });
       const web: any = await safeCall("groundedSearch", () => groundedSearch(prompt, { language: "si" }) as Promise<any>, { sources: [], summary: "" } as any, res);
       if (web.sources.length > 0) {
         web.sources.forEach((s: any, i: number) => {
-          allSources.push({ title: s.title, url: s.url, confidence: s.confidence, badge: "Candidate" });
+          allSources.push({ title: s.title, url: s.url, confidence: s.confidence, badge: requestedMode === "web_search" || requestedMode === "deep_search" ? "Web Search" : "Candidate" });
           contextBlocksText += `\n[WEB SOURCE ${i+1}] ${s.title} (${s.url}):\n${s.snippet}\n`;
         });
       }
@@ -1033,14 +1064,14 @@ export async function aiRespondStream(req: any, res: any) {
       });
       contextBlocksText += `\n[URL CONTEXT]:\n${uRes.answer}\n`;
     }
-    
+
     if (allSources.length > 0) {
       emitSse(res, "sources", { sources: allSources });
       trace.lastEvent = "sources";
     }
 
     emitSse(res, "status", { step: "assistant", status: "Writing answer" });
-    
+
     // Inject exact matching indicators into userContext for prompts
     const modifiedUserContext = {
       ...userContext,
@@ -1057,17 +1088,20 @@ export async function aiRespondStream(req: any, res: any) {
 
     // [FIX 5] Mandatory Evidence Gate before final LLM
     if (paperIntent.isOfficialPaperCandidate && route.mode === "paper_question_qa" && !hasExactQuestionText) {
-      const msg = `${route.entities.year || ""} ${route.entities.subject || ""} ${route.entities.questionType || paperIntent.questionType || "MCQ"} ${route.entities.questionNo || paperIntent.questionNo || ""} exact question evidence එක validate වෙලා නැහැ. ඒ නිසා මම answer එකක් guess කරන්නේ නැහැ. Direct PDF Recheck / OCR / Reindex කරන්න.`;
-      
+            let msg = "සමාවෙන්න, මට මේ ප්‍රශ්නයට අදාළ නිල මූලාශ්‍රයක් (past paper/scheme/PDF) සොයාගන්න බැරි වුණා.";
+      if (route.mode === "paper_question_qa") {
+        msg = "මෙම ප්‍රශ්නය සඳහා නිල Past Paper එක හෝ Marking Scheme එක සොයාගැනීමට නොහැකි විය.";
+      }
+
       console.log("[AI_RESPOND_STREAM] Answer blocked: Missing evidence for official paper question.");
-      emitSse(res, "evidence_missing", { 
+      emitSse(res, "evidence_missing", {
         reason: "NO_VALID_EVIDENCE_FOUND",
         message: msg
       });
       emitSse(res, "token", { text: msg });
-      emitSse(res, "done", { 
-        ok: false, 
-        completed: true, 
+      emitSse(res, "done", {
+        ok: false,
+        completed: true,
         requestId,
         finishReason: "blocked_no_evidence"
       });
@@ -1076,6 +1110,12 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     const sysInstruction = getCloraSystemPrompt(modifiedUserContext, route.mode);
+    let finalSysInstruction = sysInstruction;
+    if (evidence.allowModelQuestionGeneration) {
+      finalSysInstruction += "\n\n[STRICT INSTRUCTION]: The user has explicitly requested a MODEL/PRACTICE question. You MUST prefix your question exactly with: '⚠️ AI-generated model question — official past-paper question නොවේ' and NEVER claim it is from a real past paper.";
+    } else if (policy.requireEvidence) {
+      finalSysInstruction += "\n\n[STRICT INSTRUCTION]: The user is asking for a real paper question or syllabus discussion. You MUST base your answer strictly on the provided evidence. DO NOT invent or hallucinate any questions, equations, or past-paper details. If the evidence lacks the specific question, reply that you cannot find it.";
+    }
 
     // Build the parts array for the contents object
     const contentsParts: any[] = [
@@ -1096,22 +1136,41 @@ export async function aiRespondStream(req: any, res: any) {
       });
     }
 
+    if (attachments && attachments.length > 0) {
+      const bucketName = getAdminBucket().name;
+      for (const att of attachments) {
+        if (att.storagePath && att.mimeType) {
+           contentsParts.push({
+             fileData: {
+               fileUri: `gs://${bucketName}/${att.storagePath}`,
+               mimeType: att.mimeType
+             }
+           });
+           contentsParts.push({
+             text: `\n\n[Attachment: ${att.fileName || 'unknown file'}] Please analyze the attached file.`
+           });
+        }
+      }
+      aiTask = "image_understanding"; // Use multimodal model
+    }
+
     let stream: any = null;
     let modelUsed = "";
-    
+
     try {
       const result = await generateContentStreamWithFallback(
-        aiTask, 
+        aiTask,
         {
           model: "ignored", // will be overridden by router
           contents: [{ role: "user", parts: contentsParts }],
           config: {
-            systemInstruction: sysInstruction,
+            systemInstruction: finalSysInstruction,
             temperature: getTemperature(route.mode),
             maxOutputTokens: getMaxTokens(route.mode)
           }
         },
-        ai
+        ai,
+        signal
       );
       stream = result.stream;
       modelUsed = result.modelUsed;
@@ -1124,16 +1183,25 @@ export async function aiRespondStream(req: any, res: any) {
 
     let isInterrupted = false;
     let fullText = "";
+    let chunkBuffer = "";
     try {
       for await (const chunk of stream) {
         const text = chunk.text || "";
         if (text) {
           fullText += text;
+          chunkBuffer += text;
           trace.totalChars += text.length;
           trace.tokenCount++;
-          emitSse(res, "token", { text });
-          trace.lastEvent = "token";
+
+          if (chunkBuffer.length >= 50 || /[\n\r\.\?!,;]/.test(chunkBuffer)) {
+            emitSse(res, "token", { text: chunkBuffer });
+            trace.lastEvent = "token";
+            chunkBuffer = "";
+          }
         }
+      }
+      if (chunkBuffer.length > 0) {
+        emitSse(res, "token", { text: chunkBuffer });
       }
     } catch (e: any) {
       console.warn("Stream interrupted:", e);
@@ -1152,15 +1220,22 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     emitSse(res, "status", { step: "assistant", status: "Saving chat" });
-    
+
     let chatRes: any = { chatSaved: false };
     try {
-      chatRes = await safeCall("saveFinalChat", () => saveFinalChat({ 
-        uid: user.uid, 
-        email: user.email, 
-        userText: prompt, 
-        assistantText: fullText, 
-        mode: route.mode, 
+    try {
+      await updateConversationState(user.uid, {
+        activeSourceIds: allSources.map((s: any) => s.id || s.sourceId).filter(Boolean),
+        selectedSourceId: route.entities?.activeSourceId || null,
+        selectedQuestionId: route.entities?.questionNo || null
+      });
+    } catch (e) { /* ignore */ }
+      chatRes = await safeCall("saveFinalChat", () => saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: fullText,
+        mode: route.mode,
         subject: activeSubject,
         sources: allSources
       }), { chatSaved: false }, res);
@@ -1171,7 +1246,7 @@ export async function aiRespondStream(req: any, res: any) {
     } catch (err: any) {
       console.warn("CHAT_SAVE_SKIPPED", err);
     }
-    
+
     // Background extraction
     if (process.env.ENABLE_MEMORY_EXTRACTION === "true") {
       safeCall("extractStableMemoryIfUseful", () => extractStableMemoryIfUseful({ uid: user.uid, email: user.email, prompt, answer: fullText, userContext: modifiedUserContext }), null, res).catch(() => null);
@@ -1180,30 +1255,83 @@ export async function aiRespondStream(req: any, res: any) {
     // Generate suggestions
     if (!isInterrupted && fullText.length > 0) {
       try {
-        const suggPrompt = `Based on the user's message: "${prompt}" and the assistant's answer: "${fullText.substring(0, 1000)}...", generate 3 short, contextual follow-up suggestions in Sinhala. 
-Important: Output ONLY a valid JSON array of 3 strings. 
+        let finalSuggestions: string[] = [];
+
+        function getDeterministicSuggestions(mode: string): string[] {
+          if (mode === "paper_question_qa") {
+            return [
+              "මේක PDF එකෙන් ආයෙත් verify කරන්න",
+              "මේ ප්‍රශ්නයේ marking points දෙන්න",
+              "මේ වගේ තව MCQ 5ක් දෙන්න"
+            ];
+          }
+
+          if (mode === "tutor_explanation" || mode === "normal_chat") {
+            return [
+              "මේක සරලව නැවත පැහැදිලි කරන්න",
+              "මේ lesson එකෙන් MCQ 5ක් දෙන්න",
+              "මගේ වැරදි points ටික කියන්න"
+            ];
+          }
+
+          return [
+            "තව කෙටියෙන් කියන්න",
+            "exam answer එකක් ලෙස ලියන්න",
+            "මතක තබාගන්න tips දෙන්න"
+          ];
+        }
+
+        if (process.env.ENABLE_AI_SUGGESTIONS === "true") {
+          const suggPrompt = `Based on the user's message: "${prompt}" and the assistant's answer: "${fullText.substring(0, 1000)}...", generate 3 short, contextual follow-up suggestions in Sinhala.
+Important: Output ONLY a valid JSON array of 3 strings.
 Example suggestions for Clora X:
 - "මේ ප්‍රශ්නය PDF එකෙන් ආයෙත් පරීක්ෂා කරන්න" (Recheck from PDF)
 - "මේ අවුරුද්දේ marking scheme එක දෙන්න" (Get marking scheme)
 - "මේ lesson එකෙන් තව mcq ප්‍රශ්න දෙන්න" (More MCQs from this lesson)
 - "මේක වැරදියි, නැවත පරීක්ෂා කරන්න" (This is wrong, recheck)
 Do not include any other text or markdown formatting.`;
-        
-        const { result: sugResult } = await callGeminiWithFallback("fast_background", {
-            model: "ignored", // will be overridden by router
-            contents: suggPrompt,
-            config: {
-                temperature: 0.7,
-                maxOutputTokens: 200,
-                responseMimeType: "application/json"
+
+          try {
+            const { result: sugResult } = await callGeminiWithFallback("fast_background", {
+                model: "ignored",
+                contents: suggPrompt,
+                config: {
+                    temperature: 0.7,
+                    maxOutputTokens: 200,
+                    responseMimeType: "application/json"
+                }
+            }, getAIClient());
+
+            const sugText = sugResult.text || "";
+            let cleaned = sugText.replace(/```json/gi, "").replace(/```/g, "").trim();
+
+            let parsed = null;
+            try {
+              parsed = JSON.parse(cleaned);
+            } catch (e) {
+              const start = cleaned.indexOf("[");
+              const end = cleaned.lastIndexOf("]");
+              if (start >= 0 && end > start) {
+                try {
+                  parsed = JSON.parse(cleaned.slice(start, end + 1));
+                } catch (e) {}
+              }
             }
-        }, getAIClient());
-        
-        const sugText = sugResult.text || "";
-        const suggestions = JSON.parse(sugText.replace(/```json|```/g, '').trim());
-        if (Array.isArray(suggestions) && suggestions.length > 0) {
-           emitSse(res, "suggestions", { suggestions: suggestions.slice(0, 3) });
+
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              finalSuggestions = parsed.filter(x => typeof x === "string").slice(0, 3);
+            }
+          } catch (e) {
+             console.warn("Failed to generate AI suggestions, falling back to deterministic", e);
+          }
         }
+
+        if (finalSuggestions.length === 0) {
+           finalSuggestions = getDeterministicSuggestions(route.mode);
+        }
+
+        emitSse(res, "suggestions", { suggestions: finalSuggestions });
+
       } catch (err) {
         console.warn("Failed to generate suggestions", err);
       }
@@ -1211,7 +1339,7 @@ Do not include any other text or markdown formatting.`;
 
     const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
     let summaryItems: string[] = [];
-    
+
     if (route.mode === "normal_chat") {
        summaryItems.push(`Thought for ${elapsedSeconds}s`);
     } else if (paperIntent.isOfficialPaperCandidate) {
@@ -1239,10 +1367,10 @@ Do not include any other text or markdown formatting.`;
     console.error("Stream Error", error);
     trace.errorCode = error.code || "UNKNOWN_ERROR";
     trace.errorMessage = error.message || String(error);
-    
+
     // Check if error is AI_BILLING_EXHAUSTED (from checkAiBillingCircuit or classifyAiError)
     const classified = error.code === "AI_BILLING_EXHAUSTED" ? error : classifyAiError(error);
-    
+
     if (classified.code === "AI_BILLING_EXHAUSTED") {
       emitSse(res, "error", {
         code: "AI_BILLING_EXHAUSTED",
@@ -1269,11 +1397,13 @@ Do not include any other text or markdown formatting.`;
       }
       emitSse(res, "done", { ok: false, completed: false, requestId, chatSaved: false, finishReason: "error_recovered" });
     }
-    
+
     trace.doneSent = true;
     trace.lastEvent = "done";
   } finally {
     clearInterval(heartbeatInterval);
+    unregisterRequest(requestId);
+    unregisterRequest(requestId);
     if (!trace.doneSent) {
       try {
         emitSse(res, "done", {
@@ -1296,7 +1426,7 @@ Do not include any other text or markdown formatting.`;
 
 export async function aiContinueStream(req: any, res: any) {
   const startedAt = Date.now();
-  const requestId = "req_cont_" + Date.now() + "_" + Math.random().toString(36).substring(7);
+  const requestId = req.body?.clientRequestId || "req_cont_" + Date.now() + "_" + Math.random().toString(36).substring(7);
   const trace: StreamTrace = {
     requestId,
     startedAt: new Date().toISOString(),
@@ -1316,6 +1446,8 @@ export async function aiContinueStream(req: any, res: any) {
     "X-Accel-Buffering": "no",
   });
 
+  const abortController = registerRequest(requestId);
+  const signal = abortController.signal;
   const heartbeatInterval = setInterval(() => {
     try {
       emitSse(res, "heartbeat", { ok: true, requestId, ts: Date.now() });
@@ -1326,6 +1458,7 @@ export async function aiContinueStream(req: any, res: any) {
   }, 10000);
 
   req.on("close", () => {
+    cancelRequest(requestId);
     console.log(`[STREAM] STREAM_CLIENT_CLOSED requestId=${requestId}`);
     trace.clientClosed = true;
     trace.endedAt = new Date().toISOString();
@@ -1335,22 +1468,8 @@ export async function aiContinueStream(req: any, res: any) {
     const { originalPrompt, previousAssistantText, sources = [], chatId, reason } = req.body;
     const user = req.user;
 
-    // Check Daily Safety Limit Guardrails for Continuation
-    const { isDailyLimitExceeded, trackAIUsage } = await import("../cost/usageTracker");
-    const limitCheck = await isDailyLimitExceeded(user.uid);
-    if (limitCheck.exceeded) {
-      emitSse(res, "error", {
-        ok: false,
-        code: "COST_LIMIT_EXCEEDED",
-        error: "Cost Guardrail Limit Exceeded",
-        hint: limitCheck.reason
-      });
-      emitSse(res, "token", { text: `\n\n⚠️ **Daily Safety Limit Exceeded / දෛනික සීමාව ඉක්මවා ඇත**\n\n${limitCheck.reason}` });
-      emitSse(res, "done", { ok: false, completed: false, requestId, chatSaved: false, finishReason: "cost_limit_exceeded" });
-      trace.doneSent = true;
-      trace.lastEvent = "done";
-      return;
-    }
+    // Check Daily Safety Limit Guardrails for Continuation (REMOVED)
+    const { trackAIUsage } = await import("../cost/usageTracker");
 
     emitSse(res, "status", { step: "started", message: "Continuing answer..." });
 
@@ -1370,17 +1489,16 @@ Keep the same tone and language (Sinhala-first style).
     const ai = getAIClient();
     let stream: any = null;
     let modelUsed = "";
-    
+
     try {
       const result = await generateContentStreamWithFallback("final_answer", {
         model: "ignored", // will be overridden by router
         contents: promptText,
         config: {
-          temperature: 0.3,
           maxOutputTokens: 2000
         },
-      }, ai);
-      
+      }, ai, signal);
+
       stream = result.stream;
       modelUsed = result.modelUsed;
       if (result.warning) {
@@ -1391,15 +1509,23 @@ Keep the same tone and language (Sinhala-first style).
     }
 
     let fullText = "";
+    let chunkBuffer = "";
     for await (const chunk of stream) {
       const text = chunk.text || "";
       if (text) {
         fullText += text;
+        chunkBuffer += text;
         trace.totalChars += text.length;
         trace.tokenCount++;
-        emitSse(res, "token", { text });
-        trace.lastEvent = "token";
+        if (chunkBuffer.length >= 50 || /[\n\r\.\?!,;]/.test(chunkBuffer)) {
+          emitSse(res, "token", { text: chunkBuffer });
+          trace.lastEvent = "token";
+          chunkBuffer = "";
+        }
       }
+    }
+    if (chunkBuffer.length > 0) {
+      emitSse(res, "token", { text: chunkBuffer });
     }
 
     trace.completed = true;
@@ -1449,6 +1575,8 @@ Keep the same tone and language (Sinhala-first style).
     trace.lastEvent = "done";
   } finally {
     clearInterval(heartbeatInterval);
+    unregisterRequest(requestId);
+    unregisterRequest(requestId);
     if (!trace.doneSent) {
       try {
         emitSse(res, "done", {

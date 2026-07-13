@@ -1,0 +1,98 @@
+import { getAdminDb } from "../firebase/admin";
+import { resolveStrictSource } from "../ai-core/sources/sourceResolver";
+import { getSourceInventory } from "../sources/sourceInventoryService";
+
+export interface EvidenceResult {
+  intent: string;
+  subject?: string;
+  lessonIds: string[];
+  selectedSource: any | null;
+  selectedQuestion: any | null;
+  candidates: any[];
+  evidenceStatus: "verified" | "source_found_text_missing" | "ocr_required" | "index_required" | "not_found";
+  exactTextBlocks: string[];
+  allowedSourceIds: string[];
+  allowAnswerGeneration: boolean;
+  allowModelQuestionGeneration: boolean;
+}
+
+export async function retrieveEvidence(
+  uid: string,
+  prompt: string,
+  route: any,
+  policy: any,
+  activeConversationState: any
+): Promise<EvidenceResult> {
+  const lower = prompt.toLowerCase();
+  
+  let intent = policy.intent || route.mode;
+  let subject = route.entities?.subject || activeConversationState?.activeSubject || "SFT";
+  let lessonIds: string[] = activeConversationState?.activeLessonIds || [];
+  
+  let selectedSource: any = null;
+  let selectedQuestion: any = null;
+  let candidates: any[] = [];
+  let evidenceStatus: any = "not_found";
+  let exactTextBlocks: string[] = [];
+  let allowedSourceIds: string[] = activeConversationState?.activeSourceIds || [];
+  let allowAnswerGeneration = !policy.requireEvidence;
+  let allowModelQuestionGeneration = intent === "model_question_generation";
+
+  if (policy.requireEvidence) {
+    const inventory = await getSourceInventory({ uid, subject, isAdmin: false });
+    const allAvailableSources = [...inventory.groups.pastPapers, ...inventory.groups.markingSchemes, ...inventory.groups.syllabus, ...inventory.groups.uploadedPdfs, ...inventory.groups.paperStructure];
+    
+    const requestedYear = route.entities?.year;
+    
+    const strictRes = resolveStrictSource(allAvailableSources, {
+      year: requestedYear,
+      subject,
+      activeSourceId: activeConversationState?.selectedSourceId || null,
+      prompt
+    });
+    
+    if (intent === "continue_grounded_discussion" && activeConversationState?.selectedSourceId) {
+      selectedSource = allAvailableSources.find(s => s.id === activeConversationState.selectedSourceId || s.sourceId === activeConversationState.selectedSourceId);
+      if (selectedSource) {
+        evidenceStatus = "verified";
+        allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
+        allowAnswerGeneration = true;
+      }
+    }
+    if (strictRes.selectedSource) {
+      selectedSource = strictRes.selectedSource;
+      evidenceStatus = "verified";
+      allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
+      allowAnswerGeneration = true;
+    } else {
+      if (allAvailableSources.length > 0) {
+        // Find best match manually if resolveStrictSource failed
+        const matches = allAvailableSources.filter(s => {
+          if (requestedYear && s.year !== requestedYear) return false;
+          if (subject && s.subject !== subject) return false;
+          return true;
+        });
+        if (matches.length > 0) {
+          selectedSource = matches[0];
+          evidenceStatus = "verified";
+          allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
+          allowAnswerGeneration = true;
+        }
+      }
+    }
+  }
+
+  return {
+    intent,
+    subject,
+    lessonIds,
+    selectedSource,
+    selectedQuestion,
+    candidates,
+    evidenceStatus,
+    exactTextBlocks,
+    allowedSourceIds,
+    allowAnswerGeneration,
+    allowModelQuestionGeneration
+  };
+}

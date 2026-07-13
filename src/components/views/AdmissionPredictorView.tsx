@@ -1207,13 +1207,7 @@ export default function AdmissionPredictorView() {
                     </div>
                   </div>
 
-                  <AiMetricsAdvisor
-                    sftMark={sftMark}
-                    etMark={etMark}
-                    ictMark={ictMark}
-                    overallZ={overallZScore}
-                    targetZ={targetZ}
-                  />
+
                 </div>
               </div>
 

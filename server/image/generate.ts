@@ -8,6 +8,9 @@ export async function generateEducationalImage(req: any) {
     const uid = req.user.uid;
 
     if (!prompt) throw new Error("Prompt is required");
+    if (process.env.ENABLE_IMAGE_GENERATION === "false") {
+      return { ok: false, code: "IMAGE_GENERATION_DISABLED", error: "Image generation is disabled." };
+    }
 
     // Build educational Sinhalese/English exam-focused prompt
     const finalPrompt = `Create a clean Sinhala G.C.E. A/L Technology exam-focused diagram. Clear labels. Minimal clutter. Accurate educational layout. No watermark. Sinhala labels where useful. Subject: ${subject || "Technology"}. Lesson: ${lesson || "General"}. User request: ${prompt}`;
@@ -45,8 +48,8 @@ export async function generateEducationalImage(req: any) {
           if (response && response.generatedImages && response.generatedImages.length > 0) {
             imageBase64 = response.generatedImages[0].image?.imageBytes;
           }
-        } 
-        
+        }
+
         if (imageBase64) {
           break; // Successfully got image bytes!
         }
@@ -80,10 +83,8 @@ export async function generateEducationalImage(req: any) {
           contentType: "image/jpeg"
         }
       });
-      try {
-        await file.makePublic();
-      } catch (e) {}
-      imageUrl = `https://storage.googleapis.com/${bucket.name}/${path}`;
+
+      try { const [url] = await file.getSignedUrl({ action: 'read', expires: Date.now() + 1000 * 60 * 60 * 24 }); imageUrl = url; } catch (e) { }
       storagePath = path;
     } catch (storageErr) {
       console.warn("Firebase Storage upload failed, falling back to data URL:", storageErr);
@@ -110,7 +111,7 @@ export async function generateEducationalImage(req: any) {
 
     return {
       ok: true,
-      imageUrl,
+      imageUrl, storagePath,
       model: modelUsed,
       promptUsed: prompt,
       imageId

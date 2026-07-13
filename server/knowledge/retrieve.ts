@@ -23,14 +23,17 @@ export async function retrieveRelevantKnowledge({
     subject?: string;
     id?: string;
     url?: string;
+    sourceId?: string;
+    storagePath?: string;
   }> = [];
 
   const lowerQ = query.toLowerCase();
 
   try {
-    // 0. Active chat temporary PDFs
+    // 0. Active chat temporary PDFs (only if intent matches)
+    const isPdfQuery = query.toLowerCase().includes("pdf") || query.match(/mcq|essay|structured|prashna|q\d|ප්‍රශ්න|paper|marking|scheme|answer/i);
     let activePdfSourceIds: string[] = [];
-    if (uid) {
+    if (uid && isPdfQuery) {
       try {
         const chatContextDoc = await db.collection("users").doc(uid).collection("chat_context").doc("current").get();
         if (chatContextDoc.exists) {
@@ -48,7 +51,9 @@ export async function retrieveRelevantKnowledge({
       try {
         for (const sId of activePdfSourceIds) {
           const sourceSnap = await db.collection("rag_sources").doc(sId).get();
-          const sourceTitle = sourceSnap.exists ? (sourceSnap.data()?.title || sourceSnap.data()?.fileName || "Uploaded PDF") : "Uploaded PDF";
+          const sourceData = sourceSnap.exists ? sourceSnap.data() : null;
+          const sourceTitle = sourceData?.title || sourceData?.fileName || "Uploaded PDF";
+          const storagePath = sourceData?.storagePath || "";
           
           const chunksSnap = await db.collection("rag_chunks")
             .where("sourceId", "==", sId)
@@ -60,16 +65,20 @@ export async function retrieveRelevantKnowledge({
             const matchesSearch = textLower.includes(lowerQ) || 
               (data.tags && data.tags.some((t: string) => lowerQ.includes(t.toLowerCase())));
               
-            chunks.push({
-              sourceType: "Uploaded PDF",
-              title: sourceTitle,
-              text: data.text,
-              confidence: matchesSearch ? 1.0 : 0.82,
-              subject: data.subject,
-              lesson: data.lesson,
-              year: data.year,
-              id: doc.id
-            });
+            if (matchesSearch) { // Only push if matches search when from active PDF to avoid polluting
+              chunks.push({
+                sourceType: "Uploaded PDF",
+                title: sourceTitle,
+                text: data.text,
+                confidence: 1.0,
+                subject: data.subject,
+                lesson: data.lesson,
+                year: data.year,
+                id: doc.id,
+                sourceId: sId,
+                storagePath: storagePath
+              });
+            }
           });
         }
       } catch (err: any) {
@@ -90,11 +99,12 @@ export async function retrieveRelevantKnowledge({
           
           let sourceId = "";
           let sourceTitle = uploadedFileName;
+          let recentSources: any = null;
           if (!sourcesSnap.empty) {
              sourceId = sourcesSnap.docs[0].id;
              sourceTitle = sourcesSnap.docs[0].data().title || uploadedFileName;
           } else {
-             const recentSources = await db.collection("rag_sources")
+             recentSources = await db.collection("rag_sources")
                 .where("ownerUid", "==", uid)
                 .orderBy("createdAt", "desc")
                 .limit(1)
@@ -120,7 +130,9 @@ export async function retrieveRelevantKnowledge({
                    subject: data.subject,
                    lesson: data.lesson,
                    year: data.year,
-                   id: doc.id
+                   id: doc.id,
+                   sourceId: data.sourceId || sourceId,
+                   storagePath: data.storagePath || sourcesSnap?.docs[0]?.data()?.storagePath || recentSources?.docs[0]?.data()?.storagePath
                 });
              });
           }
@@ -131,9 +143,9 @@ export async function retrieveRelevantKnowledge({
 
     // 2. Syllabus owner private search first
     if (uid && chunks.length < limit) {
-       const userDoc = await db.collection("users").doc(uid).get();
-       const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "26002ishan@gmail.com";
-       const isOwner = userDoc.data()?.email?.toLowerCase() === ownerEmail.toLowerCase();
+       const roleDoc = await db.collection("user_roles").doc(uid).get();
+       const userRoles = roleDoc.exists ? (roleDoc.data()?.roles || (roleDoc.data()?.role ? [roleDoc.data().role] : [])) : [];
+       const isOwner = userRoles.includes("admin") || userRoles.includes("teacher") || userRoles.includes("content_editor");
        
        if (isOwner) {
           const sylSnap = await db.collection("users").doc(uid).collection("syllabus_chunks")
@@ -152,7 +164,9 @@ export async function retrieveRelevantKnowledge({
                    subject: data.subject,
                    lesson: data.lesson,
                    year: data.year,
-                   id: doc.id
+                   id: doc.id,
+                   sourceId: data.sourceId,
+                   storagePath: data.storagePath
                 });
              }
           });
@@ -179,7 +193,9 @@ export async function retrieveRelevantKnowledge({
                  subject: data.subject,
                  lesson: data.lesson,
                  year: data.year,
-                 id: doc.id
+                 id: doc.id,
+                 sourceId: data.sourceId,
+                 storagePath: data.storagePath
               });
            }
          });
@@ -205,7 +221,9 @@ export async function retrieveRelevantKnowledge({
                subject: data.subject,
                lesson: data.lesson,
                year: data.year,
-               id: doc.id
+               id: doc.id,
+               sourceId: data.sourceId,
+               storagePath: data.storagePath
             });
          }
        });
@@ -216,7 +234,17 @@ export async function retrieveRelevantKnowledge({
     
     return {
       chunks: chunks.slice(0, limit),
-      sources: chunks.slice(0, limit).map(c => ({ title: c.title, url: c.url, confidence: c.confidence, sourceType: c.sourceType })),
+      sources: chunks.slice(0, limit).map(c => ({
+        id: c.sourceId || c.id,
+        sourceId: c.sourceId || c.id,
+        title: c.title,
+        storagePath: c.storagePath,
+        url: c.url,
+        confidence: c.confidence,
+        sourceType: c.sourceType,
+        usedInAnswer: true,
+        pageNumber: (c as any).pageNumber
+      })),
       status: "success"
     };
 
@@ -298,6 +326,7 @@ export async function retrieveUploadedPdfQuestion({
         .where("fileName", "==", uploadedFileName)
         .limit(1)
         .get();
+          let recentSources: any = null;
       if (!sourcesSnap.empty) {
         activeSourceId = sourcesSnap.docs[0].id;
         sourceData = sourcesSnap.docs[0].data();
@@ -310,7 +339,7 @@ export async function retrieveUploadedPdfQuestion({
   // 4. latest rag_sources ownerUid == uid only as final fallback
   if (!activeSourceId) {
     try {
-      const recentSources = await db.collection("rag_sources")
+             const recentSources = await db.collection("rag_sources")
         .where("ownerUid", "==", uid)
         .orderBy("createdAt", "desc")
         .limit(1)

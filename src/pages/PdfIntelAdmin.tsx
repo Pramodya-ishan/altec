@@ -15,7 +15,7 @@ import {
 import { cn } from '../lib/utils';
 
 export default function PdfIntelAdmin() {
-  const { user, showNotification } = useApp();
+  const { user, showNotification, profile } = useApp();
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<any[]>([]);
 
@@ -39,7 +39,7 @@ export default function PdfIntelAdmin() {
     }
   };
 
-  const isAdmin = user?.email?.toLowerCase() === "26002ishan@gmail.com";
+  const isAdmin = profile?.role === 'admin' || profile?.roles?.includes('admin');
 
   if (!isAdmin) {
     return (
@@ -194,7 +194,7 @@ export default function PdfIntelAdmin() {
         <h3 className="text-indigo-400 font-bold uppercase tracking-widest text-xs">System Logs</h3>
         <div className="font-mono text-xs space-y-1 opacity-80 max-h-48 overflow-y-auto custom-scrollbar">
           <p>[SYSTEM] Exam Intelligence Engine v2.0 Initialized</p>
-          <p>[AUTH] Admin login verified: 26002ishan@gmail.com</p>
+          <p>[AUTH] Admin login verified: {user?.email || "Admin"}</p>
           <p>[STORAGE] Connected to al-ai-chat.firebasestorage.app</p>
           <p>[DB] Firestore ready. Collections: exam_question_index, syllabus_nodes</p>
           <p>[AI] Gemini 1.5 Flash heartbeat OK</p>

@@ -1,6 +1,9 @@
 node_modules/
 build/
+dist/
 coverage/
+public/pdf.worker.min.js
+public/pdf.worker.min.mjs
 .DS_Store
 *.log
 .env*

@@ -113,21 +113,23 @@ export function KnowledgeBaseView() {
             sourceScope: "owner_syllabus"
           });
 
-          const ingestFd = new FormData();
-          ingestFd.append("file", file);
-          ingestFd.append("sourceId", uploaded.sourceId);
-          ingestFd.append("storagePath", uploaded.storagePath);
-          ingestFd.append("title", title || file.name);
-          ingestFd.append("subject", subject);
-          ingestFd.append("resourceType", sourceType);
-          ingestFd.append("sourceType", sourceType);
-          ingestFd.append("sourceScope", "owner_syllabus");
-          ingestFd.append("year", year || "");
-          ingestFd.append("medium", "Sinhala");
+          const payload = {
+            sourceId: uploaded.sourceId,
+            storagePath: uploaded.storagePath,
+            title: title || file.name,
+            fileName: file.name,
+            subject: subject,
+            resourceType: sourceType,
+            sourceType: sourceType,
+            sourceScope: "owner_syllabus",
+            year: year || "",
+            medium: "Sinhala"
+          };
 
-          const ingestRes = await apiFetch("/api/rag/ingest-uploaded", {
+          const ingestRes = await apiFetch("/api/pdf/process-uploaded", {
             method: "POST",
-            body: ingestFd
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
           });
 
           data = await ingestRes.json().catch(() => null);

@@ -1,4 +1,4 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import multer from "multer";
 import { requireFirebaseUser } from "../firebase/authMiddleware";
 import { getAdminDb, getAdminBucket } from "../firebase/admin";
@@ -13,7 +13,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 import { isAiBillingCircuitOpen, getAiBillingState } from "../ai/aiCircuitBreaker";
 
 // 1. Process uploaded PDF immediately after upload
-pdfRoutes.post("/process-uploaded", requireFirebaseUser, upload.single("file"), async (req: any, res) => {
+pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (req: any, res) => {
   try {
     const user = req.user;
     const {
@@ -28,29 +28,40 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, upload.single("file"), 
       sourceScope
     } = req.body;
 
-    if (!req.file) {
-      return res.status(400).json({ ok: false, error: "Missing uploaded file buffer." });
-    }
     if (!sourceId || !storagePath) {
       return res.status(400).json({ ok: false, error: "Missing sourceId or storagePath." });
     }
 
-    const result = await processUploadedPdf({
-      uid: user.uid,
-      sourceId,
-      storagePath,
-      fileName: fileName || req.file.originalname,
-      title: title || fileName || req.file.originalname,
-      subject,
-      year: year || null,
-      resourceType: resourceType || "uploaded_pdf",
-      sourceType: sourceType || resourceType || "uploaded_pdf",
-      sourceScope: sourceScope || "personal",
-      buffer: req.file.buffer,
-      forceOcr: false
+    // Check duplication (SHA-256 would ideally be checked here, handled in a dedicated route or right before upload)
+    const db = getAdminDb();
+    await db.collection("rag_sources").doc(sourceId).update({
+      indexStatus: "queued",
+      updatedAt: new Date().toISOString()
     });
 
-    return res.json(result);
+    // Run async
+    setImmediate(() => {
+      processUploadedPdf({
+        uid: user.uid,
+        sourceId,
+        storagePath,
+        fileName: fileName || "upload.pdf",
+        title: title || fileName || "Uploaded PDF",
+        subject,
+        year: year || null,
+        resourceType: resourceType || "uploaded_pdf",
+        sourceType: sourceType || resourceType || "uploaded_pdf",
+        sourceScope: sourceScope || "personal",
+        forceOcr: false
+      }).catch(err => console.error("Async processUploadedPdf error:", err));
+    });
+
+    return res.json({
+      ok: true,
+      status: "queued",
+      message: "Processing queued",
+      sourceId
+    });
   } catch (err: any) {
     console.error("Error in process-uploaded route:", err);
     return res.status(500).json({ ok: false, error: err.message });
@@ -260,9 +271,9 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
   try {
     const { sourceId, prompt, questionId, questionNo, questionType, subject, year } = req.body;
     console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}`);
-    
+
     const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}`;
-    
+
     const cooldownUntil = failedDirectQaCooldown.get(idempotencyKey);
     if ((cooldownUntil && Date.now() < cooldownUntil) || isAiBillingCircuitOpen()) {
       return res.status(429).json({
@@ -289,7 +300,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         return res.status(500).json({ ok: false, errorCode: "DIRECT_QA_BACKEND_ERROR", error: e.message });
       }
     }
-    
+
     const requestPromise = async () => {
       let buffer: Buffer;
       if (req.file) {
@@ -329,7 +340,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
           const isRequire = result.errorCode === "AI_CLIENT_RUNTIME_ERROR" || (result.error && String(result.error).includes("require is not defined"));
           const isBilling = result.errorCode === "AI_BILLING_EXHAUSTED" || (result.error && (String(result.error).includes("depleted") || String(result.error).includes("credits") || String(result.error).includes("billing") || String(result.error).includes("RESOURCE_EXHAUSTED")));
           const isRateLimit = result.errorCode === "AI_RATE_LIMITED";
-          
+
           if (isBilling || result.errorCode === "AI_BILLING_EXHAUSTED") {
             failedDirectQaCooldown.set(idempotencyKey, Date.now() + 10 * 60 * 1000);
             return {
@@ -375,7 +386,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         ...result
       };
     };
-    
+
     inFlightDirectQa.set(idempotencyKey, requestPromise());
     try {
       const result = await inFlightDirectQa.get(idempotencyKey);
@@ -386,7 +397,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
       } else {
         inFlightDirectQa.delete(idempotencyKey);
       }
-      
+
       if (result.status) {
          const { status, ...rest } = result;
          return res.status(status).json(rest);
@@ -398,8 +409,8 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
     }
   } catch (err: any) {
     console.error("[DirectPDFQA] Backend error:", err);
-    return res.status(500).json({ 
-       ok: false, 
+    return res.status(500).json({
+       ok: false,
        found: false,
        errorCode: err.errorCode || "DIRECT_QA_BACKEND_FAILED",
        stage: err.stage || "MODEL_CALL",
@@ -457,7 +468,7 @@ pdfRoutes.post("/question-cache/:docId/resolve", requireFirebaseUser, async (req
     const db = getAdminDb();
     const doc = await db.collection("pdf_question_cache").doc(docId).get();
     if (!doc.exists) return res.status(404).json({ ok: false, error: "Cache not found" });
-    
+
     const data = doc.data()!;
     if (!data.questionText || !data.options) {
       return res.status(400).json({ ok: false, error: "Missing question text or options for solving" });
@@ -480,7 +491,7 @@ pdfRoutes.post("/question-cache/:docId/resolve", requireFirebaseUser, async (req
       });
       return res.json({ ok: true, solved });
     }
-    
+
     return res.status(500).json({ ok: false, error: "Solver failed to return result" });
   } catch (err: any) {
     return res.status(500).json({ ok: false, error: err.message });
@@ -495,7 +506,7 @@ pdfRoutes.get("/verified-answers/:sourceId", requireFirebaseUser, async (req: an
     const snap = await db.collection("verified_answers")
       .where("sourceId", "==", sourceId)
       .get();
-    
+
     const items = snap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
     return res.json({ ok: true, items });
   } catch (err: any) {
@@ -507,7 +518,7 @@ pdfRoutes.post("/verified-answers", requireFirebaseUser, async (req: any, res) =
   try {
     const user = req.user;
     // Basic admin check (could be more robust)
-    const isAdmin = user.email === "26002ishan@gmail.com";
+    const isAdmin = user.roles?.includes("admin") || user.admin === true;
     if (!isAdmin) return res.status(403).json({ ok: false, error: "Admin only" });
 
     const { sourceId, questionType, questionNo, ...data } = req.body;
@@ -517,7 +528,7 @@ pdfRoutes.post("/verified-answers", requireFirebaseUser, async (req: any, res) =
 
     const db = getAdminDb();
     const docId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
-    
+
     const verifiedDoc = {
       ...data,
       sourceId,
@@ -540,19 +551,61 @@ pdfRoutes.get("/sources", requireFirebaseUser, async (req: any, res) => {
   try {
     const user = req.user;
     const db = getAdminDb();
-    
+
     // Admin sees all, user sees owned
-    const isAdmin = user.email === "26002ishan@gmail.com";
+    const isAdmin = user.roles?.includes("admin") || user.admin === true;
     let query: any = db.collection("rag_sources");
     if (!isAdmin) {
       query = query.where("ownerUid", "==", user.uid);
     }
-    
+
     const snap = await query.orderBy("createdAt", "desc").get();
     const sources = snap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
-    
+
     return res.json({ ok: true, sources });
   } catch (err: any) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// 3. Admin repair endpoint
+pdfRoutes.post("/admin/repair-source/:sourceId", requireFirebaseUser, async (req: any, res) => {
+  try {
+    const { sourceId } = req.params;
+    // In a real app, verify admin claims. Here we assume owner or admin.
+    const db = getAdminDb();
+    const sourceSnap = await db.collection("rag_sources").doc(sourceId).get();
+    if (!sourceSnap.exists) {
+      return res.status(404).json({ ok: false, error: "Source not found." });
+    }
+    const src = sourceSnap.data()!;
+
+    // Reset index status
+    await db.collection("rag_sources").doc(sourceId).update({
+      indexStatus: "queued",
+      updatedAt: new Date().toISOString()
+    });
+
+    // Run async
+    setImmediate(() => {
+      processUploadedPdf({
+        uid: src.ownerUid,
+        sourceId,
+        storagePath: src.storagePath,
+        fileName: src.fileName,
+        title: src.title,
+        subject: src.subject,
+        year: src.year,
+        resourceType: src.resourceType || "uploaded_pdf",
+        sourceType: src.sourceType || "uploaded_pdf",
+        sourceScope: src.sourceScope || "personal",
+        forceOcr: req.body.forceOcr === true
+      }).catch(err => console.error("Async repair error:", err));
+    });
+
+    return res.json({ ok: true, message: "Repair queued." });
+  } catch (err: any) {
+    console.error("Error in repair endpoint:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });

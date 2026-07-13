@@ -1,4 +1,5 @@
-import { auth } from './firebase';
+import { auth, getFirebaseAppCheckToken } from './firebase';
+import { apiUrl, getLargeEndpointUrl } from './apiBase';
 
 export async function getAuthToken(): Promise<string | null> {
   if (!auth) return null;
@@ -35,15 +36,38 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
+  const appCheckToken = await getFirebaseAppCheckToken();
+  if (appCheckToken) headers.set("X-Firebase-AppCheck", appCheckToken);
 
   const isFormData = options.body instanceof FormData;
   if (!isFormData && options.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
+  let finalUrl: string | Request = input as any;
+  if (typeof input === 'string') {
+    finalUrl = getLargeEndpointUrl(input);
+  } else if (input instanceof URL) {
+    finalUrl = getLargeEndpointUrl(input.toString());
+  } else if (input && typeof (input as any).url === 'string') {
+    finalUrl = getLargeEndpointUrl((input as Request).url);
+  }
+
   // Ensure options.headers matches the Headers object
-  return globalThis.fetch(input, {
+  const response = await globalThis.fetch(finalUrl, {
     ...options,
     headers
   });
+
+  const originalJson = response.json.bind(response);
+  response.json = async function() {
+    try {
+      return await originalJson();
+    } catch (e) {
+      console.warn("apiFetch safe JSON parser: Failed to parse JSON, returning empty object", e);
+      return {};
+    }
+  };
+
+  return response;
 }

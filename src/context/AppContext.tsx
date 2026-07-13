@@ -41,6 +41,8 @@ export type UserProfile = {
   bday?: string;
   gender?: string;
   isVerified?: boolean;
+  role?: string;
+  roles?: string[];
 };
 
 type User = {
@@ -256,8 +258,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    fetchProfile(email);
-
     const fetchExpressNotifications = async () => {
       try {
         const res = await apiFetch(`/api/notifications?email=${encodeURIComponent(email)}`);
@@ -271,51 +271,60 @@ export function AppProvider({ children }: { children: ReactNode }) {
         console.error("Fetch express notifications failed:", err);
       }
     };
-    fetchExpressNotifications();
 
     let unsubscribe: () => void = () => {};
-    if (isFirebaseEnabled && db && auth?.currentUser) {
-      try {
-        if (auth?.currentUser && auth.currentUser.email && auth.currentUser.email.toLowerCase() !== email.toLowerCase()) {
-          console.warn("Skipping direct firestore notification read because auth.currentUser.email does not match requested email");
-          return;
-        }
-        const notifCollectionRef = collection(db, 'users', email, 'notifications');
-        const notifQuery = query(notifCollectionRef, orderBy('timestamp', 'desc'));
-        unsubscribe = onSnapshot(notifQuery, (snapshot) => {
-          const notifs: PushNotification[] = [];
-          snapshot.forEach((subDoc) => {
-            const d = subDoc.data();
-            notifs.push({
-              id: subDoc.id,
-              title: d.title,
-              message: d.message,
-              type: d.type as any,
-              senderEmail: d.senderEmail,
-              senderName: d.senderName,
-              read: d.read,
-              timestamp: d.timestamp
-            });
-          });
-          setPushNotifications(notifs);
-        }, (error) => {
-          try {
-             handleFirestoreError(error, OperationType.LIST, `users/${email}/notifications`);
-          } catch(err) {
-             console.error("Firestore onSnapshot error:", error);
+    let isCancelled = false;
+
+    const timer = setTimeout(() => {
+      if (isCancelled) return;
+      fetchProfile(email);
+      fetchExpressNotifications();
+
+      if (isFirebaseEnabled && db && auth?.currentUser) {
+        try {
+          if (auth?.currentUser && auth.currentUser.email && auth.currentUser.email.toLowerCase() !== email.toLowerCase()) {
+            console.warn("Skipping direct firestore notification read because auth.currentUser.email does not match requested email");
+            return;
           }
-        });
-      } catch (err) {
-        console.warn("Setting up Firestore onSnapshot failed, falling back to express polling:", err);
+          const notifCollectionRef = collection(db, 'users', email, 'notifications');
+          const notifQuery = query(notifCollectionRef, orderBy('timestamp', 'desc'));
+          unsubscribe = onSnapshot(notifQuery, (snapshot) => {
+            const notifs: PushNotification[] = [];
+            snapshot.forEach((subDoc) => {
+              const d = subDoc.data();
+              notifs.push({
+                id: subDoc.id,
+                title: d.title,
+                message: d.message,
+                type: d.type as any,
+                senderEmail: d.senderEmail,
+                senderName: d.senderName,
+                read: d.read,
+                timestamp: d.timestamp
+              });
+            });
+            setPushNotifications(notifs);
+          }, (error) => {
+            try {
+               handleFirestoreError(error, OperationType.LIST, `users/${email}/notifications`);
+            } catch(err) {
+               console.error("Firestore onSnapshot error:", error);
+            }
+          });
+        } catch (err) {
+          console.warn("Setting up Firestore onSnapshot failed, falling back to express polling:", err);
+          const intervalId = setInterval(fetchExpressNotifications, 10000);
+          unsubscribe = () => clearInterval(intervalId);
+        }
+      } else {
         const intervalId = setInterval(fetchExpressNotifications, 10000);
-        return () => clearInterval(intervalId);
+        unsubscribe = () => clearInterval(intervalId);
       }
-    } else {
-      const intervalId = setInterval(fetchExpressNotifications, 10000);
-      return () => clearInterval(intervalId);
-    }
+    }, 1200);
 
     return () => {
+      isCancelled = true;
+      clearTimeout(timer);
       if (unsubscribe) unsubscribe();
     };
   }, [user]);
@@ -674,7 +683,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
 
           await fetchUserDataFromDB(firebaseUser.email || '');
-          await fetchYoutubeCookies(firebaseUser.email || '');
+          setTimeout(() => {
+            fetchYoutubeCookies(firebaseUser.email || '').catch(() => {});
+          }, 1500);
           setIsAuthLoading(false);
         } else {
           // If Firebase has no user but we have local fallback, we can try
@@ -696,7 +707,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 } catch(e) {}
                 
                 await fetchUserDataFromDB(parsedUser.email);
-                await fetchYoutubeCookies(parsedUser.email);
+                setTimeout(() => {
+                  fetchYoutubeCookies(parsedUser.email).catch(() => {});
+                }, 1500);
              } catch(e) {}
           } else {
              const savedToken = localStorage.getItem('google_access_token');
@@ -726,7 +739,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           // Fetch latest details in the background
           fetchUserDataFromDB(parsedUser.email).then(() => {
-            fetchYoutubeCookies(parsedUser.email);
+            setTimeout(() => {
+              fetchYoutubeCookies(parsedUser.email).catch(() => {});
+            }, 1500);
           });
           setIsAuthLoading(false);
         } catch (e) {
@@ -1430,59 +1445,61 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const contextValue = React.useMemo(() => ({
+    data,
+    setData,
+    user,
+    setUser,
+    currentSubject,
+    setCurrentSubject,
+    currentView,
+    setCurrentView,
+    theme,
+    setTheme,
+    isSidebarOpen,
+    setSidebarOpen,
+    isAdvisorOpen,
+    setAdvisorOpen,
+    modals,
+    setModals,
+    notifications,
+    showNotification,
+    removeNotification,
+    toggleTopic,
+    updateTopicNotes,
+    saveData,
+    clearLocalStorage,
+    stars,
+    triggerStars,
+    fetchUserInfo,
+    loginWithGooglePopup,
+    isAuthLoading,
+    logout,
+    youtubeCookies,
+    saveYoutubeCookies,
+    profile,
+    saveProfile,
+    pushNotifications,
+    triggerPushNotification,
+    markPushNotificationAsRead,
+    markAllPushNotificationsAsRead,
+    deletePushNotification,
+    localFriends,
+    addFriend,
+    autoEmailLogin,
+    toggleAutoEmailLogin,
+    sendGmailProgressEmail,
+    adminTargetEmail,
+    setAdminTargetEmail,
+    loginWithEmailAndPassword,
+    registerWithEmailAndDetails,
+    verifyEmailCode
+  }), [
+    data, user, currentSubject, currentView, theme, isSidebarOpen, isAdvisorOpen, modals, notifications, stars, isAuthLoading, youtubeCookies, profile, pushNotifications, localFriends, autoEmailLogin, adminTargetEmail
+  ]);
+
   return (
-    <AppContext.Provider
-      value={{
-        data,
-        setData,
-        user,
-        setUser,
-        currentSubject,
-        setCurrentSubject,
-        currentView,
-        setCurrentView,
-        theme,
-        setTheme,
-        isSidebarOpen,
-        setSidebarOpen,
-        isAdvisorOpen,
-        setAdvisorOpen,
-        modals,
-        setModals,
-        notifications,
-        showNotification,
-        removeNotification,
-        toggleTopic,
-        updateTopicNotes,
-        saveData,
-        clearLocalStorage,
-        stars,
-        triggerStars,
-        fetchUserInfo,
-        loginWithGooglePopup,
-        isAuthLoading,
-        logout,
-        youtubeCookies,
-        saveYoutubeCookies,
-        profile,
-        saveProfile,
-        pushNotifications,
-        triggerPushNotification,
-        markPushNotificationAsRead,
-        markAllPushNotificationsAsRead,
-        deletePushNotification,
-        localFriends,
-        addFriend,
-        autoEmailLogin,
-        toggleAutoEmailLogin,
-        sendGmailProgressEmail,
-        adminTargetEmail,
-        setAdminTargetEmail,
-        loginWithEmailAndPassword,
-        registerWithEmailAndDetails,
-        verifyEmailCode
-      }}
-    >
+    <AppContext.Provider value={contextValue}>
       {children}
     </AppContext.Provider>
   );

@@ -6,12 +6,14 @@ export const syllabusRoutes = Router();
 
 export async function requireSyllabusOwner(req: any) {
   const user = await requireUser(req);
-  if (!user || !user.email) {
+  if (!user) {
     throw new Error("LOGIN_REQUIRED");
   }
-  
-  const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "26002ishan@gmail.com";
-  if (user.email.toLowerCase() !== ownerEmail.toLowerCase()) {
+  const db = getAdminDb();
+  const roleDoc = await db.collection("user_roles").doc(user.uid).get();
+  const roles = roleDoc.exists ? (roleDoc.data()?.roles || (roleDoc.data()?.role ? [roleDoc.data().role] : [])) : [];
+  const isOwner = roles.includes("admin") || roles.includes("teacher") || roles.includes("content_editor") || user.admin === true;
+  if (!isOwner) {
     throw new Error("SYLLABUS_OWNER_ONLY");
   }
   return user;
@@ -20,8 +22,11 @@ export async function requireSyllabusOwner(req: any) {
 syllabusRoutes.get("/debug", async (req, res) => {
   try {
     const user = await requireUser(req);
-    const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "26002ishan@gmail.com";
-    const isOwner = user?.email?.toLowerCase() === ownerEmail.toLowerCase();
+    const db = getAdminDb();
+    const roleDoc = await db.collection("user_roles").doc(user.uid).get();
+    const roles = roleDoc.exists ? (roleDoc.data()?.roles || (roleDoc.data()?.role ? [roleDoc.data().role] : [])) : [];
+    const isOwner = roles.includes("admin") || roles.includes("teacher") || roles.includes("content_editor") || user.admin === true;
+    const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "admin";
     
     let resourcesCount = 0;
     let chunksCount = 0;
@@ -60,21 +65,21 @@ syllabusRoutes.get("/resources", async (req, res) => {
     const userResources = userSnap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
 
     // Fetch admin resources as official ones if user is not admin
-    const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "26002ishan@gmail.com";
-    const isAdmin = user.email?.toLowerCase() === ownerEmail.toLowerCase();
+    const roleDoc = await db.collection("user_roles").doc(user.uid).get();
+    const roles = roleDoc.exists ? (roleDoc.data()?.roles || (roleDoc.data()?.role ? [roleDoc.data().role] : [])) : [];
+    const isAdmin = roles.includes("admin") || user.admin === true;
     
     let resources = [...userResources];
     
     if (!isAdmin) {
-      // Find owner uid
       let ownerUid = null;
-      const ownerDoc = await db.collection("users").doc(ownerEmail.toLowerCase()).get();
-      if (ownerDoc.exists && ownerDoc.data()?.uid) {
-        ownerUid = ownerDoc.data().uid;
+      const adminsSnap = await db.collection("user_roles").where("role", "==", "admin").limit(1).get();
+      if (!adminsSnap.empty) {
+        ownerUid = adminsSnap.docs[0].id;
       } else {
-        const snap = await db.collection("users").where("email", "==", ownerEmail.toLowerCase()).limit(1).get();
-        if (!snap.empty) {
-          ownerUid = snap.docs[0].id;
+        const adminsSnap2 = await db.collection("user_roles").where("roles", "array-contains", "admin").limit(1).get();
+        if (!adminsSnap2.empty) {
+          ownerUid = adminsSnap2.docs[0].id;
         }
       }
       
@@ -104,8 +109,9 @@ syllabusRoutes.delete("/resources/:resourceId", async (req, res) => {
     const db = getAdminDb();
     const bucket = getAdminBucket();
     
-    const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "26002ishan@gmail.com";
-    const isAdmin = user.email?.toLowerCase() === ownerEmail.toLowerCase();
+    const roleDoc = await db.collection("user_roles").doc(user.uid).get();
+    const roles = roleDoc.exists ? (roleDoc.data()?.roles || (roleDoc.data()?.role ? [roleDoc.data().role] : [])) : [];
+    const isAdmin = roles.includes("admin") || user.admin === true;
     
     // Check in user's own resources
     const docRef = db.collection("users").doc(user.uid).collection("syllabus_resources").doc(resourceId);
@@ -141,8 +147,8 @@ syllabusRoutes.delete("/resources/:resourceId", async (req, res) => {
     
     // Also delete from rag_sources and rag_chunks
     batch.delete(db.collection("rag_sources").doc(resourceId));
-    const ragChunks = await db.collection("rag_chunks").where("sourceId", "==", resourceId).get();
-    ragChunks.docs.forEach((d: any) => batch.delete(d.ref));
+    const rag_chunks = await db.collection("rag_chunks").where("sourceId", "==", resourceId).get();
+    rag_chunks.docs.forEach((d: any) => batch.delete(d.ref));
     
     await batch.commit();
     
@@ -185,19 +191,16 @@ syllabusRoutes.get("/resources/:resourceId/download", async (req, res) => {
     const db = getAdminDb();
     
     // First, let's check if the current user owns it or if it belongs to admin
-    const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "26002ishan@gmail.com";
-    
     let resourceDoc = await db.collection("users").doc(user.uid).collection("syllabus_resources").doc(resourceId).get();
     if (!resourceDoc.exists) {
-      // fallback to looking up admin
       let ownerUid = null;
-      const ownerDoc = await db.collection("users").doc(ownerEmail.toLowerCase()).get();
-      if (ownerDoc.exists && ownerDoc.data()?.uid) {
-        ownerUid = ownerDoc.data().uid;
+      const adminsSnap = await db.collection("user_roles").where("role", "==", "admin").limit(1).get();
+      if (!adminsSnap.empty) {
+        ownerUid = adminsSnap.docs[0].id;
       } else {
-        const snap = await db.collection("users").where("email", "==", ownerEmail.toLowerCase()).limit(1).get();
-        if (!snap.empty) {
-          ownerUid = snap.docs[0].id;
+        const adminsSnap2 = await db.collection("user_roles").where("roles", "array-contains", "admin").limit(1).get();
+        if (!adminsSnap2.empty) {
+          ownerUid = adminsSnap2.docs[0].id;
         }
       }
       if (ownerUid) {

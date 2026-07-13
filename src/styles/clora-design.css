@@ -1,0 +1,51 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Noto Sans Sinhala", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer utilities {
+  .clora-gradient-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500;
+  }
+  
+  .clora-bg-gradient {
+    @apply bg-gradient-to-b from-slate-50 to-white;
+  }
+  
+  .clora-glass {
+    @apply bg-white/80 backdrop-blur-xl border border-white/20 shadow-sm;
+  }
+  
+  .clora-glass-dark {
+    @apply bg-slate-900/80 backdrop-blur-xl border border-white/10 shadow-lg;
+  }
+  
+  .clora-composer-shadow {
+    box-shadow: 0 8px 32px -8px rgba(0, 0, 0, 0.08), 0 2px 8px -2px rgba(0, 0, 0, 0.04);
+  }
+  
+  .clora-hero-glow {
+    background: radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.15) 0%, rgba(255, 255, 255, 0) 70%);
+  }
+
+  .clora-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .clora-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .clora-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-slate-200 rounded-full hover:bg-slate-300 transition-colors;
+  }
+  
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}

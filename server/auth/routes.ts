@@ -2,8 +2,34 @@ import express from 'express';
 import { readUser, writeUser } from '../data/userRepository';
 import { getAuth } from 'firebase-admin/auth';
 import { requireAdmin } from '../firebase/admin';
+import { requireFirebaseUser } from '../firebase/authMiddleware';
+import { computeSourceCapabilities } from '../utils/authContext';
 
 export const authRoutes = express.Router();
+
+authRoutes.get("/context", requireFirebaseUser, async (req: any, res) => {
+    try {
+      const authContext = req.authContext;
+      const user = req.user;
+      if (!authContext) {
+        return res.status(401).json({ ok: false, error: "AuthContext not available" });
+      }
+      const capabilities = computeSourceCapabilities(authContext, {});
+      res.json({
+        ok: true,
+        user: {
+          uid: user.uid,
+          email: user.email,
+          name: user.name,
+          isAnonymous: user.isAnonymous
+        },
+        roles: authContext.roles,
+        capabilities
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+});
 
 authRoutes.post("/force-reset-password", async (req, res) => {
     try {

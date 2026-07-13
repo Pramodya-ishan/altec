@@ -28,16 +28,17 @@ export async function extractPdfText(pdfBuffer: Buffer): Promise<{
 }> {
   let pdfjsLib: any = null;
   try {
-    pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.js");
+    const pdfjsModulePath = "pdfjs-dist/legacy/build/pdf.mjs";
+    pdfjsLib = await import(pdfjsModulePath);
   } catch (err: any) {
     console.error("Failed to load pdfjs-dist:", err.message);
     return {
       text: "",
       pages: [],
-      needsOcr: true,
+      needsOcr: false,
       needsLegacyConversion: false,
       textEncoding: "unknown",
-      message: "PDF library load failure. OCR අවශ්‍යයි."
+      message: "PDF_PARSER_UNAVAILABLE"
     };
   }
 
@@ -47,7 +48,7 @@ export async function extractPdfText(pdfBuffer: Buffer): Promise<{
       disableFontFace: true,
       verbosity: 0
     });
-    
+
     const pdf = await loadingTask.promise;
     let fullText = "";
     const pages: {
@@ -58,12 +59,15 @@ export async function extractPdfText(pdfBuffer: Buffer): Promise<{
       conversionApplied: boolean;
       conversionConfidence: number;
       needsLegacyConversion: boolean;
+      pageQuality: "native_unicode" | "native_english" | "legacy_convertible" | "ocr_required" | "empty_expected" | "extraction_failed";
     }[] = [];
 
     let overallNeedsLegacy = false;
     let dominantEncoding = "unknown";
     let legacyEncodingsCount = 0;
     let unicodeEncodingsCount = 0;
+    let nativeEnglishCount = 0;
+    let ocrRequiredCount = 0;
 
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
@@ -72,16 +76,36 @@ export async function extractPdfText(pdfBuffer: Buffer): Promise<{
         .map((item: any) => item.str)
         .join(" ")
         .trim();
-      
+
       const normResult = normalizeSinhalaExtractedText(pageTextRaw);
-      
+
       if (normResult.needsLegacyConversion) {
         overallNeedsLegacy = true;
       }
-      if (normResult.textEncoding.startsWith("legacy_")) {
-        legacyEncodingsCount++;
+
+      let pageQuality: "native_unicode" | "native_english" | "legacy_convertible" | "ocr_required" | "empty_expected" | "extraction_failed" = "extraction_failed";
+
+      if (pageTextRaw.length < 40) {
+        pageQuality = "empty_expected";
       } else if (normResult.textEncoding === "unicode_sinhala") {
         unicodeEncodingsCount++;
+        pageQuality = "native_unicode";
+      } else if (normResult.textEncoding === "native_english") {
+        nativeEnglishCount++;
+        pageQuality = "native_english";
+      } else if (normResult.textEncoding.startsWith("legacy_")) {
+        legacyEncodingsCount++;
+        // Check if legacy conversion confidence is good
+        if (normResult.conversionConfidence > 0.6) {
+          pageQuality = "legacy_convertible";
+        } else {
+          pageQuality = "ocr_required";
+          ocrRequiredCount++;
+        }
+      } else {
+        // Unknown or gibberish
+        pageQuality = "ocr_required";
+        ocrRequiredCount++;
       }
 
       pages.push({
@@ -91,15 +115,17 @@ export async function extractPdfText(pdfBuffer: Buffer): Promise<{
         textEncoding: normResult.textEncoding,
         conversionApplied: normResult.conversionApplied,
         conversionConfidence: normResult.conversionConfidence,
-        needsLegacyConversion: normResult.needsLegacyConversion
+        needsLegacyConversion: normResult.needsLegacyConversion,
+        pageQuality
       });
+
       fullText += (fullText ? "\n\n" : "") + normResult.normalizedText;
     }
 
-    if (legacyEncodingsCount > unicodeEncodingsCount) {
+    if (legacyEncodingsCount > unicodeEncodingsCount && legacyEncodingsCount > nativeEnglishCount) {
       dominantEncoding = "legacy_fm_abhaya";
-    } else if (unicodeEncodingsCount > 0) {
-      dominantEncoding = "unicode_sinhala";
+    } else if (unicodeEncodingsCount > 0 || nativeEnglishCount > 0) {
+      dominantEncoding = unicodeEncodingsCount >= nativeEnglishCount ? "unicode_sinhala" : "native_english";
     }
 
     const trimmed = fullText.trim();
@@ -117,7 +143,7 @@ export async function extractPdfText(pdfBuffer: Buffer): Promise<{
     return {
       text: trimmed,
       pages,
-      needsOcr: false,
+      needsOcr: ocrRequiredCount > 0, // If any page needs OCR, we might trigger it for those pages
       needsLegacyConversion: overallNeedsLegacy,
       textEncoding: dominantEncoding
     };

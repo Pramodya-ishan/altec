@@ -1,8 +1,39 @@
-export type Video = { url: string; title: string; type?: string; storagePath?: string; };
+export type LessonResourceKind = 'pdf' | 'image' | 'video' | 'audio' | 'document' | 'link';
+
+export type LessonResourceStatus =
+  | 'uploading'
+  | 'uploaded'
+  | 'queued'
+  | 'transcoding'
+  | 'transcribing'
+  | 'indexing'
+  | 'ready'
+  | 'failed';
+
+export type LessonResource = {
+  id?: string;
+  sourceId?: string;
+  videoId?: string;
+  url: string;
+  title: string;
+  type?: string;
+  mimeType?: string;
+  mediaKind?: LessonResourceKind;
+  resourceRole?: 'video' | 'student_note' | 'image' | 'audio' | 'external_link';
+  storagePath?: string;
+  status?: LessonResourceStatus;
+  thumbnailPath?: string;
+  durationMs?: number;
+  sizeBytes?: number;
+  createdAt?: string;
+};
+
+export type Video = LessonResource;
 
 export type TopicData = {
   checked: boolean;
   videos: Video[];
+  resources?: LessonResource[];
   notes?: string; // Quick notes addition
 };
 
@@ -148,4 +179,3 @@ export interface AIChatMessage {
     isComplete: boolean;
   };
 }
-

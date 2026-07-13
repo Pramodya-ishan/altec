@@ -1,5 +1,5 @@
 export interface EncodingResult {
-  encoding: "unicode_sinhala" | "legacy_fm_abhaya" | "legacy_bamini" | "legacy_unknown" | "unknown";
+  encoding: "unicode_sinhala" | "legacy_fm_abhaya" | "legacy_bamini" | "legacy_unknown" | "unknown" | "native_english";
   confidence: number;
   reason: string;
 }
@@ -58,17 +58,29 @@ export function detectSinhalaTextEncoding(text: string): EncodingResult {
 
   if (unicodeCount === 0 && text.match(/[A-Za-z]/)) {
     // Check for Bamini or other legacy patterns (common Tamil legacy font uses Bamini etc, but here let's focus on Sinhala)
-    if (text.includes("LKavdxl") || text.includes("cHdñ;sh") || text.includes(";dlaIK")) {
+    if (legacyHits > 2 || text.includes("LKavdxl") || text.includes("cHdñ;sh") || text.includes(";dlaIK")) {
       return {
         encoding: "legacy_fm_abhaya",
         confidence: 0.8,
         reason: "Specific SFT/ET legacy keywords detected."
       };
     }
+    // Check if it's mostly english words
+    const englishWords = text.match(/\b[A-Za-z]+\b/g);
+    const hasEnglish = englishWords && englishWords.length > Math.max(1, totalChars / 20); // rough check
+
+    if (hasEnglish) {
+       return {
+         encoding: "native_english",
+         confidence: 0.9,
+         reason: "Contains English alphabet letters with no legacy patterns."
+       };
+    }
+
     return {
-      encoding: "legacy_unknown",
-      confidence: 0.5,
-      reason: "No Unicode Sinhala but contains alphabet letters; potential legacy font."
+      encoding: "unknown",
+      confidence: 0.3,
+      reason: "No Unicode Sinhala but contains some alphabet letters; not enough legacy patterns."
     };
   }
 
@@ -128,7 +140,7 @@ export function normalizeSinhalaExtractedText(rawText: string): NormalizationRes
 
   const { encoding, confidence } = detectSinhalaTextEncoding(rawText);
 
-  if (encoding === "unicode_sinhala") {
+  if (encoding === "unicode_sinhala" || encoding === "native_english") {
     return {
       rawText,
       normalizedText: rawText,

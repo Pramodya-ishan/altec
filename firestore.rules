@@ -1,86 +1,164 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // Global Catch-all safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Standard security helpers
     function signedIn() {
       return request.auth != null;
     }
-    function isUidOwner(userId) {
-      return signedIn() && request.auth.uid == userId;
-    }
-    function isEmailOwner(userId) {
-      return signedIn()
-        && request.auth.token.email != null
-        && request.auth.token.email == userId;
-    }
+
     function isOwner(userId) {
-      return isUidOwner(userId) || isEmailOwner(userId);
-    }
-    match /users/{userId}/{document=**} {
-      allow read, write: if isOwner(userId);
-    }
-    // And allow 26002ishan@gmail.com to read syllabus resources anywhere
-    match /users/{userId}/syllabus_resources/{docId} {
-      allow read, write: if isOwner(userId) || (signedIn() && request.auth.token.email == "26002ishan@gmail.com");
-    }
-    match /users/{userId}/syllabus_chunks/{docId} {
-      allow read, write: if isOwner(userId) || (signedIn() && request.auth.token.email == "26002ishan@gmail.com");
-    }
-    
-    match /rag_sources/{id} {
-      allow read: if signedIn() && (
-        resource.data.visibility in ["official", "shared"] ||
-        resource.data.ownerUid == request.auth.uid ||
-        request.auth.token.email == "26002ishan@gmail.com"
+      return signedIn() && (
+        request.auth.uid == userId ||
+        (request.auth.token != null && request.auth.token.email != null && request.auth.token.email == userId)
       );
-      allow create: if signedIn()
-        && request.resource.data.ownerUid == request.auth.uid;
-      allow update, delete: if signedIn()
-        && resource.data.ownerUid == request.auth.uid;
-    }
-    match /rag_chunks/{id} {
-      allow read: if signedIn() && (
-        resource.data.visibility in ["official", "shared"] ||
-        resource.data.ownerUid == request.auth.uid ||
-        request.auth.token.email == "26002ishan@gmail.com"
-      );
-      allow create: if signedIn()
-        && request.resource.data.ownerUid == request.auth.uid;
-      allow update, delete: if signedIn()
-        && resource.data.ownerUid == request.auth.uid;
-    }
-    match /past_papers/{id} {
-      allow read: if signedIn();
-      allow create: if signedIn() && (request.resource.data.ownerUid == request.auth.uid || request.auth.token.email == "26002ishan@gmail.com");
-      allow update, delete: if signedIn() && (resource.data.ownerUid == request.auth.uid || request.auth.token.email == "26002ishan@gmail.com");
-    }
-    match /knowledge_sources/{id} {
-      allow read: if signedIn();
-      allow write: if signedIn() && request.auth.token.email == "26002ishan@gmail.com";
-    }
-    match /knowledge_chunks/{id} {
-      allow read: if signedIn();
-      allow write: if signedIn() && request.auth.token.email == "26002ishan@gmail.com";
     }
 
+    function isAdmin() {
+      return signedIn() && (
+        request.auth.token.admin == true ||
+        request.auth.token.role == "admin" ||
+        (request.auth.token.roles != null && (
+          "admin" in request.auth.token.roles ||
+          "ops" in request.auth.token.roles ||
+          "content_editor" in request.auth.token.roles
+        ))
+      );
+    }
+
+    // Users collection and sub-collections
+    match /users/{userId} {
+      allow read, write: if isOwner(userId) || isAdmin();
+
+      match /notifications/{docId} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+
+      match /profile/{docId} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+
+      match /{allSubcollections=**} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    // User Roles collection
+    match /user_roles/{userId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // RAG sources and chunks
+    match /rag_sources/{id} {
+      allow read: if signedIn() && (
+        resource.data.visibility in ["official", "shared", "class", "institution", "public"] ||
+        resource.data.ownerUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if signedIn()
+        && (resource.data.ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /rag_chunks/{id} {
+      allow read: if signedIn() && (
+        resource.data.visibility in ["official", "shared", "class", "institution", "public"] ||
+        resource.data.ownerUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if signedIn()
+        && (resource.data.ownerUid == request.auth.uid || isAdmin());
+    }
+
+    // Past papers
+    match /past_papers/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn() && (request.resource.data.ownerUid == request.auth.uid || isAdmin());
+      allow update, delete: if signedIn() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+    }
+
+    // Knowledge base
+    match /knowledge_sources/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /knowledge_chunks/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // Indexes and metadata
     match /exam_question_index/{id} {
       allow read: if signedIn();
-      allow write: if signedIn() && request.auth.token.email == "26002ishan@gmail.com";
+      allow write: if isAdmin();
     }
+
     match /syllabus_nodes/{id} {
       allow read: if signedIn();
-      allow write: if signedIn() && request.auth.token.email == "26002ishan@gmail.com";
+      allow write: if isAdmin();
     }
+
     match /exam_pattern_reports/{id} {
       allow read: if signedIn();
-      allow write: if signedIn() && request.auth.token.email == "26002ishan@gmail.com";
+      allow write: if isAdmin();
     }
+
     match /prediction_reports/{id} {
       allow read: if signedIn();
-      allow write: if signedIn() && request.auth.token.email == "26002ishan@gmail.com";
+      allow write: if isAdmin();
     }
+
+    // PDF caching
     match /pdf_question_cache/{id} {
       allow read: if signedIn();
       allow write: if signedIn();
+    }
+
+    // Verified answers
+    match /verified_answers/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // Audit events (Immutable: write-once, never delete or update)
+    match /audit_events/{id} {
+      allow read: if isAdmin();
+      allow create: if signedIn();
+      allow update, delete: if false;
+    }
+
+    // Canonical Source Registry. Video writes are server-only.
+    match /sources/{id} {
+      allow read: if signedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.visibility in ["class", "institution", "public"] ||
+        isAdmin()
+      );
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if signedIn() && (resource.data.ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /videos/{id} {
+      allow read: if signedIn() && (resource.data.isPublished == true || isAdmin());
+      allow write: if false;
+    }
+
+    match /videoPlaybackSessions/{id} {
+      allow read, write: if false;
+    }
+
+    match /videoAuditLogs/{id} {
+      allow read, write: if false;
     }
   }
 }

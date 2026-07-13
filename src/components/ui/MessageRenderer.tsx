@@ -53,10 +53,12 @@ const PreComponent = ({ children, ...props }: any) => {
 };
 
 import { stripRawVisualBlocks } from "../../lib/ai/stripVisualBlocks";
+import { sanitizeMathText } from "../../lib/markdown/mathTextSanitizer";
 
 export function MessageRenderer({ content }: MessageRendererProps) {
   const cleanedContent = stripRawVisualBlocks(content);
-  const sanitizedContent = sanitizeMathMarkdown(cleanedContent);
+  const mathSanitized = sanitizeMathText(cleanedContent);
+  const sanitizedContent = sanitizeMathMarkdown(mathSanitized);
   return (
     <div className="text-[15.5px] sm:text-[16px] text-slate-800 leading-[1.8] font-sans break-words prose prose-slate max-w-none prose-headings:font-bold prose-headings:text-slate-950 prose-headings:mt-4 prose-headings:mb-2 prose-p:mb-3 prose-p:leading-[1.8] prose-li:leading-[1.8]">
       <Markdown
@@ -95,7 +97,27 @@ export function MessageRenderer({ content }: MessageRendererProps) {
                 {children}
               </code>
             );
-          }
+          },
+          table: ({ children }) => (
+            <div className="overflow-x-auto my-4 rounded-lg border border-slate-200 shadow-sm">
+              <table className="w-full text-sm text-left">{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => (
+            <thead className="bg-slate-50 text-slate-700 font-semibold">{children}</thead>
+          ),
+          tbody: ({ children }) => (
+            <tbody className="divide-y divide-slate-200">{children}</tbody>
+          ),
+          tr: ({ children }) => (
+            <tr className="hover:bg-slate-50 transition-colors">{children}</tr>
+          ),
+          th: ({ children }) => (
+            <th className="px-4 py-3 text-sm font-semibold border-b border-slate-200">{children}</th>
+          ),
+          td: ({ children }) => (
+            <td className="px-4 py-3 align-top leading-relaxed">{children}</td>
+          )
         }}
       >
         {sanitizedContent}

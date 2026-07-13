@@ -248,21 +248,23 @@ export default function PastPapersView() {
         setUploadProgress(60);
 
         // Step B: Call backend ingest-uploaded
-        const ingestFd = new FormData();
-        ingestFd.append("sourceId", uploaded.sourceId);
-        ingestFd.append("storagePath", uploaded.storagePath);
-        ingestFd.append("title", title);
-        ingestFd.append("subject", normSubj);
-        ingestFd.append("year", year);
-        ingestFd.append("resourceType", resType);
-        ingestFd.append("sourceType", resType);
-        ingestFd.append("sourceScope", "past_paper");
-        ingestFd.append("medium", "Sinhala");
-        ingestFd.append("file", file);
+        const payload = {
+          sourceId: uploaded.sourceId,
+          storagePath: uploaded.storagePath,
+          title: title,
+          fileName: file.name,
+          subject: normSubj,
+          year: year,
+          resourceType: resType,
+          sourceType: resType,
+          sourceScope: "past_paper",
+          medium: "Sinhala"
+        };
 
-        const ingestRes = await apiFetch("/api/rag/ingest-uploaded", {
+        const ingestRes = await apiFetch("/api/pdf/process-uploaded", {
           method: "POST",
-          body: ingestFd
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
         });
 
         const ingestData = await ingestRes.json().catch(() => null);
@@ -366,7 +368,7 @@ export default function PastPapersView() {
   const isDeleteAllowed = (paper: any) => {
     const currentUser = auth.currentUser;
     if (!currentUser) return false;
-    if (currentUser.email === '26002ishan@gmail.com' || profile?.email === '26002ishan@gmail.com') return true;
+    if (profile?.role === 'admin' || profile?.roles?.includes('admin')) return true;
     if (paper.ownerUid === currentUser.uid) return true;
     if (paper.uploaded === true) return true;
     return false;

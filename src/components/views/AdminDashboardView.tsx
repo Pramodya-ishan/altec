@@ -5,7 +5,7 @@ import { db, isFirebaseEnabled } from '../../lib/firebase';
 import { collection, getDocs, doc, setDoc, getDoc } from 'firebase/firestore';
 
 export default function AdminDashboardView() {
- const { user, showNotification } = useApp();
+ const { user, showNotification, profile } = useApp();
  const [users, setUsers] = useState<any[]>([]);
  const [loading, setLoading] = useState(true);
  const [selectedUserEmail, setSelectedUserEmail] = useState<string | null>(null);
@@ -99,7 +99,9 @@ export default function AdminDashboardView() {
  }
  };
 
- if (user?.email !== 'ishanstc123@gmail.com') {
+  const isAdmin = profile?.role === 'admin' || profile?.roles?.includes('admin');
+
+ if (!isAdmin) {
  return (
  <div className="flex flex-col items-center justify-center p-12 text-center h-full max-w-lg mx-auto mt-20">
  <div className="w-20 h-20 bg-red-100 text-red-500 rounded-full flex items-center justify-center mb-6 shadow-sm border border-red-200">

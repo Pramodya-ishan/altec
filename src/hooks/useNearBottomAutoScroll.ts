@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 
 export function useNearBottomAutoScroll(
   scrollContainerRef: React.RefObject<HTMLDivElement | null>,
@@ -10,18 +10,18 @@ export function useNearBottomAutoScroll(
   const isNearBottomRef = useRef(true);
   const prevMessagesLength = useRef(0);
 
-  const checkNearBottom = () => {
+  const checkNearBottom = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
-    
+
     const threshold = 120; // px from bottom
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     const isNear = distanceFromBottom <= threshold;
     isNearBottomRef.current = isNear;
-    setShowScrollButton(distanceFromBottom > threshold + 50);
-  };
+    setShowScrollButton(distanceFromBottom > threshold);
+  }, [scrollContainerRef]);
 
-  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const el = scrollContainerRef.current;
     if (!el) return;
     el.scrollTo({
@@ -30,8 +30,9 @@ export function useNearBottomAutoScroll(
     });
     isNearBottomRef.current = true;
     setShowScrollButton(false);
-  };
+  }, [scrollContainerRef]);
 
+  // Handle scroll events
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -42,36 +43,53 @@ export function useNearBottomAutoScroll(
 
     el.addEventListener('scroll', handleScroll, { passive: true });
     return () => el.removeEventListener('scroll', handleScroll);
-  }, [scrollContainerRef]);
+  }, [scrollContainerRef, checkNearBottom]);
+
+  // Handle ResizeObserver for dynamic content (streaming or image loading)
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+
+    const childContainer = el.firstElementChild;
+    if (!childContainer) return;
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (isStreaming && isNearBottomRef.current) {
+        requestAnimationFrame(() => {
+          el.scrollTop = el.scrollHeight;
+        });
+      }
+    });
+
+    resizeObserver.observe(childContainer);
+    return () => resizeObserver.disconnect();
+  }, [scrollContainerRef, isStreaming]);
 
   // When messages update
   useEffect(() => {
     if (messages.length === 0) return;
-    
-    const isNewUserMessage = 
-      messages.length > prevMessagesLength.current && 
+
+    const isNewUserMessage =
+      messages.length > prevMessagesLength.current &&
       messages[messages.length - 1]?.role === 'user';
-      
+
     if (isNewUserMessage) {
-      // Force scroll to bottom for user message
       setTimeout(() => scrollToBottom('smooth'), 50);
     } else if (isNearBottomRef.current) {
-      // If we were near bottom, keep scrolling
       setTimeout(() => scrollToBottom('auto'), 20);
     }
-    
-    prevMessagesLength.current = messages.length;
-  }, [messages]);
 
-  // When active streaming is in progress
+    prevMessagesLength.current = messages.length;
+  }, [messages, scrollToBottom]);
+
+  // Scroll once on streaming finish
   useEffect(() => {
-    if (isStreaming && isNearBottomRef.current) {
-      const el = scrollContainerRef.current;
-      if (el) {
-        el.scrollTop = el.scrollHeight;
-      }
+    if (!isStreaming && isNearBottomRef.current) {
+      requestAnimationFrame(() => {
+        scrollToBottom('smooth');
+      });
     }
-  }, [isStreaming, answer]);
+  }, [isStreaming, scrollToBottom]);
 
   return {
     showScrollButton,

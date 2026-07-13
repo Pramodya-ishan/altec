@@ -10,17 +10,27 @@ service firebase.storage {
     }
 
     function isAdmin() {
-      return signedIn() && request.auth.token.email == "26002ishan@gmail.com";
+      return signedIn() && (
+        request.auth.token.admin == true ||
+        request.auth.token.role == "admin" ||
+        (request.auth.token.roles != null && (
+          "admin" in request.auth.token.roles ||
+          "ops" in request.auth.token.roles ||
+          "content_editor" in request.auth.token.roles
+        ))
+      );
     }
 
     function validUpload() {
       return request.resource.size < 50 * 1024 * 1024
         && (
           request.resource.contentType.matches('application/pdf') ||
-          request.resource.contentType.matches('application/octet-stream') ||
           request.resource.contentType.matches('image/.*') ||
           request.resource.contentType.matches('audio/.*') ||
           request.resource.contentType.matches('text/.*') ||
+          request.resource.contentType == 'application/json' ||
+          request.resource.contentType.matches('application/vnd.openxmlformats-officedocument.*') ||
+          request.resource.contentType.matches('application/octet-stream') ||
           request.resource.contentType == null ||
           request.resource.contentType == ""
         );
@@ -69,8 +79,7 @@ service firebase.storage {
     }
 
     match /files/{allPaths=**} {
-      allow read: if true;
-      allow write: if signedIn() && validUpload();
+      allow read, write: if isAdmin();
     }
   }
 }

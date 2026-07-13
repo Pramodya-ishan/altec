@@ -72,7 +72,11 @@ export function getAIClient(): GoogleGenAI {
       console.log(`[AI_CONFIG] hasServiceAccountJson=${hasServiceAccountJson}`);
       console.log(`[AI_CONFIG] hasGeminiApiKey=true`);
     }
-    console.log(`[AI_CONFIG] tts=false`);
+    const ttsEnabled = String(process.env.ENABLE_TTS || "").toLowerCase() === "true";
+    console.log(`[AI_CONFIG] normal_chat=${process.env.GEMINI_DEFAULT_MODEL || "gemini-3.5-flash"}`);
+    console.log(`[AI_CONFIG] pdfQa=${process.env.GEMINI_PDF_QA_MODEL || "gemini-3.5-flash"}`);
+    console.log(`[AI_CONFIG] final=${process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview"}`);
+    console.log(`[AI_CONFIG] tts=${ttsEnabled}`);
   }
 
   return new Proxy(client, {
@@ -108,9 +112,9 @@ function mapModel(model: string, defaultFallback: string) {
 }
 
 export const AI_MODELS = {
-  default: process.env.GEMINI_DEFAULT_MODEL || "gemini-2.5-flash",
+  default: process.env.GEMINI_DEFAULT_MODEL || "gemini-3.5-flash",
   pro: process.env.GEMINI_PRO_MODEL || "gemini-3.1-pro-preview",
-  fast: process.env.GEMINI_FAST_MODEL || "gemini-2.5-flash",
+  fast: process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
   search: process.env.GEMINI_SEARCH_MODEL || "gemini-3.5-flash",
   urlContext: process.env.GEMINI_URL_CONTEXT_MODEL || "gemini-3.1-pro-preview",
   image: process.env.GEMINI_IMAGE_MODEL || "imagen-3.0-generate-001",
@@ -122,9 +126,8 @@ export function getModelFallbackChain(requestedModel?: string): string[] {
   const chain: string[] = [];
   if (requestedModel) chain.push(requestedModel);
   chain.push(AI_MODELS.pro);
-  chain.push("gemini-3-pro-preview");
-  chain.push("gemini-2.5-pro");
+  chain.push("gemini-3.1-pro-preview");
   chain.push(AI_MODELS.default);
-  chain.push("gemini-2.5-flash");
+  chain.push("gemini-3.5-flash");
   return Array.from(new Set(chain)).filter(Boolean);
 }

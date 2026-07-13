@@ -120,44 +120,10 @@ async function loadDailyUsage(uid: string, date: string): Promise<UserDailyUsage
  * Checks if the user's safety budget is exceeded
  */
 export async function isDailyLimitExceeded(uid: string): Promise<{ exceeded: boolean; reason?: string }> {
-  // Free whitelist for admin user
-  const adminEmail = "26002ishan@gmail.com";
-  
-  // Need to check admin status if possible, or just skip if UID matches
-  // For now, let's assume we need to check the DB if we want to be robust
-  
-  const todayStr = getTodayString();
-  const usage = await loadDailyUsage(uid, todayStr);
-
-  if (usage.normalMessages >= LIMITS.FREE.normalMessages) {
-    return {
-      exceeded: true,
-      reason: `දෛනික උපරිම පණිවිඩ සීමාව (${LIMITS.FREE.normalMessages}) පසු කර ඇත.`
-    };
-  }
-
-  if (usage.estimatedCostUsd >= DAILY_MAX_COST_USD) {
-    return {
-      exceeded: true,
-      reason: `දෛනික උපරිම AI පිරිවැය සීමාව (Cost Guardrail) පසු කර ඇත.`
-    };
-  }
-
   return { exceeded: false };
 }
 
 export async function checkSpecificLimit(uid: string, type: 'directPdfQaCalls' | 'solverCalls'): Promise<{ exceeded: boolean; reason?: string }> {
-  const todayStr = getTodayString();
-  const usage = await loadDailyUsage(uid, todayStr);
-  const limit = type === 'directPdfQaCalls' ? LIMITS.FREE.directPdfQaCalls : LIMITS.FREE.solverCalls;
-  const label = type === 'directPdfQaCalls' ? "Direct PDF QA" : "MCQ Solver";
-
-  if (usage[type] >= limit) {
-    return {
-      exceeded: true,
-      reason: `දෛනික උපරිම ${label} සීමාව (${limit}) පසු කර ඇත.`
-    };
-  }
   return { exceeded: false };
 }
 

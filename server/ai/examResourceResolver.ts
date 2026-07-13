@@ -229,6 +229,7 @@ export async function resolveExamResources(params: {
   prompt: string;
   uid: string;
   email?: string;
+  isAdmin?: boolean;
   subject?: string;
   year?: string;
   resourceType?: "past_paper" | "marking_scheme";
@@ -276,8 +277,7 @@ export async function resolveExamResources(params: {
   const normYear = year ? String(year) : undefined;
   const normQuestion = questionNo ? String(questionNo).toUpperCase() : undefined;
 
-  const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "26002ishan@gmail.com";
-  const isAdmin = email?.toLowerCase() === ownerEmail.toLowerCase();
+  const isAdmin = params.isAdmin === true;
 
   // Local static paper keys check
   try {

@@ -35,60 +35,6 @@ aiRoutes.get("/client-diagnostics", (req, res) => {
   });
 });
 
-aiRoutes.get("/model-health", async (req, res) => {
-  try {
-    const isExhausted = Date.now() < aiBillingCircuitOpenUntil;
-    
-    res.json({
-      ok: true,
-      billing: {
-        status: isExhausted ? "exhausted" : "ok",
-        circuitOpenUntil: aiBillingCircuitOpenUntil
-      },
-      directPdfQa: { mode: "frontend_blob_to_gemini", requiresGcs: false, available: true },
-      ocr: { available: false },
-      models: {
-        default: {
-          configured: process.env.GEMINI_DEFAULT_MODEL || "gemini-3.5-flash",
-          usedBy: ["normal_chat"]
-        },
-        normalChat: {
-          configured: process.env.GEMINI_DEFAULT_MODEL || "gemini-3.5-flash",
-          lastOk: lastOk,
-          lastError: lastError
-        },
-        fast: {
-          configured: process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
-          available: !isExhausted,
-          fallback: "gemini-2.5-flash"
-        },
-        pdfQa: {
-          configured: process.env.GEMINI_PDF_QA_MODEL || "gemini-3.5-flash",
-          available: !isExhausted,
-          fallback: process.env.GEMINI_PDF_QA_FALLBACK || "gemini-2.5-flash"
-        },
-        final: {
-          configured: process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview",
-          available: !isExhausted,
-          fallback: process.env.GEMINI_FINAL_FALLBACK || "gemini-2.5-pro"
-        },
-        tts: { enabled: false, available: false },
-        [process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview"]: { available: !isExhausted },
-        [process.env.GEMINI_NORMAL_MODEL || "gemini-3.5-flash"]: { available: !isExhausted },
-        [process.env.GEMINI_DEFAULT_MODEL || "gemini-3.5-flash"]: { available: !isExhausted },
-        [process.env.GEMINI_LITE_MODEL || "gemini-3.1-flash-lite"]: { available: !isExhausted }
-      }
-    });
-  } catch (error: any) {
-    res.json({
-      ok: false,
-      degraded: true,
-      code: "MODEL_HEALTH_DEGRADED",
-      message: "Model health check degraded",
-      errors: [error?.message || String(error)]
-    });
-  }
-});
 
 
 aiRoutes.get("/debug-knowledge", async (req, res) => {
@@ -155,7 +101,7 @@ let cachedHealthTime = 0;
 const CACHE_TTL_MS = 45000; // 45 seconds
 
 // Comprehensive Health check endpoint
-aiRoutes.get("/health", async (req, res) => {
+aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async (req, res) => {
   const now = Date.now();
   if (cachedHealthResponse && (now - cachedHealthTime < CACHE_TTL_MS)) {
     return res.json(cachedHealthResponse);
@@ -472,13 +418,31 @@ aiRoutes.get("/health", async (req, res) => {
     };
   }
 
+  const { getRealtimeConfig } = await import("../realtime/config");
+  const realtimeCfg = getRealtimeConfig();
+
+  responsePayload.directPdfQa = { mode: "frontend_blob_to_gemini", requiresGcs: false, available: true };
+  responsePayload.tts = {
+    enabled: process.env.ENABLE_TTS === "true",
+    available: process.env.ENABLE_TTS === "true" && !!dbInfo.projectId,
+    provider: process.env.TTS_PROVIDER || "google_cloud",
+    lastError: null
+  };
+  responsePayload.realtime = {
+    enabled: realtimeCfg.enabled,
+    provider: realtimeCfg.provider,
+    available: realtimeCfg.available,
+    model: realtimeCfg.model,
+    missing: realtimeCfg.missing,
+    authMode: realtimeCfg.authMode
+  };
+
   responsePayload.models = {
     final: { configured: process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview", lastOk: true, lastError: null },
     fast: { configured: process.env.GEMINI_DEFAULT_MODEL || "gemini-3-flash-preview", lastOk: true, lastError: null },
     lite: { configured: process.env.GEMINI_LITE_MODEL || "gemini-3.1-flash-lite", lastOk: true, lastError: null },
     embeddings: { configured: process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001", lastOk: true, lastError: null },
-    image: { enabled: process.env.ENABLE_IMAGE_GENERATION === "true", available: !!process.env.GEMINI_IMAGE_MODEL, lastError: null },
-    tts: { enabled: true, available: !!process.env.GEMINI_TTS_MODEL, lastError: null }
+    image: { enabled: process.env.ENABLE_IMAGE_GENERATION === "true", available: !!process.env.GEMINI_IMAGE_MODEL, lastError: null }
   };
 
   cachedHealthResponse = responsePayload;
@@ -523,6 +487,16 @@ aiRoutes.post("/debug-context", async (req, res) => {
 });
 
 
+import { cancelRequest } from "./cancellation";
+aiRoutes.post("/requests/:requestId/cancel", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    cancelRequest(req.params.requestId);
+    res.json({ ok: true, cancelled: true });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 aiRoutes.post("/respond-stream", async (req, res) => {
   try {
     const user = await requireUser(req);

@@ -51,7 +51,7 @@ function ZScoreBrainCard({ data, user, onAskClora }: { data: any, user: any, onA
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-slate-900 text-slate-100 rounded-2xl p-6 border border-slate-700/50 shadow-xl relative overflow-hidden">
       <div className="absolute top-0 right-0 p-32 bg-blue-500/10 rounded-full blur-3xl -z-10"></div>
-      
+
       <div className="flex justify-between items-start mb-6">
         <div>
           <h2 className="text-xl font-bold font-sans tracking-tight mb-1">Z-Score Brain</h2>
@@ -174,7 +174,7 @@ export default function ProfileView() {
 
  const mcqScores = studentAttempts.map((attempt: any) => {
  const rawScore = attempt.mcqRaw !== undefined ? attempt.mcqRaw : (attempt.mcqPer !== undefined ? attempt.mcqPer : 0);
- 
+
  let letterGrade = 'F';
  if (rawScore >= 75) letterGrade = 'A';
  else if (rawScore >= 65) letterGrade = 'B';
@@ -451,7 +451,7 @@ export default function ProfileView() {
  >
  {/* Accent decoration in background */}
  <div className="absolute top-0 right-0 w-32 h-32 bg-primary-500/5 rounded-full blur-3xl pointer-events-none" />
- 
+
  <div className="flex flex-col items-center text-center">
  {/* Avatar block */}
  <div className="relative group mb-5">
@@ -486,7 +486,7 @@ export default function ProfileView() {
  </span>
  </h2>
  <p className="text-xs text-slate-500 font-medium mb-3">{profile?.email || 'Offline Sandbox Mode'}</p>
- 
+
  {/* Authentication Status / Verified Badge */}
  <div className="flex justify-center mb-5">
  {user ? (
@@ -509,7 +509,7 @@ export default function ProfileView() {
  </span>
  )}
  </div>
- 
+
  <div className="bg-slate-50/80 rounded-2xl p-5 border border-slate-100 text-left">
  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Learning Bio</span>
  <p className="text-slate-700 text-sm font-semibold leading-relaxed italic">
@@ -583,7 +583,7 @@ export default function ProfileView() {
  <img src={pic} alt="Preset" className="w-full h-full" />
  </button>
  ))}
- 
+
  {/* File upload selector disguised as a preset button */}
  <label className="w-12 h-12 rounded-full border-2 border-dashed border-slate-300 hover:border-primary-500 bg-slate-50 hover:bg-slate-100 flex flex-col items-center justify-center cursor-pointer transition-all hover:scale-105 active:scale-95 shadow-sm" title="Upload Custom File">
  <i className="fa-solid fa-arrow-up-from-bracket text-slate-400 text-xs text-center"></i>
@@ -643,7 +643,7 @@ export default function ProfileView() {
  className="bg-white border border-slate-200/80 rounded-[2.5rem] shadow-sm p-8 relative overflow-hidden text-left "
  >
  <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-emerald-400 to-teal-500" />
- 
+
  <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
  <div className="flex items-start gap-4 text-left">
  <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center shrink-0">
@@ -665,6 +665,58 @@ export default function ProfileView() {
  >
  <i className="fa-solid fa-file-arrow-down text-base"></i>
  Export Dataset
+ </button>
+ </div>
+ </motion.div>
+
+ {/* 🧹 Local Cache and Service Worker Controller */}
+ <motion.div
+ initial={{ opacity: 0, scale: 0.95 }}
+ animate={{ opacity: 1, scale: 1 }}
+ transition={{ duration: 0.3, delay: 0.1 }}
+ className="bg-white border border-slate-200/80 rounded-[2.5rem] shadow-sm p-8 relative overflow-hidden text-left"
+ >
+ <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-red-400 to-amber-500" />
+
+ <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+ <div className="flex items-start gap-4 text-left">
+ <div className="w-12 h-12 rounded-2xl bg-red-50 border border-red-100 flex items-center justify-center shrink-0">
+ <i className="fa-solid fa-trash-can text-red-600 text-lg"></i>
+ </div>
+ <div>
+ <h3 className="font-display font-black text-slate-900 text-base sm:text-lg tracking-tight">
+ Application Cache & Service Worker Purge
+ </h3>
+ <p className="text-slate-600 text-xs sm:text-sm mt-1 leading-relaxed max-w-2xl">
+ If you are experiencing offline sync or page loading anomalies, you can clear all service worker registrations, purge local HTTP/Workbox caches, and force refresh the page.
+ </p>
+ </div>
+ </div>
+
+ <button
+ type="button"
+ onClick={() => {
+   if (typeof window !== 'undefined') {
+     if ('serviceWorker' in navigator) {
+       navigator.serviceWorker.getRegistrations().then(regs => {
+         regs.forEach(r => r.unregister());
+       });
+     }
+     if (typeof caches !== 'undefined') {
+       caches.keys().then(keys => {
+         Promise.all(keys.map(k => caches.delete(k))).then(() => {
+           window.location.reload();
+         });
+       });
+     } else {
+       window.location.reload();
+     }
+   }
+ }}
+ className="w-full md:w-auto px-6 py-4 bg-red-500 hover:bg-red-600 font-extrabold text-sm rounded-xl text-white transition-all shadow-md active:scale-95 flex items-center justify-center gap-2 cursor-pointer shrink-0"
+ >
+ <i className="fa-solid fa-arrows-rotate text-base"></i>
+ Clear app cache & reload
  </button>
  </div>
  </motion.div>

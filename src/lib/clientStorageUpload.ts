@@ -1,6 +1,19 @@
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { auth, storage } from "./firebase";
 
+export type UploadProgressSnapshot = {
+  bytesTransferred: number;
+  totalBytes: number;
+  progress: number;
+  state: "running" | "paused" | "success" | "canceled" | "error";
+};
+
+export type UploadTaskControls = {
+  pause: () => boolean;
+  resume: () => boolean;
+  cancel: () => boolean;
+};
+
 export function safeFileName(name: string) {
   return name
     .replace(/[^\w.\-]+/g, "_")
@@ -16,6 +29,8 @@ export async function uploadPdfWithClientStorage({
   year,
   sourceScope,
   sourceType,
+  onProgress,
+  onTask,
 }: {
   file: File;
   subject?: string;
@@ -24,6 +39,8 @@ export async function uploadPdfWithClientStorage({
   year?: string;
   sourceScope?: string;
   sourceType?: string;
+  onProgress?: (snapshot: UploadProgressSnapshot) => void;
+  onTask?: (controls: UploadTaskControls) => void;
 }) {
   const user = auth.currentUser;
   if (!user || user.isAnonymous) {
@@ -36,9 +53,9 @@ export async function uploadPdfWithClientStorage({
   const lessonPart = lesson || "general";
   const typePart = resourceType || "other";
   const subjPart = subject ? subject.toUpperCase() : "GENERAL";
-  
+
   let storagePath = `rag_uploads/${uid}/${sourceId}/${fileName}`;
-  
+
   if (sourceScope === "owner_syllabus") {
     storagePath = `users/${uid}/syllabus/${subjPart}/${typePart}/${yearPart}/${sourceId}/${fileName}`;
   } else if (sourceScope === "past_paper") {
@@ -71,7 +88,24 @@ export async function uploadPdfWithClientStorage({
         sourceScope: sourceScope || "chat_upload",
       },
     });
-    task.on("state_changed", undefined, reject, () => resolve());
+    onTask?.({ pause: () => task.pause(), resume: () => task.resume(), cancel: () => task.cancel() });
+    task.on(
+      "state_changed",
+      (snapshot) => onProgress?.({
+        bytesTransferred: snapshot.bytesTransferred,
+        totalBytes: snapshot.totalBytes,
+        progress: snapshot.totalBytes > 0 ? snapshot.bytesTransferred / snapshot.totalBytes : 0,
+        state: snapshot.state === "paused" ? "paused" : "running",
+      }),
+      (error: any) => {
+        onProgress?.({ bytesTransferred: 0, totalBytes: file.size, progress: 0, state: error?.code === "storage/canceled" ? "canceled" : "error" });
+        reject(error);
+      },
+      () => {
+        onProgress?.({ bytesTransferred: file.size, totalBytes: file.size, progress: 1, state: "success" });
+        resolve();
+      },
+    );
   });
   return { sourceId, storagePath };
 }
@@ -95,7 +129,7 @@ export async function uploadImageWithClientStorage({
   const sourceId = crypto.randomUUID();
   const fileName = safeFileName(file.name);
   const subjPart = subject ? subject.toUpperCase() : "GENERAL";
-  
+
   const storagePath = `users/${uid}/images/${subjPart}/${sourceId}/${fileName}`;
 
   console.log("[clientStorageUpload] Preparing image upload:", {
@@ -137,11 +171,11 @@ export async function deletePrivateStorageObject(storagePath: string) {
     throw new Error("Please sign in to delete files.");
   }
   const uid = user.uid;
-  
+
   if (!storagePath.startsWith(`users/${uid}/`) && !storagePath.startsWith(`rag_uploads/${uid}/`)) {
     throw new Error("UNAUTHORIZED_STORAGE_PATH");
   }
-  
+
   try {
     await deleteObject(ref(storage, storagePath));
     return { ok: true };
@@ -151,4 +185,47 @@ export async function deletePrivateStorageObject(storagePath: string) {
     }
     throw e;
   }
+}
+export async function uploadAttachmentWithClientStorage({
+  file,
+  subject,
+  sourceScope,
+}: {
+  file: File;
+  subject?: string;
+  sourceScope?: string;
+}) {
+  const user = auth.currentUser;
+  if (!user || user.isAnonymous) {
+    throw new Error("Please sign in before uploading files.");
+  }
+  const uid = user.uid;
+  const sourceId = crypto.randomUUID();
+  const fileName = safeFileName(file.name);
+  const subjPart = subject ? subject.toUpperCase() : "GENERAL";
+
+  let attachmentType = "other";
+  if (file.type.startsWith("video/")) attachmentType = "video";
+  else if (file.type.startsWith("audio/")) attachmentType = "audio";
+  else if (file.type.startsWith("image/")) attachmentType = "image";
+  else if (file.type.startsWith("text/")) attachmentType = "text";
+  else if (file.type === "application/pdf") attachmentType = "pdf";
+
+  let storagePath = `users/${uid}/attachments/${subjPart}/${attachmentType}/${sourceId}/${fileName}`;
+
+  const storageRef = ref(storage, storagePath);
+  await new Promise<void>((resolve, reject) => {
+    const task = uploadBytesResumable(storageRef, file, {
+      contentType: file.type || "application/octet-stream",
+      customMetadata: {
+        ownerUid: uid,
+        sourceId,
+        subject: subjPart,
+        attachmentType,
+        sourceScope: sourceScope || "chat_upload",
+      },
+    });
+    task.on("state_changed", undefined, reject, () => resolve());
+  });
+  return { sourceId, storagePath, attachmentType, mimeType: file.type };
 }

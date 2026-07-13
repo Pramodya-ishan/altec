@@ -3,18 +3,18 @@ import { RagSource, RagChunk, RagJob } from "./types";
 
 export async function saveRagSource(source: RagSource) {
   const db = getAdminDb();
-  await db.collection("ragSources").doc(source.id).set(source, { merge: true });
+  await db.collection("rag_sources").doc(source.id).set(source, { merge: true });
 }
 
 export async function getRagSource(id: string): Promise<RagSource | null> {
   const db = getAdminDb();
-  const doc = await db.collection("ragSources").doc(id).get();
+  const doc = await db.collection("rag_sources").doc(id).get();
   return doc.exists ? (doc.data() as RagSource) : null;
 }
 
 export async function saveRagChunk(chunk: RagChunk) {
   const db = getAdminDb();
-  await db.collection("ragChunks").doc(chunk.id).set(chunk);
+  await db.collection("rag_chunks").doc(chunk.id).set(chunk);
 }
 
 export async function saveRagJob(job: RagJob) {
@@ -34,7 +34,7 @@ export async function getKnowledgeStats() {
   };
 
   try {
-    const sourcesSnap = await db.collection("ragSources").get();
+    const sourcesSnap = await db.collection("rag_sources").get();
     stats.sourcesCount = sourcesSnap.size;
     sourcesSnap.forEach((doc: any) => {
       const data = doc.data();

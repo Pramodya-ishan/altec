@@ -37,12 +37,8 @@ export function QuizGenerator({ currentSubject, isOpen, onClose }: QuizGenerator
     setLoading(true);
     setError('');
     try {
-      const response = await fetch('/api/ai/respond', {
+      const response = await apiFetch('/api/ai/respond', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${auth?.currentUser ? await auth.currentUser.getIdToken() : ''}`
-        },
         body: JSON.stringify({
           prompt: "Generate a practice quiz with 3 MCQ questions for " + currentSubject + ". Return the result in a valid JSON array format where each object has: 'question' (string), 'options' (array of 4 strings), 'correctIndex' (number 0-3), and 'explanation' (string). Provide NO other text, only the raw JSON array. Use Sinhala.",
           activeSubject: currentSubject,

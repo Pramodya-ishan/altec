@@ -72,10 +72,19 @@ export const handleAIStream = async (req: Request, res: Response) => {
           config: { systemInstruction: systemPrompt }
         });
 
+        let chunkBuffer = "";
         for await (const chunk of finalStream) {
-           if (chunk.text) {
-              sendEvent('final_chunk', { text: chunk.text });
+           const text = chunk.text || "";
+           if (text) {
+              chunkBuffer += text;
+              if (chunkBuffer.length >= 50 || /[\n\r\.\?!,;]/.test(chunkBuffer)) {
+                 sendEvent('final_chunk', { text: chunkBuffer });
+                 chunkBuffer = "";
+              }
            }
+        }
+        if (chunkBuffer.length > 0) {
+           sendEvent('final_chunk', { text: chunkBuffer });
         }
       });
       success = true;

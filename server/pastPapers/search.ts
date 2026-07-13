@@ -39,7 +39,7 @@ export async function searchPastPapers(req: any, res: any) {
 
     // Step 2: Firestore Search (from past_papers collection)
     try {
-      let fRef: any = db.collection("ragSources");
+      let fRef: any = db.collection("rag_sources");
       if (subjectMatch) {
         fRef = fRef.where("subject", "==", subjectMatch.toLowerCase());
       }

@@ -25,15 +25,29 @@ export default function MistakeNotebook() {
   const fetchMistakes = async () => {
     setLoading(true);
     try {
-      if (!user?.email) return;
-      const q = query(
-        collection(db, "users", user.email, "mistake_notebook"),
-        orderBy("createdAt", "desc")
-      );
-      const snap = await getDocs(q);
-      setMistakes(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const email = user?.email || 'local_user';
+      if (db && user?.email) {
+        const q = query(
+          collection(db, "users", email, "mistake_notebook"),
+          orderBy("createdAt", "desc")
+        );
+        const snap = await getDocs(q);
+        const fetched = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setMistakes(fetched);
+        localStorage.setItem(`local_mistake_notebook_${email}`, JSON.stringify(fetched));
+      } else {
+        const local = localStorage.getItem(`local_mistake_notebook_${email}`) || localStorage.getItem('local_mistake_notebook');
+        if (local) {
+          setMistakes(JSON.parse(local));
+        }
+      }
     } catch (err) {
-      console.error(err);
+      console.error("Firebase fetchMistakes failed, using local fallback:", err);
+      const email = user?.email || 'local_user';
+      const local = localStorage.getItem(`local_mistake_notebook_${email}`) || localStorage.getItem('local_mistake_notebook');
+      if (local) {
+        setMistakes(JSON.parse(local));
+      }
     } finally {
       setLoading(false);
     }

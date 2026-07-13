@@ -181,6 +181,22 @@ export function getAdminBucket() {
   return cachedBucket;
 }
 
+export function getAdminBucketByName(bucketName: string) {
+  if (!bucketName) throw new Error("CONFIG_ERROR_STORAGE_BUCKET_MISSING");
+  return getAdminStorage().bucket(bucketName.replace(/^gs:\/\//, ""));
+}
+
+export async function getGoogleAccessToken() {
+  const app = getAdminApp();
+  const credential = app?.options?.credential;
+  if (!credential || typeof credential.getAccessToken !== "function") {
+    throw new Error("GOOGLE_APPLICATION_CREDENTIAL_UNAVAILABLE");
+  }
+  const result = await credential.getAccessToken();
+  if (!result?.access_token) throw new Error("GOOGLE_ACCESS_TOKEN_UNAVAILABLE");
+  return result.access_token;
+}
+
 export function getAdminAuth() {
   const app = getAdminApp();
   if (!app) {
@@ -218,7 +234,7 @@ export function getAdminDbInfo() {
 
 export async function verifyFirebaseToken(authHeader: string | undefined) {
   if (process.env.DEV_BYPASS_AUTH === 'true' && process.env.NODE_ENV !== 'production') {
-    return { uid: 'dev-user-id', email: 'dev@example.com', name: 'Dev User', admin: true };
+    return { uid: 'dev-user-id', email: 'dev@example.com', name: 'Dev User', admin: true, roles: ['admin'] };
   }
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -228,11 +244,44 @@ export async function verifyFirebaseToken(authHeader: string | undefined) {
   const token = authHeader.split('Bearer ')[1];
   try {
     const decodedToken = await getAdminAuth().verifyIdToken(token);
+    let admin = decodedToken.admin || false;
+    let roles: string[] = ['student'];
+    if (admin) {
+      roles.push('admin', 'reviewer', 'ops');
+    }
+    if (decodedToken.roles && Array.isArray(decodedToken.roles)) {
+      roles = [...new Set([...roles, ...decodedToken.roles])];
+    }
+    if (decodedToken.role && typeof decodedToken.role === 'string') {
+      roles.push(decodedToken.role);
+    }
+
+    try {
+      const db = getAdminDb();
+      const roleDoc = await db.collection("user_roles").doc(decodedToken.uid).get();
+      if (roleDoc.exists) {
+        const data = roleDoc.data();
+        if (data?.roles && Array.isArray(data.roles)) {
+          roles = [...new Set([...roles, ...data.roles])];
+        }
+        if (data?.role && typeof data.role === 'string') {
+          roles.push(data.role);
+        }
+      }
+    } catch (e) {
+      // safe fallback
+    }
+
+    if (roles.includes('admin')) {
+      admin = true;
+    }
+
     return {
       uid: decodedToken.uid,
       email: decodedToken.email,
       name: decodedToken.name || decodedToken.email?.split('@')[0] || 'User',
-      admin: decodedToken.admin || false
+      admin,
+      roles: [...new Set(roles)]
     };
   } catch (error) {
     throw new Error('Unauthorized: Invalid token');
@@ -245,7 +294,8 @@ export async function requireUser(req: any) {
 
 export async function requireAdmin(req: any) {
   const user = await requireUser(req);
-  if (!user.admin && process.env.DEV_BYPASS_AUTH !== 'true') {
+  const canManageContent = user.admin || user.roles?.includes('content_editor') || user.roles?.includes('ops');
+  if (!canManageContent && process.env.DEV_BYPASS_AUTH !== 'true') {
     throw new Error('Forbidden: Admin access required');
   }
   return user;

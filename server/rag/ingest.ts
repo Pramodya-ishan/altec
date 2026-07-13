@@ -42,7 +42,7 @@ export async function processAndIngestText(fullText: string, metadata: Omit<RagS
         createdAt: new Date().toISOString()
       };
       
-      const chunkRef = db.collection("ragChunks").doc(chunkId);
+      const chunkRef = db.collection("rag_chunks").doc(chunkId);
       batch.set(chunkRef, chunk);
       chunkCount++;
       

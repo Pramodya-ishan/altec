@@ -1,5 +1,6 @@
 import { getDownloadURL, ref } from "firebase/storage";
 import { auth, storage } from "./firebase";
+import { apiUrl as resolveApiUrl } from "./apiBase";
 
 export async function getAuthTokenOrThrow() {
   const user = auth.currentUser;
@@ -19,7 +20,7 @@ export async function openFirebaseStoragePdf(storagePath: string) {
 export async function openProtectedApiPdf(apiUrl: string) {
   const token = await getAuthTokenOrThrow();
 
-  const res = await fetch(apiUrl, {
+  const res = await fetch(resolveApiUrl(apiUrl), {
     method: "GET",
     headers: {
       Authorization: `Bearer ${token}`
@@ -51,16 +52,14 @@ export async function openProtectedApiPdf(apiUrl: string) {
 export async function openSourcePdf(source: any) {
   if (!source) throw new Error("MISSING_SOURCE");
 
-  let lastError = null;
-
   if (source.storagePath) {
     try {
-      await openFirebaseStoragePdf(source.storagePath);
+      const url = await getDownloadURL(ref(storage, source.storagePath));
+      window.open(url, "_blank", "noopener,noreferrer");
       return;
     } catch (e: any) {
-      console.warn("Failed to open Firebase Storage PDF:", e);
-      lastError = e;
-      // Fall through to try URLs if they exist
+      console.error("Failed to open Firebase Storage PDF via storagePath:", e);
+      throw e;
     }
   }
 
@@ -70,24 +69,43 @@ export async function openSourcePdf(source: any) {
   }
 
   if (source.url && source.url.startsWith("/api/")) {
-    try {
-       await openProtectedApiPdf(source.url);
-       return;
-    } catch(e: any) {
-       console.warn("Failed to open protected API PDF:", e);
-       lastError = e;
-    }
+    await openProtectedApiPdf(source.url);
+    return;
   }
 
   if (source.apiUrl && source.apiUrl.startsWith("/api/")) {
-    try {
-       await openProtectedApiPdf(source.apiUrl);
-       return;
-    } catch(e: any) {
-       console.warn("Failed to open protected API PDF (apiUrl):", e);
-       lastError = e;
-    }
+    await openProtectedApiPdf(source.apiUrl);
+    return;
   }
 
-  throw lastError || new Error("NO_OPENABLE_PDF_SOURCE");
+  throw new Error("NO_OPENABLE_PDF_SOURCE");
+}
+
+
+export async function getPdfUrl(source: any): Promise<string> {
+  if (!source) throw new Error("MISSING_SOURCE");
+  if (source.storagePath) {
+    try {
+      const url = await getDownloadURL(ref(storage, source.storagePath));
+      return url;
+    } catch (e: any) {
+      console.error("Failed to get Firebase Storage PDF url:", e);
+      throw e;
+    }
+  }
+  if (source.url && /^https?:\/\//i.test(source.url)) {
+    return source.url;
+  }
+  if ((source.url && source.url.startsWith("/api/")) || (source.apiUrl && source.apiUrl.startsWith("/api/"))) {
+    const apiRoute = source.url || source.apiUrl;
+    const token = await getAuthTokenOrThrow();
+    const res = await fetch(resolveApiUrl(apiRoute), {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!res.ok) throw new Error("API_ERROR");
+    const blob = await res.blob();
+    return URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
+  }
+  throw new Error("NO_OPENABLE_PDF_SOURCE");
 }

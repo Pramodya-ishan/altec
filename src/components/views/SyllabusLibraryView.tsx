@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { apiFetch } from '../../lib/api';
+import { useApp } from '../../context/AppContext';
 import { getRecommendedUploadMode } from '../../lib/uploadMode';
 import { Loader2, Trash2, FileText, Upload, Layers, BookOpen, FileCheck, Plus, AlertCircle, Shield, CheckCircle2 } from 'lucide-react';
 import { auth } from '../../lib/firebase';
@@ -9,7 +10,8 @@ import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { Badge } from '../ui/Badge';
 import { cn } from '../../lib/utils';
-import { openSourcePdf } from '../../lib/sourceActions';
+import { openSourcePdf, getPdfUrl } from '../../lib/sourceActions';
+const PdfViewerModal = React.lazy(() => import('../PdfViewerModal').then(m => ({ default: m.PdfViewerModal })));
 
 export default function SyllabusLibraryView() {
   const [resources, setResources] = useState<any[]>([]);
@@ -27,34 +29,24 @@ export default function SyllabusLibraryView() {
   });
   const [uploadResult, setUploadResult] = useState<any>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  
-  const ownerEmail = import.meta.env.VITE_SYLLABUS_OWNER_EMAIL || "26002ishan@gmail.com";
+  const [pdfModalOpen, setPdfModalOpen] = useState(false);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfTitle, setPdfTitle] = useState("");
+
+  const { profile } = useApp();
 
   useEffect(() => {
-    const checkOwner = () => {
-      const email = auth.currentUser?.email;
-      if (email && email.toLowerCase() === ownerEmail.toLowerCase()) {
-        setIsOwner(true);
-        fetchResources();
-      } else {
-        setIsOwner(false);
-        setLoading(false);
-      }
-    };
-    
-    // Slight delay to ensure auth is loaded
-    setTimeout(checkOwner, 1000);
-    
-    const unsub = auth.onAuthStateChanged((u: any) => {
-       if (u?.email?.toLowerCase() === ownerEmail.toLowerCase()) {
-          setIsOwner(true);
-          fetchResources();
-       } else {
-          setIsOwner(false);
-       }
-    });
-    return () => unsub();
-  }, []);
+    const isSyllabusEditor = profile?.role === 'admin' || profile?.roles?.includes('admin') ||
+                             profile?.role === 'teacher' || profile?.roles?.includes('teacher') ||
+                             profile?.role === 'content_editor' || profile?.roles?.includes('content_editor');
+    if (isSyllabusEditor) {
+      setIsOwner(true);
+      fetchResources();
+    } else {
+      setIsOwner(false);
+      setLoading(false);
+    }
+  }, [profile]);
 
   const fetchResources = async () => {
     setLoading(true);
@@ -78,69 +70,41 @@ export default function SyllabusLibraryView() {
     setUploadResult(null);
     setUploadError(null);
     try {
-      const mode = await getRecommendedUploadMode();
-      let finalData: any = null;
+      // Always use client storage upload
+      const uploaded = await uploadPdfWithClientStorage({
+        file,
+        subject: form.subject,
+        lesson: form.lesson,
+        resourceType: form.resourceType,
+        year: form.year,
+        sourceScope: 'owner_syllabus'
+      });
 
-      if (mode === 'client_firebase_storage') {
-        // Step A: Client Firebase Storage upload
-        const uploaded = await uploadPdfWithClientStorage({
-          file,
+      // Step B: Call backend ingest route
+      const ingestRes = await apiFetch("/api/pdf/process-uploaded", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceId: uploaded.sourceId,
+          storagePath: uploaded.storagePath,
+          title: form.title || file.name,
+          fileName: file.name,
           subject: form.subject,
-          lesson: form.lesson,
+          lesson: form.lesson || "",
           resourceType: form.resourceType,
-          year: form.year,
-          sourceScope: 'owner_syllabus'
-        });
+          sourceType: form.resourceType,
+          sourceScope: "owner_syllabus",
+          year: form.year || "",
+          medium: form.medium || "Sinhala"
+        })
+      });
 
-        // Step B: Call backend ingest route
-        const ingestFd = new FormData();
-        ingestFd.append("sourceId", uploaded.sourceId);
-        ingestFd.append("storagePath", uploaded.storagePath);
-        ingestFd.append("title", form.title || file.name);
-        ingestFd.append("subject", form.subject);
-        ingestFd.append("lesson", form.lesson || "");
-        ingestFd.append("resourceType", form.resourceType);
-        ingestFd.append("sourceType", form.resourceType);
-        ingestFd.append("sourceScope", "owner_syllabus");
-        ingestFd.append("year", form.year || "");
-        ingestFd.append("medium", form.medium || "Sinhala");
-        ingestFd.append("file", file);
+      let finalData = await ingestRes.json().catch(() => null);
 
-        const ingestRes = await apiFetch("/api/rag/ingest-uploaded", {
-          method: "POST",
-          body: ingestFd
-        });
-
-        finalData = await ingestRes.json().catch(() => null);
-        if (!ingestRes.ok || !finalData?.ok) {
-          setUploadError(finalData?.message || finalData?.error || finalData?.code || ingestRes.statusText || "Upload ingest failed");
-          setUploading(false);
-          return;
-        }
-      } else {
-        // Normal backend upload flow
-        const fd = new FormData();
-        fd.append("file", file);
-        fd.append("title", form.title || file.name);
-        fd.append("subject", form.subject);
-        fd.append("lesson", form.lesson || "");
-        fd.append("resourceType", form.resourceType);
-        fd.append("sourceType", form.resourceType);
-        fd.append("sourceScope", "owner_syllabus");
-        fd.append("year", form.year || "");
-        fd.append("medium", form.medium || "Sinhala");
-
-        const res = await apiFetch("/api/rag/upload", {
-          method: "POST",
-          body: fd
-        });
-        const data = await res.json().catch(()=>null);
-        if (!res.ok || !data?.ok) {
-          setUploadError(data?.message || data?.error || data?.code || res.statusText || "Upload failed");
-          setUploading(false);
-          return;
-        }
-        finalData = data;
+      if (!ingestRes.ok || !finalData?.ok) {
+        setUploadError(finalData?.message || finalData?.error || finalData?.code || ingestRes.statusText || "Upload ingest failed");
+        setUploading(false);
+        return;
       }
 
       setUploadResult({
@@ -207,7 +171,7 @@ export default function SyllabusLibraryView() {
         </div>
         <h2 className="text-xl font-bold text-slate-800 mb-2">Access Denied</h2>
         <p className="text-sm font-semibold text-slate-500 leading-relaxed">
-          Syllabus Library is restricted. Only the configured system owner ({ownerEmail}) can upload or index core curriculum resources.
+          Syllabus Library is restricted. Only authorized system educators or administrators can upload or index core curriculum resources.
         </p>
       </div>
     );
@@ -215,7 +179,7 @@ export default function SyllabusLibraryView() {
 
   return (
     <div className="w-full max-w-6xl mx-auto px-4 py-6 md:py-8 space-y-8">
-      
+
       {/* Title block */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200/60 pb-6">
         <div>
@@ -223,10 +187,10 @@ export default function SyllabusLibraryView() {
             <FileText className="w-7 h-7 text-primary-600" /> Syllabus Library
           </h1>
         </div>
-        
-        <Button 
-          onClick={fetchResources} 
-          variant="secondary" 
+
+        <Button
+          onClick={fetchResources}
+          variant="secondary"
           disabled={loading}
           className="font-bold self-start md:self-auto flex items-center gap-2"
         >
@@ -244,7 +208,7 @@ export default function SyllabusLibraryView() {
             <span className="text-[10px] font-bold text-slate-500">PDFs</span>
           </div>
         </Card>
-        
+
         <Card className="p-4 flex flex-col justify-between border-slate-200/60 shadow-sm bg-white hover:border-primary-300 transition-all">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">SFT Indexes</p>
           <div className="flex items-baseline gap-1 mt-2">
@@ -281,7 +245,7 @@ export default function SyllabusLibraryView() {
       {/* Indexing Upload Section */}
       <Card className="p-5 sm:p-6 bg-white border border-slate-200/60 shadow-md rounded-2xl relative overflow-hidden">
         <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-primary-500 to-indigo-600"></div>
-        
+
         <h2 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-1.5">
           <Plus className="w-5 h-5 text-primary-600" /> Catalog curriculum syllabus documents
         </h2>
@@ -289,20 +253,20 @@ export default function SyllabusLibraryView() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-5">
           <div className="space-y-1">
             <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Document Title</label>
-            <input 
-              type="text" 
-              placeholder="e.g. SFT 12 Unit 1 Lesson Note" 
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-primary-500/15 focus:border-primary-500 outline-none transition-all" 
-              value={form.title} 
-              onChange={e=>setForm({...form, title: e.target.value})} 
+            <input
+              type="text"
+              placeholder="e.g. SFT 12 Unit 1 Lesson Note"
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-primary-500/15 focus:border-primary-500 outline-none transition-all"
+              value={form.title}
+              onChange={e=>setForm({...form, title: e.target.value})}
             />
           </div>
 
           <div className="space-y-1">
             <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Target Subject</label>
-            <select 
-              className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-primary-500/15 focus:border-primary-500 outline-none transition-all" 
-              value={form.subject} 
+            <select
+              className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-primary-500/15 focus:border-primary-500 outline-none transition-all"
+              value={form.subject}
               onChange={e=>setForm({...form, subject: e.target.value})}
             >
               <option value="SFT">SFT</option>
@@ -313,9 +277,9 @@ export default function SyllabusLibraryView() {
 
           <div className="space-y-1">
             <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Resource Category</label>
-            <select 
-              className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-primary-500/15 focus:border-primary-500 outline-none transition-all" 
-              value={form.resourceType} 
+            <select
+              className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-primary-500/15 focus:border-primary-500 outline-none transition-all"
+              value={form.resourceType}
               onChange={e=>setForm({...form, resourceType: e.target.value})}
             >
               <option value="syllabus">Syllabus Curriculum</option>
@@ -328,31 +292,31 @@ export default function SyllabusLibraryView() {
 
           <div className="space-y-1">
             <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Lesson Name / Tag</label>
-            <input 
-              type="text" 
-              placeholder="e.g. Bio-Systems (optional)" 
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-primary-500/15 focus:border-primary-500 outline-none transition-all" 
-              value={form.lesson} 
-              onChange={e=>setForm({...form, lesson: e.target.value})} 
+            <input
+              type="text"
+              placeholder="e.g. Bio-Systems (optional)"
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-primary-500/15 focus:border-primary-500 outline-none transition-all"
+              value={form.lesson}
+              onChange={e=>setForm({...form, lesson: e.target.value})}
             />
           </div>
 
           <div className="space-y-1">
             <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Examination Year</label>
-            <input 
-              type="text" 
-              placeholder="e.g. 2024 (optional)" 
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-primary-500/15 focus:border-primary-500 outline-none transition-all" 
-              value={form.year} 
-              onChange={e=>setForm({...form, year: e.target.value})} 
+            <input
+              type="text"
+              placeholder="e.g. 2024 (optional)"
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-primary-500/15 focus:border-primary-500 outline-none transition-all"
+              value={form.year}
+              onChange={e=>setForm({...form, year: e.target.value})}
             />
           </div>
 
           <div className="space-y-1">
             <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Medium / Language</label>
-            <select 
-              className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-primary-500/15 focus:border-primary-500 outline-none transition-all" 
-              value={form.medium} 
+            <select
+              className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 text-sm font-semibold focus:ring-2 focus:ring-primary-500/15 focus:border-primary-500 outline-none transition-all"
+              value={form.medium}
               onChange={e=>setForm({...form, medium: e.target.value})}
             >
               <option value="Sinhala">Sinhala (සිංහල)</option>
@@ -360,7 +324,7 @@ export default function SyllabusLibraryView() {
             </select>
           </div>
         </div>
-        
+
         <div className="flex items-center gap-4">
           <label className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-[var(--brand-600)] hover:bg-[var(--brand-700)] text-white text-sm font-bold rounded-xl cursor-pointer transition shadow-md active:scale-[0.98]">
             {uploading ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : <Upload className="w-4 h-4 text-white" />}
@@ -410,7 +374,7 @@ export default function SyllabusLibraryView() {
               className={cn(
                 "relative flex-1 text-xs font-bold py-2.5 rounded-xl transition-colors z-10 cursor-pointer outline-none",
                 activeTab === tab
-                  ? "text-primary-700" 
+                  ? "text-primary-700"
                   : "text-slate-500 hover:text-slate-800"
               )}
             >
@@ -463,9 +427,9 @@ export default function SyllabusLibraryView() {
                             <BookOpen className="w-5 h-5 text-[var(--brand-600)]" />
                           </div>
                           <div className="min-w-0">
-                            <p 
+                            <p
                               onClick={() => {
-                                openSourcePdf({ storagePath: r.storagePath, id: r.id, url: `/api/rag/sources/${r.id}/download` }).catch((e: any) => {
+                                getPdfUrl({ storagePath: r.storagePath, id: r.id, url: `/api/rag/sources/${r.id}/download` }).then(url => { setPdfUrl(url); setPdfTitle(r.title || 'Document'); setPdfModalOpen(true); }).catch((e: any) => {
                                   console.error('Download trigger failed:', e);
                                   if (e.message?.includes('LOGIN_REQUIRED')) {
                                      alert('PDF open කරන්න login අවශ්‍යයි. නැවත sign in කරන්න.');
@@ -525,8 +489,8 @@ export default function SyllabusLibraryView() {
                         {r.chunkCount || 0}
                       </td>
                       <td className="p-4 text-right">
-                        <button 
-                          onClick={() => handleDelete(r.id)} 
+                        <button
+                          onClick={() => handleDelete(r.id)}
                           className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer"
                           aria-label="Delete indexed resource"
                         >
@@ -552,6 +516,16 @@ export default function SyllabusLibraryView() {
           </Card>
         )}
       </div>
+      {pdfModalOpen && (
+        <React.Suspense fallback={null}>
+          <PdfViewerModal
+            isOpen={pdfModalOpen}
+            onClose={() => setPdfModalOpen(false)}
+            pdfUrl={pdfUrl}
+            title={pdfTitle}
+          />
+        </React.Suspense>
+      )}
     </div>
   );
 }
