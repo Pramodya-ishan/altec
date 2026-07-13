@@ -1,6 +1,5 @@
 import React from 'react';
-import { cn } from '../../../lib/utils';
-import { motion, AnimatePresence } from 'motion/react';
+import { AnimatePresence, motion } from 'motion/react';
 
 interface CloraShellProps {
   sidebar?: React.ReactNode;
@@ -11,52 +10,37 @@ interface CloraShellProps {
 
 export function CloraShell({ sidebar, main, drawer, isDrawerOpen = false }: CloraShellProps) {
   return (
-    <div className="flex w-full bg-slate-50 overflow-hidden font-sans text-slate-800" style={{ height: '100dvh' }}>
-      {/* Sidebar - Desktop Only (Mobile would use bottom sheet or hamburger menu) */}
-      {sidebar && (
-        <aside className="hidden md:flex w-[260px] flex-shrink-0 flex-col bg-slate-900 border-r border-slate-200 z-20 text-white">
-          {sidebar}
-        </aside>
-      )}
+    <div className="flex h-full min-h-0 w-full overflow-hidden bg-[#f7f7f8] font-sans text-slate-900">
+      {sidebar && <aside className="hidden w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white md:flex">{sidebar}</aside>}
 
-      {/* Main Content Area */}
-      <main className="flex-1 relative flex flex-col min-w-0 bg-white shadow-sm z-10 transition-all duration-300">
-        <div className="absolute inset-0 clora-bg-gradient pointer-events-none opacity-60" />
-        <div className="relative flex-1 flex flex-col h-full overflow-hidden">
-          {main}
-        </div>
+      <main className="relative z-10 flex min-w-0 flex-1 flex-col bg-white">
+        <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">{main}</div>
       </main>
 
-      {/* Right Drawer (Context, PDF, Reasoning) */}
       <AnimatePresence initial={false}>
         {drawer && isDrawerOpen && (
           <motion.aside
             initial={{ width: 0, opacity: 0 }}
             animate={{ width: 360, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
-            className="flex-shrink-0 border-l border-slate-200 bg-white overflow-hidden z-20 hidden lg:block"
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            className="z-20 hidden shrink-0 overflow-hidden border-l border-slate-200 bg-white lg:block"
           >
-            <div className="w-[360px] h-full flex flex-col">
-              {drawer}
-            </div>
+            <div className="flex h-full w-[360px] flex-col">{drawer}</div>
           </motion.aside>
         )}
       </AnimatePresence>
 
-      {/* Mobile Drawer Overlay */}
       <AnimatePresence>
         {drawer && isDrawerOpen && (
           <motion.div
-             initial={{ opacity: 0, y: "100%" }}
-             animate={{ opacity: 1, y: 0 }}
-             exit={{ opacity: 0, y: "100%" }}
-             transition={{ type: "spring", damping: 30, stiffness: 300 }}
-             className="fixed inset-0 z-50 lg:hidden flex flex-col justify-end bg-black/60 backdrop-blur-sm"
+            initial={{ opacity: 0, y: '100%' }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: '100%' }}
+            transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+            className="fixed inset-0 z-50 flex flex-col justify-end bg-slate-950/35 backdrop-blur-sm lg:hidden"
           >
-             <div className="bg-white w-full h-[85vh] rounded-t-3xl shadow-2xl flex flex-col overflow-hidden border-t border-slate-200">
-                {drawer}
-             </div>
+            <div className="flex h-[85vh] w-full flex-col overflow-hidden rounded-t-3xl border-t border-slate-200 bg-white shadow-2xl">{drawer}</div>
           </motion.div>
         )}
       </AnimatePresence>

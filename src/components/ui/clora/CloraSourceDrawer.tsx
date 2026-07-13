@@ -1,7 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
 import { FileText, X, ExternalLink } from 'lucide-react';
-import { getPdfUrl } from '../../../lib/sourceActions';
 
 interface CloraSourceDrawerProps {
   sources: any[];
@@ -18,10 +17,10 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
   return (
     <div className="flex flex-col h-full bg-white text-slate-800">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50">
+      <div className="flex items-center justify-between border-b border-slate-100 bg-white px-4 py-3">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center border border-indigo-100">
-            <FileText className="w-4 h-4 text-indigo-600" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900">
+            <FileText className="h-4 w-4 text-white" />
           </div>
           <h3 className="text-sm font-bold text-slate-800">Used Sources</h3>
         </div>
@@ -47,18 +46,17 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.2 }}
               key={source.id || i}
-              onClick={() => onSourceClick(source, false)}
-              className="flex flex-col p-3 rounded-xl border border-slate-200 bg-white hover:border-indigo-200 hover:bg-slate-50/50 transition-all cursor-pointer group shadow-sm"
+              className="group flex flex-col rounded-xl border border-slate-200 bg-white p-3 transition-all hover:bg-slate-50"
             >
               <div className="flex items-start justify-between gap-2 mb-1">
-                <span className="text-xs font-bold text-slate-800 line-clamp-2 group-hover:text-indigo-600 transition-colors">
+                <span className="line-clamp-2 text-xs font-bold text-slate-800 transition-colors group-hover:text-black">
                   {source.title || source.name || "Unknown Source"}
                 </span>
-                <ExternalLink className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-600 shrink-0" />
+                <ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-slate-900" />
               </div>
               
               {source.snippet && (
-                <p className="text-[11px] text-slate-500 line-clamp-3 leading-relaxed border-l-2 border-indigo-200 pl-2 my-2 italic">
+                <p className="my-2 line-clamp-3 border-l-2 border-slate-200 pl-2 text-[11px] italic leading-relaxed text-slate-500">
                   "{source.snippet}"
                 </p>
               )}
@@ -78,7 +76,7 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
               <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-slate-100" onClick={e => e.stopPropagation()}>
                 <button
                   onClick={() => onSourceClick(source, false)}
-                  className="flex-1 py-1.5 px-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg transition text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                  className="flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg bg-slate-900 px-2 py-1.5 text-[11px] font-bold text-white transition hover:bg-black"
                 >
                   <ExternalLink className="w-3 h-3" />
                   Open PDF

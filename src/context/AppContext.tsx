@@ -902,7 +902,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   if (docData && docData.data) {
                      setData(docData.data);
                      localStorage.setItem(`student_progress_data_${email}`, JSON.stringify(docData.data));
-                     console.log("Loaded student data from Firebase Firestore successfully");
+                     if (import.meta.env.DEV) {
+                       console.info("Loaded student data from Firebase Firestore successfully");
+                     }
                      
                      // Sync this data back to the Express backend so AI routes have the latest context
                      try {

@@ -9,11 +9,11 @@ import { SafeReasoningSummary } from '../ai/SafeReasoningSummary';
 import { apiFetch } from '../../lib/api';
 import { apiUrl } from '../../lib/apiBase';
 import { getRecommendedUploadMode } from '../../lib/uploadMode';
-import { uploadPdfWithClientStorage, uploadAttachmentWithClientStorage } from '../../lib/clientStorageUpload';
+import { uploadPdfWithClientStorage, uploadAttachmentWithClientStorage, type UploadProgressSnapshot } from '../../lib/clientStorageUpload';
 import { auth } from '../../lib/firebase';
 import { CloraShell } from '../ui/clora/CloraShell';
 import { CloraHero } from '../ui/clora/CloraHero';
-import { CloraComposer } from '../ui/clora/CloraComposer';
+import { CloraComposer, type UploadTelemetry } from '../ui/clora/CloraComposer';
 import { CloraMessageBubble } from '../ui/clora/CloraMessageBubble';
 import { CloraToolPalette } from '../ui/clora/CloraToolPalette';
 import { CloraSourceDrawer } from '../ui/clora/CloraSourceDrawer';
@@ -260,24 +260,31 @@ const [messages, setMessages] = useState<{
   const [isTtsAvailable, setIsTtsAvailable] = useState(true);
 
   useEffect(() => {
-    fetch(apiUrl('/api/realtime/status'))
-      .then(r => r.json())
-      .then(data => {
-        if (data && data.enabled) {
-          setRealtimeVoiceEnabled(true);
-        }
-      })
-      .catch(e => console.error("Realtime status check failed", e));
+    const loadCapabilities = async () => {
+      try {
+        const [realtimeResponse, healthResponse] = await Promise.all([
+          apiFetch('/api/realtime/status'),
+          apiFetch('/api/ai/model-health'),
+        ]);
 
-    fetch(apiUrl('/api/ai/model-health'))
-      .then(r => r.json())
-      .then(data => {
-        if (data && data.models && data.models.tts && (data.models.tts.available === false || data.models.tts.enabled === false)) {
-          setIsTtsAvailable(false);
-          setIsVoiceFeedbackEnabled(false);
+        if (realtimeResponse.ok) {
+          const realtime = await realtimeResponse.json();
+          setRealtimeVoiceEnabled(Boolean(realtime?.enabled));
         }
-      })
-      .catch(err => console.error("Health check failed", err));
+
+        if (healthResponse.ok) {
+          const health = await healthResponse.json();
+          if (health?.models?.tts && (health.models.tts.available === false || health.models.tts.enabled === false)) {
+            setIsTtsAvailable(false);
+            setIsVoiceFeedbackEnabled(false);
+          }
+        }
+      } catch (error) {
+        if (import.meta.env.DEV) console.warn('Optional AI capability checks failed', error);
+      }
+    };
+
+    void loadCapabilities();
   }, []);
   const recognitionRef = useRef<any>(null);
   const synthRef = useRef<SpeechSynthesis | null>(typeof window !== 'undefined' ? window.speechSynthesis : null);
@@ -419,11 +426,47 @@ const [messages, setMessages] = useState<{
   }, [isStreaming]);
 
   const [uploading, setUploading] = useState(false);
+  const [uploadTelemetry, setUploadTelemetry] = useState<UploadTelemetry | null>(null);
+  const uploadStartedAtRef = useRef(0);
   const [importingStage, setImportingStage] = useState<string | null>(null);
   const [importProgressText, setImportProgressText] = useState("");
 
   // Clear chat custom dialog state (Avoid iframe restricted window.confirm)
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+
+  const beginUploadTelemetry = (file: File) => {
+    uploadStartedAtRef.current = performance.now();
+    setUploadTelemetry({
+      fileName: file.name,
+      progress: 0,
+      bytesTransferred: 0,
+      totalBytes: file.size,
+      remainingBytes: file.size,
+      speedBytesPerSecond: 0,
+      etaSeconds: 0,
+      phase: 'uploading',
+    });
+  };
+
+  const trackUploadProgress = (fileName: string) => (snapshot: UploadProgressSnapshot) => {
+    const elapsedSeconds = Math.max((performance.now() - uploadStartedAtRef.current) / 1000, 0.1);
+    const speedBytesPerSecond = snapshot.bytesTransferred / elapsedSeconds;
+    const remainingBytes = Math.max(0, snapshot.totalBytes - snapshot.bytesTransferred);
+    setUploadTelemetry({
+      fileName,
+      progress: snapshot.progress,
+      bytesTransferred: snapshot.bytesTransferred,
+      totalBytes: snapshot.totalBytes,
+      remainingBytes,
+      speedBytesPerSecond,
+      etaSeconds: speedBytesPerSecond > 0 ? remainingBytes / speedBytesPerSecond : 0,
+      phase: snapshot.state === 'error' || snapshot.state === 'canceled'
+        ? 'error'
+        : snapshot.state === 'success'
+          ? 'processing'
+          : 'uploading',
+    });
+  };
 
   // Initialize hooks
   useAutosizeTextarea(textareaRef.current, input);
@@ -518,16 +561,17 @@ const [messages, setMessages] = useState<{
     setUploading(true);
     setUploadError(null);
     setIndexingFailed(false);
+    setUploadTelemetry((current) => current ? { ...current, progress: 1, remainingBytes: 0, etaSeconds: 0, phase: 'processing' } : null);
 
     try {
       const ingestRes = await apiFetch("/api/pdf/process-uploaded", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sourceId: pendingIngestData?.uploaded?.sourceId || "",
-          storagePath: pendingIngestData?.uploaded?.storagePath || "",
-          title: pendingIngestData?.file?.name || "upload",
-          fileName: pendingIngestData?.file?.name || "upload",
+          sourceId: pendingIngestData?.sourceId || pendingIngestData?.uploaded?.sourceId || "",
+          storagePath: pendingIngestData?.storagePath || pendingIngestData?.uploaded?.storagePath || "",
+          title: pendingIngestData?.title || pendingIngestData?.file?.name || "upload",
+          fileName: pendingIngestData?.title || pendingIngestData?.file?.name || "upload",
           subject: currentSubject,
           resourceType: "uploaded_pdf",
           sourceType: "uploaded_pdf",
@@ -541,6 +585,7 @@ const [messages, setMessages] = useState<{
       if (!ingestRes.ok || !data?.ok) {
         setUploadError("Uploaded, indexing failed. Retry indexing.");
         setIndexingFailed(true);
+        setUploadTelemetry((current) => current ? { ...current, phase: 'error' } : null);
         setUploading(false);
         return;
       }
@@ -552,10 +597,12 @@ const [messages, setMessages] = useState<{
       }
       setUploading(false);
       setPendingIngestData(null);
+      setUploadTelemetry((current) => current ? { ...current, phase: 'success' } : null);
     } catch (err: any) {
       console.error("Retry indexing failed:", err);
       setUploadError("Uploaded, indexing failed. Retry indexing.");
       setIndexingFailed(true);
+      setUploadTelemetry((current) => current ? { ...current, phase: 'error' } : null);
       setUploading(false);
     }
   };
@@ -565,6 +612,7 @@ const [messages, setMessages] = useState<{
     setUploadError(null);
     setIndexingFailed(false);
     setPendingIngestData(null);
+    beginUploadTelemetry(file);
 
     if (file.type.startsWith("image/")) {
       const reader = new FileReader();
@@ -577,11 +625,13 @@ const [messages, setMessages] = useState<{
           dataUrl: dataUrl
         });
         setUploading(false);
+        setUploadTelemetry(null);
       };
       reader.onerror = () => {
         setUploadError("Failed to read image file.");
         setUploadedFile(null);
         setUploading(false);
+        setUploadTelemetry(null);
       };
       reader.readAsDataURL(file);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -600,7 +650,8 @@ const [messages, setMessages] = useState<{
          const uploaded = await uploadAttachmentWithClientStorage({
            file,
            subject: currentSubject,
-           sourceScope: "chat_upload"
+           sourceScope: "chat_upload",
+           onProgress: trackUploadProgress(file.name),
          });
          setUploadedFile({
             name: file.name,
@@ -612,6 +663,7 @@ const [messages, setMessages] = useState<{
          });
          setInput(prev => prev + `\n[Attached File: ${file.name}] Please analyze this file: `);
          setUploading(false);
+         setUploadTelemetry((current) => current ? { ...current, progress: 1, remainingBytes: 0, etaSeconds: 0, phase: 'success' } : null);
          if (fileInputRef.current) fileInputRef.current.value = "";
          return;
       }
@@ -619,7 +671,8 @@ const [messages, setMessages] = useState<{
       const uploaded = await uploadPdfWithClientStorage({
         file,
         subject: currentSubject,
-        sourceScope: "chat_upload"
+        sourceScope: "chat_upload",
+        onProgress: trackUploadProgress(file.name),
       });
 
       setUploadedFile({
@@ -630,7 +683,7 @@ const [messages, setMessages] = useState<{
         mimeType: file.type || "application/pdf",
         attachmentType: "pdf"
       });
-      setUploading(false); // Done uploading to storage, now ingest in background or just proceed
+      setUploadTelemetry((current) => current ? { ...current, progress: 1, remainingBytes: 0, etaSeconds: 0, phase: 'processing' } : null);
       if (fileInputRef.current) fileInputRef.current.value = "";
 
       const ingestRes = await apiFetch("/api/pdf/process-uploaded", {
@@ -654,6 +707,7 @@ const [messages, setMessages] = useState<{
       if (!ingestRes.ok || !data?.ok) {
         setUploadError("Uploaded, indexing failed. Retry indexing.");
         setIndexingFailed(true);
+        setUploadTelemetry((current) => current ? { ...current, phase: 'error' } : null);
         setPendingIngestData({
           file,
           sourceId: uploaded.sourceId,
@@ -665,10 +719,17 @@ const [messages, setMessages] = useState<{
           sourceScope: "chat_upload",
           medium: "Sinhala"
         });
+      } else {
+        const followUp = data.needsOcr
+          ? data.message || 'This document needs OCR before all text can be searched.'
+          : 'Please read this document and answer: ';
+        setInput((current) => `${current}\n[Uploaded PDF: ${file.name}] ${followUp}`);
+        setUploadTelemetry((current) => current ? { ...current, phase: 'success' } : null);
       }
     } catch (err: any) {
       setUploadError(err.message || "Failed to upload file.");
       setUploadedFile(null);
+      setUploadTelemetry((current) => current ? { ...current, phase: 'error' } : null);
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -1383,18 +1444,11 @@ const [messages, setMessages] = useState<{
      setMessages([{ role: 'assistant', content: 'ආයුබෝවන්! මම Clora X Assistant. ඔබට අද කුමන විභාග ප්‍රශ්නයක් හෝ පාඩමක් ගැනද දැනගන්න අවශ්‍ය?', id: 'welcome' }]);
      setInput('');
      setUploadedFile(null);
+     setUploadError(null);
+     setUploadTelemetry(null);
   };
 
   const isEmptyChat = messages.length <= 1 && !isStreaming;
-
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  };
-
 
   const handleComposerSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -1457,15 +1511,26 @@ const [messages, setMessages] = useState<{
             recentAttachmentIds={uploadedFile?.storagePath ? [uploadedFile.storagePath] : undefined}
           />
 
-          {/* Floating Chat History Button */}
-          <div className="absolute top-4 right-6 z-30">
-            <button
-              onClick={() => setShowClearConfirm(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold text-slate-600 hover:text-indigo-600 hover:bg-slate-100 border border-slate-200/80 bg-white/95 backdrop-blur-sm shadow-sm transition-all cursor-pointer active:scale-95"
-            >
-              <History className="w-3.5 h-3.5" />
-              <span>Chat History</span>
-            </button>
+          <div className="z-20 flex h-14 shrink-0 items-center justify-between border-b border-slate-100 bg-white px-4 sm:px-6">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-slate-950 text-white"><Sparkles className="h-3.5 w-3.5" /></span>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h1 className="truncate text-sm font-semibold text-slate-900">Clora X</h1>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-600"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Online</span>
+                </div>
+                <p className="truncate text-[10px] uppercase tracking-wider text-slate-400">{currentSubject || 'A/L Learning Assistant'}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1">
+              <button type="button" onClick={handleNewChat} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900" aria-label="Start a new chat" title="New chat">
+                <Plus className="h-4 w-4" /><span className="hidden sm:inline">New chat</span>
+              </button>
+              <button type="button" onClick={() => setShowClearConfirm(true)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900" aria-label="Clear chat history" title="Clear chat history">
+                <History className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
           {/* Custom Clear Chat Confirmation Dialog */}
@@ -1475,15 +1540,18 @@ const [messages, setMessages] = useState<{
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4"
+                className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-sm"
               >
                 <motion.div
                   initial={{ scale: 0.95, opacity: 0, y: 10 }}
                   animate={{ scale: 1, opacity: 1, y: 0 }}
                   exit={{ scale: 0.95, opacity: 0, y: 10 }}
-                  className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl border border-slate-100"
+                  className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="clear-chat-title"
                 >
-                  <h3 className="text-lg font-bold text-slate-800 mb-2">Clear Chat History?</h3>
+                  <h3 id="clear-chat-title" className="text-lg font-bold text-slate-800 mb-2">Clear Chat History?</h3>
                   <p className="text-sm text-slate-500 mb-6 leading-relaxed text-left">
                     This will permanently clear your conversation history and reset the assistant. Are you sure you want to continue?
                   </p>
@@ -1496,7 +1564,7 @@ const [messages, setMessages] = useState<{
                     </button>
                     <button
                       onClick={executeClearHistory}
-                      className="px-4 py-2 text-sm font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-md transition"
+                    className="rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-black"
                     >
                       Yes, Clear Chat
                     </button>
@@ -1506,22 +1574,21 @@ const [messages, setMessages] = useState<{
             )}
           </AnimatePresence>
 
-          <div className="flex-1 overflow-y-auto clora-scrollbar" ref={scrollRef}>
+          <div className="min-h-0 flex-1 overflow-y-auto bg-white clora-scrollbar" ref={scrollRef}>
             {isEmptyChat ? (
               <CloraHero
                 onSelectPrompt={(prompt) => {
                   setInput(prompt);
-                  setTimeout(() => handleComposerSubmit(), 50);
                 }}
                 prompts={[
-                  { title: "2023 Paper Structure", icon: <FileText className="w-5 h-5 text-emerald-500"/>, prompt: "What is the structure of the 2023 SFT paper?" },
-                  { title: "Explain Z-Score", icon: <BrainCircuit className="w-5 h-5 text-purple-500"/>, prompt: "How is the Z-score calculated in A/L exams?" },
-                  { title: "Review Mistakes", icon: <CheckCircle className="w-5 h-5 text-rose-500"/>, prompt: "Can you quiz me on my recent mistakes?" },
-                  { title: "Summarize Notes", icon: <Database className="w-5 h-5 text-blue-500"/>, prompt: "Provide a short summary on SFT main units." }
+                  { title: "2023 Paper Structure", icon: <FileText className="h-4 w-4"/>, prompt: "What is the structure of the 2023 SFT paper?" },
+                  { title: "Explain Z-Score", icon: <BrainCircuit className="h-4 w-4"/>, prompt: "How is the Z-score calculated in A/L exams?" },
+                  { title: "Review Mistakes", icon: <CheckCircle className="h-4 w-4"/>, prompt: "Can you quiz me on my recent mistakes?" },
+                  { title: "Summarize Notes", icon: <Database className="h-4 w-4"/>, prompt: "Provide a short summary on SFT main units." }
                 ]}
               />
             ) : (
-              <div className="max-w-4xl mx-auto pt-8 pb-32">
+              <div className="mx-auto max-w-3xl pb-8 pt-8">
                 <AnimatePresence initial={false}>
                 {messages.map((msg, idx) => {
                   if (msg.id === 'welcome' && messages.length > 1) return null; // hide welcome if there are other messages
@@ -1552,14 +1619,14 @@ const [messages, setMessages] = useState<{
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.95 }}
                 onClick={() => scrollToBottom('smooth')}
-                className="absolute bottom-32 left-1/2 -translate-x-1/2 z-30 inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-full text-xs font-bold shadow-lg hover:bg-indigo-700 transition-colors"
+                className="absolute bottom-36 left-1/2 z-30 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg transition-colors hover:bg-slate-50"
               >
                 New message ↓
               </motion.button>
             )}
           </AnimatePresence>
 
-          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-white via-white/90 to-transparent pt-10">
+          <div className="relative shrink-0 border-t border-slate-100 bg-white/95 pt-3 backdrop-blur">
             <CloraComposer
               input={input}
               setInput={setInput}
@@ -1569,9 +1636,17 @@ const [messages, setMessages] = useState<{
               onAttachClick={() => fileInputRef.current?.click()}
               onMicClick={realtimeVoiceEnabled ? () => setShowLiveVoiceModal(true) : undefined}
               attachments={uploadedFile ? [uploadedFile] : []}
-              onRemoveAttachment={() => setUploadedFile(null)}
+              onRemoveAttachment={() => {
+                setUploadedFile(null);
+                setUploadError(null);
+                setUploadTelemetry(null);
+              }}
               disabled={uploading || isStreaming}
               onErrorLogSelect={() => setShowErrorLogModal(true)}
+              uploadTelemetry={uploadTelemetry}
+              uploadError={uploadError}
+              indexingFailed={indexingFailed}
+              onRetryIndexing={handleRetryIndexing}
             />
           </div>
 
@@ -1581,7 +1656,7 @@ const [messages, setMessages] = useState<{
             ref={fileInputRef}
             onChange={handleFileUpload}
             className="hidden"
-            accept=".pdf,.png,.jpg,.jpeg,.mp3,.mp4,.wav"
+            accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,.mp3,.mp4,.webm,.mov,.wav,.m4a"
           />
 
           <ErrorLogModal

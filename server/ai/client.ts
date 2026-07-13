@@ -5,6 +5,17 @@ import { checkAiBillingCircuit, handleAiError } from "./aiCircuitBreaker";
 let cachedClient: GoogleGenAI | null = null;
 let hasLoggedDiagnostics = false;
 
+function shouldUseVertex(): boolean {
+  const configuredMode = String(process.env.GEMINI_USE_VERTEX || "").trim().toLowerCase();
+  if (configuredMode === "true") return true;
+  if (configuredMode === "false") return false;
+
+  // This project is Vertex-first. When no mode and no API key are configured,
+  // keep unrelated routes (including authentication) available and let ADC be
+  // resolved only when an AI request is actually made.
+  return !process.env.GEMINI_API_KEY;
+}
+
 export function prepareGoogleCredentials() {
   const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
   if (raw && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
@@ -30,7 +41,7 @@ export function getAIClient(): GoogleGenAI {
     prepareGoogleCredentials();
 
     const location = process.env.GOOGLE_CLOUD_LOCATION || "global";
-    const useVertex = String(process.env.GEMINI_USE_VERTEX || "").toLowerCase() === "true";
+    const useVertex = shouldUseVertex();
     const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "al-ai-chat";
 
     if (useVertex) {
@@ -54,7 +65,7 @@ export function getAIClient(): GoogleGenAI {
   if (!hasLoggedDiagnostics) {
     hasLoggedDiagnostics = true;
     const deployTarget = process.env.APP_DEPLOY_TARGET || "cloud_run";
-    const useVertex = String(process.env.GEMINI_USE_VERTEX || "").toLowerCase() === "true";
+    const useVertex = shouldUseVertex();
     const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "al-ai-chat";
     const location = process.env.GOOGLE_CLOUD_LOCATION || "global";
     const hasServiceAccountJson = !!process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || !!process.env.GOOGLE_APPLICATION_CREDENTIALS;

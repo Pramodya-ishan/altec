@@ -1,8 +1,31 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { cn } from '../../../lib/utils';
-import { Paperclip, Mic, ArrowUp, X, StopCircle } from 'lucide-react';
-import { CloraToolPalette, ToolOption } from './CloraToolPalette';
+import React, { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import {
+  AlertCircle,
+  ArrowUp,
+  FileAudio,
+  FileText,
+  FileVideo,
+  Image as ImageIcon,
+  Loader2,
+  Mic,
+  Paperclip,
+  RotateCcw,
+  Square,
+  X,
+} from 'lucide-react';
+import { CloraToolPalette, type ToolOption } from './CloraToolPalette';
+
+export type UploadTelemetry = {
+  fileName: string;
+  progress: number;
+  bytesTransferred: number;
+  totalBytes: number;
+  remainingBytes: number;
+  speedBytesPerSecond: number;
+  etaSeconds: number;
+  phase: 'uploading' | 'processing' | 'success' | 'error';
+};
 
 interface CloraComposerProps {
   input: string;
@@ -14,8 +37,35 @@ interface CloraComposerProps {
   isStreaming?: boolean;
   disabled?: boolean;
   attachments?: any[];
-  onRemoveAttachment?: (id: string) => void;
+  onRemoveAttachment?: (id: string | number) => void;
   onErrorLogSelect?: () => void;
+  uploadTelemetry?: UploadTelemetry | null;
+  uploadError?: string | null;
+  indexingFailed?: boolean;
+  onRetryIndexing?: () => void;
+}
+
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** unit).toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function formatEta(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 'Calculating…';
+  if (seconds < 60) return `${Math.ceil(seconds)} sec`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.ceil(seconds % 60);
+  return `${minutes}m ${remainder}s`;
+}
+
+function AttachmentIcon({ attachment }: { attachment: any }) {
+  const type = String(attachment?.mimeType || attachment?.type || '').toLowerCase();
+  if (type.startsWith('video/')) return <FileVideo className="h-4 w-4" />;
+  if (type.startsWith('audio/')) return <FileAudio className="h-4 w-4" />;
+  if (type.startsWith('image/') || attachment?.isImage) return <ImageIcon className="h-4 w-4" />;
+  return <FileText className="h-4 w-4" />;
 }
 
 export function CloraComposer({
@@ -29,206 +79,202 @@ export function CloraComposer({
   disabled,
   attachments = [],
   onRemoveAttachment,
-  onErrorLogSelect
+  onErrorLogSelect,
+  uploadTelemetry,
+  uploadError,
+  indexingFailed,
+  onRetryIndexing,
 }: CloraComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
-  const [palettePos, setPalettePos] = useState({ top: 0, left: 16 });
   const [viewportOffset, setViewportOffset] = useState(0);
 
   useEffect(() => {
     if (!window.visualViewport) return;
-    
     const viewport = window.visualViewport;
     const updateOffset = () => {
-      // Calculate if the visual viewport is smaller than the layout viewport
       const offset = window.innerHeight - viewport.height;
-      // Account for scroll offset within the viewport
-      const offsetTop = viewport.offsetTop;
-      
-      // If there's a significant shrink, it's typically the keyboard
-      setViewportOffset(Math.max(0, offset - offsetTop));
+      setViewportOffset(Math.max(0, offset - viewport.offsetTop));
     };
-
     viewport.addEventListener('resize', updateOffset);
     viewport.addEventListener('scroll', updateOffset);
-    
     updateOffset();
-    
     return () => {
       viewport.removeEventListener('resize', updateOffset);
       viewport.removeEventListener('scroll', updateOffset);
     };
   }, []);
 
-  // Auto-resize textarea
   useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
-    }
+    if (!textareaRef.current) return;
+    textareaRef.current.style.height = 'auto';
+    textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 176)}px`;
   }, [input]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      if (input.trim() || attachments.length > 0) {
-        onSubmit();
-      }
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      if (!disabled && (input.trim() || attachments.length > 0)) onSubmit();
     }
   };
 
-  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
+  const handleInput = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = event.target.value;
     setInput(value);
-
-    // Command palette detection (@ trigger)
-    const cursor = e.target.selectionStart || 0;
-    const textBeforeCursor = value.slice(0, cursor);
-    const lastAtMatch = textBeforeCursor.match(/@(\w*)$/);
-
-    if (lastAtMatch) {
-      setCommandQuery(lastAtMatch[1]);
-      setShowCommandPalette(true);
-    } else {
-      setShowCommandPalette(false);
-    }
+    const match = value.slice(0, event.target.selectionStart || 0).match(/@(\w*)$/);
+    setCommandQuery(match?.[1] || '');
+    setShowCommandPalette(Boolean(match));
   };
 
   const handleToolSelect = (tool: ToolOption) => {
-    if (tool.id === "error" && onErrorLogSelect) {
-      onErrorLogSelect();
-      setShowCommandPalette(false);
-      const cursor = textareaRef.current?.selectionStart || 0;
-      const textBefore = input.slice(0, cursor);
-      const textAfter = input.slice(cursor);
-      const clearedTextBefore = textBefore.replace(/@\w*$/, "");
-      setInput(clearedTextBefore + textAfter);
-      return;
-    }
-
     const cursor = textareaRef.current?.selectionStart || 0;
-    const textBefore = input.slice(0, cursor);
-    const textAfter = input.slice(cursor);
-    
-    // Replace the @query part with the full command
-    const newTextBefore = textBefore.replace(/@\w*$/, tool.command + " ");
-    
-    setInput(newTextBefore + textAfter);
+    const before = input.slice(0, cursor).replace(/@\w*$/, tool.id === 'error' ? '' : `${tool.command} `);
+    const nextValue = before + input.slice(cursor);
+
+    if (tool.id === 'error' && onErrorLogSelect) onErrorLogSelect();
+    setInput(nextValue);
     setShowCommandPalette(false);
-    
-    // Focus and move cursor after the inserted command
-    setTimeout(() => {
-      if (textareaRef.current) {
-        textareaRef.current.focus();
-        textareaRef.current.selectionStart = newTextBefore.length;
-        textareaRef.current.selectionEnd = newTextBefore.length;
-      }
-    }, 0);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(before.length, before.length);
+    });
   };
 
+  const canSubmit = !disabled && (input.trim().length > 0 || attachments.length > 0);
+  const telemetryLabel = uploadTelemetry?.phase === 'processing'
+    ? 'Processing for Clora X'
+    : uploadTelemetry?.phase === 'success'
+      ? 'Upload complete'
+      : uploadTelemetry?.phase === 'error'
+        ? 'Upload failed'
+        : 'Uploading securely';
+
   return (
-    <div 
-      className="relative w-full max-w-4xl mx-auto px-4 pb-6"
+    <div
+      className="relative mx-auto w-full max-w-3xl px-3 pb-3 sm:px-5 sm:pb-4"
       style={{
         transform: viewportOffset > 0 ? `translateY(-${viewportOffset}px)` : 'none',
-        transition: 'transform 0.1s ease-out'
+        transition: 'transform 100ms ease-out',
       }}
     >
-      <CloraToolPalette 
-        isOpen={showCommandPalette} 
-        query={commandQuery} 
+      <CloraToolPalette
+        isOpen={showCommandPalette}
+        query={commandQuery}
         onSelect={handleToolSelect}
-        position={palettePos}
+        position={{ top: 0, left: 18 }}
       />
 
-      <motion.div 
+      <motion.div
         layout
-        className={cn(
-          "relative flex flex-col bg-white border border-slate-200/80 rounded-[28px] shadow-lg shadow-slate-100/50 transition-all duration-300",
-          input.length > 0 ? "border-indigo-500/30 shadow-md shadow-indigo-500/5" : ""
-        )}
+        className="overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.08)] transition focus-within:border-slate-400 focus-within:shadow-[0_12px_36px_rgba(15,23,42,0.12)]"
       >
-        {/* Attachments Area */}
+        {(uploadTelemetry || uploadError) && (
+          <div className="border-b border-slate-100 px-4 py-3">
+            {uploadTelemetry && (
+              <div>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-semibold text-slate-800">{uploadTelemetry.fileName}</p>
+                    <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-500">
+                      {uploadTelemetry.phase === 'uploading' || uploadTelemetry.phase === 'processing' ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                      {telemetryLabel}
+                    </p>
+                  </div>
+                  <span className="text-sm font-semibold tabular-nums text-slate-900">{Math.round(uploadTelemetry.progress * 100)}%</span>
+                </div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                  <div className="h-full rounded-full bg-slate-900 transition-[width] duration-300" style={{ width: `${Math.max(2, uploadTelemetry.progress * 100)}%` }} />
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] text-slate-500 sm:grid-cols-4">
+                  <span><strong className="text-slate-700">{formatBytes(uploadTelemetry.bytesTransferred)}</strong> / {formatBytes(uploadTelemetry.totalBytes)}</span>
+                  <span>Remaining <strong className="text-slate-700">{formatBytes(uploadTelemetry.remainingBytes)}</strong></span>
+                  <span>Speed <strong className="text-slate-700">{formatBytes(uploadTelemetry.speedBytesPerSecond)}/s</strong></span>
+                  <span>ETA <strong className="text-slate-700">{formatEta(uploadTelemetry.etaSeconds)}</strong></span>
+                </div>
+              </div>
+            )}
+
+            {uploadError && (
+              <div className="mt-2 flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                <span className="flex min-w-0 items-center gap-2"><AlertCircle className="h-4 w-4 shrink-0" /><span className="truncate">{uploadError}</span></span>
+                {indexingFailed && onRetryIndexing && (
+                  <button type="button" onClick={onRetryIndexing} className="inline-flex shrink-0 items-center gap-1 font-semibold hover:text-rose-900">
+                    <RotateCcw className="h-3.5 w-3.5" /> Retry
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-2 p-3 pb-0">
-            {attachments.map((att, i) => (
-              <div key={i} className="flex items-center gap-2 bg-slate-50 border border-slate-200/60 px-3 py-1.5 rounded-xl text-sm max-w-[200px]">
-                <Paperclip className="w-4 h-4 text-slate-400 shrink-0" />
-                <span className="truncate text-slate-700 font-medium">{att.name || "Attachment"}</span>
-                <button 
-                  onClick={() => onRemoveAttachment?.(att.id || i)}
-                  className="ml-auto p-1 hover:bg-slate-200/60 rounded-full text-slate-400 transition-colors"
-                >
-                  <X className="w-3 h-3" />
+          <div className="flex gap-2 overflow-x-auto px-3 pt-3">
+            {attachments.map((attachment, index) => (
+              <div key={attachment.id || attachment.storagePath || `${attachment.name}-${index}`} className="flex max-w-[250px] shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                <span className="text-slate-500"><AttachmentIcon attachment={attachment} /></span>
+                <span className="min-w-0">
+                  <span className="block truncate font-semibold text-slate-700">{attachment.name || 'Attachment'}</span>
+                  {attachment.size ? <span className="text-[10px] text-slate-400">{formatBytes(attachment.size)}</span> : null}
+                </span>
+                <button type="button" onClick={() => onRemoveAttachment?.(attachment.id || index)} className="ml-1 rounded-full p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700" aria-label={`Remove ${attachment.name || 'attachment'}`}>
+                  <X className="h-3.5 w-3.5" />
                 </button>
               </div>
             ))}
           </div>
         )}
 
-        <div className="flex items-end gap-2 p-3">
-          <button
-            type="button"
-            onClick={onAttachClick}
-            className="p-3 text-slate-400 hover:text-indigo-600 hover:bg-slate-50 rounded-full transition-colors flex-shrink-0"
-          >
-            <Paperclip className="w-5 h-5" />
-          </button>
+        <textarea
+          ref={textareaRef}
+          value={input}
+          onChange={handleInput}
+          onKeyDown={handleKeyDown}
+          placeholder="Message Clora X"
+          disabled={disabled}
+          rows={1}
+          className="block max-h-44 min-h-14 w-full resize-none bg-transparent px-5 pb-2 pt-4 text-[15px] leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed"
+          aria-label="Message Clora X"
+        />
 
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={handleInput}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask anything or type @ to use tools..."
-            disabled={disabled}
-            className="flex-1 max-h-[200px] py-3 px-2 bg-transparent resize-none outline-none clora-scrollbar text-slate-800 placeholder:text-slate-400"
-            rows={1}
-          />
-
-          {isStreaming ? (
-            <button
-              type="button"
-              onClick={onStopClick}
-              className="p-3 text-rose-500 hover:bg-rose-500/10 rounded-full transition-colors flex-shrink-0"
-            >
-              <StopCircle className="w-6 h-6 fill-current" />
+        <div className="flex items-center justify-between gap-3 px-3 pb-3">
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={onAttachClick} disabled={disabled} className="rounded-full p-2.5 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Attach PDF, image, audio, or video" title="Attach PDF, image, audio, or video">
+              <Paperclip className="h-5 w-5" />
             </button>
-          ) : (
-            <>
-              {!input.trim() && onMicClick && (
-                <button
+            <span className="hidden rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-500 sm:inline">@ for tools</span>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {!isStreaming && !input.trim() && onMicClick && (
+              <button type="button" onClick={onMicClick} disabled={disabled} className="rounded-full p-2.5 text-slate-600 hover:bg-slate-100 disabled:opacity-40" aria-label="Start live voice">
+                <Mic className="h-5 w-5" />
+              </button>
+            )}
+
+            {isStreaming ? (
+              <button type="button" onClick={onStopClick} className="grid h-10 w-10 place-items-center rounded-full bg-slate-900 text-white hover:bg-black" aria-label="Stop response">
+                <Square className="h-3.5 w-3.5 fill-current" />
+              </button>
+            ) : (
+              <AnimatePresence initial={false}>
+                <motion.button
+                  initial={{ scale: 0.85, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
                   type="button"
-                  onClick={onMicClick}
-                  className="p-3 text-slate-400 hover:text-indigo-600 hover:bg-slate-50 rounded-full transition-colors flex-shrink-0"
+                  onClick={onSubmit}
+                  disabled={!canSubmit}
+                  className="grid h-10 w-10 place-items-center rounded-full bg-slate-900 text-white transition hover:bg-black disabled:bg-slate-200 disabled:text-slate-400"
+                  aria-label="Send message"
                 >
-                  <Mic className="w-5 h-5" />
-                </button>
-              )}
-              
-              <AnimatePresence>
-                {(input.trim() || attachments.length > 0) && (
-                  <motion.button
-                    initial={{ scale: 0.5, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0.5, opacity: 0 }}
-                    type="button"
-                    onClick={onSubmit}
-                    className="p-3 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 shadow-lg flex-shrink-0 transition-transform active:scale-95"
-                  >
-                    <ArrowUp className="w-5 h-5" />
-                  </motion.button>
-                )}
+                  <ArrowUp className="h-5 w-5" />
+                </motion.button>
               </AnimatePresence>
-            </>
-          )}
+            )}
+          </div>
         </div>
       </motion.div>
-      <div className="text-center mt-3">
-        <p className="text-[11px] text-slate-400 font-medium">Clora X can make mistakes. Check important info.</p>
-      </div>
+      <p className="mt-2 text-center text-[10px] text-slate-400">Clora X can make mistakes. Check important exam information.</p>
     </div>
   );
 }

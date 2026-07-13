@@ -1,6 +1,5 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { cn } from '../../../lib/utils';
 import { Globe, BookOpen, Layers, AlertCircle } from 'lucide-react';
 
 export interface ToolOption {
@@ -17,21 +16,21 @@ const defaultTools: ToolOption[] = [
     command: "@web",
     title: "Web Search",
     description: "Search the internet for up-to-date information.",
-    icon: <Globe className="w-4 h-4 text-blue-500" />
+    icon: <Globe className="w-4 h-4 text-slate-700" />
   },
   {
     id: "pdf",
     command: "@pdf",
     title: "PDF Library",
     description: "Search within syllabus and past papers.",
-    icon: <BookOpen className="w-4 h-4 text-purple-500" />
+    icon: <BookOpen className="w-4 h-4 text-slate-700" />
   },
   {
     id: "deep",
     command: "@deep",
     title: "Deep Search",
     description: "Multi-step reasoning for complex questions.",
-    icon: <Layers className="w-4 h-4 text-indigo-500" />
+    icon: <Layers className="w-4 h-4 text-slate-700" />
   },
   {
     id: "error",
@@ -63,13 +62,13 @@ export function CloraToolPalette({ isOpen, query, onSelect, position }: CloraToo
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 10, scale: 0.95 }}
           transition={{ duration: 0.15 }}
-          className="absolute z-50 w-72 bg-white rounded-2xl shadow-xl border border-slate-200/60 overflow-hidden"
+          className="absolute z-50 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"
           style={{ 
             bottom: `calc(100% - ${position.top - 16}px)`,
             left: position.left 
           }}
         >
-          <div className="p-2 bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500 px-3">
+          <div className="border-b border-slate-100 bg-white px-3 py-2 text-xs font-semibold text-slate-500">
             Select an AI Tool
           </div>
           <div className="max-h-64 overflow-y-auto p-1">
@@ -78,9 +77,9 @@ export function CloraToolPalette({ isOpen, query, onSelect, position }: CloraToo
                 <button
                   key={tool.id}
                   onClick={() => onSelect(tool)}
-                  className="w-full flex items-start gap-3 p-2 rounded-xl hover:bg-slate-50 focus:bg-slate-50 outline-none text-left transition-colors cursor-pointer"
+                  className="w-full cursor-pointer rounded-xl p-2 text-left outline-none transition-colors hover:bg-slate-100 focus:bg-slate-100 flex items-start gap-3"
                 >
-                  <div className="p-2 bg-white rounded-lg shadow-sm border border-slate-100 mt-0.5">
+                  <div className="mt-0.5 rounded-lg border border-slate-200 bg-white p-2">
                     {tool.icon}
                   </div>
                   <div>

@@ -1,8 +1,7 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { cn } from '../../../lib/utils';
+import { Check, CheckCircle2, Copy, FileText, Loader2, Sparkles } from 'lucide-react';
 import { MathMarkdown } from '../../chat/MathMarkdown';
-import { Sparkles, CheckCircle2, Loader2, ChevronDown } from 'lucide-react';
 import { VisualBlockRenderer } from '../VisualBlockRenderer';
 
 interface CloraMessageBubbleProps {
@@ -13,24 +12,36 @@ interface CloraMessageBubbleProps {
 
 export const CloraMessageBubble = React.memo(function CloraMessageBubble({ message, isStreaming, onToolClick }: CloraMessageBubbleProps) {
   const isUser = message.role === 'user';
-  
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (copyTimeoutRef.current !== null) window.clearTimeout(copyTimeoutRef.current);
+  }, []);
+
+  const copyMessage = async () => {
+    if (!message.content) return;
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      if (copyTimeoutRef.current !== null) window.clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  };
+
   if (isUser) {
     return (
-      <motion.div
-        layout
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.2, ease: "easeOut" }}
-        className="flex w-full justify-end px-4 mb-8"
-      >
-        <div className="bg-indigo-600 text-white rounded-3xl rounded-br-lg px-5 py-3 max-w-[85%] md:max-w-[70%] text-[15px] leading-relaxed shadow-lg">
+      <motion.div layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mb-7 flex w-full justify-end px-4 sm:px-6">
+        <div className="max-w-[88%] rounded-[22px] rounded-br-md bg-[#f4f4f4] px-4 py-3 text-[15px] leading-6 text-slate-900 sm:max-w-[75%]">
           <p className="whitespace-pre-wrap">{message.content}</p>
-          {message.attachments && message.attachments.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {message.attachments.map((att: any, i: number) => (
-                <div key={i} className="px-3 py-1.5 bg-white/10 border border-white/10 rounded-xl text-sm text-white/90 shadow-sm flex items-center gap-2">
-                  <span className="truncate max-w-[150px] font-medium">{att.name}</span>
-                </div>
+          {message.attachments?.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
+              {message.attachments.map((attachment: any, index: number) => (
+                <span key={attachment.storagePath || attachment.name || index} className="inline-flex max-w-[200px] items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs text-slate-600 ring-1 ring-slate-200">
+                  <FileText className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{attachment.name}</span>
+                </span>
               ))}
             </div>
           )}
@@ -39,89 +50,67 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
     );
   }
 
-  // Assistant Message
   return (
     <motion.div
       layout
-      initial={isStreaming ? { opacity: 1, y: 0 } : { opacity: 0, y: 8 }}
+      initial={isStreaming ? { opacity: 1 } : { opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: isStreaming ? 0 : 0.2, ease: "easeOut" }}
-      className="flex w-full justify-start px-4 mb-8 group"
+      transition={{ duration: isStreaming ? 0 : 0.2 }}
+      className="group mb-9 flex w-full justify-start px-4 sm:px-6"
     >
-      <div className="flex gap-4 max-w-4xl w-full">
-        {/* Avatar */}
-        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center flex-shrink-0 mt-1 shadow-md">
-          <Sparkles className="w-4 h-4 text-white" />
+      <div className="flex w-full gap-3 sm:gap-4">
+        <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-950 text-white">
+          <Sparkles className="h-3.5 w-3.5" />
         </div>
 
-        {/* Content Area */}
-        <div className="flex-1 min-w-0 space-y-4">
-          
-          {/* Answer Status Panel (replaces ThoughtProcessPanel) */}
-          {message.status && (
-            <div className="flex items-center gap-2">
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-full text-xs font-semibold text-slate-600">
-                {message.status === 'streaming' || message.status === 'searching' ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-600" />
-                ) : (
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                )}
-                <span className="capitalize">
-                  {message.status === 'streaming' ? 'Generating answer...' : 
-                   message.status === 'searching' ? 'Searching internet...' : 
-                   'Finished'}
-                </span>
-                
-                {/* Expandable step details could go here via a popover, keeping UI clean */}
-                <button className="ml-1 p-0.5 hover:bg-slate-100 rounded-full transition-colors">
-                  <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-                </button>
-              </div>
+        <div className="min-w-0 flex-1 space-y-4">
+          {message.status && (message.status === 'streaming' || message.status === 'searching') && (
+            <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {message.status === 'searching' ? 'Searching sources' : 'Thinking'}
             </div>
           )}
 
-          {/* Actual Markdown Content */}
           {message.content && (
-            <div className="prose prose-slate max-w-none text-[15px] leading-relaxed prose-p:my-2 prose-headings:mb-3 prose-headings:mt-6 text-slate-800">
+            <div className="prose prose-slate max-w-none text-[15px] leading-7 text-slate-800 prose-headings:mb-3 prose-headings:mt-6 prose-p:my-2">
               <MathMarkdown content={message.content} isStreaming={isStreaming} />
             </div>
           )}
 
-          {/* Visual Blocks (if any) */}
-          {message.visualBlocks && message.visualBlocks.length > 0 && (
-             <div className="grid grid-cols-1 gap-4 mt-4">
-                {message.visualBlocks.map((block: any, idx: number) => (
-                  <div key={idx} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 overflow-hidden shadow-lg">
-                    <VisualBlockRenderer block={block} />
-                  </div>
-                ))}
-             </div>
+          {message.visualBlocks?.length > 0 && (
+            <div className="grid grid-cols-1 gap-4 pt-1">
+              {message.visualBlocks.map((block: any, index: number) => (
+                <div key={index} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <VisualBlockRenderer block={block} />
+                </div>
+              ))}
+            </div>
           )}
 
-          {/* Action Row (Sources, Copy, TTS) */}
           {!isStreaming && (message.content || message.sources?.length > 0) && (
-            <div className="flex items-center gap-3 pt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-               {message.sources && message.sources.length > 0 && (
-                 <button 
-                   onClick={() => onToolClick?.('sources')}
-                   className="text-xs font-medium text-slate-500 hover:text-indigo-600 transition-colors flex items-center gap-1"
-                 >
-                   <span className="w-5 h-5 rounded-full bg-slate-100 flex items-center justify-center border border-slate-200">
-                     {message.sources.length}
-                   </span>
-                   Sources
-                 </button>
-               )}
+            <div className="flex items-center gap-1 pt-1 text-slate-400 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+              {message.content && (
+                <button type="button" onClick={copyMessage} className="rounded-lg p-2 hover:bg-slate-100 hover:text-slate-700" aria-label="Copy answer" title="Copy answer">
+                  {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                </button>
+              )}
+              {message.sources?.length > 0 && (
+                <button type="button" onClick={() => onToolClick?.('sources')} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium hover:bg-slate-100 hover:text-slate-700">
+                  <FileText className="h-4 w-4" /> {message.sources.length} sources
+                </button>
+              )}
+              {message.status === 'done' && <CheckCircle2 className="ml-1 h-3.5 w-3.5 text-emerald-500" aria-label="Answer complete" />}
             </div>
           )}
         </div>
       </div>
     </motion.div>
   );
-}, (prev, next) => {
-  return prev.message.id === next.message.id && 
-         prev.message.content === next.message.content && 
-         prev.isStreaming === next.isStreaming &&
-         prev.message.status === next.message.status &&
-         prev.message.visualBlocks?.length === next.message.visualBlocks?.length;
-});
+}, (previous, next) => (
+  previous.message.id === next.message.id
+  && previous.message.content === next.message.content
+  && previous.isStreaming === next.isStreaming
+  && previous.message.status === next.message.status
+  && previous.message.sources?.length === next.message.sources?.length
+  && previous.message.visualBlocks?.length === next.message.visualBlocks?.length
+));

@@ -1,27 +1,45 @@
 import React from 'react';
 import { motion } from 'motion/react';
+import { ArrowUpRight, Sparkles } from 'lucide-react';
 
 interface CloraHeroProps {
   onSelectPrompt?: (prompt: string) => void;
   prompts?: { title: string; prompt: string; icon: React.ReactNode; color?: string }[];
 }
 
-export function CloraHero({ onSelectPrompt, prompts }: CloraHeroProps) {
+export function CloraHero({ onSelectPrompt, prompts = [] }: CloraHeroProps) {
   return (
-    <div className="flex flex-col items-center justify-center w-full h-full p-6 text-center max-w-4xl mx-auto mt-[-10vh]">
-      <motion.div
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-        className="relative mb-8"
-      >
-        <div className="absolute inset-0 clora-hero-glow blur-3xl -z-10" />
-        
-        <p className="text-xl text-slate-500 font-medium max-w-lg mx-auto">
-          Your personal AI for Sri Lankan Advanced Level exams. How can I help you today?
+    <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-5 py-10 sm:px-8">
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45 }}>
+        <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-sm">
+          <Sparkles className="h-5 w-5" />
+        </div>
+        <h1 className="max-w-xl text-3xl font-semibold tracking-[-0.035em] text-slate-950 sm:text-4xl">How can I help you learn?</h1>
+        <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500 sm:text-base">
+          Sri Lankan A/L විෂයයන්, past papers, lesson resources සහ ඔබේ notes සමඟ ඉගෙන ගන්න.
         </p>
+
+        <div className="mt-7 grid gap-2 sm:grid-cols-2">
+          {prompts.map((item, index) => (
+            <motion.button
+              key={item.title}
+              type="button"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.06 * index, duration: 0.3 }}
+              onClick={() => onSelectPrompt?.(item.prompt)}
+              className="group flex min-h-[84px] items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:border-slate-300 hover:bg-slate-50 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-700">{item.icon}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-slate-800">{item.title}</span>
+                <span className="mt-1 block truncate text-xs text-slate-400">{item.prompt}</span>
+              </span>
+              <ArrowUpRight className="h-4 w-4 shrink-0 text-slate-300 transition group-hover:text-slate-600" />
+            </motion.button>
+          ))}
+        </div>
       </motion.div>
     </div>
   );
 }
-

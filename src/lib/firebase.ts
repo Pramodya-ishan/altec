@@ -44,7 +44,9 @@ if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
       });
     }
     isFirebaseEnabled = true;
-    console.log("Firebase client initialized successfully.");
+    if (import.meta.env.DEV) {
+      console.info("Firebase client initialized successfully.");
+    }
   } catch (error) {
     console.error("Failed to initialize Firebase:", error);
   }

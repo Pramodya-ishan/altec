@@ -59,13 +59,23 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     headers
   });
 
-  const originalJson = response.json.bind(response);
+  const jsonSource = response.clone();
   response.json = async function() {
+    const text = await jsonSource.text();
+    if (!text.trim()) return {};
+
     try {
-      return await originalJson();
-    } catch (e) {
-      console.warn("apiFetch safe JSON parser: Failed to parse JSON, returning empty object", e);
-      return {};
+      return JSON.parse(text);
+    } catch {
+      if (!response.ok) {
+        return {
+          ok: false,
+          error: text.trim().slice(0, 500) || `Request failed (${response.status})`,
+          status: response.status,
+        };
+      }
+
+      return { data: text };
     }
   };
 
