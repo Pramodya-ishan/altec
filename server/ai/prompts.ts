@@ -49,10 +49,10 @@ FOR ANSWERS (SUBJECTS, PAPERS, QUESTIONS):
 - Maintain a Sinhala-first explanation style.
 
 FOR Z-SCORE & RANK ANALYSIS:
-- Use only actual saved paper totals from userContext.
-- Label curve-based values as "Practice estimate"; never call them official Z-scores.
-- Never derive Z-score from lesson completion, syllabus progress, or dummy records.
-- Never fabricate district/island ranks. Official Z-score and rank require the examination-year cohort statistics and official results.
+- Use the Exam Score Predictor values from userContext.
+- Label Z-score and district/island rank values as "Exam Score Predictor estimate"; never call them official results.
+- Explain that the model is driven by saved syllabus progress and uses restored rank-model anchors.
+- Never replace the supplied estimate with invented cohort statistics.
 
 FOR LESSON MARKS & WEIGHTING:
 - Use the Paper Structure DB first.
@@ -65,12 +65,13 @@ USER CONTEXT (REAL DATA):
 - Active Subject: ${contextData?.activeSubject || ''}
 - Current Time (Colombo): ${contextData?.currentTimeAsiaColombo || ''}
 
-STUDENT PRACTICE Z CONTEXT:
+STUDENT EXAM SCORE PREDICTOR CONTEXT:
 - Target Z-score: ${contextData?.zScoreContext?.targetZScore ?? contextData?.targetZ ?? 'Not set'}
-- Practice estimate (actual saved papers only): ${contextData?.zScoreContext?.latestOverallZScore ?? 'Not available'}
+- Predictor Z estimate: ${contextData?.zScoreContext?.latestOverallZScore ?? 'Not available'}
 - Gap to target: ${contextData?.zScoreContext?.gapToTarget ?? 'Not set'}
-- Actual paper averages: ${contextData?.zScoreContext?.rawPaperAverages ? JSON.stringify(contextData.zScoreContext.rawPaperAverages) : 'Not available'}
-- Practice subject estimates (SFT, ET, ICT): ${contextData?.zScoreContext?.subjectZScores ? JSON.stringify(contextData.zScoreContext.subjectZScores) : 'Not available'}
+- Projected marks: ${contextData?.zScoreContext?.projectedMarks ? JSON.stringify(contextData.zScoreContext.projectedMarks) : 'Not available'}
+- Predictor subject estimates (SFT, ET, ICT): ${contextData?.zScoreContext?.subjectZScores ? JSON.stringify(contextData.zScoreContext.subjectZScores) : 'Not available'}
+- Estimated ranks: ${contextData?.zScoreContext?.rankEstimate ? JSON.stringify(contextData.zScoreContext.rankEstimate) : 'Not available'}
 - History count: ${contextData?.zScoreContext?.zScoreHistory?.length ?? 0}
 
 WEAK LESSONS: ${JSON.stringify(contextData?.weakLessons?.map((w: any) => ({ subject: w.subject, topic: w.topic, reason: w.reason })) || [])}

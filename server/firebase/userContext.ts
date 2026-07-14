@@ -1,6 +1,6 @@
 import { readUser, syncUserFromFirestore } from "../data/userRepository";
 import { getAdminDb } from "./admin";
-import { buildPracticeZSnapshot } from "../../src/shared/zscore";
+import { buildExamScorePrediction } from "../../src/lib/scoreUtils";
 
 const contextCache = new Map<string, { data: any; timestamp: number }>();
 const CACHE_TTL = 10000; // 10 seconds cache to be responsive to changes
@@ -292,52 +292,42 @@ export async function loadUserAIContext(uid: string, email?: string) {
        }
     }
 
-    // Never expose legacy progress-derived or synthetic estimates to the AI.
-    // Practice Z uses actual saved paper totals only and is never an official
-    // cohort-standardized examination result.
-    const practiceZ = buildPracticeZSnapshot(appData || {});
-    const verifiedHistory = Array.isArray(appData?.zScoreHistory)
+    // Use the same Exam Score Predictor model as the UI. Preserve valid legacy
+    // history instead of deleting the student's previous project timeline.
+    const predictor = buildExamScorePrediction(appData || {});
+    const predictorHistory = Array.isArray(appData?.zScoreHistory)
       ? appData.zScoreHistory
-          .filter((entry: any) => entry?.calculationBasis === "actual_saved_paper_marks")
+          .filter((entry: any) => Number.isFinite(Number(entry?.zScore ?? entry?.overall)))
           .map((entry: any) => ({
             date: entry.date,
-            overall: entry.zScore,
+            overall: Number(entry.zScore ?? entry.overall),
             sft: entry.subjectZScores?.sft,
             et: entry.subjectZScores?.et,
             ict: entry.subjectZScores?.ict,
-            source: "actual_saved_paper_marks",
+            source: entry.calculationBasis || "legacy_exam_score_predictor",
             official: false,
           }))
       : [];
-    zScoreContext.hasZScoreData = Object.values(practiceZ.subjects).some(
-      (subject: any) => subject.sampleCount > 0,
-    );
-    zScoreContext.calculationBasis = practiceZ.calculationBasis;
+    zScoreContext.hasZScoreData = true;
+    zScoreContext.calculationBasis = predictor.calculationBasis;
     zScoreContext.official = false;
-    zScoreContext.complete = practiceZ.complete;
-    zScoreContext.reliability = practiceZ.reliability;
-    zScoreContext.message = practiceZ.message;
-    zScoreContext.rawPaperAverages = {
-      sft: practiceZ.subjects.sft.mark,
-      et: practiceZ.subjects.et.mark,
-      ict: practiceZ.subjects.ict.mark,
+    zScoreContext.complete = true;
+    zScoreContext.reliability = "planning_estimate";
+    zScoreContext.message = "Derived from the Exam Score Predictor syllabus-completion model.";
+    zScoreContext.projectedMarks = predictor.projectedMarks;
+    zScoreContext.rawPaperAverages = predictor.projectedMarks;
+    zScoreContext.subjectZScores = predictor.subjectZScores;
+    zScoreContext.zScoreHistory = predictorHistory;
+    zScoreContext.latestOverallZScore = predictor.zScore;
+    zScoreContext.rankEstimate = {
+      districtRank: predictor.estimatedDistrictRank,
+      islandRank: predictor.estimatedIslandRank,
+      district: flatRanks.district,
+      estimated: true,
     };
-    zScoreContext.sampleCounts = {
-      sft: practiceZ.subjects.sft.sampleCount,
-      et: practiceZ.subjects.et.sampleCount,
-      ict: practiceZ.subjects.ict.sampleCount,
-    };
-    zScoreContext.subjectZScores = {
-      sft: practiceZ.subjects.sft.z,
-      et: practiceZ.subjects.et.z,
-      ict: practiceZ.subjects.ict.z,
-    };
-    zScoreContext.zScoreHistory = verifiedHistory;
-    zScoreContext.latestOverallZScore = practiceZ.overall;
-    zScoreContext.rankEstimate = undefined;
-    zScoreContext.latestUpdatedAt = verifiedHistory[verifiedHistory.length - 1]?.date;
-    zScoreContext.gapToTarget = practiceZ.overall !== null && zScoreContext.targetZScore !== undefined
-      ? Number((zScoreContext.targetZScore - practiceZ.overall).toFixed(4))
+    zScoreContext.latestUpdatedAt = predictorHistory[predictorHistory.length - 1]?.date || new Date().toISOString();
+    zScoreContext.gapToTarget = zScoreContext.targetZScore !== undefined
+      ? Number((zScoreContext.targetZScore - predictor.zScore).toFixed(4))
       : undefined;
     // ----------------------------------------------------------------------
     const contextData = {

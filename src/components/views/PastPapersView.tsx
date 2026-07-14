@@ -9,6 +9,7 @@ import { apiFetch } from '../../lib/api';
 import { getRecommendedUploadMode } from '../../lib/uploadMode';
 import { uploadPdfWithClientStorage, openPrivateStoragePdf, deletePrivateStorageObject, type UploadProgressSnapshot, type UploadTaskControls } from '../../lib/clientStorageUpload';
 import { OcrTextModal } from '../ui/OcrTextModal';
+import { PdfMiniPreview } from '../ui/PdfMiniPreview';
 
 function normalizeSubject(s: string) {
   return String(s || "").trim().toUpperCase();
@@ -632,7 +633,6 @@ export default function PastPapersView() {
  {paper.type}
  </span>
  <div className="flex items-center gap-1.5">
- {renderStatusBadge(paper)}
  <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-md shadow-inner">
  {paper.year}
  </span>
@@ -640,12 +640,13 @@ export default function PastPapersView() {
  </div>
  <h4 className="font-bold text-slate-800 text-base mb-1 group-hover:text-primary-600 transition-colors leading-tight">{paper.title}</h4>
  <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider mt-2">{paper.category}</p>
+ <div className="mt-3" onClick={(event) => event.stopPropagation()}>
+   <PdfMiniPreview sourceId={paper.sourceId || paper.id} title={paper.title} className="h-32" />
+ </div>
  </div>
  
  <div className="mt-5 pt-3 border-t border-slate-100 flex justify-between items-center relative z-10">
- <div className="flex items-center gap-2">
- {renderActionButtons(paper)}
- </div>
+ <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Open PDF</span>
  <div className="flex items-center gap-2">
   {isDeleteAllowed(paper) && (
     <button

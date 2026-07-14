@@ -85,22 +85,22 @@ export function AiMetricsAdvisor({
     const targetCourseLabel = POPULAR_COURSES.find(c => c.value === preferredCourse)?.label || preferredCourse;
 
     const systemPrompt = customPrompt ? customPrompt : `
-Provide a practice-score improvement advisory based on my actual saved paper averages:
+Provide a score-improvement advisory based on my Exam Score Predictor projections:
 
 **STUDENT PROFILE METRICS**:
 - Science for Technology (SFT) Mark: ${sftMark.toFixed(1)}% (Subject Z: ${sftZ >= 0 ? "+" : ""}${sftZ.toFixed(3)})
 - Engineering Technology (ET) Mark: ${etMark.toFixed(1)}% (Subject Z: ${etZ >= 0 ? "+" : ""}${etZ.toFixed(3)})
 - Information & Communication Technology (ICT) Mark: ${ictMark.toFixed(1)}% (Subject Z: ${ictZ >= 0 ? "+" : ""}${ictZ.toFixed(3)})
-- Practice-calibrated Overall Estimate: ${overallZ >= 0 ? "+" : ""}${overallZ.toFixed(4)}
+- Exam Score Predictor Z Estimate: ${overallZ >= 0 ? "+" : ""}${overallZ.toFixed(4)}
 - Target Z-Score: +${targetZ.toFixed(2)}
 - Preferred Degree Pathway: ${targetCourseLabel}
 
 **AI PROMPT / TASK**:
 Analyze these metrics in a highly strategic, professional, and encouraging tone. Output a detailed breakdown covering:
-1. Explain which actual paper average is strongest and weakest.
+1. Explain which projected subject score is strongest and weakest.
 2. Give concrete raw-mark goals for the next SFT, ET and ICT papers.
 3. Provide study actions tied to those mark gaps.
-4. State clearly that official Z-score, district/island rank and admission eligibility cannot be calculated without official cohort statistics and results.
+4. Keep all Z-score and rank language clearly labelled as predictor estimates, not official results.
 
 Please respond in a clean, readable markdown format, using subheadings, bullet points, and highlight cards. Respond in a blend of English and Sinhala (mixed/Sinhala-English) to make it highly friendly and understandable, but keep structural terms professional. Keep the tone motivational and laser-focused on actual state university entries. Do not use generic placeholders.
 `;
@@ -110,7 +110,7 @@ Please respond in a clean, readable markdown format, using subheadings, bullet p
     if (customPrompt) {
       nextHistory.push({ role: "user", text: customPrompt });
     } else {
-      nextHistory.push({ role: "user", text: `Run a practice-score improvement analysis for my saved paper results.` });
+      nextHistory.push({ role: "user", text: `Run an Exam Score Predictor improvement analysis for my current progress.` });
     }
     setChatHistory(nextHistory);
 

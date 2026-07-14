@@ -1,4 +1,4 @@
-import { AppData } from '../types';
+import type { AppData } from '../types';
 import { SYLLABUS } from '../constants/syllabus';
 
 import { estimateSubjectZFromMark } from '../shared/zscore';
@@ -7,88 +7,156 @@ export const calculateSubjectZ = (subject: 'sft' | 'et' | 'ict', mark: number): 
   return estimateSubjectZFromMark(subject, mark);
 };
 
-export const calculateSubjectAveragePercent = (subjectKey: 'sft' | 'et' | 'ict', data: AppData): number => {
+export type ExamScoreProjection = {
+  minimum: number;
+  maximum: number;
+  midpoint: number;
+  mcqCompleted: number;
+  partARaw: number;
+  partBcdRaw: number;
+};
+
+type RankPoint = readonly [zScore: number, rank: number];
+
+// Restored from the previous project rank model. These are model anchors, not
+// Department of Examinations cohort statistics, so every consumer must label
+// their output as an estimate.
+const ISLAND_RANK_MODEL: RankPoint[] = [
+  [2.9999, 1], [2.6557, 45], [2.3537, 212], [2.2295, 228],
+  [2.2003, 250], [2.0, 511], [1.6553, 1033], [1.5238, 1358],
+  [1.2663, 2032], [1.2293, 2170], [1.1375, 2473], [0.7249, 4155],
+  [0.6274, 4155],
+];
+
+const DISTRICT_RANK_MODEL: RankPoint[] = [
+  [2.9999, 1], [2.6557, 2], [2.3537, 3], [2.2295, 5],
+  [2.2003, 6], [2.0, 10], [1.6553, 32], [1.5238, 40],
+  [1.2663, 55], [1.2293, 56], [1.1375, 65], [0.7249, 113],
+  [0.6274, 119],
+];
+
+function interpolateEstimatedRank(zScore: number, points: RankPoint[]) {
+  const sorted = [...points].sort((a, b) => b[0] - a[0]);
+  if (zScore >= sorted[0][0]) return sorted[0][1];
+
+  for (let index = 0; index < sorted.length - 1; index += 1) {
+    const [upperZ, upperRank] = sorted[index];
+    const [lowerZ, lowerRank] = sorted[index + 1];
+    if (zScore <= upperZ && zScore >= lowerZ) {
+      const ratio = (upperZ - zScore) / Math.max(0.0001, upperZ - lowerZ);
+      return Math.max(1, Math.round(upperRank + ratio * (lowerRank - upperRank)));
+    }
+  }
+
+  const [lowestZ, lowestRank] = sorted[sorted.length - 1];
+  const [highestZ, highestRank] = sorted[0];
+  const fullSlope = (lowestRank - highestRank) / Math.max(0.0001, highestZ - lowestZ);
+  return Math.max(lowestRank, Math.round(lowestRank + (lowestZ - zScore) * fullSlope));
+}
+
+export const getEstimatedIslandRank = (zScore: number) =>
+  interpolateEstimatedRank(zScore, ISLAND_RANK_MODEL);
+
+export const getEstimatedDistrictRank = (zScore: number) =>
+  interpolateEstimatedRank(zScore, DISTRICT_RANK_MODEL);
+
+export const calculateExamScoreProjection = (
+  subjectKey: 'sft' | 'et' | 'ict',
+  data: AppData,
+): ExamScoreProjection => {
   const def = SYLLABUS[subjectKey];
   const subjectData = data[subjectKey];
-  if (!def || !subjectData) return 50;
+  if (!def || !subjectData) {
+    return { minimum: 0, maximum: 0, midpoint: 0, mcqCompleted: 0, partARaw: 0, partBcdRaw: 0 };
+  }
 
-  let mcqScore = 0;
   let mcqCheckedCount = 0;
-  def.mcqItems.forEach(item => {
-    if (subjectData.topics[item.title]?.checked) {
-      mcqScore += (item.count || 0) * def.mcqMult;
-      mcqCheckedCount += (item.count || 0);
-    }
+  def.mcqItems.forEach((item) => {
+    if (subjectData.topics[item.title]?.checked) mcqCheckedCount += item.count || 0;
   });
 
   let partAScore = 0;
-  def.partAItems.forEach(item => {
-    let checkedCount = 0;
-    item.topics?.forEach(t => { if (subjectData.topics[t]?.checked) checkedCount++; });
-    if (item.topics && item.topics.length > 0) {
-      partAScore += (checkedCount / item.topics.length) * (item.max || 0);
-    }
+  def.partAItems.forEach((item) => {
+    const completed = item.topics?.filter((topic) => subjectData.topics[topic]?.checked).length || 0;
+    if (item.topics?.length) partAScore += (completed / item.topics.length) * (item.max || 0);
   });
 
-  let bcdScores: number[] = [];
-  const allBCD = [...def.partBCDItems];
-  def.bcdGroups?.forEach(g => allBCD.push(...g.items));
-
-  allBCD.forEach(item => {
-    let checkedCount = 0;
-    item.topics?.forEach(t => { if (subjectData.topics[t]?.checked) checkedCount++; });
-    if (item.topics && item.topics.length > 0) {
-      bcdScores.push((checkedCount / item.topics.length) * (item.max || 0));
-    }
+  const bcdScores: number[] = [];
+  const allBcd = [...def.partBCDItems];
+  def.bcdGroups?.forEach((group) => allBcd.push(...group.items));
+  allBcd.forEach((item) => {
+    const completed = item.topics?.filter((topic) => subjectData.topics[topic]?.checked).length || 0;
+    if (item.topics?.length) bcdScores.push((completed / item.topics.length) * (item.max || 0));
   });
+  const top4BcdScore = bcdScores.sort((a, b) => b - a).slice(0, 4).reduce((sum, value) => sum + value, 0);
 
-  bcdScores.sort((a, b) => b - a);
-  let top4BcdScore = 0;
-  for (let i = 0; i < Math.min(4, bcdScores.length); i++) top4BcdScore += bcdScores[i];
+  const partAMax = subjectKey === 'et' ? 300 : subjectKey === 'ict' ? 40 : 400;
+  const partBcdMax = subjectKey === 'et' ? 400 : subjectKey === 'ict' ? 60 : 600;
+  const mcqRatio = mcqCheckedCount / Math.max(1, def.mcqMax || 50);
+  const minimumMcq = Math.min(45, Math.round(mcqRatio * 40)) * def.mcqMult;
+  const maximumMcq = Math.min(50, Math.round(mcqRatio * 45)) * def.mcqMult;
+  const partARatio = partAScore / Math.max(1, partAMax);
+  const bcdRatio = top4BcdScore / Math.max(1, partBcdMax);
+  const minimumPaper2 = Math.min(0.9, partARatio * 0.85) * partAMax
+    + Math.min(145 / 150, bcdRatio * (130 / 150)) * partBcdMax;
+  const maximumPaper2 = Math.min(1, partARatio * 0.9) * partAMax
+    + Math.min(1, bcdRatio * (145 / 150)) * partBcdMax;
 
-  let pAMax = subjectKey === 'et' ? 300 : (subjectKey === 'ict' ? 40 : 400);
-  let pBcdMax = subjectKey === 'et' ? 400 : (subjectKey === 'ict' ? 60 : 600);
-
-  const maxMcqTotal = def.mcqMax || 50;
-  const mcqCheckedRatio = mcqCheckedCount / maxMcqTotal;
-  const minMcqCorrect = Math.round(mcqCheckedRatio * (maxMcqTotal * 0.8)); // assumes student gets 80% correct
-  const maxMcqCorrect = Math.round(mcqCheckedRatio * (maxMcqTotal * 0.95)); // assumes student gets 95% correct
-
-  const minMcqScore = minMcqCorrect * def.mcqMult;
-  const maxMcqScore = maxMcqCorrect * def.mcqMult;
-
-  const partACheckedRatio = pAMax ? partAScore / pAMax : 0;
-  const minPartARatio = Math.min(0.90, partACheckedRatio * 0.85);
-  const maxPartARatio = Math.min(1.0, partACheckedRatio * 0.90);
-  
-  const minPartAScore = minPartARatio * pAMax;
-  const maxPartAScore = maxPartARatio * pAMax;
-
-  const bcdCheckedRatio = pBcdMax ? top4BcdScore / pBcdMax : 0;
-  const minBcdRatio = Math.min(145/150, bcdCheckedRatio * (130/150));
-  const maxBcdRatio = Math.min(1.0, bcdCheckedRatio * (145/150));
-  
-  const minBcdScore = minBcdRatio * pBcdMax;
-  const maxBcdScore = maxBcdRatio * pBcdMax;
-
-  let minFinalPercentage = 0;
-  let maxFinalPercentage = 0;
-
-  const minPaper2Base = minPartAScore + minBcdScore;
-  const maxPaper2Base = maxPartAScore + maxBcdScore;
-
+  let minimum = 0;
+  let maximum = 0;
   if (subjectKey === 'sft') {
-    minFinalPercentage = (minPaper2Base / 20) + minMcqScore;
-    maxFinalPercentage = (maxPaper2Base / 20) + maxMcqScore;
+    minimum = minimumPaper2 / 20 + minimumMcq;
+    maximum = maximumPaper2 / 20 + maximumMcq;
   } else if (subjectKey === 'et') {
-    minFinalPercentage = minMcqScore + (minPaper2Base / 14);
-    maxFinalPercentage = maxMcqScore + (maxPaper2Base / 14);
-  } else if (subjectKey === 'ict') {
-    minFinalPercentage = minMcqScore + (minPaper2Base / 2);
-    maxFinalPercentage = maxMcqScore + (maxPaper2Base / 2);
+    minimum = minimumMcq * 0.75 + minimumPaper2 * (37.5 / 700) + 25;
+    maximum = maximumMcq * 0.75 + maximumPaper2 * (37.5 / 700) + 25;
+  } else {
+    minimum = minimumMcq + minimumPaper2 / 2;
+    maximum = maximumMcq + maximumPaper2 / 2;
   }
 
-  return Math.min(95, Math.round((minFinalPercentage + maxFinalPercentage) / 2));
+  minimum = Math.max(0, Math.min(95, Math.round(minimum)));
+  maximum = Math.max(minimum, Math.min(95, Math.round(maximum)));
+  return {
+    minimum,
+    maximum,
+    midpoint: Number(((minimum + maximum) / 2).toFixed(1)),
+    mcqCompleted: mcqCheckedCount,
+    partARaw: partAScore,
+    partBcdRaw: top4BcdScore,
+  };
+};
+
+export const buildExamScorePrediction = (data: AppData) => {
+  const projections = {
+    sft: calculateExamScoreProjection('sft', data),
+    et: calculateExamScoreProjection('et', data),
+    ict: calculateExamScoreProjection('ict', data),
+  };
+  const subjectZScores = {
+    sft: calculateSubjectZ('sft', projections.sft.midpoint),
+    et: calculateSubjectZ('et', projections.et.midpoint),
+    ict: calculateSubjectZ('ict', projections.ict.midpoint),
+  };
+  const zScore = Number(((subjectZScores.sft + subjectZScores.et + subjectZScores.ict) / 3).toFixed(4));
+  return {
+    projections,
+    projectedMarks: {
+      sft: projections.sft.midpoint,
+      et: projections.et.midpoint,
+      ict: projections.ict.midpoint,
+    },
+    subjectZScores,
+    zScore,
+    estimatedIslandRank: getEstimatedIslandRank(zScore),
+    estimatedDistrictRank: getEstimatedDistrictRank(zScore),
+    calculationBasis: 'exam_score_predictor' as const,
+    official: false as const,
+  };
+};
+
+export const calculateSubjectAveragePercent = (subjectKey: 'sft' | 'et' | 'ict', data: AppData): number => {
+  return calculateExamScoreProjection(subjectKey, data).midpoint;
 };
 
 export const calculateLessonWiseMarks = (subjectKey: 'sft' | 'et' | 'ict', subjectData?: any): Record<string, { mcqMarks: number; essayMarks: number; structuredEssayMarks: number; totalMarks: number; isCompleted: boolean }> => {

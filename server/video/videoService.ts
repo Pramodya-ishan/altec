@@ -54,6 +54,7 @@ export type VideoDocument = {
   maxConcurrentSessions: number;
   qualityProfiles: string[];
   version: number;
+  playbackMode?: "direct" | "hls";
 };
 
 const QUALITY_LADDER = [
@@ -180,6 +181,19 @@ export async function startTranscode(video: VideoDocument) {
 }
 
 export async function refreshTranscodeStatus(video: VideoDocument): Promise<VideoDocument> {
+  if (!env.ENABLE_VIDEO_TRANSCODING && video.status === "uploaded") {
+    const updates = {
+      status: "ready" as VideoStatus,
+      isPublished: true,
+      allowPlayback: true,
+      playbackMode: "direct" as const,
+      publishedAt: video.updatedAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await getAdminDb().collection("videos").doc(video.id).set(updates, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "ready", updatedAt: updates.updatedAt }, { merge: true });
+    return { ...video, ...updates };
+  }
   if (!video.transcoderJobName || !["queued", "transcoding"].includes(video.status)) return video;
   const token = await getGoogleAccessToken();
   const response = await fetch(`https://transcoder.googleapis.com/v1/${video.transcoderJobName}`, {
@@ -233,6 +247,18 @@ export function createSignedPlaybackCookie(video: VideoDocument) {
     path: `/videos/${video.id}/versions/${video.version}/hls/`,
     expiresAt: new Date(expires * 1000).toISOString(),
   };
+}
+
+export async function createDirectPlaybackUrl(video: VideoDocument) {
+  const bucket = getAdminBucketByName(video.inputBucket);
+  const expiresAtMs = Date.now() + env.VIDEO_SESSION_TTL_SECONDS * 1000;
+  const [url] = await bucket.file(video.inputObjectPath).getSignedUrl({
+    action: "read",
+    expires: expiresAtMs,
+    responseDisposition: "inline",
+    responseType: video.mimeType || "video/mp4",
+  });
+  return { url, expiresAt: new Date(expiresAtMs).toISOString() };
 }
 
 export function canUserPlayVideo(video: VideoDocument, user: { uid: string; admin?: boolean; roles?: string[] }) {

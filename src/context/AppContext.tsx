@@ -123,9 +123,13 @@ function sanitizeAppData(value: AppData): AppData {
   return {
     ...value,
     zScoreHistory: Array.isArray(value?.zScoreHistory)
-      ? value.zScoreHistory.filter(
-          (entry) => entry?.calculationBasis === "actual_saved_paper_marks",
-        )
+      ? value.zScoreHistory
+          .filter((entry) => Number.isFinite(Number(entry?.zScore)) && Boolean(entry?.date))
+          .map((entry) => ({
+            ...entry,
+            calculationBasis: entry.calculationBasis || "legacy_exam_score_predictor",
+            official: false as const,
+          }))
       : [],
   };
 }

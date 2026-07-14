@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Check, CheckCircle2, Copy, FileText, Loader2, Sparkles } from 'lucide-react';
 import { MathMarkdown } from '../../chat/MathMarkdown';
 import { VisualBlockRenderer } from '../VisualBlockRenderer';
+import { PdfMiniPreview } from '../PdfMiniPreview';
 
 interface CloraMessageBubbleProps {
   message: any;
@@ -39,8 +40,11 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
           {message.attachments?.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
               {message.attachments.map((attachment: any, index: number) => (
-                <span key={attachment.storagePath || attachment.name || index} className="inline-flex max-w-[200px] items-center gap-1.5 rounded-lg bg-white px-2.5 py-1.5 text-xs text-slate-600 ring-1 ring-slate-200">
-                  <FileText className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{attachment.name}</span>
+                <span key={attachment.storagePath || attachment.name || index} className="inline-flex max-w-[220px] items-center gap-2 rounded-lg bg-white p-2 text-xs text-slate-600 ring-1 ring-slate-200">
+                  {attachment.sourceId && /pdf/i.test(`${attachment.mimeType || ''} ${attachment.name || ''}`) ? (
+                    <PdfMiniPreview sourceId={attachment.sourceId} title={attachment.name || 'PDF'} className="h-20 w-14 shrink-0" />
+                  ) : <FileText className="h-4 w-4 shrink-0" />}
+                  <span className="truncate font-semibold">{attachment.name}</span>
                 </span>
               ))}
             </div>

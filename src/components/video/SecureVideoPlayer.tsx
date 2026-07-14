@@ -17,7 +17,9 @@ type PlayerMetadata = {
 type SessionResponse = {
   ok: true;
   sessionId: string;
-  manifestUrl: string;
+  playbackMode?: "direct" | "hls";
+  directUrl?: string;
+  manifestUrl?: string;
   expiresAt: string;
   watermark: { userId: string; label: string };
 };
@@ -97,34 +99,41 @@ export function SecureVideoPlayer({ videoId, title, onClose }: { videoId: string
 
         sessionIdRef.current = session.sessionId;
         setWatermark((current) => ({ ...current, label: session.watermark.label }));
-        shaka.polyfill.installAll();
-        if (!shaka.Player.isBrowserSupported()) throw new Error("This browser does not support secure HLS playback.");
-
-        const engine = new shaka.Player();
-        await engine.attach(video);
-        shakaRef.current = engine;
-        engine.configure({
-          abr: { enabled: true, defaultBandwidthEstimate: 1_500_000 },
-          streaming: { bufferingGoal: 24, rebufferingGoal: 2 },
-        });
-        engine.getNetworkingEngine()?.registerRequestFilter((_type: unknown, request: any) => {
-          request.allowCrossSiteCredentials = true;
-        });
-        await engine.load(session.manifestUrl);
+        let heights: number[] = [];
+        let engine: any = null;
+        if (session.playbackMode === "direct" && session.directUrl) {
+          video.src = session.directUrl;
+          video.load();
+        } else {
+          if (!session.manifestUrl) throw new Error("Secure video source is unavailable.");
+          shaka.polyfill.installAll();
+          if (!shaka.Player.isBrowserSupported()) throw new Error("This browser does not support secure HLS playback.");
+          engine = new shaka.Player();
+          await engine.attach(video);
+          shakaRef.current = engine;
+          engine.configure({
+            abr: { enabled: true, defaultBandwidthEstimate: 1_500_000 },
+            streaming: { bufferingGoal: 24, rebufferingGoal: 2 },
+          });
+          engine.getNetworkingEngine()?.registerRequestFilter((_type: unknown, request: any) => {
+            request.allowCrossSiteCredentials = true;
+          });
+          await engine.load(session.manifestUrl);
+          heights = Array.from(new Set<number>(
+            engine.getVariantTracks().map((track: any) => Number(track.height || 0)).filter(Boolean),
+          )).sort((a, b) => a - b);
+        }
         if (disposed) return;
-
-        const heights = Array.from(new Set(
-          engine.getVariantTracks().map((track: any) => Number(track.height || 0)).filter(Boolean),
-        )).sort((a: number, b: number) => a - b);
         const player = new Plyr(video, {
           controls: ["play-large", "restart", "rewind", "play", "fast-forward", "progress", "current-time", "duration", "mute", "volume", "captions", "settings", "pip", "airplay", "fullscreen"],
-          settings: ["captions", "quality", "speed"],
+          settings: heights.length ? ["captions", "quality", "speed"] : ["captions", "speed"],
           speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] },
           quality: {
             default: 0,
             options: [0, ...heights],
             forced: true,
             onChange: (height: number) => {
+              if (!engine) return;
               if (height === 0) {
                 engine.configure({ abr: { enabled: true } });
                 return;
@@ -141,7 +150,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: { videoId: string
         const resumeKey = `clora_video_resume_${videoId}`;
         const saved = Number(localStorage.getItem(resumeKey) || 0);
         if (saved > 5 && Number.isFinite(saved)) video.currentTime = saved;
-        setStatus("Secure stream ready");
+        setStatus(session.playbackMode === "direct" ? "Private video ready" : "Secure stream ready");
 
         heartbeat = window.setInterval(() => {
           if (sessionIdRef.current) {
@@ -204,7 +213,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: { videoId: string
         <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px]">
           <main className="min-w-0 overflow-y-auto bg-black">
             <div className="relative aspect-video w-full overflow-hidden bg-black">
-              <video ref={videoRef} className="h-full w-full" playsInline crossOrigin="use-credentials" />
+              <video ref={videoRef} className="h-full w-full" playsInline />
               {watermark.label && (
                 <div className="pointer-events-none absolute z-20 select-none rounded-md bg-black/30 px-2 py-1 text-[10px] font-bold text-white/55 transition-all duration-1000" style={{ left: `${watermark.x}%`, top: `${watermark.y}%` }}>
                   {watermark.label} · {videoId.slice(0, 8)}

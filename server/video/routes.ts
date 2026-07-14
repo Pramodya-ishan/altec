@@ -9,6 +9,7 @@ import {
 } from "../firebase/admin";
 import {
   canUserPlayVideo,
+  createDirectPlaybackUrl,
   createSignedPlaybackCookie,
   refreshTranscodeStatus,
   safeVideoFileName,
@@ -247,12 +248,36 @@ videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
       throw error;
     }
 
+    const fallbackReady = !transcode.enabled;
+    if (fallbackReady) {
+      await getAdminDb().collection("videos").doc(video.id).set({
+        status: "ready",
+        isPublished: true,
+        allowPlayback: true,
+        playbackMode: "direct",
+        publishedAt: now,
+        updatedAt: now,
+      }, { merge: true });
+      await getAdminDb().collection("sources").doc(video.sourceId).set({
+        processingStatus: "ready",
+        updatedAt: now,
+      }, { merge: true });
+    } else {
+      await getAdminDb().collection("videos").doc(video.id).set({
+        isPublished: true,
+        allowPlayback: true,
+        playbackMode: "hls",
+        updatedAt: now,
+      }, { merge: true });
+    }
+
     res.json({
       ok: true,
       videoId: video.id,
       sourceId: video.sourceId,
-      status: transcode.enabled ? "queued" : "uploaded",
+      status: transcode.enabled ? "queued" : "ready",
       transcodeQueued: transcode.enabled,
+      playbackMode: transcode.enabled ? "hls" : "direct",
     });
   } catch (error: any) {
     res.status(400).json({ ok: false, code: "VIDEO_FINALIZE_FAILED", message: error.message });
@@ -429,7 +454,8 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
       return res.status(409).json({ ok: false, code: "PLAYBACK_SESSION_LIMIT", message: "This account already has an active playback session." });
     }
 
-    const signed = createSignedPlaybackCookie(video);
+    const directPlayback = !video.transcoderJobName || (video as any).playbackMode === "direct";
+    const signed = directPlayback ? null : createSignedPlaybackCookie(video);
     const sessionRef = db.collection("videoPlaybackSessions").doc();
     const expiresAtMs = now + env.VIDEO_SESSION_TTL_SECONDS * 1000;
     await sessionRef.set({
@@ -445,20 +471,25 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
       status: "active",
     });
 
-    res.cookie("Cloud-CDN-Cookie", signed.cookieValue, {
-      secure: true,
-      httpOnly: true,
-      sameSite: "none",
-      domain: env.VIDEO_COOKIE_DOMAIN || undefined,
-      path: signed.path,
-      maxAge: env.VIDEO_COOKIE_TTL_SECONDS * 1000,
-    });
+    if (signed) {
+      res.cookie("Cloud-CDN-Cookie", signed.cookieValue, {
+        secure: true,
+        httpOnly: true,
+        sameSite: "none",
+        domain: env.VIDEO_COOKIE_DOMAIN || undefined,
+        path: signed.path,
+        maxAge: env.VIDEO_COOKIE_TTL_SECONDS * 1000,
+      });
+    }
+    const direct = directPlayback ? await createDirectPlaybackUrl(video) : null;
     res.setHeader("Cache-Control", "no-store");
     res.json({
       ok: true,
       sessionId: sessionRef.id,
-      manifestUrl: signed.manifestUrl,
-      expiresAt: signed.expiresAt,
+      playbackMode: direct ? "direct" : "hls",
+      directUrl: direct?.url,
+      manifestUrl: signed?.manifestUrl,
+      expiresAt: direct?.expiresAt || signed?.expiresAt,
       watermark: { userId: user.uid, label: user.email || user.uid },
     });
   } catch (error: any) {

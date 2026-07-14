@@ -63,8 +63,7 @@ import { cn } from "../../lib/utils";
 
 import { SYLLABUS } from "../../constants/syllabus";
 
-import { calculateSubjectZ } from "../../lib/scoreUtils";
-import { buildPracticeZSnapshot } from "../../shared/zscore";
+import { buildExamScorePrediction, calculateSubjectZ } from "../../lib/scoreUtils";
 
 import { RequirementQuestion } from "../../types";
 
@@ -662,66 +661,46 @@ export default function AdmissionPredictorView() {
     saveData({ ...data, targetZ: val });
   };
 
-  // Z-score cannot be derived from syllabus completion. Use only real saved
-  // paper totals and keep the result explicitly labelled as a practice estimate.
-  const practiceZ = useMemo(() => buildPracticeZSnapshot(data), [data]);
-  const sftMark = practiceZ.subjects.sft.mark;
-  const etMark = practiceZ.subjects.et.mark;
-  const ictMark = practiceZ.subjects.ict.mark;
-  const sftZ = practiceZ.subjects.sft.z;
-  const etZ = practiceZ.subjects.et.z;
-  const ictZ = practiceZ.subjects.ict.z;
-  const overallZScore = practiceZ.overall;
-  const hasCompletePracticeZ = practiceZ.complete && overallZScore !== null;
+  const prediction = useMemo(() => buildExamScorePrediction(data), [data]);
+  const sftMark = prediction.projectedMarks.sft;
+  const etMark = prediction.projectedMarks.et;
+  const ictMark = prediction.projectedMarks.ict;
+  const sftZ = prediction.subjectZScores.sft;
+  const etZ = prediction.subjectZScores.et;
+  const ictZ = prediction.subjectZScores.ict;
+  const overallZScore = prediction.zScore;
 
   const [historyPoints, setHistoryPoints] = useState<any[]>(() =>
-    (data.zScoreHistory || []).filter(
-      (point: any) => point?.calculationBasis === "actual_saved_paper_marks",
-    ),
+    (data.zScoreHistory || []).filter((point: any) => Number.isFinite(Number(point?.zScore))),
   );
 
   useEffect(() => {
     if (isAuthLoading) return;
 
     const savedHistory = Array.isArray(data.zScoreHistory) ? data.zScoreHistory : [];
-    const verifiedHistory = savedHistory.filter(
-      (point: any) => point?.calculationBasis === "actual_saved_paper_marks",
+    let points = savedHistory.filter((point: any) => Number.isFinite(Number(point?.zScore)));
+    const day = new Date().toISOString().slice(0, 10);
+    const fingerprint = `predictor:${day}:${sftMark}:${etMark}:${ictMark}`;
+    const point = {
+      date: new Date().toISOString(),
+      zScore: overallZScore,
+      subjectZScores: { sft: sftZ, et: etZ, ict: ictZ },
+      projectedMarks: { sft: sftMark, et: etMark, ict: ictMark },
+      estimatedDistrictRank: prediction.estimatedDistrictRank,
+      estimatedIslandRank: prediction.estimatedIslandRank,
+      calculationBasis: "exam_score_predictor" as const,
+      official: false as const,
+      fingerprint,
+      reason: "Exam Score Predictor progress updated",
+    };
+    const sameDayIndex = points.findIndex((entry: any) =>
+      entry?.calculationBasis === "exam_score_predictor" && String(entry?.date || "").slice(0, 10) === day,
     );
-    let points = [...verifiedHistory];
-
-    if (hasCompletePracticeZ) {
-      const latestTimes = [
-        practiceZ.subjects.sft.latestRecordedAt,
-        practiceZ.subjects.et.latestRecordedAt,
-        practiceZ.subjects.ict.latestRecordedAt,
-      ].filter(Boolean) as string[];
-      const sortedTimes = latestTimes.sort();
-      const recordedAt = sortedTimes[sortedTimes.length - 1] || new Date().toISOString();
-      const sampleCounts = {
-        sft: practiceZ.subjects.sft.sampleCount,
-        et: practiceZ.subjects.et.sampleCount,
-        ict: practiceZ.subjects.ict.sampleCount,
-      };
-      const fingerprint = [
-        sftMark, etMark, ictMark,
-        sampleCounts.sft, sampleCounts.et, sampleCounts.ict,
-      ].join(":");
-      const point = {
-        date: recordedAt,
-        zScore: overallZScore,
-        subjectZScores: { sft: Number(sftZ), et: Number(etZ), ict: Number(ictZ) },
-        rawPaperAverages: { sft: Number(sftMark), et: Number(etMark), ict: Number(ictMark) },
-        sampleCounts,
-        calculationBasis: "actual_saved_paper_marks" as const,
-        official: false as const,
-        fingerprint,
-        reason: "Actual saved paper results updated",
-      };
-      const existingIndex = points.findIndex((entry: any) => entry.fingerprint === fingerprint);
-      if (existingIndex >= 0) points[existingIndex] = point;
-      else points.push(point);
-      points = points.slice(-60);
-    }
+    if (sameDayIndex >= 0) points[sameDayIndex] = point;
+    else points.push(point);
+    // Preserve the previous project's real timeline; only apply a generous
+    // safety cap so historical records are not silently discarded.
+    points = points.slice(-1000);
 
     setHistoryPoints(points);
     if (JSON.stringify(points) !== JSON.stringify(savedHistory)) {
@@ -741,8 +720,8 @@ export default function AdmissionPredictorView() {
     etMark,
     ictMark,
     isAuthLoading,
-    hasCompletePracticeZ,
-    practiceZ,
+    prediction.estimatedDistrictRank,
+    prediction.estimatedIslandRank,
   ]);
 
   const chartData = useMemo(() => {
@@ -753,21 +732,18 @@ export default function AdmissionPredictorView() {
 
       let cleanStr = dateStr.replace(/\s*\(Today\)/gi, "").trim();
 
-      if (cleanStr.includes("-")) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(cleanStr)) {
         const parts = cleanStr.split("-").map(Number);
 
         if (parts.length === 3) {
           const [y, m, d] = parts;
 
           return new Date(y === 2001 ? 2026 : y, m - 1, d, 12, 0, 0);
-          // Handle 2001 year
         }
       }
       const parsed = new Date(cleanStr);
 
       if (!isNaN(parsed.getTime())) {
-        parsed.setFullYear(2026);
-
         parsed.setHours(12, 0, 0, 0);
 
         return parsed;
@@ -905,9 +881,9 @@ export default function AdmissionPredictorView() {
     return null;
   };
 
-  const formatZ = (value: number | null, digits = 3) =>
-    value === null ? "N/A" : `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`;
-  const formatMark = (value: number | null) => value === null ? "No papers" : `${value.toFixed(1)}%`;
+  const formatZ = (value: number, digits = 3) =>
+    `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`;
+  const formatMark = (value: number) => `${value.toFixed(1)}%`;
 
   return (
     <div className="max-w-7xl mx-auto space-y-8 ">
@@ -952,7 +928,7 @@ export default function AdmissionPredictorView() {
                         District rank
                       </p>
                       <p className="text-sm font-black text-emerald-700 relative">
-                        Unavailable
+                        ≈ {prediction.estimatedDistrictRank.toLocaleString()}
                       </p>
                     </div>
                     <div className="bg-amber-50 border border-amber-100 p-3.5 rounded-2xl text-center shadow-sm relative overflow-hidden">
@@ -963,14 +939,14 @@ export default function AdmissionPredictorView() {
                         Island rank
                       </p>
                       <p className="text-sm font-black text-amber-700 relative">
-                        Unavailable
+                        ≈ {prediction.estimatedIslandRank.toLocaleString()}
                       </p>
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900">
-                    <strong>{hasCompletePracticeZ ? "Practice estimate" : "More paper results required"}.</strong>{" "}
-                    {practiceZ.message} Official Z-score and ranks require the examination-year cohort mean and standard deviation.
+                  <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 px-4 py-3 text-xs leading-5 text-indigo-900">
+                    <strong>Exam Score Predictor estimate.</strong>{" "}
+                    Z-score and rank projections use your syllabus completion model. They are planning estimates, not official examination results.
                   </div>
 
                   <div className="space-y-4 pt-2">
@@ -984,7 +960,7 @@ export default function AdmissionPredictorView() {
                           Science for Technology
                         </span>
                         <span className="text-[10px] font-bold text-slate-400 font-mono shrink-0 whitespace-nowrap">
-                          {practiceZ.subjects.sft.sampleCount} saved papers
+                          {prediction.projections.sft.minimum}–{prediction.projections.sft.maximum} range
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between">
@@ -1017,7 +993,7 @@ export default function AdmissionPredictorView() {
                           Engineering Tech
                         </span>
                         <span className="text-[10px] font-bold text-slate-400 font-mono shrink-0 whitespace-nowrap">
-                          {practiceZ.subjects.et.sampleCount} saved papers
+                          {prediction.projections.et.minimum}–{prediction.projections.et.maximum} range
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between">
@@ -1050,7 +1026,7 @@ export default function AdmissionPredictorView() {
                           Information Tech
                         </span>
                         <span className="text-[10px] font-bold text-slate-400 font-mono shrink-0 whitespace-nowrap">
-                          {practiceZ.subjects.ict.sampleCount} saved papers
+                          {prediction.projections.ict.minimum}–{prediction.projections.ict.maximum} range
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between">
@@ -1103,8 +1079,8 @@ export default function AdmissionPredictorView() {
                       <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
                         <div className="max-w-sm">
                           <LineChart className="mx-auto mb-3 h-7 w-7 text-slate-300" />
-                          <p className="text-sm font-bold text-slate-700">No verified practice history yet</p>
-                          <p className="mt-1 text-xs leading-5 text-slate-500">Add completed paper marks for SFT, ET and ICT. The chart will only record real saved paper results.</p>
+                          <p className="text-sm font-bold text-slate-700">Your predictor history starts here</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">Complete syllabus lessons and this chart will retain each real progress snapshot.</p>
                         </div>
                       </div>
                     ) : (

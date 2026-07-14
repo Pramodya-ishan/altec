@@ -1,7 +1,13 @@
 import { apiFetch } from "./api";
 import type { UploadProgressSnapshot, UploadTaskControls } from "./clientStorageUpload";
 
-const DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024;
+const DEFAULT_CHUNK_SIZE = 16 * 1024 * 1024;
+
+function chooseChunkSize(fileSize: number) {
+  if (fileSize >= 1024 * 1024 * 1024) return 64 * 1024 * 1024;
+  if (fileSize >= 256 * 1024 * 1024) return 32 * 1024 * 1024;
+  return DEFAULT_CHUNK_SIZE;
+}
 
 type VideoMetadata = {
   title: string;
@@ -64,7 +70,7 @@ async function uploadResumableFile(params: {
   chunkSize?: number;
 }) {
   const { file, uploadUrl, onProgress, onTask } = params;
-  const chunkSize = params.chunkSize || DEFAULT_CHUNK_SIZE;
+  const chunkSize = params.chunkSize || chooseChunkSize(file.size);
   let offset = 0;
   let paused = false;
   let canceled = false;

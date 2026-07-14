@@ -4,6 +4,7 @@ import { SYLLABUS } from '../../constants/syllabus';
 import { calculateGrade, cn } from '../../lib/utils';
 import { AppData, SubjectKey } from '../../types';
 import JSZip from 'jszip';
+import { calculateExamScoreProjection } from '../../lib/scoreUtils';
 
 export function PredictorWidget() {
   const { data, currentSubject, saveData, clearLocalStorage, showNotification } = useApp();
@@ -109,6 +110,11 @@ export function PredictorWidget() {
     minFinalPercentage = minMcqScore + (minPaper2Base / 2);
     maxFinalPercentage = maxMcqScore + (maxPaper2Base / 2);
   }
+
+  // Keep the widget and every Z-score consumer on one calculation source.
+  const sharedProjection = calculateExamScoreProjection(currentSubject, data);
+  minFinalPercentage = sharedProjection.minimum;
+  maxFinalPercentage = sharedProjection.maximum;
 
   minFinalPercentage = Math.round(minFinalPercentage);
   maxFinalPercentage = Math.round(maxFinalPercentage);

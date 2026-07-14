@@ -13,6 +13,7 @@ import {
   type UploadTaskControls,
 } from "../../lib/clientStorageUpload";
 import { createAndUploadSecureVideo } from "../../lib/videoUpload";
+import { PdfMiniPreview } from "../ui/PdfMiniPreview";
 
 const SecureVideoPlayer = React.lazy(() => import("../video/SecureVideoPlayer").then((module) => ({ default: module.SecureVideoPlayer })));
 
@@ -213,7 +214,7 @@ export function NotesModal() {
           sizeBytes: file.size,
           createdAt: new Date().toISOString(),
         });
-        showNotification(result.transcodeQueued ? "Video uploaded. Secure processing has started." : "Video uploaded. Transcoding is waiting for cloud configuration.", "success");
+        showNotification(result.transcodeQueued ? "Video uploaded. Secure processing has started." : "Video uploaded and ready to play.", "success");
       } else {
         const upload = await uploadPdfWithClientStorage({
           file,
@@ -288,7 +289,7 @@ export function NotesModal() {
       const payload = await response.json().catch(() => null);
       const liveStatus = payload?.video?.status || resource.status;
       if (!response.ok || liveStatus !== "ready") {
-        showNotification(`Video status: ${liveStatus || "processing"}. It can be played after secure processing finishes.`, "info");
+        showNotification(`Video is still processing (${liveStatus || "pending"}).`, "info");
         return;
       }
       setPlayerResource({ ...resource, status: "ready" });
@@ -382,13 +383,16 @@ export function NotesModal() {
                     {resources.map((resource, index) => (
                       <div key={resource.id || resource.sourceId || `${resource.title}-${index}`} className="group flex min-w-0 items-center gap-2">
                         <button type="button" onClick={() => void openResource(resource)} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-300 hover:shadow-md">
-                          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100"><ResourceIcon kind={resource.mediaKind} /></span>
+                          {resource.mediaKind === "pdf" ? (
+                            <PdfMiniPreview sourceId={resource.sourceId} title={resource.title} className="h-20 w-16 shrink-0" />
+                          ) : (
+                            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100"><ResourceIcon kind={resource.mediaKind} /></span>
+                          )}
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-sm font-black text-slate-800 group-hover:text-indigo-700">{resource.title}</span>
                             <span className="mt-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
                               {resource.mediaKind || "document"}
                               {resource.sizeBytes ? ` · ${formatBytes(resource.sizeBytes)}` : ""}
-                              {resource.status && <em className={`not-italic ${resource.status === "failed" ? "text-rose-500" : resource.status === "ready" ? "text-emerald-600" : "text-amber-600"}`}>· {resource.status}</em>}
                             </span>
                           </span>
                         </button>

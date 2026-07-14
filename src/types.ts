@@ -80,7 +80,10 @@ export type AppData = {
     subjectZScores?: { sft: number; et: number; ict: number }; 
     rawPaperAverages?: { sft: number; et: number; ict: number };
     sampleCounts?: { sft: number; et: number; ict: number };
-    calculationBasis?: "actual_saved_paper_marks";
+    projectedMarks?: { sft: number; et: number; ict: number };
+    estimatedDistrictRank?: number;
+    estimatedIslandRank?: number;
+    calculationBasis?: "actual_saved_paper_marks" | "exam_score_predictor" | "legacy_exam_score_predictor";
     official?: false;
     fingerprint?: string;
     reason?: string; 

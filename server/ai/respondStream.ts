@@ -369,7 +369,7 @@ export async function aiRespondStream(req: any, res: any) {
           id,
           sourceId: id,
           url: source.url || `/api/rag/sources/${id}/download`,
-          badge: source.textIndexed ? "Lesson PDF" : source.needsOcr ? "Needs OCR" : "Needs indexing",
+          badge: "Lesson PDF",
           usedInAnswer: true,
         };
       });
@@ -378,8 +378,7 @@ export async function aiRespondStream(req: any, res: any) {
             `**${lessonName}** lesson එකට match වෙන saved PDF resource${lessonSources.length === 1 ? " එක" : "s"}:`,
             "",
             ...lessonSources.map((source: any, index: number) => {
-              const status = source.textIndexed ? "AI-ready" : source.needsOcr ? "OCR අවශ්‍යයි" : "Reprocess අවශ්‍යයි";
-              return `${index + 1}. [${source.title}](${source.url}) — ${status}`;
+              return `${index + 1}. [${source.title}](${source.url})`;
             }),
             "",
             "මෙය saved lesson resources වල exact result එකයි. Web candidate PDFs හෝ source එකේ නැති exam details add කරන්නේ නැහැ.",
@@ -426,27 +425,25 @@ export async function aiRespondStream(req: any, res: any) {
           emitSse(res, "status", { step: "zscore_db", status: "reading" });
           const formatMetric = (value: unknown, digits = 4) =>
             typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "N/A";
-          const hasCompleteEstimate = zctx.complete === true && typeof zctx.latestOverallZScore === "number";
-          let fastAns = hasCompleteEstimate
-            ? `### Practice Z estimate\n\nActual saved paper totals පමණක් භාවිතා කළ practice estimate එක: **${formatMetric(zctx.latestOverallZScore)}**.\n`
-            : `### Practice Z estimate unavailable\n\nSFT, ET සහ ICT තුනටම අවම වශයෙන් completed paper result එකක් save කළ පසු overall practice estimate එක ගණනය කළ හැක.\n`;
+          let fastAns = `### Exam Score Predictor Z estimate\n\nඔයාගේ syllabus progress එකෙන් Exam Score Predictor ගණනය කළ planning estimate එක: **${formatMetric(zctx.latestOverallZScore)}**.\n`;
           fastAns += zctx.targetZScore !== undefined
             ? `Target Z-score එක: **${zctx.targetZScore}**.\n`
             : `Target Z-score එක තවම Profile එකේ set කරලා නැහැ.\n`;
-          if (zctx.gapToTarget !== undefined) fastAns += `Practice target gap එක: **${formatMetric(zctx.gapToTarget)}**.\n\n`;
+          if (zctx.gapToTarget !== undefined) fastAns += `Target gap එක: **${formatMetric(zctx.gapToTarget)}**.\n`;
+          if (zctx.rankEstimate?.districtRank) fastAns += `Estimated district rank: **≈ ${Number(zctx.rankEstimate.districtRank).toLocaleString()}**.\n`;
+          if (zctx.rankEstimate?.islandRank) fastAns += `Estimated island rank: **≈ ${Number(zctx.rankEstimate.islandRank).toLocaleString()}**.\n\n`;
 
-          fastAns += `**Actual saved-paper averages / practice subject estimates:**\n`;
+          fastAns += `**Projected marks / subject estimates:**\n`;
           for (const subject of ["sft", "et", "ict"]) {
             const label = subject.toUpperCase();
             const mark = zctx.rawPaperAverages?.[subject];
             const estimate = zctx.subjectZScores?.[subject];
-            const samples = zctx.sampleCounts?.[subject] || 0;
-            fastAns += `- ${label}: ${typeof mark === "number" ? `${mark.toFixed(1)}%` : "No completed papers"} · Z ${formatMetric(estimate)} · ${samples} paper${samples === 1 ? "" : "s"}\n`;
+            fastAns += `- ${label}: ${typeof mark === "number" ? `${mark.toFixed(1)}%` : "N/A"} · Z ${formatMetric(estimate)}\n`;
           }
           fastAns += `\n`;
 
           if (zctx.latestUpdatedAt) fastAns += `*Last updated: ${new Date(zctx.latestUpdatedAt).toLocaleString("en-LK", { timeZone: "Asia/Colombo" })}*\n\n`;
-          fastAns += `> මෙය official exam Z-score හෝ rank prediction එකක් නොවේ. Official Z-score සඳහා examination-year cohort mean සහ standard deviation අවශ්‍යයි; district/island rank මෙතැන fabricate නොකරයි.`;
+          fastAns += `> මේවා Exam Score Predictor planning estimates. Official exam Z-score හෝ official district/island rank නොවේ.`;
 
           emitSse(res, "token", { text: fastAns });
           trace.lastEvent = "token";
@@ -1045,7 +1042,7 @@ export async function aiRespondStream(req: any, res: any) {
       }
 
       if (needsOcr) {
-        const ocrWarning = "⚠️ PDF එකෙන් text extract කරන්න බැහැ. OCR අවශ්‍යයි.";
+        const ocrWarning = "PDF එක save වෙලා තියෙනවා, නමුත් එහි searchable lesson text තවම සූදානම් නැහැ. ටික වේලාවකින් නැවත උත්සාහ කරන්න.";
         emitSse(res, "token", { text: ocrWarning });
         trace.lastEvent = "token";
 
@@ -1121,8 +1118,8 @@ export async function aiRespondStream(req: any, res: any) {
     if (isLessonEvidenceMode(route.mode) && contextBlocksText.trim().length === 0) {
       const lessonName = route.entities.lesson || evidence.lessonIds[0] || "requested lesson";
       const statusMessage = evidence.evidenceStatus === "ocr_required"
-        ? `**${lessonName}** lesson එකට PDF source හමු වුණා, නමුත් text index වෙලා නැහැ. OCR/Reprocess run කළාට පස්සේ ඒ PDF evidence එකෙන් ප්‍රශ්න දෙන්න පුළුවන්.`
-        : `**${lessonName}** lesson එකට indexed PDF evidence එකක් හමු වුණේ නැහැ. Source එක upload/index කළාට පස්සේ මම ඒ lesson එකේ PDF වලින් පමණක් ප්‍රශ්න සහ පිළිතුරු දෙන්නම්.`;
+        ? `**${lessonName}** lesson PDF එක save වෙලා තියෙනවා. Searchable lesson text සූදානම් වූ විගස ඒ PDF evidence එකෙන් ප්‍රශ්න සහ පිළිතුරු දෙන්නම්.`
+        : `**${lessonName}** lesson එකට searchable PDF evidence එකක් තවම හමු වුණේ නැහැ. PDF එක lesson එක යටතේ upload කළ පසු එහි content එකෙන් පිළිතුරු දෙන්නම්.`;
       emitSse(res, "evidence_missing", {
         reason: evidence.evidenceStatus,
         lesson: lessonName,
