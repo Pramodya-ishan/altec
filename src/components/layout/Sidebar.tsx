@@ -25,7 +25,7 @@ export function Sidebar() {
     { id: 'paper-marks', label: 'Past Paper Marks', icon: LineChart },
     { id: 'past-papers', label: 'Past Papers DB', icon: FileText },
     { id: 'admission-predictor', label: 'Z Core & Analytics', icon: GraduationCap },
-    { id: 'clora-x', label: 'Clora X Assistant', icon: Bot }
+    { id: 'clora-x', label: 'Study Assistant', icon: Bot }
   ];
 
   const isAdminUser = profile?.role === 'admin' || profile?.roles?.includes('admin');
@@ -52,7 +52,7 @@ export function Sidebar() {
 
       <aside
         className={cn(
-          "fixed left-0 top-0 h-[100dvh] bg-white shadow-2xl lg:shadow-none lg:border-r lg:border-slate-200 z-[99] lg:z-40 flex flex-col transition-all duration-300 ease-[cubic-bezier(0.25,1,0.5,1)] pt-4",
+          "fixed left-0 top-0 h-[100dvh] bg-white shadow-xl lg:shadow-none lg:border-r lg:border-slate-200 z-[99] lg:z-40 flex flex-col transition-all duration-200 ease-out pt-4",
           isSidebarOpen ? "w-72 translate-x-0" : "w-72 lg:w-[72px] -translate-x-full lg:translate-x-0"
         )}
       >
@@ -86,11 +86,11 @@ export function Sidebar() {
                     ? "gap-3.5 px-4 py-3.5 text-left justify-start" 
                     : "px-0 py-3.5 justify-center text-center mx-auto w-12",
                   isActive
-                    ? "bg-indigo-50 text-indigo-700"
+                    ? "bg-slate-950 text-white"
                     : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
                 )}
               >
-                <Icon className={cn("shrink-0 transition-transform duration-200", isActive ? "scale-110 text-indigo-600" : "group-hover:scale-110", isSidebarOpen ? "w-5 h-5" : "w-5 h-5")} />
+                <Icon className={cn("shrink-0 transition-colors duration-200", isActive ? "text-white" : "", isSidebarOpen ? "w-5 h-5" : "w-5 h-5")} />
                 
                 {isSidebarOpen ? (
                   <span className="truncate font-bold tracking-tight text-[14px]">{item.label}</span>

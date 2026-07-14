@@ -146,9 +146,9 @@ function AuthOverlay() {
 
   if (isAuthLoading) {
     return (
-      <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-white" role="status" aria-live="polite" aria-label="Checking sign-in">
-        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 px-5 py-4 shadow-sm">
-          <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
+      <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-[#f7f8fa]" role="status" aria-live="polite" aria-label="Checking sign-in">
+        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-[0_8px_30px_rgba(15,23,42,0.06)]">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-700" />
           <div>
             <p className="text-sm font-bold text-slate-800">Opening your workspace</p>
             <p className="text-xs text-slate-500">Checking your secure session…</p>
@@ -161,16 +161,16 @@ function AuthOverlay() {
   if (user) return null;
 
   return (
-    <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[999999] flex items-center justify-center p-4">
-      <div className="bg-white rounded-[1.5rem] shadow-2xl p-8 max-w-sm w-full text-center flex flex-col gap-6">
+    <div className="fixed inset-0 bg-[#f7f8fa] z-[999999] flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-[0_18px_60px_rgba(15,23,42,0.08)] p-8 max-w-sm w-full text-center flex flex-col gap-6">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shadow-sm border border-indigo-100">
+          <div className="w-14 h-14 rounded-xl bg-slate-950 text-white flex items-center justify-center">
             <GraduationCap className="w-8 h-8" />
           </div>
           <div className="space-y-1.5">
-            <h2 className="text-2xl font-black text-slate-900 tracking-tight">Clora X</h2>
+            <h2 className="text-2xl font-semibold text-slate-950 tracking-tight">A/L Learning Workspace</h2>
             <p className="text-sm font-medium text-slate-500">
-              Sign in with your Google account to access your A/L dashboard.
+              Sign in to continue to your lessons, papers and progress.
             </p>
           </div>
         </div>

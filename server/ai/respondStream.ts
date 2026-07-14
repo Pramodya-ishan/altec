@@ -378,7 +378,7 @@ export async function aiRespondStream(req: any, res: any) {
             `**${lessonName}** lesson එකට match වෙන saved PDF resource${lessonSources.length === 1 ? " එක" : "s"}:`,
             "",
             ...lessonSources.map((source: any, index: number) => {
-              return `${index + 1}. [${source.title}](${source.url})`;
+              return `${index + 1}. **${source.title}**`;
             }),
             "",
             "මෙය saved lesson resources වල exact result එකයි. Web candidate PDFs හෝ source එකේ නැති exam details add කරන්නේ නැහැ.",
@@ -387,6 +387,21 @@ export async function aiRespondStream(req: any, res: any) {
 
       if (lessonSources.length > 0) emitSse(res, "sources", { sources: lessonSources });
       emitSse(res, "token", { text: answer });
+      if (lessonSources.length > 0) {
+        const selected = lessonSources[0];
+        await updateConversationState(user.uid, {
+          activeSubject: route.entities.subject || activeSubject,
+          activeLessonIds: [lessonName],
+          activeSourceIds: lessonSources.map((source: any) => source.sourceId).filter(Boolean),
+          selectedSourceId: selected.sourceId,
+          selectedQuestionId: null,
+          currentQuestionIndex: 0,
+          requestedResourceType: "lesson_pdf",
+          evidenceMode: "strict",
+          allowGeneratedContent: false,
+          lastIntent: "lesson_pdf_search"
+        });
+      }
       const chatRes = await saveFinalChat({
         uid: user.uid,
         email: user.email,
@@ -411,6 +426,92 @@ export async function aiRespondStream(req: any, res: any) {
         finishReason: lessonSources.length > 0 ? "lesson_sources_found" : "lesson_sources_missing",
       });
       trace.doneSent = true;
+      return;
+    }
+
+    // A selected lesson PDF remains locked across terse follow-ups such as
+    // "1", "Q1" and "eke prashna karamu".  We never ask the model to invent
+    // the question: the authenticated Direct PDF QA route reads the original
+    // Firebase object on the server.
+    const selectedFollowUpModes = [
+      "selected_resource_discussion",
+      "continue_grounded_discussion",
+      "lesson_question_discussion"
+    ];
+    if (selectedFollowUpModes.includes(route.mode) && activeConversationState.selectedSourceId) {
+      const selectedSource = evidence.selectedSource;
+      const rawQuestionNo = route.entities.questionNo || activeConversationState.selectedQuestionId;
+      const explicitQuestionNo = rawQuestionNo ? String(rawQuestionNo).replace(/^q/i, "") : null;
+
+      if (!explicitQuestionNo) {
+        const promptText = "හරි. මේ PDF එක source එක ලෙස තෝරාගෙන තියෙනවා. පටන් ගන්න ප්‍රශ්න අංකය කියන්න — උදා: **Q1**.";
+        emitSse(res, "token", { text: promptText });
+        const chatRes = await saveFinalChat({
+          uid: user.uid, email: user.email, userText: prompt, assistantText: promptText,
+          mode: "selected_resource_discussion", subject: evidence.subject || activeSubject,
+          sources: selectedSource ? [selectedSource] : []
+        });
+        emitSse(res, "done", {
+          ok: true, completed: true, requestId, messageId: chatRes.messageId || null,
+          chatSaved: chatRes.chatSaved, sources: selectedSource ? [selectedSource] : [],
+          finishReason: "selected_source_waiting_for_question"
+        });
+        trace.doneSent = true;
+        trace.completed = true;
+        return;
+      }
+
+      if (!selectedSource) {
+        const missing = "තෝරාගත් PDF source එක දැන් හමු වුණේ නැහැ. Lesson resources එකෙන් PDF එක නැවත තෝරන්න.";
+        emitSse(res, "token", { text: missing });
+        emitSse(res, "done", { ok: false, completed: true, requestId, finishReason: "selected_source_missing", sources: [] });
+        trace.doneSent = true;
+        return;
+      }
+
+      const sourceId = selectedSource.sourceId || selectedSource.id;
+      const questionType = route.entities.requestedAnswerType === "essay" ? "ESSAY" : "MCQ";
+      await updateConversationState(user.uid, {
+        selectedSourceId: sourceId,
+        selectedQuestionId: explicitQuestionNo,
+        currentQuestionIndex: Number(explicitQuestionNo) || null,
+        lastIntent: "selected_resource_discussion"
+      });
+
+      const lockedSources = [{
+        id: sourceId,
+        sourceId,
+        title: selectedSource.title,
+        storagePath: selectedSource.storagePath,
+        url: selectedSource.url || `/api/rag/sources/${sourceId}/download`,
+        badge: "Selected PDF"
+      }];
+      emitSse(res, "sources", { sources: lockedSources });
+      emitSse(res, "direct_pdf_handoff_required", {
+        sourceId,
+        storagePath: selectedSource.storagePath,
+        title: selectedSource.title,
+        subject: selectedSource.subject || evidence.subject || activeSubject || "SFT",
+        year: selectedSource.year || null,
+        questionNo: explicitQuestionNo,
+        questionType,
+        prompt,
+        reason: "SELECTED_SOURCE_DIRECT_SCAN",
+        message: `තෝරාගත් PDF එකෙන් Q${explicitQuestionNo} කියවමින් පවතී.`
+      });
+      emitSse(res, "done", {
+        ok: true, completed: false, pending: true, requestId,
+        finishReason: "pending_direct_pdf_qa", canContinue: true, needsClientFile: false,
+        sources: lockedSources,
+        paperInfo: {
+          sourceId, questionNo: explicitQuestionNo,
+          year: selectedSource.year || null,
+          subject: selectedSource.subject || evidence.subject || activeSubject || "SFT",
+          questionType, prompt, extractionMethod: "pending_direct_pdf_qa"
+        }
+      });
+      trace.doneSent = true;
+      trace.completed = false;
       return;
     }
 

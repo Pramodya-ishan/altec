@@ -63,7 +63,7 @@ export type KnowledgeRouterResult = {
 };
 
 function parseDeterministicIntent(prompt: string, activeSubject?: string): Partial<KnowledgeRouterResult> | null {
-  const lower = prompt.toLowerCase();
+  const lower = prompt.toLowerCase().trim();
   const lessonReference = resolveLessonReference(prompt);
 
   // PDF Inventory request check
@@ -207,6 +207,57 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
     questionNo = "4";
   } else if (lower.includes("පස්වෙනි") || lower.includes("fifth") || lower.includes("5th")) {
     questionNo = "5";
+  }
+
+  // Short follow-ups are very common after the assistant has displayed a
+  // source list ("1", "q1", "eka", "ek karamu").  Keep these deterministic
+  // so an LLM router cannot accidentally turn a selected-PDF discussion into
+  // an unrelated lesson search.
+  const isBareNumber = /^\d{1,3}$/.test(lower);
+  const isSourceSelection = isBareNumber || /^(?:source|pdf|file)\s*\d{1,3}$/.test(lower);
+  const isGroundedFollowUp = [
+    "eka", "eke", "ek", "ek karamu", "ek krmu", "ehem karamu", "ehem krmu",
+    "questions karamu", "prashna karamu", "prshna krmu", "pdf eke prashna",
+    "එක", "ඒක", "ඒ pdf එක", "ප්‍රශ්න කරමු", "ප්‍රශ්නය"
+  ].some(token => lower === token || lower.includes(token));
+
+  if (isSourceSelection) {
+    return {
+      mode: "continue_grounded_discussion",
+      entities: { subject },
+      answerHints: {
+        mustUseRag: true,
+        mustUseGoogleSearch: false,
+        mustUseUrlContext: false,
+        mustAskClarification: false
+      }
+    };
+  }
+
+  if (questionNo && (lower === `q${questionNo}` || lower === `question ${questionNo}` || isGroundedFollowUp)) {
+    return {
+      mode: "selected_resource_discussion",
+      entities: { subject, questionNo, requestedAnswerType: lower.includes("essay") ? "essay" : undefined },
+      answerHints: {
+        mustUseRag: true,
+        mustUseGoogleSearch: false,
+        mustUseUrlContext: false,
+        mustAskClarification: false
+      }
+    };
+  }
+
+  if (isGroundedFollowUp) {
+    return {
+      mode: "continue_grounded_discussion",
+      entities: { subject },
+      answerHints: {
+        mustUseRag: true,
+        mustUseGoogleSearch: false,
+        mustUseUrlContext: false,
+        mustAskClarification: false
+      }
+    };
   }
 
   // 5. Lesson marks intent
