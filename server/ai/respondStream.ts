@@ -358,6 +358,63 @@ export async function aiRespondStream(req: any, res: any) {
       return;
     }
 
+    // A lesson PDF lookup is an inventory operation, not a generative answer.
+    // Return exact Firebase matches so the model cannot invent a web source.
+    if (route.mode === "lesson_pdf_search") {
+      const lessonName = route.entities.lesson || evidence.lessonIds[0] || "requested lesson";
+      const lessonSources = (evidence.candidates || []).map((source: any) => {
+        const id = source.sourceId || source.id;
+        return {
+          ...source,
+          id,
+          sourceId: id,
+          url: source.url || `/api/rag/sources/${id}/download`,
+          badge: source.textIndexed ? "Lesson PDF" : source.needsOcr ? "Needs OCR" : "Needs indexing",
+          usedInAnswer: true,
+        };
+      });
+      const answer = lessonSources.length > 0
+        ? [
+            `**${lessonName}** lesson එකට match වෙන saved PDF resource${lessonSources.length === 1 ? " එක" : "s"}:`,
+            "",
+            ...lessonSources.map((source: any, index: number) => {
+              const status = source.textIndexed ? "AI-ready" : source.needsOcr ? "OCR අවශ්‍යයි" : "Reprocess අවශ්‍යයි";
+              return `${index + 1}. [${source.title}](${source.url}) — ${status}`;
+            }),
+            "",
+            "මෙය saved lesson resources වල exact result එකයි. Web candidate PDFs හෝ source එකේ නැති exam details add කරන්නේ නැහැ.",
+          ].join("\n")
+        : `**${lessonName}** lesson එකට match වෙන saved PDF resource එකක් හමු වුණේ නැහැ. Lesson resource එක නිවැරදි lesson name එක යටතේ upload කර index කරන්න.`;
+
+      if (lessonSources.length > 0) emitSse(res, "sources", { sources: lessonSources });
+      emitSse(res, "token", { text: answer });
+      const chatRes = await saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: answer,
+        mode: route.mode,
+        subject: route.entities.subject || activeSubject,
+        sources: lessonSources,
+      });
+      if (chatRes?.chatSaved) {
+        trace.chatSaved = true;
+        trace.messageId = chatRes.messageId;
+      }
+      trace.completed = true;
+      emitSse(res, "done", {
+        ok: lessonSources.length > 0,
+        completed: true,
+        requestId,
+        messageId: chatRes?.messageId || null,
+        chatSaved: trace.chatSaved,
+        sources: lessonSources,
+        finishReason: lessonSources.length > 0 ? "lesson_sources_found" : "lesson_sources_missing",
+      });
+      trace.doneSent = true;
+      return;
+    }
+
     emitSse(res, "status", { step: "profile", status: "reading" });
 
     const userContext = await safeCall("loadUserAIContext", () => loadUserAIContext(user.uid, user.email), { activeSubject } as any, res);
@@ -368,14 +425,20 @@ export async function aiRespondStream(req: any, res: any) {
        const zctx = userContext?.zScoreContext;
        if (zctx && zctx.hasZScoreData) {
           emitSse(res, "status", { step: "zscore_db", status: "reading" });
-          let fastAns = `Firebase data අනුව ඔයාගේ latest estimated Z-score එක: **${zctx.latestOverallZScore ?? 'N/A'}**.\n`;
-          fastAns += `Target Z-score එක: **${zctx.targetZScore ?? 'N/A'}**.\n`;
-          if (zctx.gapToTarget) fastAns += `Target එකට තව අවශ්‍ය gap එක: **${zctx.gapToTarget}**.\n\n`;
+          let fastAns = `ඔයාගේ latest estimated Z-score එක: **${zctx.latestOverallZScore ?? 'Not calculated'}**.\n`;
+          fastAns += zctx.targetZScore !== undefined
+            ? `Target Z-score එක: **${zctx.targetZScore}**.\n`
+            : `Target Z-score එක තවම Profile එකේ set කරලා නැහැ.\n`;
+          if (zctx.gapToTarget !== undefined) fastAns += `Target එකට gap එක: **${zctx.gapToTarget}**.\n\n`;
 
           fastAns += `**Subject Z (Estimated):**\n`;
-          fastAns += `- SFT: ${zctx.subjectZScores?.sft ?? 'N/A'}\n`;
-          fastAns += `- ET: ${zctx.subjectZScores?.et ?? 'N/A'}\n`;
-          fastAns += `- ICT: ${zctx.subjectZScores?.ict ?? 'N/A'}\n\n`;
+          if (zctx.subjectZScores) {
+            fastAns += `- SFT: ${zctx.subjectZScores.sft ?? 'Not calculated'}\n`;
+            fastAns += `- ET: ${zctx.subjectZScores.et ?? 'Not calculated'}\n`;
+            fastAns += `- ICT: ${zctx.subjectZScores.ict ?? 'Not calculated'}\n\n`;
+          } else {
+            fastAns += `Subject-wise estimates තවම save වෙලා නැහැ. Marks save කළාම ඒවා මෙතැන පෙන්වනවා.\n\n`;
+          }
 
           if (zctx.rankEstimate?.districtRank) {
             fastAns += `**Rank Estimates:**\n`;
@@ -383,9 +446,8 @@ export async function aiRespondStream(req: any, res: any) {
             fastAns += `- Island Rank: ${zctx.rankEstimate.islandRank ?? 'N/A'}\n\n`;
           }
 
-          fastAns += `*History records: ${zctx.zScoreHistory?.length ?? 0}*\n`;
-          if (zctx.latestUpdatedAt) fastAns += `*Last updated: ${new Date(zctx.latestUpdatedAt).toLocaleString()}*\n\n`;
-          fastAns += `Z-score එක වෙනස් වීමට හේතු: ඔබ ලබාගත් ලකුණු ප්‍රමාණයන් සහ සපුරන ලද පාඩම්වල ප්‍රගතිය (progress) මෙයට බලපා ඇත. ඊළඟට Z-score වැඩි කරන්න, ඔයාගේ weak lessons ටික revise කරමුද?`;
+          if (zctx.latestUpdatedAt) fastAns += `*Last updated: ${new Date(zctx.latestUpdatedAt).toLocaleString("en-LK", { timeZone: "Asia/Colombo" })}*\n\n`;
+          fastAns += `මේ estimate එක saved paper marks සහ subject progress අනුව ගණනය කරලා තියෙන්නේ. Official exam Z-score එකක් නොවේ.`;
 
           emitSse(res, "token", { text: fastAns });
           trace.lastEvent = "token";
@@ -1082,7 +1144,7 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     // 4. Web Search
-    if (requestedMode === "web_search" || requestedMode === "deep_search" || (route.mode !== "uploaded_pdf_question_qa" && route.answerHints.mustUseGoogleSearch)) {
+    if (requestedMode === "web_search" || requestedMode === "deep_search" || (route.mode !== "uploaded_pdf_question_qa" && !isLessonEvidenceMode(route.mode) && route.answerHints.mustUseGoogleSearch)) {
       emitSse(res, "status", { step: "web_search", status: "searching", query: prompt });
       const web: any = await safeCall("groundedSearch", () => groundedSearch(prompt, { language: "si" }) as Promise<any>, { sources: [], summary: "" } as any, res);
       if (web.sources.length > 0) {
@@ -1160,6 +1222,7 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     // Build the parts array for the contents object
+    const mistakeImageSources: any[] = [];
     const contentsParts: any[] = [
       {
         text: `Context Blocks:\n${contextBlocksText}\n\nPrevious Chat History:\n${history?.length ? JSON.stringify(history) : 'None'}\n\nCurrent User Request:\n${prompt}\nAnswer in Sinhala-first style if appropriate.`
@@ -1175,8 +1238,9 @@ export async function aiRespondStream(req: any, res: any) {
         errorText: mistake.errorText || mistake.questionText,
         createdAt: mistake.createdAt,
         hasImage: Boolean(mistake.imageStoragePath),
-      })))}\nUse these records for diagnosis, revision, or a grounded quiz. Do not invent missing questions or answers.`;
-      const bucketName = getAdminBucket().name;
+      })))}\nUse these records for diagnosis, revision, or a grounded quiz. If a saved image is attached below, inspect that actual image. Do not ask the user to upload it again. Never replace unreadable or missing details with generic likely mistakes; say exactly what cannot be read.`;
+      const bucket = getAdminBucket();
+      const bucketName = bucket.name;
       for (const mistake of recentMistakes.slice(0, 3)) {
         if (!mistake.imageStoragePath || !mistake.imageMimeType) continue;
         contentsParts.push({
@@ -1186,8 +1250,29 @@ export async function aiRespondStream(req: any, res: any) {
           },
         });
         contentsParts.push({ text: `Mistake Notebook image for ${mistake.subject || "subject"} / ${mistake.lesson || "lesson"}. Analyze only when relevant.` });
+        try {
+          const [imageUrl] = await bucket.file(mistake.imageStoragePath).getSignedUrl({
+            action: "read",
+            expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+          });
+          const source = {
+            id: mistake.id,
+            sourceId: mistake.id,
+            title: mistake.imageFileName || `${mistake.subject || "Subject"} - ${mistake.lesson || "lesson"}`,
+            url: imageUrl,
+            sourceType: "mistake_image",
+            badge: "Saved error image",
+            mimeType: mistake.imageMimeType,
+            lesson: mistake.lesson,
+          };
+          mistakeImageSources.push(source);
+          allSources.push(source);
+        } catch (error) {
+          console.warn("[MistakeNotebook] Could not sign saved image", { mistakeId: mistake.id, error: String(error) });
+        }
         aiTask = "image_understanding";
       }
+      if (mistakeImageSources.length > 0) emitSse(res, "sources", { sources: allSources });
     }
 
     if (image && image.data && image.mimeType) {
@@ -1268,6 +1353,14 @@ export async function aiRespondStream(req: any, res: any) {
       }
       if (chunkBuffer.length > 0) {
         emitSse(res, "token", { text: chunkBuffer });
+      }
+      if (!isInterrupted && mistakeImageSources.length > 0) {
+        const gallery = `\n\n### Saved error image${mistakeImageSources.length === 1 ? "" : "s"}\n\n${mistakeImageSources.map((source: any) => {
+          const alt = String(source.title || "Saved mistake image").replace(/[\[\]]/g, "");
+          return `![${alt}](${source.url})`;
+        }).join("\n\n")}`;
+        fullText += gallery;
+        emitSse(res, "token", { text: gallery });
       }
     } catch (e: any) {
       console.warn("Stream interrupted:", e);

@@ -20,8 +20,34 @@ console.warn = (...args: any[]) => {
 
 // Suppress Vite websocket warnings in AI Studio preview
 if (typeof window !== 'undefined') {
+  const recoverFromStaleChunk = async () => {
+    const recoveryKey = 'clora_chunk_recovery';
+    const lastRecovery = Number(sessionStorage.getItem(recoveryKey) || 0);
+    if (Date.now() - lastRecovery < 30_000) return;
+    sessionStorage.setItem(recoveryKey, String(Date.now()));
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations().catch(() => []);
+      await Promise.all(registrations.map((registration) => registration.unregister().catch(() => false)));
+    }
+    if (typeof caches !== 'undefined') {
+      const keys = await caches.keys().catch(() => []);
+      await Promise.all(keys.filter((key) => key.startsWith('workbox') || key.startsWith('clora')).map((key) => caches.delete(key)));
+    }
+    window.location.reload();
+  };
+
+  window.addEventListener('vite:preloadError', (event) => {
+    event.preventDefault();
+    void recoverFromStaleChunk();
+  });
+
   window.addEventListener("unhandledrejection", (event) => {
     const msg = String(event.reason?.message || event.reason || "");
+    if (msg.includes('Failed to fetch dynamically imported module') || msg.includes('Importing a module script failed')) {
+      event.preventDefault();
+      void recoverFromStaleChunk();
+      return;
+    }
     if (msg.includes("WebSocket closed without opened")) {
       event.preventDefault();
       console.warn("[dev] Vite HMR websocket unavailable");

@@ -7,6 +7,7 @@ import { resolveLessonReference } from "./lessonResolver";
 export type KnowledgeRouterResult = {
   mode:
 
+    | "lesson_pdf_search"
     | "lesson_question_discussion"
     | "lesson_theory_explanation"
     | "official_paper_question"
@@ -241,6 +242,12 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
       mode: "past_paper_lesson_search",
 
       entities: { subject, lesson: lessonReference?.label }
+    };
+  }
+  if (lessonReference && (lower.includes("pdf") || lower.includes("resource") || lower.includes("note") || lower.includes("tute"))) {
+    return {
+      mode: "lesson_pdf_search",
+      entities: { subject, lesson: lessonReference.label }
     };
   }
   const asksLessonQuestions = (lower.includes("prashna") || lower.includes("prasna") || lower.includes("ප්‍රශ්න") || lower.includes("question") || lower.includes("quiz"))

@@ -80,6 +80,7 @@ export function normalizeMathMarkdown(
   }
 
   let output = rawContent
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/\r\n/g, "\n")
     .replace(/\\text\{([^\}]+)\}/g, "$1")
     .replace(/\\\\\(/g, "\\(")

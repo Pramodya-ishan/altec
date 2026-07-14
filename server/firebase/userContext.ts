@@ -19,18 +19,28 @@ export async function loadUserAIContext(uid: string, email?: string) {
     const userUidRef = db.collection("users").doc(uid);
     const userEmailRef = email ? db.collection("users").doc(email.toLowerCase()) : null;
 
-    // 2. Fetch both profile snapshots
-    const [uidSnap, emailSnap] = await Promise.all([
+    // 2. Fetch root, profile, and progress snapshots in one network round-trip.
+    const [uidSnap, emailSnap, uidProfileSnap, emailProfileSnap, uidProg, emailProg] = await Promise.all([
       userUidRef.get().catch(() => null),
-      userEmailRef ? userEmailRef.get().catch(() => null) : null
+      userEmailRef ? userEmailRef.get().catch(() => null) : null,
+      userUidRef.collection("profile").doc("main").get().catch(() => null),
+      userEmailRef ? userEmailRef.collection("profile").doc("main").get().catch(() => null) : null,
+      userUidRef.collection("progress").doc("data").get().catch(() => null),
+      userEmailRef ? userEmailRef.collection("progress").doc("data").get().catch(() => null) : null,
     ]);
 
     let profileData: any = {};
+    if (emailSnap && emailSnap.exists) {
+      profileData = { ...profileData, ...emailSnap.data() };
+    }
     if (uidSnap && uidSnap.exists) {
       profileData = { ...profileData, ...uidSnap.data() };
     }
-    if (emailSnap && emailSnap.exists) {
-      profileData = { ...profileData, ...emailSnap.data() };
+    if (emailProfileSnap && emailProfileSnap.exists) {
+      profileData = { ...profileData, ...emailProfileSnap.data() };
+    }
+    if (uidProfileSnap && uidProfileSnap.exists) {
+      profileData = { ...profileData, ...uidProfileSnap.data() };
     }
     
     // 2.5 LOAD FROM LOCAL DB EXPORT (OLD SCHEMA)
@@ -51,29 +61,24 @@ export async function loadUserAIContext(uid: string, email?: string) {
     let appData: any = null;
     let loadedFrom = "none";
     
-    // 1. Root data
-    if (profileData.appData) { appData = profileData.appData; loadedFrom = "root_appData"; }
-    else if (profileData.data) { appData = profileData.data; loadedFrom = "root_data"; }
-
-    // 2. Subcollections
-    if (!appData) {
-      const [uidProg, emailProg] = await Promise.all([
-        userUidRef.collection("progress").doc("data").get().catch(() => null),
-        userEmailRef ? userEmailRef.collection("progress").doc("data").get().catch(() => null) : null
-      ]);
-
-      if (uidProg && uidProg.exists) {
-        const p = uidProg.data();
-        appData = p?.data || p;
-        loadedFrom = "uid_progress_data";
-      } else if (emailProg && emailProg.exists) {
-        const p = emailProg.data();
-        appData = p?.data || p;
-        loadedFrom = "email_progress_data";
-      }
+    // 1. Canonical UID progress wins over root/legacy copies.
+    if (uidProg && uidProg.exists) {
+      const p = uidProg.data();
+      appData = p?.data || p;
+      loadedFrom = "uid_progress_data";
+    } else if (emailProg && emailProg.exists) {
+      const p = emailProg.data();
+      appData = p?.data || p;
+      loadedFrom = "email_progress_data";
+    } else if (profileData.appData) {
+      appData = profileData.appData;
+      loadedFrom = "root_appData";
+    } else if (profileData.data) {
+      appData = profileData.data;
+      loadedFrom = "root_data";
     }
-    
-    // 3. Local DB Fallback
+
+    // 2. Local DB Fallback
     if (!appData && localDbData && (localDbData.data || localDbData.appData)) {
       appData = localDbData.data || localDbData.appData;
       loadedFrom = "local_db_fallback";
@@ -197,8 +202,11 @@ export async function loadUserAIContext(uid: string, email?: string) {
     };
 
     // Extract target Z-score
-    const targetZ = profileData.targetZScore ?? profileData.targetZ ?? profileData.zTarget ?? 
-                    appData?.targetZScore ?? appData?.targetZ ?? appData?.zTarget;
+    const targetZ = profileData.targetZScore ?? profileData.targetZ ?? profileData.zTarget ??
+                    profileData.profile?.targetZScore ?? profileData.profile?.targetZ ??
+                    (uidProg && uidProg.exists ? uidProg.data()?.targetZScore ?? uidProg.data()?.data?.targetZ : undefined) ??
+                    (emailProg && emailProg.exists ? emailProg.data()?.targetZScore ?? emailProg.data()?.data?.targetZ : undefined) ??
+                    appData?.targetZScore ?? appData?.targetZ ?? appData?.zTarget ?? appData?.profile?.targetZ;
     if (targetZ !== undefined && targetZ !== null) {
        zScoreContext.targetZScore = Number(targetZ);
        zScoreContext.hasZScoreData = true;
@@ -220,11 +228,11 @@ export async function loadUserAIContext(uid: string, email?: string) {
        et: profileData.etZ ?? appData?.etZ ?? subjZ?.et,
        ict: profileData.ictZ ?? appData?.ictZ ?? subjZ?.ict,
     };
-    if (flatSubjZ.sft || flatSubjZ.et || flatSubjZ.ict) {
+    if ([flatSubjZ.sft, flatSubjZ.et, flatSubjZ.ict].some((value) => value !== undefined && value !== null)) {
        zScoreContext.subjectZScores = {
-         sft: flatSubjZ.sft ? Number(flatSubjZ.sft) : undefined,
-         et: flatSubjZ.et ? Number(flatSubjZ.et) : undefined,
-         ict: flatSubjZ.ict ? Number(flatSubjZ.ict) : undefined,
+         sft: flatSubjZ.sft !== undefined && flatSubjZ.sft !== null ? Number(flatSubjZ.sft) : undefined,
+         et: flatSubjZ.et !== undefined && flatSubjZ.et !== null ? Number(flatSubjZ.et) : undefined,
+         ict: flatSubjZ.ict !== undefined && flatSubjZ.ict !== null ? Number(flatSubjZ.ict) : undefined,
        };
        zScoreContext.hasZScoreData = true;
     }
@@ -253,9 +261,9 @@ export async function loadUserAIContext(uid: string, email?: string) {
        zScoreContext.zScoreHistory = rawHistory.map((r: any) => ({
           date: r.date ?? r.createdAt ?? r.timestamp,
           overall: r.overall ?? r.zScore ?? r.overallZScore,
-          sft: r.sft ?? r.sftZ,
-          et: r.et ?? r.etZ,
-          ict: r.ict ?? r.ictZ,
+          sft: r.sft ?? r.sftZ ?? r.subjectZScores?.sft,
+          et: r.et ?? r.etZ ?? r.subjectZScores?.et,
+          ict: r.ict ?? r.ictZ ?? r.subjectZScores?.ict,
           source: r.source ?? 'history_array'
        })).filter((r: any) => r.overall !== undefined);
 
@@ -268,11 +276,11 @@ export async function loadUserAIContext(uid: string, email?: string) {
              return 0;
           });
           const latestHist = zScoreContext.zScoreHistory[zScoreContext.zScoreHistory.length - 1];
-          if (!zScoreContext.latestOverallZScore || (latestHist.date && new Date(latestHist.date).getTime() > 0)) {
+          if (zScoreContext.latestOverallZScore === undefined || (latestHist.date && new Date(latestHist.date).getTime() > 0)) {
              zScoreContext.latestOverallZScore = latestHist.overall;
              zScoreContext.latestUpdatedAt = latestHist.date;
              
-             if (!zScoreContext.subjectZScores && (latestHist.sft || latestHist.et || latestHist.ict)) {
+             if (!zScoreContext.subjectZScores && [latestHist.sft, latestHist.et, latestHist.ict].some((value) => value !== undefined && value !== null)) {
                 zScoreContext.subjectZScores = {
                    sft: latestHist.sft,
                    et: latestHist.et,
@@ -304,7 +312,7 @@ export async function loadUserAIContext(uid: string, email?: string) {
       chatHistoryLast10,
       recentMistakes,
       examDates: profileData?.examDates || {},
-      targetZ: appData?.targetZ || profileData?.targetZ,
+      targetZ: zScoreContext.targetZScore,
       zScoreContext,
       currentTimeAsiaColombo: new Date().toLocaleString("en-US", {timeZone: process.env.APP_TIME_ZONE || "Asia/Colombo"})
     };

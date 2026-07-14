@@ -2,7 +2,9 @@ export function sanitizeMathMarkdown(input: string): string {
   if (!input) return "";
 
   // Replace unicode replacement character  with space
-  let text = input.replace(/\uFFFD/g, " ");
+  let text = input
+    .replace(/\uFFFD/g, " ")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "");
 
   // Fix common broken sqrt/braces patterns
   text = text.replace(/\\sqrt\{([^}]*)$/g, "\\sqrt{$1}");

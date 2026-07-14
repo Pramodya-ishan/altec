@@ -506,14 +506,16 @@ app.post("/api/profile/target-zscore", async (req, res) => {
     // Write to profile/main
     const uidRef = db.collection("users").doc(user.uid).collection("profile").doc("main");
     batch.set(uidRef, { targetZScore, updatedAt: new Date().toISOString() }, { merge: true });
+    batch.set(db.collection("users").doc(user.uid), { targetZScore, updatedAt: new Date().toISOString() }, { merge: true });
 
     // Also write to progress/data for consistency
     const progRef = db.collection("users").doc(user.uid).collection("progress").doc("data");
-    batch.set(progRef, { targetZScore, updatedAt: new Date().toISOString() }, { merge: true });
+    batch.set(progRef, { targetZScore, data: { targetZ: targetZScore }, updatedAt: new Date().toISOString() }, { merge: true });
 
     if (user.email) {
        const emailRef = db.collection("users").doc(user.email.toLowerCase()).collection("profile").doc("main");
        batch.set(emailRef, { targetZScore, updatedAt: new Date().toISOString() }, { merge: true });
+       batch.set(db.collection("users").doc(user.email.toLowerCase()), { targetZScore, updatedAt: new Date().toISOString() }, { merge: true });
     }
 
     await batch.commit();
@@ -620,6 +622,12 @@ if (process.env.NODE_ENV !== "production") {
 } else {
   const distPath = path.join(process.cwd(), 'dist');
   app.use(express.static(distPath));
+  // Do not turn a missing hashed JS/CSS chunk into index.html. Browsers reject
+  // that response as a module MIME mismatch; the client can then perform its
+  // one-time stale-cache recovery from a clean 404 instead.
+  app.get('/assets/*', (req, res) => {
+    res.status(404).type('text/plain').send('Static asset not found');
+  });
   app.get('*', (req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
   });

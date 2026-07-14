@@ -918,16 +918,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
                        console.info("Loaded student data from Firebase Firestore successfully");
                      }
                      
-                     // Sync this data back to the Express backend so AI routes have the latest context
-                     try {
-                       await apiFetch('/api/data', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ email: email, data: docData.data })
-                       });
-                     } catch (e) {
+                     // Keep the initial screen responsive; this mirror write does not
+                     // need to block the Firestore data already rendered above.
+                     void apiFetch('/api/data', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: email, data: docData.data })
+                     }).catch((e) => {
                        console.error('Failed to sync loaded Firestore data to Express backend', e);
-                     }
+                     });
                      return;
                   }
                }

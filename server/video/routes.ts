@@ -17,6 +17,7 @@ import {
   verifyVideoAppCheck,
   type VideoDocument,
 } from "./videoService";
+import { removeUndefinedDeep } from "../ai-core/memory/chatSanitizer";
 
 export const videoRoutes = express.Router();
 
@@ -116,8 +117,8 @@ videoRoutes.post("/admin/videos", async (req, res) => {
     };
 
     await db.runTransaction(async (tx: any) => {
-      tx.create(videoRef, video);
-      tx.create(sourceRef, {
+      tx.create(videoRef, removeUndefinedDeep(video));
+      tx.create(sourceRef, removeUndefinedDeep({
         sourceId: sourceRef.id,
         ownerUid: admin.uid,
         notebookIds: [],
@@ -143,7 +144,7 @@ videoRoutes.post("/admin/videos", async (req, res) => {
         chunkCount: 0,
         createdAt: now,
         updatedAt: now,
-      });
+      }));
     });
     res.status(201).json({ ok: true, videoId: video.id, sourceId: video.sourceId, version });
   } catch (error: any) {

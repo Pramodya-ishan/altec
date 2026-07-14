@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireUser, getAdminDb } from "../firebase/admin";
+import { requireUser, getAdminBucket, getAdminDb } from "../firebase/admin";
 import { diagnoseStudent } from "../ai-core/student/studentDiagnosis";
 import { generateWarPlan } from "../ai-core/study/warPlan";
 
@@ -78,6 +78,35 @@ router.post("/mock-result", async (req, res) => {
 });
 
 // Mistake Notebook
+router.get("/mistakes", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const snapshot = await getAdminDb().collection("users").doc(user.uid).collection("mistake_notebook")
+      .orderBy("createdAt", "desc")
+      .limit(100)
+      .get();
+    const bucket = getAdminBucket();
+    const mistakes = await Promise.all(snapshot.docs.map(async (document: any) => {
+      const data = document.data();
+      let imageUrl: string | null = null;
+      if (data.imageStoragePath) {
+        try {
+          [imageUrl] = await bucket.file(data.imageStoragePath).getSignedUrl({
+            action: "read",
+            expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+          });
+        } catch (error) {
+          console.warn("[mistakes] Could not sign image", { id: document.id, error: String(error) });
+        }
+      }
+      return { id: document.id, ...data, imageUrl };
+    }));
+    res.json({ ok: true, mistakes });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 router.post("/mistake", async (req, res) => {
   try {
     const user = await requireUser(req);

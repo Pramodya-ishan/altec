@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { findLessonSources, resolveLessonReference } from "../lessonResolver";
+import { findLessonSources, isLessonEvidenceMode, resolveLessonReference } from "../lessonResolver";
+import { routeKnowledgeRequest } from "../knowledgeRouter";
 import { resolveAnswerPolicy } from "../../ai/answerPolicy";
 import { computeIndexStatus } from "../../sources/sourceInventoryService";
 
@@ -21,6 +22,15 @@ assert.equal(resolveLessonReference("Python lesson quiz")?.label, "Python");
 const policy = resolveAnswerPolicy("තරල පාඩමේ ප්‍රශ්න කරමු", { mode: "lesson_question_discussion" }, "SFT");
 assert.equal(policy.requireEvidence, true);
 assert.equal(policy.intent, "lesson_question_discussion");
+
+const pdfPolicy = resolveAnswerPolicy("tharala pdf", { mode: "lesson_pdf_search" }, "SFT");
+assert.equal(pdfPolicy.requireEvidence, true);
+assert.equal(pdfPolicy.intent, "lesson_pdf_search");
+assert.equal(isLessonEvidenceMode("lesson_pdf_search"), true);
+
+const pdfRoute = await routeKnowledgeRequest({ prompt: "tharala pdf", uid: "test-user", activeSubject: "SFT" });
+assert.equal(pdfRoute.mode, "lesson_pdf_search");
+assert.equal(pdfRoute.entities.lesson, "තරල / Fluid mechanics");
 
 assert.equal(computeIndexStatus({ indexStatus: "queued", chunkCount: 0, needsOcr: false }), "queued");
 assert.equal(computeIndexStatus({ indexStatus: "ready", chunkCount: 4, needsOcr: false }), "ready");

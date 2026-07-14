@@ -68,7 +68,7 @@ export function MessageRenderer({ content }: MessageRendererProps) {
           img: ({ node, ...props }) => {
             const src = props.src || "";
             if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:image/")) {
-              return <img {...props} className="rounded-2xl shadow-sm border border-slate-200 my-4 max-w-full" loading="lazy" referrerPolicy="no-referrer" alt="" />;
+              return <img {...props} className="rounded-2xl shadow-sm border border-slate-200 my-4 max-w-full" loading="lazy" referrerPolicy="no-referrer" alt={props.alt || "AI response image"} />;
             }
             return null;
           },

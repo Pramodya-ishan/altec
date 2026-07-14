@@ -466,7 +466,7 @@ export default function PastPapersView() {
 
  return (
  <div className="space-y-6 ">
- <div className="bg-white p-6 border border-slate-200 rounded-[1.8rem] shadow-sm relative overflow-hidden">
+ <div className="bg-white p-4 sm:p-6 border border-slate-200 rounded-[1.8rem] shadow-sm relative overflow-visible">
  
  <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
  <div className="flex gap-2 bg-slate-100 p-1 rounded-xl w-full md:w-auto overflow-x-auto">
@@ -506,7 +506,7 @@ export default function PastPapersView() {
  )}
  </label>
  {isUploading && uploadTelemetry && (
-   <div className="absolute right-0 top-12 z-20 w-72 rounded-2xl border border-slate-200 bg-white p-4 text-xs shadow-xl" role="status" aria-live="polite">
+   <div className="fixed left-4 right-4 top-24 z-50 w-auto rounded-2xl border border-slate-200 bg-white p-4 text-xs shadow-xl sm:absolute sm:left-auto sm:right-0 sm:top-12 sm:w-72" role="status" aria-live="polite">
      <div className="mb-2 flex items-center justify-between font-bold text-slate-800">
        <span>{uploadTelemetry.phase === "indexing" ? "Upload complete · indexing" : "Uploading PDF"}</span>
        <span>{Math.round(uploadTelemetry.progress * 100)}%</span>

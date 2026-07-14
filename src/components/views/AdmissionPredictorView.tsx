@@ -99,6 +99,10 @@ import {
   normalizeFormula,
   looksLikeAdvisorJson,
 } from "../../lib/advisorParser";
+import { sanitizeMathMarkdown } from "../../lib/mathSanitizer";
+
+const safeAdvisorMarkdown = (value: unknown) =>
+  sanitizeMathMarkdown(normalizeFormula(String(value || "")));
 
 export const SubjectTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
@@ -256,7 +260,7 @@ export const DiagnosticJsonDashboard = ({
                 remarkPlugins={[remarkGfm, remarkMath]}
                 rehypePlugins={[rehypeKatex]}
               >
-                {normalizeFormula(data.targetFeasibility.explanation)}
+                {safeAdvisorMarkdown(data.targetFeasibility.explanation)}
               </Markdown>
             </div>
           </div>
@@ -492,7 +496,7 @@ export const DiagnosticJsonDashboard = ({
                 remarkPlugins={[remarkGfm, remarkMath]}
                 rehypePlugins={[rehypeKatex]}
               >
-                {normalizeFormula(data.finalAdvice)}
+                {safeAdvisorMarkdown(data.finalAdvice)}
               </Markdown>
             </div>
           </div>
@@ -570,7 +574,7 @@ const renderMessageContent = (
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
       >
-        {message.text}
+        {safeAdvisorMarkdown(message.text)}
       </Markdown>
     );
   }
@@ -582,7 +586,7 @@ const renderMessageContent = (
           remarkPlugins={[remarkGfm, remarkMath]}
           rehypePlugins={[rehypeKatex]}
         >
-          {message.text}
+          {safeAdvisorMarkdown(message.text)}
         </Markdown>
       )}
 

@@ -82,7 +82,7 @@ export async function retrieveEvidence(
       evidenceStatus = "verified";
       allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
       allowAnswerGeneration = true;
-    } else {
+    } else if (!isLessonEvidenceMode(intent)) {
       if (allAvailableSources.length > 0) {
         // Find best match manually if resolveStrictSource failed
         const matches = allAvailableSources.filter(s => {

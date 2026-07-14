@@ -140,7 +140,23 @@ function AuthOverlay() {
     }
   };
 
-  if (isAuthLoading) return null;
+  if (isAuthLoading) {
+    return (
+      <div className="fixed inset-0 z-[999999] bg-slate-50" role="status" aria-live="polite" aria-label="Loading your student data">
+        <div className="h-17 border-b border-slate-200 bg-white px-5 py-4">
+          <div className="h-9 w-44 animate-pulse rounded-xl bg-slate-200" />
+        </div>
+        <div className="mx-auto max-w-6xl space-y-5 p-5 sm:p-8">
+          <div className="flex items-center gap-3 rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm">
+            <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
+            <div><p className="text-sm font-bold text-slate-800">Loading your learning data</p><p className="text-xs text-slate-500">Syncing marks, lessons, PDFs and profile…</p></div>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">{[0, 1, 2].map((item) => <div key={item} className="h-32 animate-pulse rounded-3xl border border-slate-200 bg-white" />)}</div>
+          <div className="h-72 animate-pulse rounded-3xl border border-slate-200 bg-white" />
+        </div>
+      </div>
+    );
+  }
 
   if (user) return null;
 

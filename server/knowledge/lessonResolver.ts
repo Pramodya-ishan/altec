@@ -104,5 +104,5 @@ export function findLessonSources(sources: any[], prompt: unknown, explicitLesso
 }
 
 export function isLessonEvidenceMode(mode: unknown) {
-  return ["lesson_question_discussion", "lesson_theory_explanation", "past_paper_lesson_search"].includes(String(mode || ""));
+  return ["lesson_pdf_search", "lesson_question_discussion", "lesson_theory_explanation", "past_paper_lesson_search"].includes(String(mode || ""));
 }

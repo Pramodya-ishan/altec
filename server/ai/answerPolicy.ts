@@ -1,4 +1,5 @@
 export type AnswerIntent =
+  | "lesson_pdf_search"
   | "lesson_question_discussion"
   | "lesson_theory_explanation"
   | "official_paper_question"
@@ -63,7 +64,7 @@ export function resolveAnswerPolicy(
      };
   }
 
-  if (["lesson_question_discussion", "lesson_theory_explanation", "past_paper_lesson_search"].includes(route?.mode)) {
+  if (["lesson_pdf_search", "lesson_question_discussion", "lesson_theory_explanation", "past_paper_lesson_search"].includes(route?.mode)) {
     return {
       intent: route.mode,
       allowSources: true,

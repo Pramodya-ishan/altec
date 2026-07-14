@@ -1,194 +1,92 @@
-import React, { useState, useEffect } from 'react';
-import { useApp } from '../context/AppContext';
-import { auth, db } from '../lib/firebase';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
-import { 
-  BookOpen, 
-  Search, 
-  Filter, 
-  Trash2, 
-  RotateCcw, 
-  CheckCircle,
-  XCircle,
-  ChevronRight,
-  AlertCircle
-} from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
-import { cn } from '../lib/utils';
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AlertCircle, BookOpen, ImageIcon, RefreshCw, Search } from "lucide-react";
+import { apiFetch } from "../lib/api";
+import { Skeleton } from "../components/ui/Skeleton";
+
+type MistakeRecord = {
+  id: string;
+  subject?: string;
+  lesson?: string;
+  errorText?: string;
+  questionText?: string;
+  imageUrl?: string | null;
+  imageFileName?: string | null;
+  createdAt?: string;
+};
 
 export default function MistakeNotebook() {
-  const { user } = useApp();
-  const [mistakes, setMistakes] = useState<any[]>([]);
+  const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterSubject, setFilterSubject] = useState<string>('All');
+  const [error, setError] = useState("");
+  const [subject, setSubject] = useState("All");
+  const [search, setSearch] = useState("");
 
-  const fetchMistakes = async () => {
+  const loadMistakes = useCallback(async () => {
     setLoading(true);
+    setError("");
     try {
-      const email = user?.email || 'local_user';
-      if (db && user?.email) {
-        const q = query(
-          collection(db, "users", email, "mistake_notebook"),
-          orderBy("createdAt", "desc")
-        );
-        const snap = await getDocs(q);
-        const fetched = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setMistakes(fetched);
-        localStorage.setItem(`local_mistake_notebook_${email}`, JSON.stringify(fetched));
-      } else {
-        const local = localStorage.getItem(`local_mistake_notebook_${email}`) || localStorage.getItem('local_mistake_notebook');
-        if (local) {
-          setMistakes(JSON.parse(local));
-        }
-      }
-    } catch (err) {
-      console.error("Firebase fetchMistakes failed, using local fallback:", err);
-      const email = user?.email || 'local_user';
-      const local = localStorage.getItem(`local_mistake_notebook_${email}`) || localStorage.getItem('local_mistake_notebook');
-      if (local) {
-        setMistakes(JSON.parse(local));
-      }
+      const response = await apiFetch("/api/student/mistakes");
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Could not load your error log.");
+      setMistakes(Array.isArray(payload.mistakes) ? payload.mistakes : []);
+    } catch (loadError: any) {
+      setError(loadError?.message || "Could not load your error log.");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  useEffect(() => {
-    fetchMistakes();
-  }, [user]);
+  useEffect(() => { void loadMistakes(); }, [loadMistakes]);
 
-  const filteredMistakes = mistakes.filter(m => filterSubject === 'All' || m.subject === filterSubject);
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return mistakes.filter((mistake) => {
+      if (subject !== "All" && mistake.subject !== subject) return false;
+      if (!term) return true;
+      return `${mistake.lesson || ""} ${mistake.errorText || mistake.questionText || ""}`.toLowerCase().includes(term);
+    });
+  }, [mistakes, search, subject]);
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto pb-12">
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 tracking-tight flex items-center gap-2">
-            <BookOpen className="w-8 h-8 text-rose-600" />
-            Mistake Notebook
-          </h1>
-          <p className="text-gray-500 mt-1">Automatic logging of errors for targeted revision</p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input 
-              type="text" 
-              placeholder="Search mistakes..." 
-              className="pl-9 pr-4 py-2 bg-white border border-gray-100 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 outline-none w-64"
-            />
+    <section className="mx-auto w-full max-w-5xl space-y-5 pb-12">
+      <header className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <span className="grid h-11 w-11 place-items-center rounded-2xl bg-rose-50 text-rose-600"><BookOpen className="h-5 w-5" /></span>
+            <div><h1 className="text-xl font-bold text-slate-950">Error log</h1><p className="text-sm text-slate-500">Your saved text and images for AI revision.</p></div>
           </div>
-          <select 
-            value={filterSubject}
-            onChange={(e) => setFilterSubject(e.target.value)}
-            className="px-4 py-2 bg-white border border-gray-100 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 outline-none"
-          >
-            <option>All</option>
-            <option>SFT</option>
-            <option>ET</option>
-            <option>ICT</option>
+          <button type="button" onClick={() => void loadMistakes()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+          </button>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_150px]">
+          <label className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input aria-label="Search errors" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search lesson or error text" className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-slate-400 focus:ring-4 focus:ring-slate-100" /></label>
+          <select aria-label="Filter errors by subject" value={subject} onChange={(event) => setSubject(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 outline-none focus:border-slate-400">
+            <option>All</option><option>SFT</option><option>ET</option><option>ICT</option>
           </select>
         </div>
       </header>
 
       {loading ? (
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-rose-600"></div>
-        </div>
-      ) : filteredMistakes.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-gray-100 p-16 text-center space-y-4">
-          <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center mx-auto">
-            <CheckCircle className="w-10 h-10 text-emerald-600" />
-          </div>
-          <h3 className="text-xl font-bold text-gray-900">No Mistakes Logged Yet</h3>
-          <p className="text-gray-500 max-w-md mx-auto">Excellent work! Any errors you make in mock tests or practice sessions will appear here for you to master.</p>
-        </div>
+        <div className="grid gap-4 sm:grid-cols-2">{[0, 1, 2, 3].map((item) => <div key={item} className="rounded-3xl border border-slate-200 bg-white p-5"><Skeleton className="h-5 w-32" /><Skeleton className="mt-4 h-16 w-full" /><Skeleton className="mt-4 h-40 w-full rounded-2xl" /></div>)}</div>
+      ) : error ? (
+        <div className="rounded-3xl border border-rose-200 bg-white p-6 text-center"><AlertCircle className="mx-auto h-7 w-7 text-rose-500" /><p className="mt-3 text-sm font-semibold text-slate-800">{error}</p></div>
+      ) : filtered.length === 0 ? (
+        <div className="rounded-3xl border border-slate-200 bg-white p-12 text-center"><BookOpen className="mx-auto h-9 w-9 text-slate-300" /><h2 className="mt-3 font-bold text-slate-800">No saved errors found</h2><p className="mt-1 text-sm text-slate-500">Add text or an image from the AI tools menu.</p></div>
       ) : (
-        <div className="grid grid-cols-1 gap-4">
-          {filteredMistakes.map((mistake) => (
-            <motion.div
-              layout
-              key={mistake.id}
-              className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden hover:border-rose-100 transition-all"
-            >
-              <div className="p-6 space-y-4">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className={cn(
-                      "px-3 py-1 rounded-lg text-[10px] font-bold uppercase",
-                      mistake.subject === 'SFT' ? "bg-indigo-50 text-indigo-600" :
-                      mistake.subject === 'ET' ? "bg-emerald-50 text-emerald-600" :
-                      "bg-amber-50 text-amber-600"
-                    )}>
-                      {mistake.subject}
-                    </div>
-                    <span className="text-xs font-medium text-gray-400">{mistake.lesson}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button className="p-2 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors">
-                      <RotateCcw className="w-4 h-4" />
-                    </button>
-                    <button className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="flex gap-4">
-                    <div className="shrink-0 pt-1">
-                      <AlertCircle className="w-5 h-5 text-rose-500" />
-                    </div>
-                    <div className="space-y-4 flex-1">
-                      <h4 className="text-gray-900 font-bold leading-tight">{mistake.questionText}</h4>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="p-4 bg-rose-50 rounded-xl border border-rose-100">
-                          <span className="text-[10px] font-bold text-rose-400 uppercase block mb-1">Your Answer</span>
-                          <div className="flex items-center gap-2 text-rose-700 font-medium">
-                            <XCircle className="w-4 h-4" />
-                            {mistake.userAnswer}
-                          </div>
-                        </div>
-                        <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100">
-                          <span className="text-[10px] font-bold text-emerald-400 uppercase block mb-1">Correct Answer</span>
-                          <div className="flex items-center gap-2 text-emerald-700 font-medium">
-                            <CheckCircle className="w-4 h-4" />
-                            {mistake.correctAnswer}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="bg-gray-50 rounded-xl p-4">
-                        <span className="text-[10px] font-bold text-gray-400 uppercase block mb-1">AI Explanation</span>
-                        <p className="text-sm text-gray-600 leading-relaxed">{mistake.explanation}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="pt-4 border-t border-gray-50 flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] font-bold text-gray-400 uppercase">Repeats:</span>
-                      <span className="text-sm font-bold text-gray-700">{mistake.repeatCount || 0}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="text-[10px] font-bold text-gray-400 uppercase">Type:</span>
-                      <span className="text-xs font-bold text-rose-600">{mistake.mistakeType}</span>
-                    </div>
-                  </div>
-                  
-                  <button className="flex items-center gap-1 text-sm font-bold text-indigo-600 hover:text-indigo-700">
-                    Master this topic <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {filtered.map((mistake) => (
+            <article key={mistake.id} className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+              {mistake.imageUrl ? <img src={mistake.imageUrl} alt={mistake.imageFileName || `Saved ${mistake.lesson || "error"}`} className="max-h-72 w-full bg-slate-50 object-contain" loading="lazy" /> : null}
+              <div className="p-5">
+                <div className="flex items-center gap-2"><span className="rounded-full bg-slate-900 px-2.5 py-1 text-[10px] font-bold text-white">{mistake.subject || "Subject"}</span><span className="truncate text-xs font-semibold text-slate-500">{mistake.lesson || "Lesson"}</span>{mistake.imageUrl ? <ImageIcon className="ml-auto h-4 w-4 text-slate-400" /> : null}</div>
+                <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-800">{mistake.errorText || mistake.questionText || "Image-only error record"}</p>
+                {mistake.createdAt ? <time className="mt-4 block text-[11px] text-slate-400">{new Date(mistake.createdAt).toLocaleString()}</time> : null}
               </div>
-            </motion.div>
+            </article>
           ))}
         </div>
       )}
-    </div>
+    </section>
   );
 }
