@@ -35,6 +35,26 @@
       "destination": "/manifest.webmanifest"
     },
     {
+      "source": "/resources",
+      "destination": "/resources/index.html"
+    },
+    {
+      "source": "/past-papers/:subject/:year",
+      "destination": "/past-papers/:subject/:year/index.html"
+    },
+    {
+      "source": "/past-papers/:subject",
+      "destination": "/past-papers/:subject/index.html"
+    },
+    {
+      "source": "/lessons/:subject/:lesson",
+      "destination": "/lessons/:subject/:lesson/index.html"
+    },
+    {
+      "source": "/lessons/:subject",
+      "destination": "/lessons/:subject/index.html"
+    },
+    {
       "source": "/clora-x/:path*",
       "destination": "/index.html"
     },

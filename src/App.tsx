@@ -30,7 +30,7 @@ import { NotesModal } from './components/modals/NotesModal';
 import { SilencePlayerModal } from './components/modals/SilencePlayerModal';
 import { AnimatePresence, motion } from 'motion/react';
 import { cn } from './lib/utils';
-import { CheckCircle2, XCircle, Info, X, CloudOff, GraduationCap, Loader2 } from 'lucide-react';
+import { CheckCircle2, XCircle, Info, X, CloudOff, Loader2 } from 'lucide-react';
 import { PageSkeleton } from './components/ui/PageSkeleton';
 
 function ToastNotification() {
@@ -147,13 +147,8 @@ function AuthOverlay() {
   if (isAuthLoading) {
     return (
       <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-white" role="status" aria-live="polite" aria-label="Checking sign-in">
-        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 px-5 py-4 shadow-sm">
-          <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
-          <div>
-            <p className="text-sm font-bold text-slate-800">Opening your workspace</p>
-            <p className="text-xs text-slate-500">Checking your secure session…</p>
-          </div>
-        </div>
+        <div className="absolute inset-x-0 top-0 h-0.5 overflow-hidden bg-slate-100"><div className="h-full w-1/3 animate-[pulse_1s_ease-in-out_infinite] bg-slate-900" /></div>
+        <p className="text-sm font-medium text-slate-500">Loading dashboard…</p>
       </div>
     );
   }
@@ -161,24 +156,17 @@ function AuthOverlay() {
   if (user) return null;
 
   return (
-    <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[999999] flex items-center justify-center p-4">
-      <div className="bg-white rounded-[1.5rem] shadow-2xl p-8 max-w-sm w-full text-center flex flex-col gap-6">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shadow-sm border border-indigo-100">
-            <GraduationCap className="w-8 h-8" />
-          </div>
-          <div className="space-y-1.5">
-            <h2 className="text-2xl font-black text-slate-900 tracking-tight">Clora X</h2>
-            <p className="text-sm font-medium text-slate-500">
-              Sign in with your Google account to access your A/L dashboard.
-            </p>
-          </div>
+    <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-slate-50 p-4">
+      <div className="flex w-full max-w-sm flex-col gap-6 rounded-2xl border border-slate-200 bg-white p-7 shadow-sm">
+        <div className="space-y-2 text-left">
+          <h2 className="text-xl font-semibold tracking-tight text-slate-950">Sign in</h2>
+          <p className="text-sm leading-6 text-slate-500">Use your Google account to continue to the A/L learning dashboard.</p>
         </div>
 
         <button
           onClick={handleGoogleLogin}
           disabled={actionLoading}
-          className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-800 font-bold py-3.5 px-6 rounded-xl cursor-pointer active:scale-[0.98] transition-all text-sm flex items-center justify-center gap-3 shadow-sm"
+          className="flex w-full cursor-pointer items-center justify-center gap-3 rounded-xl border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60"
         >
           {actionLoading ? (
             <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
@@ -216,6 +204,38 @@ function AppContent() {
      setCurrentView(path as any);
   }, [location.pathname, setCurrentView]);
 
+  React.useEffect(() => {
+    const metadata: Record<string, { title: string; description: string }> = {
+      '/paper-structure': {
+        title: 'A/L Technology Syllabus & Exam Score Predictor | Clora X',
+        description: 'Track Sri Lankan G.C.E. A/L SFT, ET and ICT syllabus progress and plan exam preparation lesson by lesson.',
+      },
+      '/past-papers': {
+        title: 'Sri Lanka A/L SFT, ET & ICT Past Papers | Clora X',
+        description: 'Open and organize A/L Technology SFT, ET and ICT past papers, model papers and marking-scheme resources.',
+      },
+      '/admission-predictor': {
+        title: 'A/L Technology Exam Score Predictor | Clora X',
+        description: 'Review SFT, ET and ICT practice scores and planning estimates from your completed work.',
+      },
+      '/clora-x': {
+        title: 'Clora X A/L Technology Learning Assistant',
+        description: 'Ask syllabus-grounded questions about SFT, ET, ICT lessons, past papers and your saved learning resources.',
+      },
+    };
+    const current = metadata[location.pathname] || {
+      title: 'Clora X | Sri Lanka A/L Technology SFT, ET & ICT',
+      description: 'Sinhala-first G.C.E. A/L Technology learning workspace for SFT, ET and ICT.',
+    };
+    const canonicalUrl = `${window.location.origin}${location.pathname}`;
+    document.title = current.title;
+    document.getElementById('app-description')?.setAttribute('content', current.description);
+    document.getElementById('app-canonical')?.setAttribute('href', canonicalUrl);
+    document.getElementById('app-og-title')?.setAttribute('content', current.title);
+    document.getElementById('app-og-description')?.setAttribute('content', current.description);
+    document.getElementById('app-og-url')?.setAttribute('content', canonicalUrl);
+  }, [location.pathname]);
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 relative">
       <OnlineStatus />
@@ -237,7 +257,7 @@ function AppContent() {
                 {user && isUserDataLoading && !hasHydratedUserData ? (
                   <PageSkeleton pathname={location.pathname} />
                 ) : (
-                <Routes location={location} key={location.pathname}>
+                <Routes location={location}>
                   <Route path="/" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="/paper-structure" element={<PaperStructureView />} />
                   <Route path="/question-marks" element={<Navigate to="/paper-structure" replace />} />

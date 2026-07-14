@@ -392,7 +392,10 @@ videoRoutes.get("/admin/videos", async (req, res) => {
     await verifyVideoAppCheck(req);
     await requireAdmin(req);
     const snapshot = await getAdminDb().collection("videos").orderBy("createdAt", "desc").limit(100).get();
-    res.json({ ok: true, videos: snapshot.docs.map((doc: any) => publicVideo({ id: doc.id, ...doc.data() } as VideoDocument)) });
+    const videos = await Promise.all(snapshot.docs.map((doc: any) =>
+      refreshTranscodeStatus({ id: doc.id, ...doc.data() } as VideoDocument),
+    ));
+    res.json({ ok: true, videos: videos.map(publicVideo) });
   } catch (error: any) {
     res.status(400).json({ ok: false, code: "VIDEOS_LIST_FAILED", message: error.message });
   }
@@ -414,8 +417,10 @@ videoRoutes.get("/videos", async (req, res) => {
     await verifyVideoAppCheck(req);
     const user = await requireUser(req);
     const snapshot = await getAdminDb().collection("videos").where("isPublished", "==", true).limit(100).get();
-    const videos = snapshot.docs
-      .map((doc: any) => ({ id: doc.id, ...doc.data() } as VideoDocument))
+    const refreshed = await Promise.all(snapshot.docs.map((doc: any) =>
+      refreshTranscodeStatus({ id: doc.id, ...doc.data() } as VideoDocument),
+    ));
+    const videos = refreshed
       .filter((video: VideoDocument) => canUserPlayVideo(video, user))
       .map(publicVideo);
     res.json({ ok: true, videos });
@@ -512,15 +517,32 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
     const active = await db.collection("videoPlaybackSessions")
       .where("userId", "==", user.uid)
       .where("status", "==", "active")
-      .limit(Math.max(1, video.maxConcurrentSessions))
+      .limit(25)
       .get();
     const now = Date.now();
-    const liveSessions = active.docs.filter((doc: any) => Number(doc.data().expiresAtMs || 0) > now);
+    const deviceId = String(req.header("X-Device-ID") || "unknown").slice(0, 160);
+    const expiredOrSameDevice = active.docs.filter((document: any) => {
+      const session = document.data();
+      return Number(session.expiresAtMs || 0) <= now
+        || (session.videoId === video.id && session.deviceId === deviceId);
+    });
+    if (expiredOrSameDevice.length) {
+      const cleanup = db.batch();
+      expiredOrSameDevice.forEach((document: any) => cleanup.set(document.ref, { status: "revoked", endedAt: new Date(now).toISOString() }, { merge: true }));
+      await cleanup.commit();
+    }
+    const liveSessions = active.docs.filter((document: any) => {
+      const session = document.data();
+      return session.videoId === video.id
+        && session.deviceId !== deviceId
+        && Number(session.expiresAtMs || 0) > now;
+    });
     if (liveSessions.length >= video.maxConcurrentSessions) {
       return res.status(409).json({ ok: false, code: "PLAYBACK_SESSION_LIMIT", message: "This account already has an active playback session." });
     }
 
-    const directPlayback = !video.transcoderJobName || (video as any).playbackMode === "direct";
+    const cdnConfigured = Boolean(env.VIDEO_CDN_BASE_URL && env.VIDEO_CDN_KEY_NAME && env.VIDEO_CDN_SIGNING_KEY);
+    const directPlayback = !video.transcoderJobName || (video as any).playbackMode === "direct" || !cdnConfigured;
     const signed = directPlayback ? null : createSignedPlaybackCookie(video);
     const sessionRef = db.collection("videoPlaybackSessions").doc();
     const streamToken = directPlayback ? crypto.randomBytes(32).toString("base64url") : null;
@@ -529,7 +551,7 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
       sessionId: sessionRef.id,
       userId: user.uid,
       videoId: video.id,
-      deviceId: String(req.header("X-Device-ID") || "unknown").slice(0, 160),
+      deviceId,
       userAgentHash: crypto.createHash("sha256").update(String(req.header("user-agent") || "unknown")).digest("hex"),
       createdAt: new Date(now).toISOString(),
       lastHeartbeatAt: new Date(now).toISOString(),

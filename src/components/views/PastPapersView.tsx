@@ -8,7 +8,8 @@ import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { apiFetch } from '../../lib/api';
 import { getRecommendedUploadMode } from '../../lib/uploadMode';
 import { uploadPdfWithClientStorage, deletePrivateStorageObject, type UploadProgressSnapshot, type UploadTaskControls } from '../../lib/clientStorageUpload';
-import { DocumentCover } from '../ui/DocumentCover';
+import { useSearchParams } from 'react-router-dom';
+import { FileText } from 'lucide-react';
 
 function normalizeSubject(s: string) {
   return String(s || "").trim().toUpperCase();
@@ -54,7 +55,8 @@ function formatEta(seconds: number | null) {
 }
 
 export default function PastPapersView() {
-  const { currentSubject, profile } = useApp();
+  const { currentSubject, setCurrentSubject, profile } = useApp();
+  const [searchParams] = useSearchParams();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('A/L Past Papers');
   const [papers, setPapers] = useState<any[]>([]);
@@ -67,6 +69,20 @@ export default function PastPapersView() {
   const uploadControlsRef = useRef<UploadTaskControls | null>(null);
 
   const categories = ['A/L Past Papers', 'Model Papers'];
+
+  const searchQuery = searchParams.toString();
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchQuery);
+    const subject = String(params.get('subject') || '').toLowerCase();
+    if (subject === 'sft' || subject === 'et' || subject === 'ict') {
+      setCurrentSubject(subject);
+    }
+
+    const requestedSearch = params.get('search') || params.get('teacher') || params.get('year') || '';
+    setSearchTerm(requestedSearch);
+    setSelectedCategory(params.get('category') === 'model' ? 'Model Papers' : 'A/L Past Papers');
+  }, [searchQuery, setCurrentSubject]);
 
   useEffect(() => {
     if (toast) {
@@ -89,7 +105,11 @@ export default function PastPapersView() {
   }, [currentSubject]);
 
   const filteredPapers = dedupeBySourceId([...uploadedPapers, ...papers]).filter(paper => {
-    const matchesSearch = String(paper.title || "").toLowerCase().includes(searchTerm.toLowerCase()) || String(paper.year || "").includes(searchTerm);
+    const searchableText = [paper.title, paper.year, paper.teacher, paper.author, paper.description, ...(Array.isArray(paper.tags) ? paper.tags : [])]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    const matchesSearch = searchableText.includes(searchTerm.toLowerCase());
     const matchesCategory = paper.category === selectedCategory;
     return matchesSearch && matchesCategory;
   });
@@ -471,7 +491,6 @@ export default function PastPapersView() {
     });
   }}
  >
- <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-primary-100 to-transparent rounded-bl-full opacity-0 group-hover:opacity-50 transition-opacity pointer-events-none"></div>
  <div className="relative z-10">
  <div className="flex justify-between items-start mb-3">
  <span className={cn(
@@ -488,7 +507,13 @@ export default function PastPapersView() {
  </div>
  <h4 className="font-bold text-slate-800 text-base mb-1 group-hover:text-primary-600 transition-colors leading-tight">{paper.title}</h4>
  <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider mt-2">{paper.category}</p>
- <DocumentCover title={paper.title} eyebrow={`${paper.year || "A/L"} · ${paper.type || "Paper"}`} className="mt-4" />
+ <div className="mt-4 flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+   <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white text-slate-500 ring-1 ring-slate-200"><FileText className="h-4 w-4" /></span>
+   <span className="min-w-0">
+     <span className="block text-xs font-bold text-slate-700">PDF file</span>
+     <span className="block truncate text-[11px] text-slate-400">Open in the secure document viewer</span>
+   </span>
+ </div>
  </div>
  
  <div className="mt-5 pt-3 border-t border-slate-100 flex justify-between items-center relative z-10">

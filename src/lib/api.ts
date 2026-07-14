@@ -11,18 +11,29 @@ export async function getAuthToken(): Promise<string | null> {
     }
   }
   
-  // Wait for auth state if not loaded
+  // Wait briefly for Firebase's first auth event. Never leave API calls
+  // pending forever when persistence or a browser extension blocks auth.
   return new Promise((resolve) => {
-    const unsubscribe = auth.onAuthStateChanged(async (user: any) => {
+    let settled = false;
+    let timeout = 0;
+    let unsubscribe = () => {};
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
       unsubscribe();
+      resolve(value);
+    };
+    timeout = window.setTimeout(() => finish(null), 5000);
+    unsubscribe = auth.onAuthStateChanged(async (user: any) => {
       if (user) {
         try {
-          resolve(await user.getIdToken());
+          finish(await user.getIdToken());
         } catch (e) {
-          resolve(null);
+          finish(null);
         }
       } else {
-        resolve(null);
+        finish(null);
       }
     });
   });

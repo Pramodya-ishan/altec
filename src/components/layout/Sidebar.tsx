@@ -8,7 +8,7 @@ import {
   LineChart, 
   FileText, 
   GraduationCap, 
-  Bot, 
+  MessageCircle,
   BookOpen, 
   ShieldAlert,
   Menu,
@@ -25,7 +25,7 @@ export function Sidebar() {
     { id: 'paper-marks', label: 'Past Paper Marks', icon: LineChart },
     { id: 'past-papers', label: 'Past Papers DB', icon: FileText },
     { id: 'admission-predictor', label: 'Z Core & Analytics', icon: GraduationCap },
-    { id: 'clora-x', label: 'Clora X Assistant', icon: Bot }
+    { id: 'clora-x', label: 'Study Assistant', icon: MessageCircle }
   ];
 
   const isAdminUser = profile?.role === 'admin' || profile?.roles?.includes('admin');
