@@ -28,8 +28,10 @@ export async function extractPdfText(pdfBuffer: Buffer): Promise<{
 }> {
   let pdfjsLib: any = null;
   try {
-    const pdfjsModulePath = "pdfjs-dist/legacy/build/pdf.mjs";
-    pdfjsLib = await import(pdfjsModulePath);
+    // Keep this import literal so esbuild includes PDF.js in the generated
+    // Vercel runtime. A variable-based import escaped the bundle and made
+    // Vercel trace the entire node_modules tree during function packaging.
+    pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
   } catch (err: any) {
     console.error("Failed to load pdfjs-dist:", err.message);
     return {
@@ -159,4 +161,3 @@ export async function extractPdfText(pdfBuffer: Buffer): Promise<{
     };
   }
 }
-

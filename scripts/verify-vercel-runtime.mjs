@@ -55,13 +55,25 @@ if (!source.includes("google-gax-protos")) {
 
 await access(protoAssetPath);
 
-for (const functionConfig of Object.values(vercelConfig.functions || {})) {
-  const includeFiles = Array.isArray(functionConfig.includeFiles)
-    ? functionConfig.includeFiles
-    : [functionConfig.includeFiles];
-  if (!includeFiles.includes("vercel-runtime/google-gax-protos/**")) {
-    throw new Error("Every Vercel API function must include the bundled google-gax protobuf assets.");
-  }
+const functionEntries = Object.entries(vercelConfig.functions || {});
+if (functionEntries.length !== 1 || functionEntries[0][0] !== "api/index.ts") {
+  throw new Error("Vercel must package exactly one API function (api/index.ts).");
+}
+
+const functionConfig = functionEntries[0][1];
+const includeFiles = Array.isArray(functionConfig.includeFiles)
+  ? functionConfig.includeFiles
+  : [functionConfig.includeFiles];
+if (!includeFiles.includes("vercel-runtime/google-gax-protos/**")) {
+  throw new Error("The Vercel API function must include bundled google-gax protobuf assets.");
+}
+if (functionConfig.excludeFiles !== "node_modules/**") {
+  throw new Error("The Vercel API function must exclude node_modules after bundling.");
+}
+
+const bundledInputs = Object.keys(metafile.inputs || {});
+if (!bundledInputs.some((input) => input.includes("node_modules/pdfjs-dist/legacy/build/pdf.mjs"))) {
+  throw new Error("PDF.js escaped the Vercel runtime bundle; node_modules cannot be safely excluded.");
 }
 
 await unlink(metafilePath);

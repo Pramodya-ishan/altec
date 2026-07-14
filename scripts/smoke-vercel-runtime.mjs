@@ -12,6 +12,7 @@ const timeout = setTimeout(() => {
   process.exit(1);
 }, 60_000);
 let isolatedDirectory;
+let exitCode = 0;
 
 try {
   // Import from outside the repository so Node cannot silently resolve a
@@ -50,11 +51,16 @@ try {
   clearTimeout(timeout);
   console.log("Verified isolated pure-ESM boot and JSON API handling without root node_modules.");
 } catch (error) {
-  clearTimeout(timeout);
   console.error("Vercel runtime ESM smoke test failed:", error);
-  process.exitCode = 1;
+  exitCode = 1;
 } finally {
+  clearTimeout(timeout);
   if (isolatedDirectory) {
     await rm(isolatedDirectory, { recursive: true, force: true });
   }
 }
+
+// Firebase Admin/gRPC and rate-limiter dependencies can retain background
+// handles even after the HTTP server closes. This is a build-time smoke test,
+// so terminate explicitly after all assertions and temporary-file cleanup.
+process.exit(exitCode);
