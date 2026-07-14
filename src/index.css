@@ -25,12 +25,12 @@
 }
 
 :root {
-  --app-bg: #f6f8fb;
+  --app-bg: #f7f8fa;
   --app-surface: #ffffff;
-  --app-surface-soft: #f8fafc;
-  --app-text: #0f172a;
-  --app-muted: #64748b;
-  --app-border: #e2e8f0;
+  --app-surface-soft: #f8f9fb;
+  --app-text: #111827;
+  --app-muted: #667085;
+  --app-border: #e5e7eb;
 
   --brand-50: #eef6ff;
   --brand-100: #d9ebff;
@@ -42,13 +42,13 @@
   --warning: #f59e0b;
   --danger: #ef4444;
 
-  --radius-sm: 10px;
-  --radius-md: 14px;
-  --radius-lg: 20px;
-  --radius-xl: 28px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
 
-  --shadow-card: 0 1px 2px rgba(15,23,42,.06), 0 12px 32px rgba(15,23,42,.06);
-  --shadow-float: 0 20px 60px rgba(15,23,42,.14);
+  --shadow-card: 0 1px 2px rgba(15,23,42,.04), 0 8px 24px rgba(15,23,42,.045);
+  --shadow-float: 0 20px 48px rgba(15,23,42,.12);
 
   --primary-50: #eef6ff;
   --primary-100: #d9ebff;
@@ -157,9 +157,9 @@
   }
 }
 
-/* Universal active click focus outline */
 :where(button,a,input,textarea,select,[role="button"],[tabindex]:not([tabindex="-1"])):focus-visible {
-  outline: none;
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
 .recharts-wrapper svg:focus,
@@ -220,6 +220,7 @@ body {
   overflow-x: hidden;
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
 body::-webkit-scrollbar { width: 7px; }
@@ -254,6 +255,40 @@ html {
   background-color: var(--app-muted);
   border-radius: 999px;
   opacity: 0.4;
+}
+
+@layer components {
+  .ui-button {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition-colors disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .ui-button-primary {
+    @apply bg-slate-950 text-white hover:bg-slate-800;
+  }
+
+  .ui-button-secondary {
+    @apply border border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50;
+  }
+
+  .ui-icon-button {
+    @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950;
+  }
+
+  .ui-menu-item {
+    @apply flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 hover:text-slate-950;
+  }
+
+  .ui-sidebar-tooltip {
+    @apply pointer-events-none absolute left-full z-[100] ml-3 whitespace-nowrap rounded-lg bg-slate-950 px-2.5 py-1.5 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100;
+  }
+
+  .ui-panel {
+    @apply rounded-2xl border border-slate-200 bg-white shadow-[var(--shadow-card)];
+  }
+
+  .ui-field {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-950 placeholder:text-slate-400 transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:bg-slate-50 disabled:text-slate-400;
+  }
 }
 
 

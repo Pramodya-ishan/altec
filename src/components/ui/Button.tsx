@@ -14,13 +14,13 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         disabled={disabled || isLoading}
         className={cn(
-          "inline-flex items-center justify-center font-medium rounded-full transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 active:scale-98 disabled:opacity-50 disabled:pointer-events-none cursor-pointer",
+          "inline-flex items-center justify-center gap-2 font-semibold rounded-xl transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-blue-500/30 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none cursor-pointer",
           // Sizing
           size === 'sm' && "px-4 py-1.5 text-xs h-8",
           size === 'md' && "px-6 py-2.5 text-sm h-11",
           size === 'lg' && "px-8 py-3.5 text-base h-13",
           // Variants
-          variant === 'primary' && "bg-[var(--brand-600)] hover:bg-[var(--brand-700)] text-white shadow-sm border border-transparent",
+          variant === 'primary' && "bg-slate-950 hover:bg-slate-800 text-white border border-transparent",
           variant === 'secondary' && "bg-white hover:bg-slate-50 text-[var(--app-text)] border border-[var(--app-border)] shadow-sm",
           variant === 'ghost' && "bg-transparent hover:bg-slate-100 text-[var(--app-text)] border border-transparent",
           variant === 'danger' && "bg-[var(--danger)] hover:bg-red-700 text-white shadow-sm border border-transparent",

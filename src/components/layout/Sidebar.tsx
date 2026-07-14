@@ -1,110 +1,93 @@
-import React, { useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { BookOpen, Check, FileText, GraduationCap, Layers3, LineChart, Menu, MessageCircle, ShieldCheck, X } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { cn } from '../../lib/utils';
-import { ViewKey } from '../../types';
-import { 
-  Layers, 
-  LineChart, 
-  FileText, 
-  GraduationCap, 
-  MessageCircle,
-  BookOpen, 
-  ShieldAlert,
-  Menu,
-  ChevronUp
-} from 'lucide-react';
+import type { ViewKey } from '../../types';
+
+const CORE_ITEMS = [
+  { id: 'paper-structure', label: 'Learning plan', icon: Layers3 },
+  { id: 'paper-marks', label: 'Exam results', icon: LineChart },
+  { id: 'past-papers', label: 'Past papers', icon: FileText },
+  { id: 'admission-predictor', label: 'Score predictor', icon: GraduationCap },
+  { id: 'clora-x', label: 'Study assistant', icon: MessageCircle },
+] satisfies Array<{ id: ViewKey; label: string; icon: typeof Layers3 }>;
 
 export function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { isSidebarOpen, setSidebarOpen, theme, setTheme, user, profile } = useApp();
-  
-  const menuItems: { id: ViewKey; label: string; icon: any }[] = [
-    { id: 'paper-structure', label: 'Paper Structure', icon: Layers },
-    { id: 'paper-marks', label: 'Past Paper Marks', icon: LineChart },
-    { id: 'past-papers', label: 'Past Papers DB', icon: FileText },
-    { id: 'admission-predictor', label: 'Z Core & Analytics', icon: GraduationCap },
-    { id: 'clora-x', label: 'Study Assistant', icon: MessageCircle }
+  const { isSidebarOpen, setSidebarOpen, profile } = useApp();
+  const isAdmin = profile?.role === 'admin' || profile?.roles?.includes('admin');
+  const isEditor = isAdmin || ['content_editor', 'teacher'].includes(profile?.role || '') || profile?.roles?.some((role) => ['content_editor', 'teacher'].includes(role));
+  const items = [
+    ...CORE_ITEMS,
+    ...(isEditor ? [{ id: 'syllabus' as ViewKey, label: 'Syllabus library', icon: BookOpen }] : []),
+    ...(isAdmin ? [
+      { id: 'pdf-sources' as ViewKey, label: 'PDF sources', icon: FileText },
+      { id: 'admin-dashboard' as ViewKey, label: 'Administration', icon: ShieldCheck },
+    ] : []),
   ];
 
-  const isAdminUser = profile?.role === 'admin' || profile?.roles?.includes('admin');
-  const isSyllabusEditor = isAdminUser || profile?.role === 'content_editor' || profile?.roles?.includes('content_editor') || profile?.role === 'teacher' || profile?.roles?.includes('teacher');
-
-  if (isSyllabusEditor) {
-    menuItems.push({ id: 'syllabus', label: 'Syllabus Library', icon: BookOpen } as any);
-  }
-  if (isAdminUser) {
-    menuItems.push({ id: 'pdf-sources', label: 'PDF Intelligence', icon: FileText } as any);
-    menuItems.push({ id: 'admin-dashboard', label: 'Admin Dashboard', icon: ShieldAlert } as any);
-  }
+  const openRoute = (id: ViewKey) => {
+    navigate(`/${id}`);
+    if (window.innerWidth < 1024) setSidebarOpen(false);
+  };
 
   return (
     <>
-      {/* Mobile overlay */}
-      <div
-        className={cn(
-          "fixed inset-0 bg-slate-900/40 z-[98] backdrop-blur-sm transition-opacity duration-300 lg:hidden lg:pointer-events-none",
-          isSidebarOpen ? "opacity-100 visible" : "opacity-0 invisible"
-        )}
+      <button
+        type="button"
+        aria-label="Close navigation"
         onClick={() => setSidebarOpen(false)}
-      />
-
-      <aside
         className={cn(
-          "fixed left-0 top-0 h-[100dvh] bg-white shadow-2xl lg:shadow-none lg:border-r lg:border-slate-200 z-[99] lg:z-40 flex flex-col transition-all duration-300 ease-[cubic-bezier(0.25,1,0.5,1)] pt-4",
-          isSidebarOpen ? "w-72 translate-x-0" : "w-72 lg:w-[72px] -translate-x-full lg:translate-x-0"
+          'fixed inset-0 z-[80] bg-slate-950/20 transition-opacity lg:hidden',
+          isSidebarOpen ? 'visible opacity-100' : 'invisible opacity-0',
         )}
-      >
-        <div className={cn("px-3 mb-6 flex items-center", isSidebarOpen ? "justify-between px-6" : "justify-center")}>
-          {isSidebarOpen && <span className="font-extrabold text-lg tracking-tight text-slate-900">Menu</span>}
-          <button
-            onClick={() => setSidebarOpen(!isSidebarOpen)}
-            className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
-            aria-label="Toggle Menu"
-          >
-            <Menu className="w-5 h-5" />
+      />
+      <aside className={cn(
+        'fixed inset-y-0 left-0 z-[90] flex w-72 flex-col border-r border-slate-200 bg-white transition-[width,transform] duration-200 lg:z-40',
+        isSidebarOpen ? 'translate-x-0 lg:w-64' : '-translate-x-full lg:w-[72px] lg:translate-x-0',
+      )}>
+        <div className={cn('flex h-16 items-center border-b border-slate-100 px-3', isSidebarOpen ? 'justify-between' : 'justify-center')}>
+          {isSidebarOpen && (
+            <button type="button" onClick={() => openRoute('paper-structure')} className="min-w-0 text-left">
+              <span className="block truncate text-sm font-semibold tracking-tight text-slate-950">A/L Workspace</span>
+              <span className="block text-[11px] text-slate-400">Technology stream</span>
+            </button>
+          )}
+          <button type="button" onClick={() => setSidebarOpen(!isSidebarOpen)} className="ui-icon-button" aria-label={isSidebarOpen ? 'Collapse navigation' : 'Expand navigation'}>
+            {isSidebarOpen ? <X className="h-4 w-4 lg:hidden" /> : <Menu className="h-5 w-5" />}
+            {isSidebarOpen && <Menu className="hidden h-5 w-5 lg:block" />}
           </button>
         </div>
-        
-        <nav className="flex-1 overflow-y-auto py-2 px-3 flex flex-col gap-1.5 scrollbar-none">
-          {menuItems.map((item) => {
-            const isActive = location.pathname.includes(item.id) || (location.pathname === '/' && item.id === 'paper-structure');
-            const Icon = item.icon;
+
+        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Main navigation">
+          {items.map(({ id, label, icon: Icon }) => {
+            const active = location.pathname === `/${id}` || (location.pathname === '/' && id === 'paper-structure');
             return (
               <button
-                key={item.id}
-                onClick={() => {
-                  navigate(`/${item.id}`);
-                  if (window.innerWidth < 1024) {
-                    setSidebarOpen(false);
-                  }
-                }}
+                key={id}
+                type="button"
+                onClick={() => openRoute(id)}
+                aria-current={active ? 'page' : undefined}
+                title={!isSidebarOpen ? label : undefined}
                 className={cn(
-                  "w-full flex items-center rounded-xl font-semibold transition-all duration-200 cursor-pointer relative group outline-none",
-                  isSidebarOpen 
-                    ? "gap-3.5 px-4 py-3.5 text-left justify-start" 
-                    : "px-0 py-3.5 justify-center text-center mx-auto w-12",
-                  isActive
-                    ? "bg-indigo-50 text-indigo-700"
-                    : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                  'group relative flex h-11 w-full items-center rounded-xl text-sm font-medium transition-colors',
+                  isSidebarOpen ? 'gap-3 px-3' : 'justify-center px-0',
+                  active ? 'bg-slate-950 text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-950',
                 )}
               >
-                <Icon className={cn("shrink-0 transition-transform duration-200", isActive ? "scale-110 text-indigo-600" : "group-hover:scale-110", isSidebarOpen ? "w-5 h-5" : "w-5 h-5")} />
-                
-                {isSidebarOpen ? (
-                  <span className="truncate font-bold tracking-tight text-[14px]">{item.label}</span>
-                ) : (
-                  <div className="absolute left-full ml-4 top-1/2 -translate-y-1/2 px-3 py-2 bg-slate-900 text-white border border-slate-800 text-xs font-bold rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 whitespace-nowrap shadow-xl z-[99]">
-                    {item.label}
-                  </div>
-                )}
+                <Icon className="h-[18px] w-[18px] shrink-0" />
+                {isSidebarOpen && <span className="truncate">{label}</span>}
+                {!isSidebarOpen && <span className="ui-sidebar-tooltip">{label}</span>}
               </button>
             );
           })}
         </nav>
 
-        </aside>
+        <div className={cn('border-t border-slate-100 p-3 text-xs text-slate-400', !isSidebarOpen && 'text-center')}>
+          {isSidebarOpen ? 'Synced learning workspace' : <Check className="mx-auto h-4 w-4" />}
+        </div>
+      </aside>
     </>
   );
 }
