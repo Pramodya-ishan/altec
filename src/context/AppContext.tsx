@@ -4,7 +4,53 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useRe
 import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
 import { isFirebaseEnabled, db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, deleteDoc } from 'firebase/firestore';
-import { GoogleAuthProvider, signInWithCredential, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, setPersistence, browserLocalPersistence } from 'firebase/auth';
+import { GoogleAuthProvider, signInWithCredential, signInWithPopup, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, setPersistence, browserLocalPersistence } from 'firebase/auth';
+
+const GOOGLE_IDENTITY_SCRIPT = 'https://accounts.google.com/gsi/client';
+
+function loadGoogleIdentityServices(): Promise<void> {
+  if ((window as any).google?.accounts?.oauth2) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${GOOGLE_IDENTITY_SCRIPT}"]`);
+    const script = existing || document.createElement('script');
+    const cleanup = () => {
+      script.removeEventListener('load', onLoad);
+      script.removeEventListener('error', onError);
+    };
+    const onLoad = () => {
+      cleanup();
+      (window as any).google?.accounts?.oauth2 ? resolve() : reject(new Error('Google Identity Services did not initialize.'));
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error('Could not load Google Identity Services.'));
+    };
+    script.addEventListener('load', onLoad, { once: true });
+    script.addEventListener('error', onError, { once: true });
+    if (!existing) {
+      script.src = GOOGLE_IDENTITY_SCRIPT;
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+  });
+}
+
+async function requestGoogleAccessToken(clientId: string): Promise<string> {
+  await loadGoogleIdentityServices();
+  return new Promise((resolve, reject) => {
+    const client = (window as any).google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'openid email profile',
+      callback: (response: { access_token?: string; error?: string; error_description?: string }) => {
+        if (response?.access_token) resolve(response.access_token);
+        else reject(new Error(response?.error_description || response?.error || 'Google did not return an access token.'));
+      },
+      error_callback: (error: { type?: string }) => reject(new Error(error?.type || 'Google sign-in window failed.')),
+    });
+    client.requestAccessToken({ prompt: 'select_account' });
+  });
+}
 
 type ModalsState = {
   playlist: { open: boolean; topic: string };
@@ -766,18 +812,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       void setPersistence(auth, browserLocalPersistence).catch((error) => {
         console.warn('Could not enable persistent Firebase authentication:', error);
       });
-      void getRedirectResult(auth).then((redirectResult) => {
-        if (!redirectResult || !active) return;
-        const credential = GoogleAuthProvider.credentialFromResult(redirectResult);
-        const accessToken = credential?.accessToken || '';
-        if (accessToken) localStorage.setItem('google_access_token', accessToken);
-        hydratedAuthUidRef.current = redirectResult.user.uid;
-        void establishFirebaseSession(redirectResult.user, accessToken);
-      }).catch((error) => {
-        console.error("Google Redirect Login Error:", error);
-        showNotification("Google sign-in could not be completed. Please try again.", "error");
-      });
-
       unsubscribeAutoAuth = onAuthStateChanged(auth, (firebaseUser) => {
         window.clearTimeout(authDeadline);
         if (!active) return;
@@ -814,37 +848,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsAuthLoading(true);
     try {
       if (isFirebaseEnabled && auth) {
-        const provider = new GoogleAuthProvider();
-        provider.setCustomParameters({ prompt: 'select_account' });
         await setPersistence(auth, browserLocalPersistence);
+        const clientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
         let result;
-        try {
+        let accessToken = '';
+        if (clientId) {
+          accessToken = await requestGoogleAccessToken(clientId);
+          const credential = GoogleAuthProvider.credential(null, accessToken);
+          result = await signInWithCredential(auth, credential);
+        } else if (import.meta.env.DEV) {
+          const provider = new GoogleAuthProvider();
+          provider.setCustomParameters({ prompt: 'select_account' });
           result = await signInWithPopup(auth, provider);
-        } catch (popupError: any) {
-          if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'].includes(popupError?.code)) {
-            await signInWithRedirect(auth, provider);
-            return;
-          }
-          throw popupError;
+          accessToken = GoogleAuthProvider.credentialFromResult(result)?.accessToken || '';
+        } else {
+          const configurationError = new Error('VITE_GOOGLE_CLIENT_ID is not configured for production Google sign-in.');
+          (configurationError as any).code = 'auth/missing-google-client-id';
+          throw configurationError;
         }
-        
-        const credential = GoogleAuthProvider.credentialFromResult(result);
-        const accessToken = credential?.accessToken;
         if (accessToken) {
           localStorage.setItem('google_access_token', accessToken);
         }
 
         hydratedAuthUidRef.current = result.user.uid;
-        await establishFirebaseSession(result.user, accessToken || '');
+        await establishFirebaseSession(result.user, accessToken);
         showNotification("Signed in successfully.", "success");
       } else {
          showNotification("Firebase is required for Google login", "error");
       }
     } catch (error: any) {
       console.error("Google Popup Login Error:", error);
-      const message = error?.code === 'auth/popup-closed-by-user'
-        ? "Sign-in was closed before it finished."
-        : "Google sign-in failed. Check the authorized domain and try again.";
+      const message = error?.code === 'auth/missing-google-client-id'
+        ? "Google sign-in is not configured. Add VITE_GOOGLE_CLIENT_ID in Vercel and redeploy."
+        : error?.code === 'auth/popup-closed-by-user' || /popup_closed|cancelled/i.test(String(error?.message || ''))
+          ? "Sign-in was closed before it finished."
+          : "Google sign-in failed. Verify the OAuth JavaScript origin for this site.";
       showNotification(message, "error");
     }
     setIsAuthLoading(false);
