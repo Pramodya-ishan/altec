@@ -6,7 +6,9 @@ function normalizeEmail(value: unknown) {
 
 export function getConfiguredAdminEmails() {
   return new Set(
-    (process.env.ADMIN_EMAILS || "")
+    [process.env.ADMIN_EMAILS, process.env.SYLLABUS_OWNER_EMAIL]
+      .filter(Boolean)
+      .join(",")
       .split(",")
       .map(normalizeEmail)
       .filter(Boolean),

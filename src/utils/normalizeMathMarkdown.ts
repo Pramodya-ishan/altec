@@ -8,6 +8,7 @@ export function normalizeMathMarkdown(
 
   function normalizeMathSegment(segment: string): string {
     return segment
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
       .replace(/(\d+)\s*times\s*10\s*\^?\s*([−-]?\s*\d+)/gi, (_, g1, g2) => {
         const exponent = g2.replace(/[−]/g, "-").trim();
         return `${g1} \\\\times 10^{${exponent}}`;

@@ -2,6 +2,7 @@ import { getAIClient } from "../ai/client";
 import { checkAiBillingCircuit, handleAiError } from "../ai/aiCircuitBreaker";
 import { classifyAiError } from "../ai/aiErrorClassifier";
 import { GoogleGenAI } from "@google/genai";
+import { resolveLessonReference } from "./lessonResolver";
 
 export type KnowledgeRouterResult = {
   mode:
@@ -62,6 +63,7 @@ export type KnowledgeRouterResult = {
 
 function parseDeterministicIntent(prompt: string, activeSubject?: string): Partial<KnowledgeRouterResult> | null {
   const lower = prompt.toLowerCase();
+  const lessonReference = resolveLessonReference(prompt);
 
   // PDF Inventory request check
   const isPdfInventory = lower.includes("give all pdfs") ||
@@ -232,18 +234,22 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
       entities: { subject }
     };
   }
-  if (lower.includes("kelinama past paper prashna walata ymu") || lower.includes("kelinma past paper prashna walata ymu")) {
+  const asksPastPaperLesson = (lower.includes("past paper") || lower.includes("pastpaper") || lower.includes("past papers") || lower.includes("paper prashna"))
+    && (lower.includes("prashna") || lower.includes("prasna") || lower.includes("ප්‍රශ්න") || lower.includes("question") || lower.includes("gmu") || lower.includes("gamu") || lower.includes("karamu") || lower.includes("කරමු"));
+  if (lower.includes("kelinama past paper prashna walata ymu") || lower.includes("kelinma past paper prashna walata ymu") || (asksPastPaperLesson && lessonReference)) {
     return {
       mode: "past_paper_lesson_search",
 
-      entities: { subject }
+      entities: { subject, lesson: lessonReference?.label }
     };
   }
-  if (lower.includes("tharala prashna pdf discuss krmu") || lower.includes("prashna pdf discuss") || (lower.includes("pdf") && lower.includes("discuss"))) {
+  const asksLessonQuestions = (lower.includes("prashna") || lower.includes("prasna") || lower.includes("ප්‍රශ්න") || lower.includes("question") || lower.includes("quiz"))
+    && (lower.includes("lesson") || lower.includes("පාඩම") || lower.includes("pdf") || Boolean(lessonReference));
+  if (lower.includes("tharala prashna pdf discuss krmu") || lower.includes("prashna pdf discuss") || (lower.includes("pdf") && lower.includes("discuss")) || asksLessonQuestions) {
     return {
       mode: "lesson_question_discussion",
 
-      entities: { subject }
+      entities: { subject, lesson: lessonReference?.label }
     };
   }
   const isLessonMarks = lower.includes("marks") || lower.includes("ලකුණු") || lower.includes("lkunu") || lower.includes("weighting");

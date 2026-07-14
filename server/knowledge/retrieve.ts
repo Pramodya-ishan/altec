@@ -1,16 +1,24 @@
 
 import { getAdminDb } from "../firebase/admin";
+import { getSourceInventory } from "../sources/sourceInventoryService";
+import { findLessonSources, scoreLessonSource } from "./lessonResolver";
 
 export async function retrieveRelevantKnowledge({
   query,
   uid,
   subject,
-  limit = 8
+  limit = 8,
+  lesson,
+  strictLesson = false,
+  allowedSourceIds = []
 }: {
   query: string;
   uid?: string;
   subject?: string;
   limit?: number;
+  lesson?: string;
+  strictLesson?: boolean;
+  allowedSourceIds?: string[];
 }) {
   const db = getAdminDb();
   const chunks: Array<{
@@ -28,6 +36,102 @@ export async function retrieveRelevantKnowledge({
   }> = [];
 
   const lowerQ = query.toLowerCase();
+
+  if (uid && strictLesson) {
+    const inventory = await getSourceInventory({ uid, subject, isAdmin: false });
+    const lessonMatch = findLessonSources(inventory.all, query, lesson);
+    let sources = lessonMatch.sources;
+
+    // Older uploads did not copy the lesson from the lesson container onto the
+    // source document. Recover those sources from the lesson metadata already
+    // stored on their indexed chunks.
+    if (lessonMatch.reference) {
+      const knownIds = new Set(sources.map((source: any) => String(source.sourceId || source.id)));
+      const accessibleSourceMap = new Map<string, any>(
+        inventory.all.map((source: any): [string, any] => [String(source.sourceId || source.id), source]),
+      );
+      const [ownedChunks, sharedChunks] = await Promise.all([
+        db.collection("rag_chunks").where("ownerUid", "==", uid).get().catch(() => ({ docs: [] } as any)),
+        db.collection("rag_chunks").where("visibility", "in", ["official", "shared"]).get().catch(() => ({ docs: [] } as any)),
+      ]);
+      for (const document of [...(ownedChunks as any).docs, ...(sharedChunks as any).docs]) {
+        const chunk = document.data();
+        const sourceId = String(chunk.sourceId || "");
+        const source = accessibleSourceMap.get(sourceId);
+        if (!source || knownIds.has(sourceId)) continue;
+        const score = scoreLessonSource({ lesson: chunk.lesson, title: source.title }, lessonMatch.reference);
+        if (score < 40) continue;
+        sources.push({ ...source, lesson: chunk.lesson || source.lesson, lessonMatchScore: score });
+        knownIds.add(sourceId);
+      }
+      sources = sources.sort((a: any, b: any) => Number(b.lessonMatchScore || 0) - Number(a.lessonMatchScore || 0));
+    }
+
+    for (const source of sources.slice(0, 10)) {
+      const sourceId = source.sourceId || source.id;
+      const chunkSnapshot = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
+      chunkSnapshot.docs
+        .sort((a: any, b: any) => Number(a.data().chunkIndex || 0) - Number(b.data().chunkIndex || 0))
+        .slice(0, 8)
+        .forEach((document: any) => {
+          const data = document.data();
+          if (!data.text) return;
+          chunks.push({
+            sourceType: data.sourceType || source.sourceType || "Lesson PDF",
+            title: source.title,
+            text: data.text,
+            confidence: Math.min(1, Number(source.lessonMatchScore || 100) / 100),
+            year: data.year || source.year,
+            lesson: data.lesson || source.lesson || lessonMatch.reference?.label,
+            subject: data.subject || source.subject,
+            id: document.id,
+            sourceId,
+            storagePath: source.storagePath,
+            pageNumber: data.pageNumber,
+          } as any);
+        });
+    }
+
+    // Round-robin chunks so every matched lesson PDF contributes evidence.
+    // This prevents the first large PDF from filling the context window and
+    // silently excluding other PDFs in the same lesson container.
+    const bySource = new Map<string, typeof chunks>();
+    for (const chunk of chunks) {
+      const key = String(chunk.sourceId || "unknown");
+      const list = bySource.get(key) || [];
+      list.push(chunk);
+      bySource.set(key, list);
+    }
+    const selected: typeof chunks = [];
+    const maximum = Math.max(limit, Math.min(40, sources.length * 4));
+    for (let index = 0; selected.length < maximum; index += 1) {
+      let added = false;
+      for (const source of sources) {
+        const sourceChunks = bySource.get(String(source.sourceId || source.id)) || [];
+        if (sourceChunks[index]) {
+          selected.push(sourceChunks[index]);
+          added = true;
+          if (selected.length >= maximum) break;
+        }
+      }
+      if (!added) break;
+    }
+    return {
+      chunks: selected,
+      sources: sources.map((source: any) => ({
+        id: source.sourceId || source.id,
+        sourceId: source.sourceId || source.id,
+        title: source.title,
+        lesson: source.lesson || lessonMatch.reference?.label,
+        storagePath: source.storagePath,
+        confidence: Math.min(1, Number(source.lessonMatchScore || 100) / 100),
+        sourceType: source.sourceType || source.resourceType,
+        usedInAnswer: selected.some((chunk: any) => chunk.sourceId === (source.sourceId || source.id)),
+      })),
+      lesson: lessonMatch.reference?.label || lesson || null,
+      status: selected.length > 0 ? "success" : (sources.length > 0 ? "index_required" : "not_found"),
+    };
+  }
 
   try {
     // 0. Active chat temporary PDFs (only if intent matches)

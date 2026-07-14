@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../../lib/utils';
 import { openSourcePdf } from '../../lib/sourceActions';
@@ -7,7 +7,7 @@ import { db, storage, auth } from '../../lib/firebase';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { apiFetch } from '../../lib/api';
 import { getRecommendedUploadMode } from '../../lib/uploadMode';
-import { uploadPdfWithClientStorage, openPrivateStoragePdf, deletePrivateStorageObject } from '../../lib/clientStorageUpload';
+import { uploadPdfWithClientStorage, openPrivateStoragePdf, deletePrivateStorageObject, type UploadProgressSnapshot, type UploadTaskControls } from '../../lib/clientStorageUpload';
 import { OcrTextModal } from '../ui/OcrTextModal';
 
 function normalizeSubject(s: string) {
@@ -29,6 +29,26 @@ function dedupeBySourceId(items: any[]) {
   return Array.from(map.values());
 }
 
+type UploadTelemetry = UploadProgressSnapshot & {
+  speedBytesPerSecond: number;
+  remainingBytes: number;
+  etaSeconds: number | null;
+  phase: "uploading" | "indexing";
+};
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+  return `${(value / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
+function formatEta(seconds: number | null) {
+  if (seconds === null || !Number.isFinite(seconds)) return "Calculating…";
+  if (seconds < 60) return `${Math.max(1, Math.ceil(seconds))}s`;
+  return `${Math.floor(seconds / 60)}m ${Math.ceil(seconds % 60)}s`;
+}
+
 export default function PastPapersView() {
   const { currentSubject, profile } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
@@ -37,8 +57,11 @@ export default function PastPapersView() {
   const [uploadedPapers, setUploadedPapers] = useState<any[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadTelemetry, setUploadTelemetry] = useState<UploadTelemetry | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [selectedOcrPaper, setSelectedOcrPaper] = useState<any | null>(null);
+  const uploadStartedAtRef = useRef(0);
+  const uploadControlsRef = useRef<UploadTaskControls | null>(null);
 
   const categories = ['A/L Past Papers', 'Model Papers'];
 
@@ -150,7 +173,8 @@ export default function PastPapersView() {
     const buttons: React.ReactNode[] = [];
 
     // 1. View OCR Text button
-    if (status === 'ready' || Number(paper.chunkCount || 0) > 0) {
+    const hasIndexedText = paper.textIndexed === true || Number(paper.chunkCount || 0) > 0;
+    if (hasIndexedText) {
       buttons.push(
         <button
           key="view_ocr"
@@ -180,8 +204,8 @@ export default function PastPapersView() {
       );
     }
 
-    // 3. Reprocess / Force OCR button
-    buttons.push(
+    // 3. Reprocess only when text is not ready.
+    if (["needs_ocr", "needs_legacy_conversion", "failed", "not_indexed"].includes(status) || !hasIndexedText) buttons.push(
       <button
         key="reprocess"
         onClick={(e) => handleReprocess(paper, e)}
@@ -225,7 +249,9 @@ export default function PastPapersView() {
     const category = selectedCategory;
 
     setIsUploading(true);
-    setUploadProgress(10);
+    setUploadProgress(0);
+    setUploadTelemetry(null);
+    uploadStartedAtRef.current = performance.now();
     
     try {
       const mode = await getRecommendedUploadMode();
@@ -235,17 +261,31 @@ export default function PastPapersView() {
       let data: any = null;
 
       if (mode === 'client_firebase_storage') {
-        setUploadProgress(30);
         // Step A: Client Firebase Storage upload
         const uploaded = await uploadPdfWithClientStorage({
           file,
           subject: normSubj,
           year,
           resourceType: resType,
-          sourceScope: "past_paper"
+          sourceScope: "past_paper",
+          onTask: (controls) => { uploadControlsRef.current = controls; },
+          onProgress: (snapshot) => {
+            const elapsedSeconds = Math.max(0.25, (performance.now() - uploadStartedAtRef.current) / 1000);
+            const speed = snapshot.bytesTransferred / elapsedSeconds;
+            const remaining = Math.max(0, snapshot.totalBytes - snapshot.bytesTransferred);
+            setUploadProgress(snapshot.progress * 100);
+            setUploadTelemetry({
+              ...snapshot,
+              speedBytesPerSecond: speed,
+              remainingBytes: remaining,
+              etaSeconds: speed > 1024 ? remaining / speed : null,
+              phase: "uploading",
+            });
+          },
         });
 
-        setUploadProgress(60);
+        setUploadProgress(100);
+        setUploadTelemetry((current) => current ? { ...current, phase: "indexing" } : null);
 
         // Step B: Call backend ingest-uploaded
         const payload = {
@@ -272,8 +312,6 @@ export default function PastPapersView() {
           throw new Error(ingestData?.message || ingestData?.code || "Upload ingest failed");
         }
 
-        setUploadProgress(80);
-
         // Step C: Save to past_papers
         const saveRes = await apiFetch("/api/rag/past-papers", {
           method: "POST",
@@ -289,7 +327,8 @@ export default function PastPapersView() {
             resourceType: resType,
             storagePath: uploaded.storagePath,
             chunkCount: ingestData.chunkCount || 0,
-            needsOcr: ingestData.needsOcr || false
+            needsOcr: ingestData.needsOcr || false,
+            textIndexed: false,
           })
         });
 
@@ -303,7 +342,8 @@ export default function PastPapersView() {
           storagePath: uploaded.storagePath,
           title,
           chunkCount: ingestData.chunkCount || 0,
-          needsOcr: ingestData.needsOcr || false
+          needsOcr: ingestData.needsOcr || false,
+          indexStatus: ingestData.status || "queued",
         };
       } else {
         // Fallback or Normal backend upload if not forced to client storage
@@ -347,6 +387,8 @@ export default function PastPapersView() {
         storagePath: data.storagePath,
         chunkCount: data.chunkCount || 0,
         needsOcr: data.needsOcr || false,
+        indexStatus: data.indexStatus || data.status || "queued",
+        textIndexed: Number(data.chunkCount || 0) > 0,
         ownerUid: auth.currentUser?.uid || "",
         uploaded: true,
         createdAt: new Date()
@@ -356,12 +398,16 @@ export default function PastPapersView() {
       
       setIsUploading(false);
       setUploadProgress(0);
+      setUploadTelemetry(null);
+      uploadControlsRef.current = null;
       setToast({ type: 'success', message: "PDF uploaded successfully. Indexing status updated." });
     } catch (error: any) {
       console.error("Upload failed", error);
       setToast({ type: 'error', message: `Upload failed: ${error.message || error}` });
       setIsUploading(false);
       setUploadProgress(0);
+      setUploadTelemetry(null);
+      uploadControlsRef.current = null;
     }
   };
 
@@ -454,11 +500,29 @@ export default function PastPapersView() {
  className="cursor-pointer bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm transition-colors flex items-center gap-2"
  >
  {isUploading ? (
- <><i className="fa-solid fa-circle-notch fa-spin"></i> Uploading {Math.round(uploadProgress)}%</>
+ <><i className="fa-solid fa-circle-notch fa-spin"></i> {uploadTelemetry?.phase === "indexing" ? "Indexing…" : `Uploading ${Math.round(uploadProgress)}%`}</>
  ) : (
  <><i className="fa-solid fa-cloud-arrow-up"></i> Upload PDF</>
  )}
  </label>
+ {isUploading && uploadTelemetry && (
+   <div className="absolute right-0 top-12 z-20 w-72 rounded-2xl border border-slate-200 bg-white p-4 text-xs shadow-xl" role="status" aria-live="polite">
+     <div className="mb-2 flex items-center justify-between font-bold text-slate-800">
+       <span>{uploadTelemetry.phase === "indexing" ? "Upload complete · indexing" : "Uploading PDF"}</span>
+       <span>{Math.round(uploadTelemetry.progress * 100)}%</span>
+     </div>
+     <div className="mb-3 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-slate-900 transition-all" style={{ width: `${uploadTelemetry.progress * 100}%` }} /></div>
+     <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-slate-500">
+       <span>Uploaded</span><strong className="text-right text-slate-700">{formatBytes(uploadTelemetry.bytesTransferred)} / {formatBytes(uploadTelemetry.totalBytes)}</strong>
+       <span>Remaining</span><strong className="text-right text-slate-700">{formatBytes(uploadTelemetry.remainingBytes)}</strong>
+       <span>Speed</span><strong className="text-right text-slate-700">{formatBytes(uploadTelemetry.speedBytesPerSecond)}/s</strong>
+       <span>ETA</span><strong className="text-right text-slate-700">{uploadTelemetry.phase === "indexing" ? "Processing…" : formatEta(uploadTelemetry.etaSeconds)}</strong>
+     </div>
+     {uploadTelemetry.phase === "uploading" && (
+       <button type="button" onClick={() => uploadControlsRef.current?.cancel()} className="mt-3 w-full rounded-lg border border-slate-200 py-2 font-bold text-slate-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700">Cancel upload</button>
+     )}
+   </div>
+ )}
  </div>
  )}
  </div>

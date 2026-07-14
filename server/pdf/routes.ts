@@ -12,6 +12,54 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 import { isAiBillingCircuitOpen, getAiBillingState } from "../ai/aiCircuitBreaker";
 
+function storageObjectPath(input: unknown): string {
+  const value = String(input || "").trim();
+  if (!value) return "";
+  if (value.startsWith("gs://")) {
+    return value.replace(/^gs:\/\/[^/]+\//, "");
+  }
+  if (value.startsWith("https://firebasestorage.googleapis.com")) {
+    try {
+      const parsed = new URL(value);
+      const marker = "/o/";
+      const index = parsed.pathname.indexOf(marker);
+      return index >= 0 ? decodeURIComponent(parsed.pathname.slice(index + marker.length)) : "";
+    } catch {
+      return "";
+    }
+  }
+  return value.replace(/^\/+/, "");
+}
+
+function canUseStoragePath(user: any, path: string) {
+  const roles = Array.isArray(user?.roles) ? user.roles : [];
+  const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
+  return privileged
+    || path.startsWith(`users/${user.uid}/`)
+    || path.startsWith(`rag_uploads/${user.uid}/`);
+}
+
+async function resolveDirectQaSource(user: any, sourceId: string, submittedPath: unknown) {
+  const db = getAdminDb();
+  const snapshots = await Promise.all([
+    sourceId ? db.collection("rag_sources").doc(sourceId).get() : Promise.resolve(null),
+    sourceId ? db.collection("past_papers").doc(sourceId).get() : Promise.resolve(null),
+  ]);
+  const sourceSnapshot = snapshots.find((snapshot: any) => snapshot?.exists) as any;
+  const source = sourceSnapshot?.data?.() || null;
+  const path = storageObjectPath(source?.storagePath || submittedPath);
+  if (!path) throw Object.assign(new Error("PDF source has no valid storage path."), { status: 400, code: "DIRECT_QA_SOURCE_PATH_INVALID" });
+
+  const roles = Array.isArray(user?.roles) ? user.roles : [];
+  const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
+  const visible = ["public", "official", "shared"].includes(String(source?.visibility || ""));
+  const owned = source?.ownerUid === user.uid || canUseStoragePath(user, path);
+  if (!privileged && !visible && !owned) {
+    throw Object.assign(new Error("You do not have access to this PDF source."), { status: 403, code: "DIRECT_QA_SOURCE_FORBIDDEN" });
+  }
+  return { source, path };
+}
+
 // 1. Process uploaded PDF immediately after upload
 pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (req: any, res) => {
   try {
@@ -25,26 +73,73 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (
       year,
       resourceType,
       sourceType,
-      sourceScope
+      sourceScope,
+      lesson
     } = req.body;
 
     if (!sourceId || !storagePath) {
       return res.status(400).json({ ok: false, error: "Missing sourceId or storagePath." });
     }
 
-    // Check duplication (SHA-256 would ideally be checked here, handled in a dedicated route or right before upload)
+    const normalizedStoragePath = storageObjectPath(storagePath);
+    if (!normalizedStoragePath || !canUseStoragePath(user, normalizedStoragePath)) {
+      return res.status(403).json({ ok: false, error: "Storage path is outside the signed-in user's upload area." });
+    }
+
+    // Create the metadata document before the asynchronous worker starts. New
+    // client-storage uploads do not have a rag_sources document yet, so update()
+    // raised Firestore NOT_FOUND and surfaced as /process-uploaded 500.
     const db = getAdminDb();
-    await db.collection("rag_sources").doc(sourceId).update({
+    const now = new Date().toISOString();
+    await db.collection("rag_sources").doc(sourceId).set({
+      sourceId,
+      ownerUid: user.uid,
+      storagePath: normalizedStoragePath,
+      title: title || fileName || "Uploaded PDF",
+      fileName: fileName || "upload.pdf",
+      subject: String(subject || "").toUpperCase(),
+      lesson: lesson ? String(lesson).trim().slice(0, 180) : null,
+      year: year ? String(year) : null,
+      resourceType: resourceType || "uploaded_pdf",
+      sourceType: sourceType || resourceType || "uploaded_pdf",
+      sourceScope: sourceScope || "personal",
+      visibility: "private",
       indexStatus: "queued",
-      updatedAt: new Date().toISOString()
-    });
+      chunkCount: 0,
+      needsOcr: false,
+      textIndexed: false,
+      createdAt: now,
+      updatedAt: now,
+    }, { merge: true });
+
+    if ((sourceScope || "") === "past_paper") {
+      await db.collection("past_papers").doc(sourceId).set({
+        id: sourceId,
+        sourceId,
+        ownerUid: user.uid,
+        storagePath: normalizedStoragePath,
+        title: title || fileName || "Uploaded PDF",
+        fileName: fileName || "upload.pdf",
+        subject: String(subject || "").toUpperCase(),
+        year: year ? String(year) : null,
+        resourceType: resourceType || "past_paper",
+        sourceType: sourceType || resourceType || "past_paper",
+        sourceScope: "past_paper",
+        indexStatus: "queued",
+        chunkCount: 0,
+        needsOcr: false,
+        textIndexed: false,
+        createdAt: now,
+        updatedAt: now,
+      }, { merge: true });
+    }
 
     // Run async
     setImmediate(() => {
       processUploadedPdf({
         uid: user.uid,
         sourceId,
-        storagePath,
+        storagePath: normalizedStoragePath,
         fileName: fileName || "upload.pdf",
         title: title || fileName || "Uploaded PDF",
         subject,
@@ -52,6 +147,7 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (
         resourceType: resourceType || "uploaded_pdf",
         sourceType: sourceType || resourceType || "uploaded_pdf",
         sourceScope: sourceScope || "personal",
+        lesson: lesson ? String(lesson).trim().slice(0, 180) : undefined,
         forceOcr: false
       }).catch(err => console.error("Async processUploadedPdf error:", err));
     });
@@ -269,7 +365,7 @@ const failedDirectQaCooldown = new Map<string, number>();
 
 pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), async (req: any, res) => {
   try {
-    const { sourceId, prompt, questionId, questionNo, questionType, subject, year } = req.body;
+    const { sourceId, storagePath, prompt, questionId, questionNo, questionType, subject, year } = req.body;
     console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}`);
 
     const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}`;
@@ -307,8 +403,13 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         buffer = req.file.buffer;
         console.log(`[DirectPDFQA] File received via upload. Buffer size: ${buffer.length} bytes`);
       } else {
-        console.error("[DirectPDFQA] Missing file buffer or storagePath in request");
-        return { ok: false, status: 400, errorCode: "DIRECT_QA_MISSING_FILE", error: "Missing uploaded file buffer or storagePath." };
+        const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath);
+        console.log(`[DirectPDFQA] Reading verified source from Firebase Admin: ${resolved.path}`);
+        const [downloaded] = await getAdminBucket().file(resolved.path).download();
+        buffer = downloaded;
+        if (!buffer?.length) {
+          return { ok: false, status: 404, errorCode: "DIRECT_QA_SOURCE_EMPTY", error: "The stored PDF is empty or unavailable." };
+        }
       }
       const effectivePrompt = prompt?.trim() || `${year || ""} ${subject || ""} ${questionType || "question"} ${questionNo} answer`;
       if (!questionNo || !questionType) {
@@ -409,10 +510,10 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
     }
   } catch (err: any) {
     console.error("[DirectPDFQA] Backend error:", err);
-    return res.status(500).json({
+    return res.status(Number(err.status) || 500).json({
        ok: false,
        found: false,
-       errorCode: err.errorCode || "DIRECT_QA_BACKEND_FAILED",
+       errorCode: err.code || err.errorCode || "DIRECT_QA_BACKEND_FAILED",
        stage: err.stage || "MODEL_CALL",
        message: err.message || "Direct PDF QA failed"
     });

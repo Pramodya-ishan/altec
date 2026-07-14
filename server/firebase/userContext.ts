@@ -90,6 +90,13 @@ export async function loadUserAIContext(uid: string, email?: string) {
       userEmailRef ? userEmailRef.collection("chat_history").orderBy("createdAt", "desc").limit(15).get().catch(() => ({ docs: [] })) : { docs: [] }
     ]);
 
+    const mistakeSnapshot = await userUidRef.collection("mistake_notebook")
+      .orderBy("createdAt", "desc")
+      .limit(20)
+      .get()
+      .catch(() => ({ docs: [] } as any));
+    const recentMistakes = (mistakeSnapshot as any).docs.map((document: any) => ({ id: document.id, ...document.data() }));
+
     // Merge unique docs
     const memoryDocs = [...(memoryUid as any).docs, ...(memoryEmail as any).docs];
     const aiMemory = Array.from(new Map(memoryDocs.map(d => [d.id, d.data()])).values());
@@ -295,6 +302,7 @@ export async function loadUserAIContext(uid: string, email?: string) {
       recentProgress: progressSummary,
       aiMemory,
       chatHistoryLast10,
+      recentMistakes,
       examDates: profileData?.examDates || {},
       targetZ: appData?.targetZ || profileData?.targetZ,
       zScoreContext,
@@ -313,6 +321,7 @@ export async function loadUserAIContext(uid: string, email?: string) {
       recentProgress: [],
       aiMemory: [],
       chatHistoryLast10: [],
+      recentMistakes: [],
       examDates: {},
       currentTimeAsiaColombo: new Date().toLocaleString("en-US", {timeZone: "Asia/Colombo"})
     };

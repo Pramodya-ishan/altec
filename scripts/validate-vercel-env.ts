@@ -38,6 +38,10 @@ function validateVercelEnvironment() {
     );
   }
 
+  if (isVercel && !process.env.ADMIN_EMAILS?.trim() && !process.env.SYLLABUS_OWNER_EMAIL?.trim()) {
+    console.warn("[VERCEL_ENV] ADMIN_EMAILS/SYLLABUS_OWNER_EMAIL is not configured; lesson video upload will be unavailable to the project owner.");
+  }
+
   console.log(`Validated Google service-account configuration for project ${credential.project_id}.`);
 }
 

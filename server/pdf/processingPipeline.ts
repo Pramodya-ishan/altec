@@ -17,6 +17,7 @@ export interface ProcessUploadedPdfParams {
   resourceType: string;
   sourceType?: string | null;
   sourceScope: string;
+  lesson?: string;
   buffer?: Buffer;
   forceOcr?: boolean;
 }
@@ -41,6 +42,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
     resourceType,
     sourceType,
     sourceScope,
+    lesson,
     buffer,
     forceOcr = false,
   } = params;
@@ -266,6 +268,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
       resourceType,
       sourceType,
       sourceScope,
+      lesson,
       pages,
       extractionMethod,
       textEncoding,
@@ -317,6 +320,7 @@ interface FinalizeParams {
   resourceType: string;
   sourceType?: string | null;
   sourceScope: string;
+  lesson?: string;
   pages: {
     pageNumber: number;
     text: string;
@@ -348,6 +352,7 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
     resourceType,
     sourceType,
     sourceScope,
+    lesson,
     pages,
     extractionMethod,
     textEncoding,
@@ -400,7 +405,7 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
     for (let j = 0; j < subChunks.length; j++) {
       const chunkTextContent = subChunks[j];
       const questionNo = detectQuestionNo(chunkTextContent);
-      const detectedLesson = detectLessonForChunk(chunkTextContent, normalizedSubjectKey);
+      const detectedLesson = lesson?.trim() || detectLessonForChunk(chunkTextContent, normalizedSubjectKey);
       const chunkId = `chunk_${sourceId}_${chunkCount}`;
 
       const rawPreview = p.rawText 
@@ -486,6 +491,7 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
     ocrTextPdfStoragePath: textPdfResponse.ocrTextPdfStoragePath,
     ocrTextStoragePath: textPdfResponse.ocrTextStoragePath,
     ocrTextPdfStatus: textPdfResponse.ocrTextPdfStatus,
+    lesson: lesson?.trim() || null,
     processedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };

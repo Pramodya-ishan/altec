@@ -1240,7 +1240,7 @@ export default function AdmissionPredictorView() {
                       >
                         <AreaChart
                           data={chartData}
-                          margin={{ top: 15, right: 15, left: -25, bottom: 45 }}
+                          margin={{ top: 15, right: 15, left: -25, bottom: 20 }}
                         >
                           <defs>
                             <linearGradient
@@ -1275,10 +1275,11 @@ export default function AdmissionPredictorView() {
                             tickLine={false}
                             axisLine={false}
                             dy={15}
-                            dx={-15}
-                            angle={-45}
-                            textAnchor="end"
-                            interval={0}
+                            angle={0}
+                            textAnchor="middle"
+                            interval="preserveStartEnd"
+                            minTickGap={34}
+                            tickFormatter={(value) => String(value).slice(5)}
                           />
                           <YAxis
                             stroke="#94a3b8"

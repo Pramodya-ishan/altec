@@ -183,6 +183,9 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
 
     const normSubject = normalizeSubject(subject || "");
     const db = getAdminDb();
+    const existingSnapshot = await db.collection("past_papers").doc(finalId).get();
+    const existing = existingSnapshot.exists ? existingSnapshot.data() || {} : {};
+    const alreadyProcessed = Boolean(existing.processedAt) || Number(existing.chunkCount || 0) > 0 || existing.indexStatus === "failed" || existing.indexStatus === "needs_ocr";
     const paperDoc = {
       id: finalId,
       sourceId: finalId,
@@ -200,14 +203,14 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
       ownerUid: req.user.uid,
       ownerEmail: req.user.email || "unknown",
       uploaded: true,
-      chunkCount: Number(chunkCount || 0),
-      needsOcr: needsOcr === true,
-      textIndexed: Number(chunkCount || 0) > 0 && needsOcr !== true,
+      chunkCount: alreadyProcessed ? Number(existing.chunkCount || 0) : Number(chunkCount || 0),
+      needsOcr: alreadyProcessed ? existing.needsOcr === true : needsOcr === true,
+      textIndexed: alreadyProcessed ? existing.textIndexed === true : Number(chunkCount || 0) > 0 && needsOcr !== true,
       createdAt: createdAt || new Date().toISOString(),
       updatedAt: updatedAt || new Date().toISOString()
     };
 
-    await db.collection("past_papers").doc(finalId).set(paperDoc);
+    await db.collection("past_papers").doc(finalId).set(paperDoc, { merge: true });
     invalidateInventoryCache(req.user.uid);
 
     res.json({ ok: true, doc: paperDoc });
@@ -843,5 +846,3 @@ ragRoutes.get("/sources/:sourceId/chunks", requireFirebaseUser, async (req: any,
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
-
-

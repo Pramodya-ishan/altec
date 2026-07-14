@@ -7,6 +7,18 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
+function lessonFromStoragePath(storagePath: unknown) {
+  const path = String(storagePath || "").replace(/^gs:\/\/[^/]+\//, "");
+  const parts = path.split("/").filter(Boolean);
+  const marker = parts.indexOf("paper_structure");
+  if (marker < 0 || !parts[marker + 2]) return null;
+  try {
+    return decodeURIComponent(parts[marker + 2]).replace(/_/g, " ").trim() || null;
+  } catch {
+    return parts[marker + 2].replace(/_/g, " ").trim() || null;
+  }
+}
+
 export function invalidateInventoryCache(uid: string) {
   for (const key of cache.keys()) {
     if (key.startsWith(`${uid}:`) || key.startsWith("all:") || key.startsWith("admin:")) {
@@ -23,18 +35,20 @@ export function computeIndexStatus(src: {
   indexStatus?: string;
 }) {
   const chunkCount = Number(src.chunkCount || 0);
+  const currentStatus = String(src.indexStatus || "").toLowerCase();
   const needsOcr = src.needsOcr === true || src.indexStatus === "needs_ocr";
   const needsLegacy = src.needsLegacyConversion === true || src.indexStatus === "needs_legacy_conversion";
 
+  if (["queued", "running", "processing", "indexing"].includes(currentStatus)) return currentStatus;
+  if (currentStatus === "failed") return "failed";
   if (chunkCount > 0 && (src.needsOcr === false || src.indexStatus === "ready")) {
     return "ready";
-  }
-  if (needsOcr || chunkCount === 0) {
-    return "needs_ocr";
   }
   if (needsLegacy) {
     return "needs_legacy_conversion";
   }
+  if (needsOcr) return "needs_ocr";
+  if (chunkCount === 0) return "not_indexed";
   return "not_indexed";
 }
 
@@ -123,6 +137,7 @@ export async function getSourceInventory(params: {
       title: src.title || src.fileName || "Untitled PDF",
       fileName: src.fileName || src.title || "untitled.pdf",
       subject: normSubject || null,
+      lesson: src.lesson || src.topic || lessonFromStoragePath(src.storagePath) || null,
       year: normYear || null,
       resourceType: normResourceType || "uploaded_pdf",
       sourceScope: normSourceScope || null,
@@ -135,6 +150,7 @@ export async function getSourceInventory(params: {
       indexStatus: calcStatus,
       visibility: src.visibility || "private",
       sourceType: src.sourceType || normResourceType || null,
+      tags: Array.isArray(src.tags) ? src.tags : [],
       textIndexed: Number(src.chunkCount || 0) > 0 && src.needsOcr !== true,
       createdAt: src.createdAt || null,
     });

@@ -1,8 +1,7 @@
-import { storage, auth } from "../firebase";
+import { auth } from "../firebase";
 import { stripRawVisualBlocks } from "./stripVisualBlocks";
-import { ref, getBlob, getDownloadURL } from "firebase/storage";
 import { normalizeStoragePath } from "./normalizeStoragePath";
-import { apiUrl, getLargeEndpointUrl } from "../apiBase";
+import { getLargeEndpointUrl } from "../apiBase";
 
 export type DirectPdfQaResult = {
   ok: boolean;
@@ -79,55 +78,14 @@ export async function askDirectPdfQa(params: {
     const normalized = normalizeStoragePath(source.storagePath);
     console.info("[DirectPDFQA] Normalized path:", normalized);
 
-    // 2. Prepare FormData
+    // 2. Send only the source identity to our authenticated backend. The server
+    // reads the object with Firebase Admin after verifying source ownership.
+    // Browser-side download URLs are intentionally not fetched here: Firebase
+    // Storage CORS rules are not an authorization boundary and were causing the
+    // DirectPDFQA flow to fail before it reached the backend.
     const formData = new FormData();
-
-    if (normalized.kind === "downloadUrl" || normalized.path) {
-      onProgress?.("fetching");
-      let downloadUrl = "";
-      if (normalized.kind === "downloadUrl") {
-         downloadUrl = normalized.url;
-      } else {
-         try {
-             downloadUrl = await getDownloadURL(ref(storage, normalized.path));
-         } catch(e) {
-             console.error("Failed to get download URL", e);
-             throw makeDirectQaError("DIRECT_QA_FIREBASE_FETCH_FAILED", source, {
-                status: 500,
-                statusText: "Storage rules / App Check / login check",
-                message: "PDF source එක තියෙනවා, නමුත් Storage permission නිසා open/scan කරන්න බැහැ. Storage rules/App Check/login check කරන්න."
-             });
-         }
-      }
-
-      console.info("[DirectPDFQA] Fetching blob from client...");
-      // Fetching from download URL
-      const blobController = new AbortController();
-      if (signal) {
-        signal.addEventListener("abort", () => blobController.abort(new Error("USER_CANCELLED")));
-      }
-      const blobTimeout = setTimeout(() => blobController.abort(), 60000);
-      let r;
-      try {
-        r = await fetch(downloadUrl, { signal: blobController.signal });
-      } catch (e: any) {
-        throw makeDirectQaError("DIRECT_QA_FIREBASE_FETCH_FAILED", source, { message: e.name === "AbortError" ? "PDF download timed out (60s)." : e.message });
-      } finally {
-        clearTimeout(blobTimeout);
-      }
-
-      if (!r.ok) {
-        throw makeDirectQaError("DIRECT_QA_FIREBASE_FETCH_FAILED", source, {
-          status: r.status,
-          statusText: r.statusText,
-          url: downloadUrl
-        });
-      }
-      const blob = await r.blob();
-      const isLarge = blob.size > 15 * 1024 * 1024;
-      onProgress?.("uploading", { size: blob.size, isLarge });
-      formData.append("file", blob, source.fileName || `${source.id || source.sourceId}.pdf`);
-    }
+    onProgress?.("fetching", { serverSide: true });
+    formData.append("storagePath", normalized.kind === "path" ? normalized.path : normalized.url);
 
     formData.append("sourceId", source.id || source.sourceId);
     formData.append("prompt", prompt);
@@ -140,7 +98,7 @@ export async function askDirectPdfQa(params: {
     // 3. POST to backend
     const endpoint = getLargeEndpointUrl("/api/pdf/direct-qa-file");
     console.info("[DirectPDFQA] Posting to backend:", endpoint);
-    onProgress?.("scanning");
+    onProgress?.("scanning", { serverSide: true });
 
     const token = await auth.currentUser?.getIdToken();
     const backendController = new AbortController();

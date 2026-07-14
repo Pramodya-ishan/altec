@@ -29,7 +29,7 @@ export function sanitizeMathMarkdown(input: string): string {
   // We wrap Sinhala segments inside math mode with \text{...} or just unwrap them.
   // Method: Find math blocks and transform them.
   
-  const SINHALA_REGEX = /[\u0D80-\u0DFF\u200D]+/g;
+  const SINHALA_REGEX = /[\u0D80-\u0DFF\u200D]+/;
 
   // Transform $$ blocks
   text = text.replace(/\$\$(.*?)\$\$/gs, (match, content) => {
@@ -106,4 +106,3 @@ export function getUnclosedMathInfo(text: string): { hasUnclosed: boolean; index
   }
   return { hasUnclosed: false, index: -1, type: null };
 }
-

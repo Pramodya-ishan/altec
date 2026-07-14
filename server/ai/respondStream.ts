@@ -20,6 +20,7 @@ import { retrieveEvidence } from "../knowledge/evidenceRetrieval";
 import { generateContentStreamWithFallback, callGeminiWithFallback, AITask } from "./modelRouter";
 import { resolveAnswerPolicy } from "./answerPolicy";
 import { scoreSource } from "../sources/sourceScoring";
+import { isLessonEvidenceMode } from "../knowledge/lessonResolver";
 
 interface StreamTrace {
   requestId: string;
@@ -271,6 +272,8 @@ export async function aiRespondStream(req: any, res: any) {
     }
     await updateConversationState(user.uid, {
       activeSubject: evidence.subject || activeConversationState.activeSubject,
+      activeLessonIds: evidence.lessonIds.length > 0 ? evidence.lessonIds : activeConversationState.activeLessonIds,
+      activeSourceIds: evidence.allowedSourceIds.length > 0 ? evidence.allowedSourceIds : activeConversationState.activeSourceIds,
       lastIntent: evidence.intent
     });
     if (policy.intent === "blocked_or_unsafe") {
@@ -769,7 +772,9 @@ export async function aiRespondStream(req: any, res: any) {
             }
           }
 
-          // 1.3 If chunks are missing or bad, trigger Frontend Direct PDF QA (Zero-GCS-Auth Path)
+          // 1.3 If chunks are missing or bad, trigger the authenticated Direct
+          // PDF QA handoff. The frontend sends the source identity; the backend
+          // performs the verified Firebase Admin read.
           if (noChunks || badTextQuality || needsOcr) {
             console.log(`[AI_RESPOND_STREAM] Direct PDF QA required for ${paperSource.id}. Emitting event...`);
 
@@ -782,8 +787,8 @@ export async function aiRespondStream(req: any, res: any) {
               questionNo: requestedQuestionNo,
               questionType: paperIntent.questionType || "MCQ",
               prompt: prompt,
-              reason: "DIRECT_PDF_QA_REQUIRES_CLIENT_FILE",
-              message: "PDF scan කරන්න client file handoff අවශ්‍යයි."
+              reason: "DIRECT_PDF_QA_SERVER_SCAN_REQUIRED",
+              message: "PDF source එක secure server scan එකකට යොමු කරනවා."
             });
 
             // [FIX 1] Emit explicit done event for pending Direct PDF QA
@@ -793,9 +798,9 @@ export async function aiRespondStream(req: any, res: any) {
               pending: true,
               requestId,
               finishReason: "pending_direct_pdf_qa",
-              reason: "DIRECT_PDF_HANDOFF_REQUIRED",
+              reason: "DIRECT_PDF_SERVER_SCAN_REQUIRED",
               canContinue: true,
-              needsClientFile: true,
+              needsClientFile: false,
               sources: allSources.length > 0 ? allSources : [paperSource],
               paperInfo: {
                 sourceId: paperSource.id || paperSource.sourceId,
@@ -808,7 +813,8 @@ export async function aiRespondStream(req: any, res: any) {
               }
             });
 
-            // We stop here and let the frontend handle the rest to avoid GCS auth issues on backend
+            // The frontend starts the follow-up request while the backend reads
+            // the verified source path. No cross-origin Storage fetch is used.
             trace.doneSent = true;
             trace.completed = false;
             return;
@@ -1017,9 +1023,20 @@ export async function aiRespondStream(req: any, res: any) {
         query: prompt,
         uid: user.uid,
         subject: route.entities.subject || activeSubject,
-        limit: 5
+        limit: isLessonEvidenceMode(route.mode) ? 24 : 5,
+        lesson: route.entities.lesson || evidence.lessonIds[0],
+        strictLesson: isLessonEvidenceMode(route.mode),
+        allowedSourceIds: evidence.allowedSourceIds,
       }) as Promise<any>, { chunks: [] } as any, res);
       const chunksList = Array.isArray(retrieveResult) ? retrieveResult : (retrieveResult?.chunks || []);
+      if (isLessonEvidenceMode(route.mode) && Array.isArray(retrieveResult?.sources)) {
+        for (const source of retrieveResult.sources) {
+          if (source.usedInAnswer === false) continue;
+          if (!allSources.some((existing: any) => (existing.sourceId || existing.id) === (source.sourceId || source.id))) {
+            allSources.push({ ...source, badge: "Lesson PDF" });
+          }
+        }
+      }
       if (chunksList.length > 0) {
         chunksList.forEach((c: any, i: number) => {
           const score = scoreSource(c, {
@@ -1033,10 +1050,35 @@ export async function aiRespondStream(req: any, res: any) {
           if (policy.intent === "official_paper_question" && score < 75) return;
           if (policy.intent === "syllabus_lesson_explanation" && score < 55) return;
 
-          allSources.push({ title: c.title, sourceId: c.sourceId || c.id, pageNumber: c.metadata?.pageNumber || c.page, sourceType: c.sourceType || 'rag', sourceScope: c.sourceScope || 'personal', confidence: c.confidence, badge: "RAG" });
+          if (!isLessonEvidenceMode(route.mode)) {
+            allSources.push({ title: c.title, sourceId: c.sourceId || c.id, pageNumber: c.metadata?.pageNumber || c.page, sourceType: c.sourceType || 'rag', sourceScope: c.sourceScope || 'personal', confidence: c.confidence, badge: "RAG" });
+          }
           contextBlocksText += `\n[RAG SOURCE ${i+1}] ${c.title}:\n${c.text.substring(0, 1000)}\n`;
         });
       }
+    }
+
+    if (isLessonEvidenceMode(route.mode) && contextBlocksText.trim().length === 0) {
+      const lessonName = route.entities.lesson || evidence.lessonIds[0] || "requested lesson";
+      const statusMessage = evidence.evidenceStatus === "ocr_required"
+        ? `**${lessonName}** lesson එකට PDF source හමු වුණා, නමුත් text index වෙලා නැහැ. OCR/Reprocess run කළාට පස්සේ ඒ PDF evidence එකෙන් ප්‍රශ්න දෙන්න පුළුවන්.`
+        : `**${lessonName}** lesson එකට indexed PDF evidence එකක් හමු වුණේ නැහැ. Source එක upload/index කළාට පස්සේ මම ඒ lesson එකේ PDF වලින් පමණක් ප්‍රශ්න සහ පිළිතුරු දෙන්නම්.`;
+      emitSse(res, "evidence_missing", {
+        reason: evidence.evidenceStatus,
+        lesson: lessonName,
+        message: statusMessage,
+      });
+      emitSse(res, "token", { text: statusMessage });
+      emitSse(res, "done", {
+        ok: false,
+        completed: true,
+        requestId,
+        finishReason: "blocked_no_lesson_evidence",
+        sources: evidence.candidates,
+      });
+      trace.doneSent = true;
+      trace.completed = true;
+      return;
     }
 
     // 4. Web Search
@@ -1123,6 +1165,30 @@ export async function aiRespondStream(req: any, res: any) {
         text: `Context Blocks:\n${contextBlocksText}\n\nPrevious Chat History:\n${history?.length ? JSON.stringify(history) : 'None'}\n\nCurrent User Request:\n${prompt}\nAnswer in Sinhala-first style if appropriate.`
       }
     ];
+
+    const asksAboutMistakes = /mistake|error log|wrong answer|වැරදි|වරද|quiz me on my recent/i.test(prompt);
+    if (asksAboutMistakes && Array.isArray(modifiedUserContext.recentMistakes)) {
+      const recentMistakes = modifiedUserContext.recentMistakes.slice(0, 8);
+      contentsParts[0].text += `\n\nRecent Mistake Notebook records (real saved data):\n${JSON.stringify(recentMistakes.map((mistake: any) => ({
+        subject: mistake.subject,
+        lesson: mistake.lesson,
+        errorText: mistake.errorText || mistake.questionText,
+        createdAt: mistake.createdAt,
+        hasImage: Boolean(mistake.imageStoragePath),
+      })))}\nUse these records for diagnosis, revision, or a grounded quiz. Do not invent missing questions or answers.`;
+      const bucketName = getAdminBucket().name;
+      for (const mistake of recentMistakes.slice(0, 3)) {
+        if (!mistake.imageStoragePath || !mistake.imageMimeType) continue;
+        contentsParts.push({
+          fileData: {
+            fileUri: `gs://${bucketName}/${mistake.imageStoragePath}`,
+            mimeType: mistake.imageMimeType,
+          },
+        });
+        contentsParts.push({ text: `Mistake Notebook image for ${mistake.subject || "subject"} / ${mistake.lesson || "lesson"}. Analyze only when relevant.` });
+        aiTask = "image_understanding";
+      }
+    }
 
     if (image && image.data && image.mimeType) {
       contentsParts.push({

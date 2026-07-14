@@ -63,6 +63,21 @@ export function resolveAnswerPolicy(
      };
   }
 
+  if (["lesson_question_discussion", "lesson_theory_explanation", "past_paper_lesson_search"].includes(route?.mode)) {
+    return {
+      intent: route.mode,
+      allowSources: true,
+      allowedSourceTypes: route.mode === "past_paper_lesson_search"
+        ? ["past_paper", "marking_scheme", "paper_structure"]
+        : ["uploaded_pdf", "paper_structure", "notes", "past_paper", "marking_scheme"],
+      requireEvidence: true,
+      allowVisuals: true,
+      maxAnswerStyle: "exam_style",
+      shouldUseStudentContext: true,
+      shouldUseSyllabus: false,
+    };
+  }
+
   // 1. Official paper intent first (with Sinhala keywords)
   const isOfficialPaper = (p.includes("mcq") || p.includes("essay") || p.includes("structured") || p.includes("q") || p.includes("prashna") || p.includes("ප්‍රශ්න") || p.includes("marking scheme") || p.includes("answer") || p.includes("පිළිතුරු")) && p.match(/\b(201\d|202\d)\b/) || route?.mode === "paper_question_qa";
   if (isOfficialPaper) {
@@ -79,7 +94,7 @@ export function resolveAnswerPolicy(
   }
 
   // 2. Uploaded PDF intent second
-  if (route?.mode === "direct_pdf_solve" || (attachments && attachments.length > 0) || p.includes("pdf") || p.includes("paper eke") || p.includes("meke") || p.includes("upload") || p.includes("මෙම")) {
+  if (route?.mode === "direct_pdf_solve" || (attachments && attachments.length > 0) || p.includes("paper eke") || p.includes("meke") || p.includes("upload") || p.includes("මෙම pdf")) {
     return {
        intent: "uploaded_pdf_question",
        allowSources: true,

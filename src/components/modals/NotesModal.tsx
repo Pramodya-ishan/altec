@@ -117,7 +117,8 @@ export function NotesModal() {
         const context = await response.json().catch(() => null);
         const serverRoles = Array.isArray(context?.roles) ? context.roles : [];
         const serverAllowsUpload = response.ok
-          && serverRoles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
+          && (context?.capabilities?.canUploadVideo === true
+            || serverRoles.some((role: string) => ["admin", "content_editor", "ops"].includes(role)));
         if (active) {
           setVideoPermission(response.ok ? (serverAllowsUpload ? "allowed" : "denied") : (response.status === 401 || response.status === 403 ? "denied" : "unavailable"));
         }
@@ -226,7 +227,7 @@ export function NotesModal() {
         });
 
         let processed: any = { sourceId: upload.sourceId, storagePath: upload.storagePath };
-        if (["pdf", "image"].includes(mediaKind)) {
+        if (mediaKind === "pdf") {
           const response = await apiFetch("/api/pdf/process-uploaded", {
             method: "POST",
             body: JSON.stringify({
@@ -256,7 +257,7 @@ export function NotesModal() {
           mediaKind,
           resourceRole: mediaKind === "image" ? "image" : mediaKind === "audio" ? "audio" : "student_note",
           storagePath: processed.storagePath || upload.storagePath,
-          status: "ready",
+          status: mediaKind === "pdf" ? (processed.status || "queued") : "ready",
           sizeBytes: file.size,
           createdAt: new Date().toISOString(),
         });

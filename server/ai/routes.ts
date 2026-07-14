@@ -503,7 +503,12 @@ aiRoutes.post("/respond-stream", async (req, res) => {
     (req as any).user = user;
     await aiRespondStream(req, res);
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    const unauthorized = String(error?.message || "").startsWith("Unauthorized:");
+    res.status(unauthorized ? 401 : 500).json({
+      ok: false,
+      error: unauthorized ? "AUTH_REQUIRED" : error.message,
+      message: error.message,
+    });
   }
 });
 
@@ -876,5 +881,4 @@ aiRoutes.post("/web/pdf-proxy", async (req, res) => {
     res.status(500).json({ ok: false, error: error.message || "Fetch timeout or network issue" });
   }
 });
-
 

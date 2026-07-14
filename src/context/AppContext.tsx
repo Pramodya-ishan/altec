@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useRe
 import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
 import { isFirebaseEnabled, db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, deleteDoc } from 'firebase/firestore';
-import { GoogleAuthProvider, signInWithCredential, signInWithPopup, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { GoogleAuthProvider, signInWithCredential, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { calculateSubjectAveragePercent, calculateSubjectZ } from '../lib/scoreUtils';
 
 type ModalsState = {
@@ -645,6 +645,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let unsubscribeAutoAuth = () => {};
     
     if (isFirebaseEnabled && auth) {
+      void getRedirectResult(auth).then((redirectResult) => {
+        if (!redirectResult) return;
+        const credential = GoogleAuthProvider.credentialFromResult(redirectResult);
+        if (credential?.accessToken) localStorage.setItem('google_access_token', credential.accessToken);
+      }).catch((error) => {
+        console.error("Google Redirect Login Error:", error);
+        showNotification("Google login could not be completed. Please try again.", "error");
+      });
       unsubscribeAutoAuth = onAuthStateChanged(auth, async (firebaseUser) => {
         if (firebaseUser) {
           if (firebaseUser.isAnonymous) {
@@ -779,6 +787,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
         
         provider.setCustomParameters({ prompt: 'select_account' });
+        if (import.meta.env.PROD) {
+          await signInWithRedirect(auth, provider);
+          return;
+        }
         const result = await signInWithPopup(auth, provider);
         
         const credential = GoogleAuthProvider.credentialFromResult(result);

@@ -1,6 +1,7 @@
 import { getAdminDb } from "../firebase/admin";
 import { resolveStrictSource } from "../ai-core/sources/sourceResolver";
 import { getSourceInventory } from "../sources/sourceInventoryService";
+import { findLessonSources, isLessonEvidenceMode } from "./lessonResolver";
 
 export interface EvidenceResult {
   intent: string;
@@ -41,10 +42,27 @@ export async function retrieveEvidence(
   if (policy.requireEvidence) {
     const inventory = await getSourceInventory({ uid, subject, isAdmin: false });
     const allAvailableSources = [...inventory.groups.pastPapers, ...inventory.groups.markingSchemes, ...inventory.groups.syllabus, ...inventory.groups.uploadedPdfs, ...inventory.groups.paperStructure];
+    if (isLessonEvidenceMode(intent)) {
+      const lessonMatch = findLessonSources(allAvailableSources, prompt, route.entities?.lesson || activeConversationState?.activeLessonIds?.[0]);
+      lessonIds = lessonMatch.reference ? [lessonMatch.reference.label] : [];
+      candidates = lessonMatch.sources;
+      const indexedMatches = lessonMatch.sources.filter((source: any) => source.textIndexed || Number(source.chunkCount || 0) > 0);
+      if (indexedMatches.length > 0) {
+        selectedSource = indexedMatches[0];
+        allowedSourceIds = indexedMatches.map((source: any) => source.sourceId || source.id).filter(Boolean);
+        evidenceStatus = "verified";
+        allowAnswerGeneration = true;
+      } else if (lessonMatch.sources.length > 0) {
+        selectedSource = lessonMatch.sources[0];
+        allowedSourceIds = lessonMatch.sources.map((source: any) => source.sourceId || source.id).filter(Boolean);
+        evidenceStatus = lessonMatch.sources.some((source: any) => source.needsOcr) ? "ocr_required" : "index_required";
+        allowAnswerGeneration = false;
+      }
+    }
     
     const requestedYear = route.entities?.year;
     
-    const strictRes = resolveStrictSource(allAvailableSources, {
+    const strictRes = isLessonEvidenceMode(intent) ? { selectedSource: null } : resolveStrictSource(allAvailableSources, {
       year: requestedYear,
       subject,
       activeSourceId: activeConversationState?.selectedSourceId || null,

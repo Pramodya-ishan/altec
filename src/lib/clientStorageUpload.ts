@@ -112,9 +112,13 @@ export async function uploadFileWithClientStorage(args: Parameters<typeof upload
 export async function uploadImageWithClientStorage({
   file,
   subject,
+  onProgress,
+  onTask,
 }: {
   file: File;
   subject?: string;
+  onProgress?: (snapshot: UploadProgressSnapshot) => void;
+  onTask?: (controls: UploadTaskControls) => void;
 }) {
   const user = auth.currentUser;
   if (!user || user.isAnonymous) {
@@ -142,7 +146,24 @@ export async function uploadImageWithClientStorage({
         sourceScope: "images",
       },
     });
-    task.on("state_changed", undefined, reject, () => resolve());
+    onTask?.({ pause: () => task.pause(), resume: () => task.resume(), cancel: () => task.cancel() });
+    task.on(
+      "state_changed",
+      (snapshot) => onProgress?.({
+        bytesTransferred: snapshot.bytesTransferred,
+        totalBytes: snapshot.totalBytes,
+        progress: snapshot.totalBytes > 0 ? snapshot.bytesTransferred / snapshot.totalBytes : 0,
+        state: snapshot.state === "paused" ? "paused" : "running",
+      }),
+      (error: any) => {
+        onProgress?.({ bytesTransferred: 0, totalBytes: file.size, progress: 0, state: error?.code === "storage/canceled" ? "canceled" : "error" });
+        reject(error);
+      },
+      () => {
+        onProgress?.({ bytesTransferred: file.size, totalBytes: file.size, progress: 1, state: "success" });
+        resolve();
+      },
+    );
   });
   return { sourceId, storagePath };
 }

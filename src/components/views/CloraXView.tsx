@@ -23,7 +23,6 @@ const PdfViewerModal = React.lazy(() => import('../PdfViewerModal').then(m => ({
 import {
   Paperclip,
   Loader2,
-  Sparkles,
   Trash2,
   Send,
   Square,
@@ -1511,18 +1510,7 @@ const [messages, setMessages] = useState<{
             recentAttachmentIds={uploadedFile?.storagePath ? [uploadedFile.storagePath] : undefined}
           />
 
-          <div className="z-20 flex h-14 shrink-0 items-center justify-between border-b border-slate-100 bg-white px-4 sm:px-6">
-            <div className="flex min-w-0 items-center gap-2.5">
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-slate-950 text-white"><Sparkles className="h-3.5 w-3.5" /></span>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h1 className="truncate text-sm font-semibold text-slate-900">Clora X</h1>
-                  <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-600"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Online</span>
-                </div>
-                <p className="truncate text-[10px] uppercase tracking-wider text-slate-400">{currentSubject || 'A/L Learning Assistant'}</p>
-              </div>
-            </div>
-
+          <div className="z-20 flex h-14 shrink-0 items-center justify-end border-b border-slate-100 bg-white px-4 sm:px-6">
             <div className="flex items-center gap-1">
               <button type="button" onClick={handleNewChat} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900" aria-label="Start a new chat" title="New chat">
                 <Plus className="h-4 w-4" /><span className="hidden sm:inline">New chat</span>

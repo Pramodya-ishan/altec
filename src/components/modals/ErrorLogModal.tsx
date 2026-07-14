@@ -1,9 +1,13 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { X, AlertCircle, Sparkles, BookOpen, Layers, CheckCircle2, Save } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
-import { isFirebaseEnabled, db } from '../../lib/firebase';
-import { collection, addDoc, doc, setDoc } from 'firebase/firestore';
+import React, { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
+import { AlertCircle, Camera, ImagePlus, LoaderCircle, Save, X } from "lucide-react";
+import { useApp } from "../../context/AppContext";
+import { apiFetch } from "../../lib/api";
+import {
+  uploadImageWithClientStorage,
+  type UploadProgressSnapshot,
+  type UploadTaskControls,
+} from "../../lib/clientStorageUpload";
 
 interface ErrorLogModalProps {
   isOpen: boolean;
@@ -11,87 +15,140 @@ interface ErrorLogModalProps {
   onLogged?: () => void;
 }
 
+const LESSON_SUGGESTIONS: Record<string, string[]> = {
+  SFT: ["තරල", "විද්‍යුතය", "කෘෂි තාක්ෂණය", "ආහාර තාක්ෂණය"],
+  ET: ["Basic Electronics", "Electrical Technology", "Civil Engineering", "Mechanical Systems"],
+  ICT: ["Networking", "Database", "Python", "Web Development"],
+};
+
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+  return `${(value / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
 export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps) {
   const { user, showNotification } = useApp();
-  const [subject, setSubject] = useState<string>('SFT');
-  const [lesson, setLesson] = useState<string>('');
-  const [mistakeType, setMistakeType] = useState<string>('Conceptual');
-  const [questionText, setQuestionText] = useState<string>('');
-  const [userAnswer, setUserAnswer] = useState<string>('');
-  const [correctAnswer, setCorrectAnswer] = useState<string>('');
-  const [explanation, setExplanation] = useState<string>('');
-  const [saving, setSaving] = useState<boolean>(false);
+  const [subject, setSubject] = useState("SFT");
+  const [lesson, setLesson] = useState("");
+  const [errorText, setErrorText] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState<UploadProgressSnapshot | null>(null);
+  const controlsRef = useRef<UploadTaskControls | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // Suggested lessons based on selected subject
-  const getSuggestedLessons = () => {
-    if (subject === 'SFT') {
-      return ['SFT Main Unit 1', 'Agro Technology', 'Food Technology', 'Bio-Systems Technology'];
-    }
-    if (subject === 'ET') {
-      return ['Basic Electronics', 'Civil Engineering', 'Mechanical Systems', 'Electrical Technology'];
-    }
-    return ['Networking', 'HTML & Web Development', 'Database Management', 'Programming with Python'];
+  useEffect(() => () => {
+    if (imagePreview) URL.revokeObjectURL(imagePreview);
+  }, [imagePreview]);
+
+  const clearImage = () => {
+    if (imagePreview) URL.revokeObjectURL(imagePreview);
+    setImagePreview(null);
+    setImageFile(null);
+    setProgress(null);
+    if (inputRef.current) inputRef.current.value = "";
   };
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!questionText.trim()) {
-      showNotification('Please enter the question or mistake details.', 'error');
+  const handleImage = (file?: File) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      showNotification("Choose an image file.", "error");
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      showNotification("Image must be smaller than 15 MB.", "error");
+      return;
+    }
+    clearImage();
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+  };
+
+  const reset = () => {
+    setLesson("");
+    setErrorText("");
+    clearImage();
+  };
+
+  const handleClose = () => {
+    if (saving && !confirm("Upload is running. Cancel it?")) return;
+    controlsRef.current?.cancel();
+    onClose();
+  };
+
+  const handleSave = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!user?.email) {
+      showNotification("Please sign in before saving an error.", "error");
+      return;
+    }
+    if (!lesson.trim()) {
+      showNotification("Select or type the lesson.", "error");
+      return;
+    }
+    if (!errorText.trim() && !imageFile) {
+      showNotification("Add error text or upload an image.", "error");
       return;
     }
 
     setSaving(true);
-    const newMistake = {
-      subject,
-      lesson: lesson.trim() || 'General Practice',
-      mistakeType,
-      questionText: questionText.trim(),
-      userAnswer: userAnswer.trim(),
-      correctAnswer: correctAnswer.trim(),
-      explanation: explanation.trim() || 'No explanation provided yet.',
-      repeatCount: 0,
-      createdAt: new Date().toISOString(),
-    };
-
     try {
-      const email = user?.email || 'local_user';
-
-      if (isFirebaseEnabled && db && user?.email) {
-        const collRef = collection(db, 'users', email, 'mistake_notebook');
-        await addDoc(collRef, newMistake);
+      let image: { storagePath?: string; mimeType?: string; fileName?: string } = {};
+      if (imageFile) {
+        const uploaded = await uploadImageWithClientStorage({
+          file: imageFile,
+          subject,
+          onProgress: setProgress,
+          onTask: (controls) => { controlsRef.current = controls; },
+        });
+        image = { storagePath: uploaded.storagePath, mimeType: imageFile.type, fileName: imageFile.name };
       }
 
-      // Save to local cache as well
-      const localKey = `local_mistake_notebook_${email}`;
-      const localRaw = localStorage.getItem(localKey);
-      let localList = [];
-      if (localRaw) {
-        try {
-          localList = JSON.parse(localRaw);
-        } catch (e) {
-          localList = [];
-        }
-      }
-      const withId = { id: Date.now().toString(), ...newMistake };
-      localList.unshift(withId);
-      localStorage.setItem(localKey, JSON.stringify(localList));
-      localStorage.setItem('local_mistake_notebook', JSON.stringify(localList)); // generic fallback
+      const response = await apiFetch("/api/student/mistake", {
+        method: "POST",
+        body: JSON.stringify({
+          subject,
+          lesson: lesson.trim(),
+          errorText: errorText.trim(),
+          imageStoragePath: image.storagePath,
+          imageMimeType: image.mimeType,
+          imageFileName: image.fileName,
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Could not save the error log.");
 
-      showNotification('Mistake logged successfully in your Notebook!', 'success');
-      
-      // Reset form
-      setLesson('');
-      setQuestionText('');
-      setUserAnswer('');
-      setCorrectAnswer('');
-      setExplanation('');
-      
-      if (onLogged) onLogged();
+      const localRecord = {
+        id: payload.id,
+        subject,
+        lesson: lesson.trim(),
+        errorText: errorText.trim(),
+        imageStoragePath: image.storagePath || null,
+        imageMimeType: image.mimeType || null,
+        createdAt: new Date().toISOString(),
+      };
+      const localKey = `local_mistake_notebook_${user.email.toLowerCase()}`;
+      let previous: unknown = [];
+      try {
+        previous = JSON.parse(localStorage.getItem(localKey) || "[]");
+      } catch {
+        previous = [];
+      }
+      localStorage.setItem(localKey, JSON.stringify([localRecord, ...(Array.isArray(previous) ? previous : [])].slice(0, 100)));
+
+      showNotification("Saved. AI can now use this error for diagnosis and quizzes.", "success");
+      reset();
+      onLogged?.();
       onClose();
-    } catch (err: any) {
-      console.error('Error logging mistake:', err);
-      showNotification('Failed to log mistake. Saved locally.', 'error');
+    } catch (error: any) {
+      if (error?.code !== "storage/canceled") {
+        showNotification(error?.message || "Could not save the error log.", "error");
+      }
     } finally {
+      controlsRef.current = null;
       setSaving(false);
     }
   };
@@ -99,193 +156,93 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
-          {/* Backdrop */}
-          <motion.div
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <motion.button
+            type="button"
+            aria-label="Close error log"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm"
+            onClick={handleClose}
+            className="fixed inset-0 h-full w-full cursor-default bg-slate-950/35 backdrop-blur-sm"
           />
 
-          {/* Modal Container */}
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+          <motion.section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="error-log-title"
+            initial={{ opacity: 0, scale: 0.97, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            transition={{ type: 'spring', duration: 0.4 }}
-            className="relative bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-800 w-full max-w-lg z-10 overflow-hidden"
+            exit={{ opacity: 0, scale: 0.97, y: 12 }}
+            className="relative z-10 w-full max-w-xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"
           >
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-950/20">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-rose-50 dark:bg-rose-900/20 rounded-xl text-rose-600 dark:text-rose-400">
-                  <AlertCircle className="w-5 h-5 animate-pulse" />
-                </div>
+            <header className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
+              <div className="flex items-center gap-3">
+                <span className="grid h-10 w-10 place-items-center rounded-2xl bg-rose-50 text-rose-600">
+                  <AlertCircle className="h-5 w-5" />
+                </span>
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-white tracking-tight font-display">
-                    Log a New Mistake
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Saves to Mistake Notebook for AI Diagnostics
-                  </p>
+                  <h2 id="error-log-title" className="text-lg font-bold text-slate-950">Add an error</h2>
+                  <p className="text-sm text-slate-500">Save text or a photo for AI revision.</p>
                 </div>
               </div>
-              <button
-                onClick={onClose}
-                className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
+              <button type="button" onClick={handleClose} aria-label="Close" className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
+                <X className="h-5 w-5" />
               </button>
-            </div>
+            </header>
 
-            {/* Form */}
-            <form onSubmit={handleSave} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto clora-scrollbar">
-              {/* Row 1: Subject and Type */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    Subject
-                  </label>
-                  <select
-                    value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-semibold text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 outline-none transition"
-                  >
-                    <option value="SFT">Science for Tech (SFT)</option>
-                    <option value="ET">Engineering Tech (ET)</option>
-                    <option value="ICT">Information Tech (ICT)</option>
+            <form onSubmit={handleSave} className="space-y-5 p-6">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="space-y-2 text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Subject
+                  <select value={subject} onChange={(event) => { setSubject(event.target.value); setLesson(""); }} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold normal-case text-slate-900 outline-none focus:border-slate-400 focus:ring-4 focus:ring-slate-100">
+                    <option value="SFT">SFT</option>
+                    <option value="ET">ET</option>
+                    <option value="ICT">ICT</option>
                   </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    Mistake Type
-                  </label>
-                  <select
-                    value={mistakeType}
-                    onChange={(e) => setMistakeType(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-semibold text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 outline-none transition"
-                  >
-                    <option value="Conceptual">Conceptual Error</option>
-                    <option value="Calculation">Calculation Mistake</option>
-                    <option value="Misread">Misread Question</option>
-                    <option value="Time Pressure">Time Management</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Lesson Input & Suggestions */}
-              <div>
-                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  Lesson / Topic
                 </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Basic Logic Gates"
-                  value={lesson}
-                  onChange={(e) => setLesson(e.target.value)}
-                  className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 outline-none transition"
-                />
-                
-                {/* Suggestions Quick Buttons */}
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {getSuggestedLessons().map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => setLesson(s)}
-                      className="px-2 py-1 bg-slate-50 hover:bg-slate-100 text-[11px] text-slate-500 hover:text-slate-700 border border-slate-200/60 rounded-lg transition"
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Question / Mistake details */}
-              <div>
-                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5 flex items-center justify-between">
-                  <span>Question or Mistake Details *</span>
+                <label className="space-y-2 text-xs font-bold uppercase tracking-wide text-slate-500">
+                  Lesson
+                  <input value={lesson} onChange={(event) => setLesson(event.target.value)} list={`mistake-lessons-${subject}`} placeholder="Type or select a lesson" className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-medium normal-case text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100" />
+                  <datalist id={`mistake-lessons-${subject}`}>
+                    {LESSON_SUGGESTIONS[subject].map((item) => <option key={item} value={item} />)}
+                  </datalist>
                 </label>
-                <textarea
-                  required
-                  rows={3}
-                  placeholder="Paste the question or write about what you got wrong..."
-                  value={questionText}
-                  onChange={(e) => setQuestionText(e.target.value)}
-                  className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 outline-none transition resize-none"
-                />
               </div>
 
-              {/* Answers */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    Your Answer
+              <label className="block space-y-2 text-xs font-bold uppercase tracking-wide text-slate-500">
+                Error or question
+                <textarea value={errorText} onChange={(event) => setErrorText(event.target.value)} rows={5} placeholder="Paste the question, error message, or explain what went wrong…" className="w-full resize-none rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium normal-case leading-6 text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100" />
+              </label>
+
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/70 p-4">
+                <input ref={inputRef} type="file" accept="image/*" capture="environment" onChange={(event) => handleImage(event.target.files?.[0])} className="sr-only" id="mistake-image" />
+                {imagePreview && imageFile ? (
+                  <div className="flex items-center gap-4">
+                    <img src={imagePreview} alt="Selected error" className="h-20 w-20 rounded-xl border border-slate-200 object-cover" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-slate-900">{imageFile.name}</p>
+                      <p className="mt-1 text-xs text-slate-500">{progress ? `${Math.round(progress.progress * 100)}% · ${formatBytes(progress.bytesTransferred)} / ${formatBytes(progress.totalBytes)}` : formatBytes(imageFile.size)}</p>
+                    </div>
+                    <button type="button" onClick={clearImage} disabled={saving} className="rounded-full p-2 text-slate-400 hover:bg-white hover:text-rose-600" aria-label="Remove image"><X className="h-4 w-4" /></button>
+                  </div>
+                ) : (
+                  <label htmlFor="mistake-image" className="flex cursor-pointer items-center justify-center gap-3 rounded-xl px-4 py-5 text-sm font-semibold text-slate-600 transition hover:bg-white hover:text-slate-950">
+                    <ImagePlus className="h-5 w-5" /> Upload question or error image
+                    <Camera className="h-4 w-4 text-slate-400" />
                   </label>
-                  <input
-                    type="text"
-                    placeholder="What did you put?"
-                    value={userAnswer}
-                    onChange={(e) => setUserAnswer(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 outline-none transition"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                    Correct Answer
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Correct solution..."
-                    value={correctAnswer}
-                    onChange={(e) => setCorrectAnswer(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 outline-none transition"
-                  />
-                </div>
+                )}
               </div>
 
-              {/* Explanation */}
-              <div>
-                <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1.5">
-                  Explanation / Revision Notes
-                </label>
-                <textarea
-                  rows={2}
-                  placeholder="Optional: What is the correct way or how to avoid this next time?"
-                  value={explanation}
-                  onChange={(e) => setExplanation(e.target.value)}
-                  className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 outline-none transition resize-none"
-                />
-              </div>
-
-              {/* Submit Buttons */}
-              <div className="pt-2 flex items-center justify-end gap-3 border-t border-slate-100 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="px-4 py-2 text-sm font-semibold text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
-                >
-                  Cancel
+              <footer className="flex items-center justify-end gap-3 border-t border-slate-100 pt-5">
+                <button type="button" onClick={handleClose} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-900">Cancel</button>
+                <button type="submit" disabled={saving} className="inline-flex min-w-32 items-center justify-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60">
+                  {saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  {saving ? "Saving…" : "Save error"}
                 </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-rose-500/10 hover:shadow-rose-500/20 transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
-                >
-                  {saving ? (
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <Save className="w-4 h-4" />
-                  )}
-                  Save to Notebook
-                </button>
-              </div>
+              </footer>
             </form>
-          </motion.div>
+          </motion.section>
         </div>
       )}
     </AnimatePresence>

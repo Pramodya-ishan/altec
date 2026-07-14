@@ -33,7 +33,7 @@ function ToastNotification() {
   const { notifications, removeNotification } = useApp();
 
   return (
-    <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[99999] pointer-events-none flex flex-col items-center justify-start w-full max-w-sm gap-2">
+    <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[99999] pointer-events-none flex flex-col items-center justify-start w-full max-w-sm gap-2" aria-live="polite">
       <AnimatePresence>
         {notifications.map((notif, i) => {
           if (i < notifications.length - 1) return null; // Show only latest
@@ -47,14 +47,14 @@ function ToastNotification() {
               exit={{ opacity: 0, scale: 0.95, y: -10 }}
               transition={{ duration: 0.2 }}
               className={cn(
-                "pointer-events-auto px-4 py-3 rounded-xl shadow-lg font-medium text-white flex items-center gap-3 cursor-pointer min-w-[280px] max-w-[90vw] overflow-hidden border",
-                notif.type === 'error' ? 'bg-red-600 border-red-500' : 
-                notif.type === 'success' ? 'bg-emerald-600 border-emerald-500' : 
-                'bg-slate-800 border-slate-700'
+                "pointer-events-auto px-4 py-3 rounded-2xl shadow-xl font-medium bg-white text-slate-800 flex items-center gap-3 cursor-pointer min-w-[280px] max-w-[90vw] overflow-hidden border",
+                notif.type === 'error' ? 'border-rose-200' :
+                notif.type === 'success' ? 'border-emerald-200' :
+                'border-slate-200'
               )}
               onClick={() => removeNotification(notif.id)}
             >
-              <div className="shrink-0 flex items-center justify-center text-white/90">
+              <div className={cn("shrink-0 flex items-center justify-center", notif.type === 'error' ? 'text-rose-600' : notif.type === 'success' ? 'text-emerald-600' : 'text-slate-500')}>
                  {notif.type === 'success' && <CheckCircle2 className="w-5 h-5" />}
                  {notif.type === 'error' && <XCircle className="w-5 h-5" />}
                  {notif.type === 'info' && <Info className="w-5 h-5" />}
@@ -63,8 +63,9 @@ function ToastNotification() {
                  {notif.message.replace(/\[RETRY:\d+\]/gi, '').replace(/(?:\(\s*|-?\s*)?retry in\s*(\d+(?:\.\d+)?)\s*(?:s|sec|seconds?)(?:\.\.\.|\.)?(?:\s*\))?/gi, '').trim() || "Network error. Please wait."}
               </div>
               <button 
-                 className="shrink-0 text-white/70 hover:text-white transition-colors"
+                 className="shrink-0 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
                  onClick={(e) => { e.stopPropagation(); removeNotification(notif.id); }}
+                 aria-label="Dismiss notification"
               >
                  <X className="w-4 h-4" />
               </button>
