@@ -5,7 +5,6 @@ import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
 import { isFirebaseEnabled, db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, deleteDoc } from 'firebase/firestore';
 import { GoogleAuthProvider, signInWithCredential, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { calculateSubjectAveragePercent, calculateSubjectZ } from '../lib/scoreUtils';
 
 type ModalsState = {
   playlist: { open: boolean; topic: string };
@@ -82,6 +81,8 @@ type AppContextType = {
   fetchUserInfo: (token: string) => Promise<void>;
   loginWithGooglePopup: () => Promise<void>;
   isAuthLoading: boolean;
+  isUserDataLoading: boolean;
+  hasHydratedUserData: boolean;
   logout: () => void;
   youtubeCookies: string;
   saveYoutubeCookies: (cookies: string) => Promise<void>;
@@ -118,10 +119,27 @@ const defaultData: AppData = {
   ict: { topics: {}, paperMarks: [], questionMarks: {} },
 };
 
+function sanitizeAppData(value: AppData): AppData {
+  return {
+    ...value,
+    zScoreHistory: Array.isArray(value?.zScoreHistory)
+      ? value.zScoreHistory.filter(
+          (entry) => entry?.calculationBasis === "actual_saved_paper_marks",
+        )
+      : [],
+  };
+}
+
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [data, setData] = useState<AppData>(defaultData);
+  const [data, setRawData] = useState<AppData>(defaultData);
+  const setData = React.useCallback<React.Dispatch<React.SetStateAction<AppData>>>((update) => {
+    setRawData((previous) => {
+      const next = typeof update === "function" ? update(previous) : update;
+      return sanitizeAppData(next);
+    });
+  }, []);
   const [currentSubject, setCurrentSubject] = useState<SubjectKey>('sft');
   const [currentView, setCurrentView] = useState<ViewKey>('paper-structure');
   const [theme, setThemeState] = useState<ThemeKey>('slate');
@@ -130,6 +148,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
 
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isUserDataLoading, setIsUserDataLoading] = useState(false);
+  const [hasHydratedUserData, setHasHydratedUserData] = useState(false);
   const [youtubeCookies, setYoutubeCookies] = useState<string>('');
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -669,8 +689,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
                      try { setData(JSON.parse(savedData)); } catch(e) {}
                   }
 
-                  await fetchUserDataFromDB(parsedUser.email);
-                  await fetchYoutubeCookies(parsedUser.email);
+                  setIsAuthLoading(false);
+                  void fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData });
+                  void fetchYoutubeCookies(parsedUser.email);
                } catch(e) {}
             }
             setIsAuthLoading(false);
@@ -690,7 +711,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
              try { setData(JSON.parse(savedData)); } catch(e) {}
           }
 
-          await fetchUserDataFromDB(firebaseUser.email || '');
+          setIsAuthLoading(false);
+          void fetchUserDataFromDB(firebaseUser.email || '', { showLoading: !savedData });
           setTimeout(() => {
             fetchYoutubeCookies(firebaseUser.email || '').catch(() => {});
           }, 1500);
@@ -714,7 +736,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   await signInAnonymously(auth);
                 } catch(e) {}
                 
-                await fetchUserDataFromDB(parsedUser.email);
+                setIsAuthLoading(false);
+                void fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData });
                 setTimeout(() => {
                   fetchYoutubeCookies(parsedUser.email).catch(() => {});
                 }, 1500);
@@ -746,7 +769,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
 
           // Fetch latest details in the background
-          fetchUserDataFromDB(parsedUser.email).then(() => {
+          fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData }).then(() => {
             setTimeout(() => {
               fetchYoutubeCookies(parsedUser.email).catch(() => {});
             }, 1500);
@@ -896,8 +919,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsAuthLoading(false);
   };
 
-  const fetchUserDataFromDB = async (rawEmail: string) => {
+  const fetchUserDataFromDB = async (
+    rawEmail: string,
+    options: { showLoading?: boolean } = {},
+  ) => {
       const email = rawEmail.toLowerCase();
+      const showLoading = options.showLoading !== false;
+      if (showLoading) setIsUserDataLoading(true);
       try {
          // Try fetching from Firestore first if enabled
          if (isFirebaseEnabled && db) {
@@ -975,6 +1003,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
                setData(JSON.parse(savedData));
             } catch(err) {}
          }
+      } finally {
+         setHasHydratedUserData(true);
+         if (showLoading) setIsUserDataLoading(false);
       }
   };
 
@@ -1263,26 +1294,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       showNotification(`Status updated: ${topic}`, 'success');
     }
     
-    const sftMark = calculateSubjectAveragePercent('sft', nextData);
-    const etMarkBase = calculateSubjectAveragePercent('et', nextData);
-    const etMark = Math.min(100, (etMarkBase * 0.75) + 25);
-    const ictMark = calculateSubjectAveragePercent('ict', nextData);
-    const sftZ = calculateSubjectZ('sft', sftMark);
-    const etZ = calculateSubjectZ('et', etMark);
-    const ictZ = calculateSubjectZ('ict', ictMark);
-    const overallZScore = Number(((sftZ + etZ + ictZ) / 3).toFixed(3));
-
-    if (!nextData.zScoreHistory) {
-       nextData.zScoreHistory = [];
-    }
-    
-    nextData.zScoreHistory.push({
-       date: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
-       zScore: overallZScore,
-       subjectZScores: { sft: sftZ, et: etZ, ict: ictZ },
-       reason: `${isDone ? 'Completed' : 'Reset'} ${topic} - Z-score updated`
-    });
-
     saveData(nextData);
   };
 
@@ -1511,6 +1522,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     fetchUserInfo,
     loginWithGooglePopup,
     isAuthLoading,
+    isUserDataLoading,
+    hasHydratedUserData,
     logout,
     youtubeCookies,
     saveYoutubeCookies,
@@ -1532,7 +1545,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     registerWithEmailAndDetails,
     verifyEmailCode
   }), [
-    data, user, currentSubject, currentView, theme, isSidebarOpen, isAdvisorOpen, modals, notifications, stars, isAuthLoading, youtubeCookies, profile, pushNotifications, localFriends, autoEmailLogin, adminTargetEmail
+    data, user, currentSubject, currentView, theme, isSidebarOpen, isAdvisorOpen, modals, notifications, stars, isAuthLoading, isUserDataLoading, hasHydratedUserData, youtubeCookies, profile, pushNotifications, localFriends, autoEmailLogin, adminTargetEmail
   ]);
 
   return (

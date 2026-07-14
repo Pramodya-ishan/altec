@@ -36,6 +36,10 @@ type UploadTelemetry = UploadProgressSnapshot & {
   phase: "uploading" | "indexing";
 };
 
+// Vercel Functions accept request bodies up to roughly 4.5 MB. Leave margin
+// for multipart boundaries while still covering typical compressed papers.
+const MAX_INLINE_REINDEX_BYTES = 4_000_000;
+
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
@@ -87,21 +91,26 @@ export default function PastPapersView() {
 
   const [reindexingId, setReindexingId] = useState<string | null>(null);
 
-  const handleReprocess = async (paper: any, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleReprocessFile = async (paper: any, file: File) => {
     const paperId = paper.sourceId || paper.id;
     setReindexingId(paperId);
 
     try {
+      if (file.size > MAX_INLINE_REINDEX_BYTES) {
+        throw new Error("This PDF is larger than the direct Vercel OCR limit. Compress it below 4 MB, then select it again.");
+      }
+      const formData = new FormData();
+      formData.append("file", file);
       const res = await apiFetch(`/api/pdf/reprocess/${paperId}`, {
-        method: "POST"
+        method: "POST",
+        body: formData,
       });
 
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) {
         throw new Error(data?.error || "Reprocessing failed");
       }
-      setToast({ type: 'success', message: "OCR processing pipeline triggered successfully!" });
+      setToast({ type: 'success', message: "PDF reprocessed. OCR/index status will update automatically." });
     } catch (err: any) {
       console.error("Reprocessing failed:", err);
       setToast({ type: 'error', message: `Reprocessing failed: ${err.message || String(err)}` });
@@ -206,14 +215,25 @@ export default function PastPapersView() {
 
     // 3. Reprocess only when text is not ready.
     if (["needs_ocr", "needs_legacy_conversion", "failed", "not_indexed"].includes(status) || !hasIndexedText) buttons.push(
-      <button
+      <label
         key="reprocess"
-        onClick={(e) => handleReprocess(paper, e)}
+        onClick={(event) => event.stopPropagation()}
         className="px-2 py-1 text-[10px] font-bold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 shadow-sm transition-all flex items-center gap-1 cursor-pointer shrink-0"
-        title="Trigger processing pipeline (Force OCR fallback)"
+        title="Select the original PDF and run OCR without a server-side Storage download"
       >
+        <input
+          type="file"
+          accept="application/pdf"
+          className="hidden"
+          disabled={reindexingId === paperId}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void handleReprocessFile(paper, file);
+          }}
+        />
         <i className="fa-solid fa-arrows-rotate text-[8px]"></i> Reprocess
-      </button>
+      </label>
     );
 
     return <div className="flex items-center gap-1.5 flex-wrap">{buttons}</div>;
@@ -298,7 +318,8 @@ export default function PastPapersView() {
           resourceType: resType,
           sourceType: resType,
           sourceScope: "past_paper",
-          medium: "Sinhala"
+          medium: "Sinhala",
+          deferProcessing: file.size <= MAX_INLINE_REINDEX_BYTES,
         };
 
         const ingestRes = await apiFetch("/api/pdf/process-uploaded", {
@@ -310,6 +331,27 @@ export default function PastPapersView() {
         const ingestData = await ingestRes.json().catch(() => null);
         if (!ingestRes.ok || !ingestData?.ok) {
           throw new Error(ingestData?.message || ingestData?.code || "Upload ingest failed");
+        }
+
+        // Hand the same browser File to the indexing route while it is still
+        // available. This avoids a second server-side Firebase Storage download,
+        // which can fail when the Vercel service account lacks object access.
+        let indexingData = ingestData;
+        if (file.size <= MAX_INLINE_REINDEX_BYTES) {
+          const reindexForm = new FormData();
+          reindexForm.append("file", file);
+          reindexForm.append("sourceId", uploaded.sourceId);
+          reindexForm.append("mode", "auto");
+          const reindexRes = await apiFetch("/api/rag/reindex-uploaded", {
+            method: "POST",
+            body: reindexForm,
+          });
+          const reindexData = await reindexRes.json().catch(() => null);
+          if (reindexRes.ok && reindexData?.ok) {
+            indexingData = reindexData;
+          } else {
+            console.warn("Immediate PDF indexing failed; background processing remains queued", reindexData);
+          }
         }
 
         // Step C: Save to past_papers
@@ -326,9 +368,10 @@ export default function PastPapersView() {
             paperType: type,
             resourceType: resType,
             storagePath: uploaded.storagePath,
-            chunkCount: ingestData.chunkCount || 0,
-            needsOcr: ingestData.needsOcr || false,
-            textIndexed: false,
+            chunkCount: indexingData.chunkCount || 0,
+            needsOcr: indexingData.needsOcr || false,
+            indexStatus: indexingData.indexStatus || indexingData.status || "queued",
+            textIndexed: Number(indexingData.chunkCount || 0) > 0,
           })
         });
 
@@ -341,9 +384,9 @@ export default function PastPapersView() {
           sourceId: uploaded.sourceId,
           storagePath: uploaded.storagePath,
           title,
-          chunkCount: ingestData.chunkCount || 0,
-          needsOcr: ingestData.needsOcr || false,
-          indexStatus: ingestData.status || "queued",
+          chunkCount: indexingData.chunkCount || 0,
+          needsOcr: indexingData.needsOcr || false,
+          indexStatus: indexingData.indexStatus || indexingData.status || "queued",
         };
       } else {
         // Fallback or Normal backend upload if not forced to client storage

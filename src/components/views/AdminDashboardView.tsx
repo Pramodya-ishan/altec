@@ -188,12 +188,13 @@ export default function AdminDashboardView() {
  <button onClick={() => {
  try{ 
  const d = JSON.parse(jsonInput); 
- if(!d.zScoreHistory) d.zScoreHistory = []; 
- d.zScoreHistory.push({date: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit' }), zScore: 2.1}); 
+ d.zScoreHistory = Array.isArray(d.zScoreHistory)
+   ? d.zScoreHistory.filter((entry: any) => entry?.calculationBasis === 'actual_saved_paper_marks')
+   : [];
  setJsonInput(JSON.stringify(d, null, 2));
  } catch(e) {}
  }} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded shadow-sm border border-slate-600 transition-colors whitespace-nowrap">
- <i className="fa-solid fa-plus text-emerald-400 mr-1.5"></i> Inject Target Score (2.1)
+ <i className="fa-solid fa-broom text-emerald-400 mr-1.5"></i> Remove Synthetic Z History
  </button>
  <button onClick={() => {
  try{ 

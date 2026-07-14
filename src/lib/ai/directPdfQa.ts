@@ -151,17 +151,17 @@ export async function askDirectPdfQa(params: {
        const { questionText, options } = result.sourceEvidence || {};
 
        let text = "";
-       text += `<details><summary>📄 **Source evidence**</summary>\n\n`;
-       text += `- PDF: ${source.title || "Paper"}\n`;
-       text += `- Year: ${year || source.year || "N/A"}\n`;
-       text += `- Subject: ${subject || source.subject || "N/A"}\n`;
-       text += `- Question: ${questionType || "MCQ"} ${questionNo || ""}\n`;
-       text += `- Evidence status: ${result.found ? "Verified from exact PDF" : "Missing"}\n\n`;
+       text += `### 📄 Source evidence\n\n`;
+       text += `- **PDF:** ${source.title || "Paper"}\n`;
+       text += `- **Year:** ${year || source.year || "N/A"}\n`;
+       text += `- **Subject:** ${subject || source.subject || "N/A"}\n`;
+       text += `- **Question:** ${questionType || "MCQ"} ${questionNo || ""}\n`;
+       text += `- **Evidence status:** ${result.found ? "Verified from exact PDF" : "Missing"}\n\n`;
 
-       if (questionText) text += `❓ **Question**\n${stripRawVisualBlocks(questionText)}\n\n`;
+       if (questionText) text += `### ❓ Question\n\n${stripRawVisualBlocks(questionText)}\n\n`;
 
        if (options && options.length) {
-         text += `🔘 **Options**\n${options.map((o: string, i: number) => `(${i+1}) ${stripRawVisualBlocks(o)}`).join('\n')}\n\n`;
+         text += `### 🔘 Options\n\n${options.map((o: string, i: number) => `${i + 1}. ${stripRawVisualBlocks(o)}`).join('\n')}\n\n`;
        }
 
        let finalAnswerText = "";
@@ -183,19 +183,19 @@ export async function askDirectPdfQa(params: {
        }
 
        if (finalAnswerText) {
-         text += `✅ **Answer**\n${stripRawVisualBlocks(finalAnswerText)}\n\n`;
+         text += `### ✅ Answer\n\n${stripRawVisualBlocks(finalAnswerText)}\n\n`;
        }
 
        if (explanation) {
-         text += `🧠 **Explanation**\n${stripRawVisualBlocks(explanation)}\n\n`;
+         text += `### 🧠 Explanation\n\n${stripRawVisualBlocks(explanation)}\n\n`;
        }
 
        if (whyOthersWrong && whyOthersWrong.length > 0) {
-         text += `❌ **Why other options are not correct**\n`;
+         text += `### ❌ Why other options are not correct\n\n`;
          text += whyOthersWrong.map((reason: string) => `- ${stripRawVisualBlocks(reason)}`).join('\n') + "\n\n";
        }
 
-       text += `📌 **Answer status**\n${answerStatus}\n</details>\n`;
+       text += `### 📌 Answer status\n\n${answerStatus}\n`;
 
        result.answer = text;
     }

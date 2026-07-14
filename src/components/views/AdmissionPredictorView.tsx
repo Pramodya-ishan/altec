@@ -39,7 +39,6 @@ import React, { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 
 import { ResponsiveChartShell } from "../ui/ResponsiveChartShell";
-import { AiMetricsAdvisor } from "../widgets/AiMetricsAdvisor";
 
 import {
   AreaChart,
@@ -64,12 +63,8 @@ import { cn } from "../../lib/utils";
 
 import { SYLLABUS } from "../../constants/syllabus";
 
-import {
-  calculateSubjectZ,
-  calculateSubjectAveragePercent,
-  getEstIslandRank,
-  getEstDistrictRank,
-} from "../../lib/scoreUtils";
+import { calculateSubjectZ } from "../../lib/scoreUtils";
+import { buildPracticeZSnapshot } from "../../shared/zscore";
 
 import { RequirementQuestion } from "../../types";
 
@@ -667,217 +662,87 @@ export default function AdmissionPredictorView() {
     saveData({ ...data, targetZ: val });
   };
 
-  // Live raw marks calculated dynamically from the Exam Score Predictor system
-  const sftMark = calculateSubjectAveragePercent("sft", data);
+  // Z-score cannot be derived from syllabus completion. Use only real saved
+  // paper totals and keep the result explicitly labelled as a practice estimate.
+  const practiceZ = useMemo(() => buildPracticeZSnapshot(data), [data]);
+  const sftMark = practiceZ.subjects.sft.mark;
+  const etMark = practiceZ.subjects.et.mark;
+  const ictMark = practiceZ.subjects.ict.mark;
+  const sftZ = practiceZ.subjects.sft.z;
+  const etZ = practiceZ.subjects.et.z;
+  const ictZ = practiceZ.subjects.ict.z;
+  const overallZScore = practiceZ.overall;
+  const hasCompletePracticeZ = practiceZ.complete && overallZScore !== null;
 
-  const etMarkBase = calculateSubjectAveragePercent("et", data);
-
-  const etMark = Math.min(100, etMarkBase * 0.75 + 25);
-
-  const ictMark = calculateSubjectAveragePercent("ict", data);
-
-  const sftZ = calculateSubjectZ("sft", sftMark);
-
-  const etZ = calculateSubjectZ("et", etMark);
-
-  const ictZ = calculateSubjectZ("ict", ictMark);
-
-  const overallZScore = Number(((sftZ + etZ + ictZ) / 3).toFixed(4));
-
-  // State to store real pre-populated/saved history of changes for the area chart
-  const [historyPoints, setHistoryPoints] = useState<any[]>(
-    data.zScoreHistory || [],
+  const [historyPoints, setHistoryPoints] = useState<any[]>(() =>
+    (data.zScoreHistory || []).filter(
+      (point: any) => point?.calculationBasis === "actual_saved_paper_marks",
+    ),
   );
 
   useEffect(() => {
     if (isAuthLoading) return;
-    // Prevent overwriting data before user data is loaded
 
-    let points = data.zScoreHistory ? [...data.zScoreHistory] : [];
+    const savedHistory = Array.isArray(data.zScoreHistory) ? data.zScoreHistory : [];
+    const verifiedHistory = savedHistory.filter(
+      (point: any) => point?.calculationBasis === "actual_saved_paper_marks",
+    );
+    let points = [...verifiedHistory];
 
-    const today = new Date();
-
-    const todayDateStr =
-      today.toLocaleDateString("en-US", { month: "short", day: "2-digit" }) +
-      " (Today)";
-
-    const todaySimple = today.toLocaleDateString("en-US", {
-      month: "short",
-      day: "2-digit",
-    });
-
-    let updated = false;
-
-    if (!points || points.length === 0) {
-      points = [];
-
-      for (let i = 6; i >= 1; i--) {
-        const pastDate = new Date();
-
-        pastDate.setDate(today.getDate() - i);
-
-        const pDate = pastDate.toLocaleDateString("en-US", {
-          month: "short",
-          day: "2-digit",
-        });
-
-        points.push({
-          date: pDate,
-          zScore: Number(Math.max(-2.5, overallZScore - i * 0.05).toFixed(4)),
-          subjectZScores: { sft: sftZ, et: etZ, ict: ictZ },
-          reason: "",
-        });
-      }
-      points.push({
-        date: todayDateStr,
+    if (hasCompletePracticeZ) {
+      const latestTimes = [
+        practiceZ.subjects.sft.latestRecordedAt,
+        practiceZ.subjects.et.latestRecordedAt,
+        practiceZ.subjects.ict.latestRecordedAt,
+      ].filter(Boolean) as string[];
+      const sortedTimes = latestTimes.sort();
+      const recordedAt = sortedTimes[sortedTimes.length - 1] || new Date().toISOString();
+      const sampleCounts = {
+        sft: practiceZ.subjects.sft.sampleCount,
+        et: practiceZ.subjects.et.sampleCount,
+        ict: practiceZ.subjects.ict.sampleCount,
+      };
+      const fingerprint = [
+        sftMark, etMark, ictMark,
+        sampleCounts.sft, sampleCounts.et, sampleCounts.ict,
+      ].join(":");
+      const point = {
+        date: recordedAt,
         zScore: overallZScore,
-        subjectZScores: { sft: sftZ, et: etZ, ict: ictZ },
-        reason: "",
-      });
-
-      updated = true;
-    } else {
-      let todayFoundIndex = -1;
-
-      points = points.map((p: any, idx: number) => {
-        if (p.date === todayDateStr) {
-          todayFoundIndex = idx;
-
-          if (p.zScore !== overallZScore) {
-            updated = true;
-
-            const prevS = p.subjectZScores || { sft: sftZ, et: etZ, ict: ictZ };
-
-            const sDiff = sftZ - prevS.sft;
-
-            const eDiff = etZ - prevS.et;
-
-            const iDiff = ictZ - prevS.ict;
-
-            let reasons = [];
-
-            if (sDiff > 0.001)
-              reasons.push(`SFT improved (+${sDiff.toFixed(3)})`);
-            else if (sDiff < -0.001)
-              reasons.push(`SFT dropped (${sDiff.toFixed(3)})`);
-
-            if (eDiff > 0.001)
-              reasons.push(`ET improved (+${eDiff.toFixed(3)})`);
-            else if (eDiff < -0.001)
-              reasons.push(`ET dropped (${eDiff.toFixed(3)})`);
-
-            if (iDiff > 0.001)
-              reasons.push(`ICT improved (+${iDiff.toFixed(3)})`);
-            else if (iDiff < -0.001)
-              reasons.push(`ICT dropped (${iDiff.toFixed(3)})`);
-
-            const reasonStr =
-              reasons.length > 0
-                ? reasons.join(", ")
-                : p.reason || "Scores aligned.";
-
-            return {
-              ...p,
-              zScore: overallZScore,
-              subjectZScores: { sft: sftZ, et: etZ, ict: ictZ },
-              reason: reasonStr,
-            };
-          }
-          return p;
-        } else if (p.date.includes("(Today)")) {
-          const cleanDate = p.date.replace(/\s*\(Today\)/, "");
-
-          if (cleanDate === todaySimple) {
-            todayFoundIndex = idx;
-
-            if (p.zScore !== overallZScore) {
-              updated = true;
-
-              const prevS = p.subjectZScores || {
-                sft: sftZ,
-                et: etZ,
-                ict: ictZ,
-              };
-
-              const sDiff = sftZ - prevS.sft;
-
-              const eDiff = etZ - prevS.et;
-
-              const iDiff = ictZ - prevS.ict;
-
-              let reasons = [];
-
-              if (sDiff > 0.001)
-                reasons.push(`SFT improved (+${sDiff.toFixed(3)})`);
-              else if (sDiff < -0.001)
-                reasons.push(`SFT dropped (${sDiff.toFixed(3)})`);
-
-              if (eDiff > 0.001)
-                reasons.push(`ET improved (+${eDiff.toFixed(3)})`);
-              else if (eDiff < -0.001)
-                reasons.push(`ET dropped (${eDiff.toFixed(3)})`);
-
-              if (iDiff > 0.001)
-                reasons.push(`ICT improved (+${iDiff.toFixed(3)})`);
-              else if (iDiff < -0.001)
-                reasons.push(`ICT dropped (${iDiff.toFixed(3)})`);
-
-              const reasonStr =
-                reasons.length > 0
-                  ? reasons.join(", ")
-                  : p.reason || "Scores aligned.";
-
-              return {
-                ...p,
-                date: todayDateStr,
-                zScore: overallZScore,
-                subjectZScores: { sft: sftZ, et: etZ, ict: ictZ },
-                reason: reasonStr,
-              };
-            }
-            return { ...p, date: todayDateStr };
-          }
-          updated = true;
-
-          return { ...p, date: cleanDate };
-        }
-        return p;
-      });
-
-      if (todayFoundIndex === -1) {
-        points.push({
-          date: todayDateStr,
-          zScore: overallZScore,
-          subjectZScores: { sft: sftZ, et: etZ, ict: ictZ },
-          reason: "New target logged",
-        });
-
-        updated = true;
-      }
+        subjectZScores: { sft: Number(sftZ), et: Number(etZ), ict: Number(ictZ) },
+        rawPaperAverages: { sft: Number(sftMark), et: Number(etMark), ict: Number(ictMark) },
+        sampleCounts,
+        calculationBasis: "actual_saved_paper_marks" as const,
+        official: false as const,
+        fingerprint,
+        reason: "Actual saved paper results updated",
+      };
+      const existingIndex = points.findIndex((entry: any) => entry.fingerprint === fingerprint);
+      if (existingIndex >= 0) points[existingIndex] = point;
+      else points.push(point);
+      points = points.slice(-60);
     }
 
     setHistoryPoints(points);
-
-    if (updated) {
+    if (JSON.stringify(points) !== JSON.stringify(savedHistory)) {
       const newData = structuredClone(data);
-
       newData.zScoreHistory = points;
-
-      const timer = setTimeout(() => {
-        if (saveData) saveData(newData);
-      }, 2000);
-
+      const timer = setTimeout(() => saveData?.(newData), 600);
       return () => clearTimeout(timer);
     }
   }, [
     overallZScore,
     data.zScoreHistory,
-    data,
     saveData,
     sftZ,
     etZ,
     ictZ,
+    sftMark,
+    etMark,
+    ictMark,
     isAuthLoading,
+    hasCompletePracticeZ,
+    practiceZ,
   ]);
 
   const chartData = useMemo(() => {
@@ -1040,9 +905,9 @@ export default function AdmissionPredictorView() {
     return null;
   };
 
-  const zDifference = Number((overallZScore - targetZ).toFixed(4));
-
-  const isTargetMet = zDifference >= 0;
+  const formatZ = (value: number | null, digits = 3) =>
+    value === null ? "N/A" : `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`;
+  const formatMark = (value: number | null) => value === null ? "No papers" : `${value.toFixed(1)}%`;
 
   return (
     <div className="max-w-7xl mx-auto space-y-8 ">
@@ -1073,11 +938,10 @@ export default function AdmissionPredictorView() {
                         <LineChart className="w-10 h-10 text-indigo-900" />
                       </div>
                       <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-1 leading-tight relative">
-                        Overall Z
+                        Practice Z
                       </p>
                       <p className="text-lg font-black text-indigo-700 tracking-tight relative">
-                        {overallZScore > 0 ? "+" : ""}
-                        {overallZScore.toFixed(4)}
+                        {formatZ(overallZScore, 4)}
                       </p>
                     </div>
                     <div className="bg-emerald-50 border border-emerald-100 p-3.5 rounded-2xl text-center shadow-sm relative overflow-hidden">
@@ -1085,10 +949,10 @@ export default function AdmissionPredictorView() {
                         <MapPin className="w-10 h-10 text-emerald-900" />
                       </div>
                       <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest mb-1 leading-tight relative">
-                        Dist Rank
+                        District rank
                       </p>
-                      <p className="text-lg font-black text-emerald-700 relative">
-                        {getEstDistrictRank(overallZScore)}
+                      <p className="text-sm font-black text-emerald-700 relative">
+                        Unavailable
                       </p>
                     </div>
                     <div className="bg-amber-50 border border-amber-100 p-3.5 rounded-2xl text-center shadow-sm relative overflow-hidden">
@@ -1096,12 +960,17 @@ export default function AdmissionPredictorView() {
                         <Globe className="w-10 h-10 text-amber-900" />
                       </div>
                       <p className="text-[10px] font-bold text-amber-500 uppercase tracking-widest mb-1 leading-tight relative">
-                        Island Rank
+                        Island rank
                       </p>
-                      <p className="text-lg font-black text-amber-700 relative">
-                        {getEstIslandRank(overallZScore)}
+                      <p className="text-sm font-black text-amber-700 relative">
+                        Unavailable
                       </p>
                     </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-900">
+                    <strong>{hasCompletePracticeZ ? "Practice estimate" : "More paper results required"}.</strong>{" "}
+                    {practiceZ.message} Official Z-score and ranks require the examination-year cohort mean and standard deviation.
                   </div>
 
                   <div className="space-y-4 pt-2">
@@ -1115,7 +984,7 @@ export default function AdmissionPredictorView() {
                           Science for Technology
                         </span>
                         <span className="text-[10px] font-bold text-slate-400 font-mono shrink-0 whitespace-nowrap">
-                          Cohort Curve
+                          {practiceZ.subjects.sft.sampleCount} saved papers
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between">
@@ -1124,7 +993,7 @@ export default function AdmissionPredictorView() {
                             Raw Score
                           </span>
                           <div className="text-xl font-extrabold text-slate-900 leading-none">
-                            {Number(sftMark.toFixed(2))}%
+                            {formatMark(sftMark)}
                           </div>
                         </div>
                         <div className="text-right">
@@ -1132,8 +1001,7 @@ export default function AdmissionPredictorView() {
                             Subject Z
                           </span>
                           <div className="text-xl font-mono font-black text-slate-700 leading-none">
-                            {sftZ >= 0 ? "+" : ""}
-                            {sftZ.toFixed(3)}
+                            {formatZ(sftZ)}
                           </div>
                         </div>
                       </div>
@@ -1149,7 +1017,7 @@ export default function AdmissionPredictorView() {
                           Engineering Tech
                         </span>
                         <span className="text-[10px] font-bold text-slate-400 font-mono shrink-0 whitespace-nowrap">
-                          Cohort Curve
+                          {practiceZ.subjects.et.sampleCount} saved papers
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between">
@@ -1158,10 +1026,7 @@ export default function AdmissionPredictorView() {
                             Raw Score
                           </span>
                           <div className="text-xl font-extrabold text-slate-900 leading-none">
-                            {Number(etMark.toFixed(2))}%
-                          </div>
-                          <div className="text-[9px] font-semibold text-rose-600 mt-1">
-                            (75% Paper + 25% Practical)
+                            {formatMark(etMark)}
                           </div>
                         </div>
                         <div className="text-right">
@@ -1169,8 +1034,7 @@ export default function AdmissionPredictorView() {
                             Subject Z
                           </span>
                           <div className="text-xl font-mono font-black text-slate-700 leading-none">
-                            {etZ >= 0 ? "+" : ""}
-                            {etZ.toFixed(3)}
+                            {formatZ(etZ)}
                           </div>
                         </div>
                       </div>
@@ -1186,7 +1050,7 @@ export default function AdmissionPredictorView() {
                           Information Tech
                         </span>
                         <span className="text-[10px] font-bold text-slate-400 font-mono shrink-0 whitespace-nowrap">
-                          Cohort Curve
+                          {practiceZ.subjects.ict.sampleCount} saved papers
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between">
@@ -1195,7 +1059,7 @@ export default function AdmissionPredictorView() {
                             Raw Score
                           </span>
                           <div className="text-xl font-extrabold text-slate-900 leading-none">
-                            {Number(ictMark.toFixed(2))}%
+                            {formatMark(ictMark)}
                           </div>
                         </div>
                         <div className="text-right">
@@ -1203,8 +1067,7 @@ export default function AdmissionPredictorView() {
                             Subject Z
                           </span>
                           <div className="text-xl font-mono font-black text-slate-700 leading-none">
-                            {ictZ >= 0 ? "+" : ""}
-                            {ictZ.toFixed(3)}
+                            {formatZ(ictZ)}
                           </div>
                         </div>
                       </div>
@@ -1236,6 +1099,15 @@ export default function AdmissionPredictorView() {
                   </div>
 
                   <div className="w-full h-80 min-h-0 min-w-0">
+                    {chartData.length === 0 ? (
+                      <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
+                        <div className="max-w-sm">
+                          <LineChart className="mx-auto mb-3 h-7 w-7 text-slate-300" />
+                          <p className="text-sm font-bold text-slate-700">No verified practice history yet</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">Add completed paper marks for SFT, ET and ICT. The chart will only record real saved paper results.</p>
+                        </div>
+                      </div>
+                    ) : (
                     <ResponsiveChartShell minHeight={320}>
                       <ResponsiveContainer
                         width="100%"
@@ -1325,6 +1197,7 @@ export default function AdmissionPredictorView() {
                         </AreaChart>
                       </ResponsiveContainer>
                     </ResponsiveChartShell>
+                    )}
                   </div>
                 </div>
               </div>
@@ -2205,10 +2078,10 @@ function ZScoreCalculatorBlock({
         <div>
           <h2 className="text-xl font-display font-black text-slate-900 tracking-tight flex items-center gap-2">
             <Calculator className="w-5 h-5 text-primary-600" />
-            Manual Z-Score Calculator
+            Practice Z Estimate
           </h2>
           <p className="text-xs text-slate-500 mt-1 font-medium">
-            Calculate Island & District ranks using Custom Raw Marks.
+            Explore a practice-calibrated estimate from custom marks. This is not an official examination Z-score.
           </p>
         </div>
         <button
@@ -2268,30 +2141,17 @@ function ZScoreCalculatorBlock({
       {results && (
         <div className="bg-slate-900 rounded-[1.5rem] p-6 text-white text-center mt-6 shadow-lg border border-slate-800">
           <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest mb-1">
-            Calculated Overall Z-Score
+            Practice-calibrated overall estimate
           </p>
           <h3 className="text-5xl font-black tracking-tight text-white mb-6">
             {results.overallZ >= 0 ? "+" : ""}
             {results.overallZ.toFixed(4)}
           </h3>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-emerald-900/30 border border-emerald-800/50 rounded-xl p-4">
-              <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-1">
-                Avg Predicted District Rank
-              </p>
-              <p className="text-2xl font-black text-emerald-50">
-                {getEstDistrictRank(results.overallZ)}
-              </p>
-            </div>
-            <div className="bg-amber-900/30 border border-amber-800/50 rounded-xl p-4">
-              <p className="text-[10px] font-bold text-amber-400 uppercase tracking-widest mb-1">
-                Avg Predicted Island Rank
-              </p>
-              <p className="text-2xl font-black text-amber-50">
-                {getEstIslandRank(results.overallZ)}
-              </p>
-            </div>
+          <div className="rounded-xl border border-slate-700 bg-slate-800/70 p-4 text-left">
+            <p className="text-[11px] font-bold leading-5 text-slate-200">
+              Official district and island ranks are unavailable. They require the examination-year cohort distribution and official results, which this practice calculator does not have.
+            </p>
           </div>
         </div>
       )}

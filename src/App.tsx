@@ -28,6 +28,7 @@ import { SilencePlayerModal } from './components/modals/SilencePlayerModal';
 import { AnimatePresence, motion } from 'motion/react';
 import { cn } from './lib/utils';
 import { CheckCircle2, XCircle, Info, X, CloudOff, GraduationCap, Loader2 } from 'lucide-react';
+import { PageSkeleton } from './components/ui/PageSkeleton';
 
 function ToastNotification() {
   const { notifications, removeNotification } = useApp();
@@ -142,17 +143,13 @@ function AuthOverlay() {
 
   if (isAuthLoading) {
     return (
-      <div className="fixed inset-0 z-[999999] bg-slate-50" role="status" aria-live="polite" aria-label="Loading your student data">
-        <div className="h-17 border-b border-slate-200 bg-white px-5 py-4">
-          <div className="h-9 w-44 animate-pulse rounded-xl bg-slate-200" />
-        </div>
-        <div className="mx-auto max-w-6xl space-y-5 p-5 sm:p-8">
-          <div className="flex items-center gap-3 rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm">
-            <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
-            <div><p className="text-sm font-bold text-slate-800">Loading your learning data</p><p className="text-xs text-slate-500">Syncing marks, lessons, PDFs and profile…</p></div>
+      <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-white" role="status" aria-live="polite" aria-label="Checking sign-in">
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 px-5 py-4 shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
+          <div>
+            <p className="text-sm font-bold text-slate-800">Opening your workspace</p>
+            <p className="text-xs text-slate-500">Checking your secure session…</p>
           </div>
-          <div className="grid gap-4 sm:grid-cols-3">{[0, 1, 2].map((item) => <div key={item} className="h-32 animate-pulse rounded-3xl border border-slate-200 bg-white" />)}</div>
-          <div className="h-72 animate-pulse rounded-3xl border border-slate-200 bg-white" />
         </div>
       </div>
     );
@@ -200,8 +197,10 @@ function AuthOverlay() {
 }
 
 function AppContent() {
-  const { theme, isSidebarOpen, setCurrentView } = useApp();
+  const { theme, isSidebarOpen, setCurrentView, user, isUserDataLoading, hasHydratedUserData } = useApp();
   const location = useLocation();
+  const [displayedPath, setDisplayedPath] = React.useState(location.pathname);
+  const isRouteTransitioning = displayedPath !== location.pathname;
 
   const isChatRoute = location.pathname === "/clora-x" || location.pathname === "/ai-chat";
 
@@ -215,7 +214,9 @@ function AppContent() {
        path = 'clora-x';
      }
      setCurrentView(path as any);
-  }, [location.pathname]);
+     const transitionTimer = window.setTimeout(() => setDisplayedPath(location.pathname), 160);
+     return () => window.clearTimeout(transitionTimer);
+  }, [location.pathname, setCurrentView]);
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 relative">
@@ -242,17 +243,12 @@ function AppContent() {
               transition={{ duration: 0.15 }}
               className="relative w-full h-full flex-1 flex flex-col min-h-0"
             >
-              <Suspense fallback={<div className="flex-1 w-full h-full p-4 sm:p-6 lg:p-8 animate-pulse flex flex-col gap-6">
-                  <div className="w-1/3 h-8 bg-slate-200 rounded-xl mb-4"></div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-                    <div className="h-32 bg-slate-200 rounded-2xl"></div>
-                    <div className="h-32 bg-slate-200 rounded-2xl"></div>
-                    <div className="h-32 bg-slate-200 rounded-2xl"></div>
-                  </div>
-                  <div className="w-full h-64 bg-slate-200 rounded-2xl"></div>
-                </div>}>
+              <Suspense fallback={<PageSkeleton pathname={location.pathname} />}>
+                {isRouteTransitioning || (user && isUserDataLoading && !hasHydratedUserData) ? (
+                  <PageSkeleton pathname={location.pathname} />
+                ) : (
                 <Routes location={location} key={location.pathname}>
-                  <Route path="/" element={<Navigate to="/admission-predictor" replace />} />
+                  <Route path="/" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="/paper-structure" element={<PaperStructureView />} />
                   <Route path="/question-marks" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="/paper-marks" element={<PaperMarksView />} />
@@ -275,6 +271,7 @@ function AppContent() {
                   <Route path="/focus-todo" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="*" element={<NotFoundView />} />
                 </Routes>
+                )}
               </Suspense>
             </motion.div>
           </AnimatePresence>

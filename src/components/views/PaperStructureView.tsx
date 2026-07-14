@@ -1,4 +1,3 @@
-import { calculateSubjectAveragePercent, calculateSubjectZ } from '../../lib/scoreUtils';
 import { apiFetch } from "../../lib/api";
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
@@ -402,28 +401,7 @@ export default function PaperStructureView() {
  topicMarks.push(newEntry);
  topicMarks.sort((a: any, b: any) => a.time - b.time);
  
- {
-
- const sftMark = calculateSubjectAveragePercent('sft', nextData);
- const etMarkBase = calculateSubjectAveragePercent('et', nextData);
- const etMark = Math.min(100, (etMarkBase * 0.75) + 25);
- const ictMark = calculateSubjectAveragePercent('ict', nextData);
- const sftZ = calculateSubjectZ('sft', sftMark);
- const etZ = calculateSubjectZ('et', etMark);
- const ictZ = calculateSubjectZ('ict', ictMark);
- const overallZScore = Number(((sftZ + etZ + ictZ) / 3).toFixed(3));
-
- if (!nextData.zScoreHistory) nextData.zScoreHistory = [];
- nextData.zScoreHistory.push({
- date: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit' }),
- zScore: overallZScore,
- subjectZScores: { sft: sftZ, et: etZ, ict: ictZ },
- reason: `Finished Quick Test: ${selectedTopic} - Z-score updated`
-      });
-
-
  saveData(nextData);
- }
  if (showNotification) {
  showNotification(`Quick test complete! Normalised score: ${finalNormalizedScore}/${mcqMax}`, 'success');
  }

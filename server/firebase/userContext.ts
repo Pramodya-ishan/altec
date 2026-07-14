@@ -1,5 +1,6 @@
 import { readUser, syncUserFromFirestore } from "../data/userRepository";
 import { getAdminDb } from "./admin";
+import { buildPracticeZSnapshot } from "../../src/shared/zscore";
 
 const contextCache = new Map<string, { data: any; timestamp: number }>();
 const CACHE_TTL = 10000; // 10 seconds cache to be responsive to changes
@@ -291,9 +292,53 @@ export async function loadUserAIContext(uid: string, email?: string) {
        }
     }
 
-    if (zScoreContext.targetZScore !== undefined && zScoreContext.latestOverallZScore !== undefined) {
-       zScoreContext.gapToTarget = Number((zScoreContext.targetZScore - zScoreContext.latestOverallZScore).toFixed(4));
-    }
+    // Never expose legacy progress-derived or synthetic estimates to the AI.
+    // Practice Z uses actual saved paper totals only and is never an official
+    // cohort-standardized examination result.
+    const practiceZ = buildPracticeZSnapshot(appData || {});
+    const verifiedHistory = Array.isArray(appData?.zScoreHistory)
+      ? appData.zScoreHistory
+          .filter((entry: any) => entry?.calculationBasis === "actual_saved_paper_marks")
+          .map((entry: any) => ({
+            date: entry.date,
+            overall: entry.zScore,
+            sft: entry.subjectZScores?.sft,
+            et: entry.subjectZScores?.et,
+            ict: entry.subjectZScores?.ict,
+            source: "actual_saved_paper_marks",
+            official: false,
+          }))
+      : [];
+    zScoreContext.hasZScoreData = Object.values(practiceZ.subjects).some(
+      (subject: any) => subject.sampleCount > 0,
+    );
+    zScoreContext.calculationBasis = practiceZ.calculationBasis;
+    zScoreContext.official = false;
+    zScoreContext.complete = practiceZ.complete;
+    zScoreContext.reliability = practiceZ.reliability;
+    zScoreContext.message = practiceZ.message;
+    zScoreContext.rawPaperAverages = {
+      sft: practiceZ.subjects.sft.mark,
+      et: practiceZ.subjects.et.mark,
+      ict: practiceZ.subjects.ict.mark,
+    };
+    zScoreContext.sampleCounts = {
+      sft: practiceZ.subjects.sft.sampleCount,
+      et: practiceZ.subjects.et.sampleCount,
+      ict: practiceZ.subjects.ict.sampleCount,
+    };
+    zScoreContext.subjectZScores = {
+      sft: practiceZ.subjects.sft.z,
+      et: practiceZ.subjects.et.z,
+      ict: practiceZ.subjects.ict.z,
+    };
+    zScoreContext.zScoreHistory = verifiedHistory;
+    zScoreContext.latestOverallZScore = practiceZ.overall;
+    zScoreContext.rankEstimate = undefined;
+    zScoreContext.latestUpdatedAt = verifiedHistory[verifiedHistory.length - 1]?.date;
+    zScoreContext.gapToTarget = practiceZ.overall !== null && zScoreContext.targetZScore !== undefined
+      ? Number((zScoreContext.targetZScore - practiceZ.overall).toFixed(4))
+      : undefined;
     // ----------------------------------------------------------------------
     const contextData = {
       loadedFrom,

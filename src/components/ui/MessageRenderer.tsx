@@ -54,9 +54,10 @@ const PreComponent = ({ children, ...props }: any) => {
 
 import { stripRawVisualBlocks } from "../../lib/ai/stripVisualBlocks";
 import { sanitizeMathText } from "../../lib/markdown/mathTextSanitizer";
+import { normalizeAnswerMarkdown } from "../../lib/markdown/normalizeAnswerMarkdown";
 
 export function MessageRenderer({ content }: MessageRendererProps) {
-  const cleanedContent = stripRawVisualBlocks(content);
+  const cleanedContent = normalizeAnswerMarkdown(stripRawVisualBlocks(content));
   const mathSanitized = sanitizeMathText(cleanedContent);
   const sanitizedContent = sanitizeMathMarkdown(mathSanitized);
   return (

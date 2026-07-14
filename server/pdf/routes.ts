@@ -74,7 +74,8 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (
       resourceType,
       sourceType,
       sourceScope,
-      lesson
+      lesson,
+      deferProcessing,
     } = req.body;
 
     if (!sourceId || !storagePath) {
@@ -134,8 +135,10 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (
       }, { merge: true });
     }
 
-    // Run async
-    setImmediate(() => {
+    // Small client-storage uploads immediately hand the same File to the
+    // multipart reindex route. Do not start a competing Storage download that
+    // could fail later and overwrite a successful client-buffer index.
+    if (deferProcessing !== true) setImmediate(() => {
       processUploadedPdf({
         uid: user.uid,
         sourceId,
@@ -154,8 +157,8 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (
 
     return res.json({
       ok: true,
-      status: "queued",
-      message: "Processing queued",
+      status: deferProcessing === true ? "awaiting_client_file" : "queued",
+      message: deferProcessing === true ? "Source registered; awaiting direct client file hand-off" : "Processing queued",
       sourceId
     });
   } catch (err: any) {
@@ -177,6 +180,11 @@ pdfRoutes.post("/reprocess/:sourceId", requireFirebaseUser, upload.single("file"
     }
 
     const srcData = sourceSnap.data()!;
+    const roles = Array.isArray(user?.roles) ? user.roles : [];
+    const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
+    if (srcData.ownerUid !== user.uid && !privileged) {
+      return res.status(403).json({ ok: false, error: "You do not have permission to reprocess this source." });
+    }
     let buffer: Buffer;
 
     if (req.file) {
@@ -399,11 +407,13 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
 
     const requestPromise = async () => {
       let buffer: Buffer;
+      let resolvedSource: any = null;
       if (req.file) {
         buffer = req.file.buffer;
         console.log(`[DirectPDFQA] File received via upload. Buffer size: ${buffer.length} bytes`);
       } else {
         const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath);
+        resolvedSource = resolved.source;
         console.log(`[DirectPDFQA] Reading verified source from Firebase Admin: ${resolved.path}`);
         const [downloaded] = await getAdminBucket().file(resolved.path).download();
         buffer = downloaded;
@@ -435,6 +445,12 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
           questionType,
           questionNo,
           prompt: effectivePrompt,
+          allowOfficialAnswer: [
+            resolvedSource?.resourceType,
+            resolvedSource?.sourceType,
+            resolvedSource?.sourceScope,
+          ].some((value) => String(value || "").toLowerCase().includes("marking"))
+            || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
         });
         console.log(`[DirectPDFQA] Structured extraction result: ${result.found ? "FOUND" : "NOT_FOUND"}`);
         if (!result.ok || !result.found || !result.sourceEvidence?.questionText) {

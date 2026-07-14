@@ -8,6 +8,7 @@ import "katex/dist/katex.min.css";
 
 import { normalizeMathMarkdown } from "../../utils/normalizeMathMarkdown";
 import { stripRawVisualBlocks } from "../../lib/ai/stripVisualBlocks";
+import { normalizeAnswerMarkdown } from "../../lib/markdown/normalizeAnswerMarkdown";
 
 interface MathMarkdownProps {
   content: string;
@@ -19,7 +20,7 @@ export const MathMarkdown = memo(function MathMarkdown({
   isStreaming = false,
 }: MathMarkdownProps) {
   const normalizedContent = useMemo(() => {
-    const withoutBlocks = stripRawVisualBlocks(content);
+    const withoutBlocks = normalizeAnswerMarkdown(stripRawVisualBlocks(content));
     return normalizeMathMarkdown(withoutBlocks, isStreaming);
   }, [content, isStreaming]);
 

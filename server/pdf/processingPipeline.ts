@@ -5,6 +5,7 @@ import { generateSinhalaTextPdf } from "./generateSinhalaTextPdf";
 import { invalidateInventoryCache, computeIndexStatus } from "../sources/sourceInventoryService";
 import { normalizeSubject, detectQuestionNo } from "../rag/routes";
 import { detectLessonForChunk } from "./lessonDetector";
+import { extractPdfPagesWithGemini, isGeminiPdfOcrConfigured } from "./geminiPdfOcr";
 
 export interface ProcessUploadedPdfParams {
   uid: string;
@@ -135,10 +136,92 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
     }
 
     if (triggerOcr) {
+      needsOcr = true;
       const isCloudVisionEnabled = process.env.ENABLE_CLOUD_VISION_OCR === "true";
-      if (!isCloudVisionEnabled) {
-        console.warn("Cloud Vision OCR is requested/required but not enabled in env.");
-        const errorMsg = "Cloud Vision OCR is required but ENABLE_CLOUD_VISION_OCR is false.";
+      const ocrErrors: string[] = [];
+
+      if (isCloudVisionEnabled) {
+        console.log(`Triggering Cloud Vision OCR fallback for sourceId: ${sourceId}...`);
+        try {
+          const ocrResponse = await runCloudVisionPdfOcr({
+            sourceId,
+            uid,
+            buffer: buffer as Buffer,
+            languageHints: ["si", "en"],
+          });
+
+          if (ocrResponse.queued) {
+            const metaUpdate = {
+              ocrStatus: "running",
+              indexStatus: "needs_ocr",
+              needsOcr: true,
+              chunkCount: 0,
+              textIndexed: false,
+              updatedAt: new Date().toISOString(),
+            };
+            await sourceRef.update(metaUpdate);
+            if (sourceScope === "past_paper") {
+              await db.collection("past_papers").doc(sourceId).update(metaUpdate).catch(() => {});
+            }
+            return {
+              ok: true,
+              status: "queued",
+              message: "OCR processing has been queued.",
+              chunkCount: 0,
+              needsOcr: true,
+              extractionMethod: "cloud_vision_ocr",
+            };
+          }
+
+          if (ocrResponse.result) {
+            pages = ocrResponse.result.pages.map((page) => ({
+              pageNumber: page.pageNumber,
+              text: page.text,
+              rawText: page.text,
+              textEncoding: "unicode_sinhala",
+              conversionApplied: false,
+              conversionConfidence: 1,
+            }));
+            fullText = ocrResponse.result.fullText;
+            extractionMethod = "cloud_vision_ocr";
+            textEncoding = "unicode_sinhala";
+            ocrConfidence = ocrResponse.result.confidence;
+            needsOcr = false;
+            needsLegacyConversion = false;
+          }
+        } catch (ocrErr: any) {
+          console.error("Cloud Vision OCR operation failed; trying Gemini PDF OCR:", ocrErr);
+          ocrErrors.push(`Cloud Vision: ${ocrErr?.message || String(ocrErr)}`);
+        }
+      }
+
+      if (needsOcr && isGeminiPdfOcrConfigured()) {
+        try {
+          const geminiPages = await extractPdfPagesWithGemini(buffer as Buffer);
+          pages = geminiPages.map((page) => ({
+            ...page,
+            rawText: page.text,
+            textEncoding: "unicode_sinhala",
+            conversionApplied: false,
+            conversionConfidence: 1,
+          }));
+          fullText = geminiPages.map((page) => page.text).join("\n\n");
+          extractionMethod = "gemini_pdf_ocr";
+          textEncoding = "unicode_sinhala";
+          ocrConfidence = 0.85;
+          needsOcr = false;
+          needsLegacyConversion = false;
+          console.log(`Gemini PDF OCR completed successfully. Extracted ${pages.length} pages.`);
+        } catch (ocrErr: any) {
+          console.error("Gemini PDF OCR operation failed:", ocrErr);
+          ocrErrors.push(`Gemini: ${ocrErr?.message || String(ocrErr)}`);
+        }
+      }
+
+      if (needsOcr) {
+        const errorMsg = ocrErrors.length > 0
+          ? `OCR failed. ${ocrErrors.join(" | ")}`
+          : "OCR is required, but neither Cloud Vision nor Gemini PDF OCR is configured.";
         await finalizeFailedProcessing({
           sourceId,
           sourceScope,
@@ -146,91 +229,16 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
           errorMsg,
           needsOcr: true,
           needsLegacyConversion: false,
-          status: "needs_ocr"
+          status: "needs_ocr",
         });
         return {
           ok: false,
           status: "needs_ocr",
-          message: "OCR provider not configured or available. setup_needed.",
-          chunkCount: 0,
-          needsOcr: true,
-          extractionMethod: "none",
-          error: errorMsg
-        };
-      }
-
-      console.log(`Triggering Cloud Vision OCR fallback for sourceId: ${sourceId}...`);
-      try {
-        const ocrResponse = await runCloudVisionPdfOcr({
-          sourceId,
-          uid,
-          buffer: buffer as Buffer,
-          languageHints: ["si", "en"]
-        });
-
-        if (ocrResponse.queued) {
-          console.log(`Cloud Vision OCR job queued asynchronously for large PDF ${sourceId}.`);
-          // Update source metadata to queued state
-          const metaUpdate = {
-            ocrStatus: "running",
-            indexStatus: "needs_ocr",
-            needsOcr: true,
-            chunkCount: 0,
-            textIndexed: false,
-            updatedAt: new Date().toISOString()
-          };
-          await sourceRef.update(metaUpdate);
-          if (sourceScope === "past_paper") {
-            await db.collection("past_papers").doc(sourceId).update(metaUpdate).catch(() => {});
-          }
-          return {
-            ok: true,
-            status: "queued",
-            message: "OCR processing has been queued.",
-            chunkCount: 0,
-            needsOcr: true,
-            extractionMethod: "cloud_vision_ocr"
-          };
-        }
-
-        // Synchronous result received!
-        if (ocrResponse.result) {
-          pages = ocrResponse.result.pages.map(p => ({
-            pageNumber: p.pageNumber,
-            text: p.text,
-            rawText: p.text,
-            textEncoding: "unicode_sinhala",
-            conversionApplied: false,
-            conversionConfidence: 1.0
-          }));
-          fullText = ocrResponse.result.fullText;
-          extractionMethod = "cloud_vision_ocr";
-          textEncoding = "unicode_sinhala";
-          ocrConfidence = ocrResponse.result.confidence;
-          needsOcr = false;
-          needsLegacyConversion = false;
-          console.log(`Cloud Vision OCR completed successfully. Extracted ${pages.length} pages.`);
-        }
-      } catch (ocrErr: any) {
-        console.error("Cloud Vision OCR operation failed:", ocrErr);
-        const errorMsg = `Cloud Vision OCR failed: ${ocrErr.message}`;
-        await finalizeFailedProcessing({
-          sourceId,
-          sourceScope,
-          uid,
-          errorMsg,
-          needsOcr: true,
-          needsLegacyConversion: false,
-          status: "failed"
-        });
-        return {
-          ok: false,
-          status: "failed",
           message: errorMsg,
           chunkCount: 0,
           needsOcr: true,
           extractionMethod: "none",
-          error: errorMsg
+          error: errorMsg,
         };
       }
     }

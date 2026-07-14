@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { useApp } from "../../context/AppContext";
 import { apiFetch } from "../../lib/api";
 import { SSEParser } from "../../lib/sseParser";
-import { getEstIslandRank, getEstDistrictRank, calculateSubjectZ } from "../../lib/scoreUtils";
+import { calculateSubjectZ } from "../../lib/scoreUtils";
 import ReactMarkdown from "react-markdown";
 import { 
   Sparkles, 
@@ -77,9 +77,6 @@ export function AiMetricsAdvisor({
   const etZ = calculateSubjectZ("et", etMark);
   const ictZ = calculateSubjectZ("ict", ictMark);
 
-  const getDistrictRank = getEstDistrictRank(overallZ);
-  const getIslandRank = getEstIslandRank(overallZ);
-
   const runAiAnalysis = async (customPrompt?: string) => {
     setLoading(true);
     setError("");
@@ -88,25 +85,22 @@ export function AiMetricsAdvisor({
     const targetCourseLabel = POPULAR_COURSES.find(c => c.value === preferredCourse)?.label || preferredCourse;
 
     const systemPrompt = customPrompt ? customPrompt : `
-Provide a comprehensive A/L Technology Stream AI prediction and rank advisory based on my active scores:
+Provide a practice-score improvement advisory based on my actual saved paper averages:
 
 **STUDENT PROFILE METRICS**:
 - Science for Technology (SFT) Mark: ${sftMark.toFixed(1)}% (Subject Z: ${sftZ >= 0 ? "+" : ""}${sftZ.toFixed(3)})
 - Engineering Technology (ET) Mark: ${etMark.toFixed(1)}% (Subject Z: ${etZ >= 0 ? "+" : ""}${etZ.toFixed(3)})
 - Information & Communication Technology (ICT) Mark: ${ictMark.toFixed(1)}% (Subject Z: ${ictZ >= 0 ? "+" : ""}${ictZ.toFixed(3)})
-- Calculated Overall Z-Score: ${overallZ >= 0 ? "+" : ""}${overallZ.toFixed(4)}
-- Estimated Island Rank: ${getIslandRank}
-- Estimated District Rank: ${getDistrictRank} in ${district} district
+- Practice-calibrated Overall Estimate: ${overallZ >= 0 ? "+" : ""}${overallZ.toFixed(4)}
 - Target Z-Score: +${targetZ.toFixed(2)}
 - Preferred Degree Pathway: ${targetCourseLabel}
 
 **AI PROMPT / TASK**:
 Analyze these metrics in a highly strategic, professional, and encouraging tone. Output a detailed breakdown covering:
-1. **Z-Score Calibration & Standing**: Explain how the current standardization curves for SFT, ET, and ICT affect the overall Z-score. Point out which subject is boosting them and which is pulling them down.
-2. **District & Island Rank Estimation**: Provide realistic context for the current Estimated Island Rank (${getIslandRank}) and District Rank (${getDistrictRank} in ${district}). Compare this to typical historical university cutoffs for G.C.E. A/L Technology stream (e.g. University of Sri Jayewardenepura, University of Moratuwa, University of Kelaniya, Rajarata, Sabaragamuwa, etc.) for the preferred course: ${targetCourseLabel}.
-3. **Admission Pathway Analysis**: Which specific state universities can the student currently expect to get into in their district (${district})? What are the high-tier "stretch" options they can unlock?
-4. **Concrete Raw Marks Goals to Bridge the Gap**: Specify exactly how many raw marks (%) they must add to SFT, ET, and/or ICT to reach their target Z-score of +${targetZ.toFixed(2)}. Suggest a realistic, high-yield subject-wise micro-marks target strategy.
-5. **Actionable Study Advice**: Offer 3 highly focused study tactics for their weakest subjects.
+1. Explain which actual paper average is strongest and weakest.
+2. Give concrete raw-mark goals for the next SFT, ET and ICT papers.
+3. Provide study actions tied to those mark gaps.
+4. State clearly that official Z-score, district/island rank and admission eligibility cannot be calculated without official cohort statistics and results.
 
 Please respond in a clean, readable markdown format, using subheadings, bullet points, and highlight cards. Respond in a blend of English and Sinhala (mixed/Sinhala-English) to make it highly friendly and understandable, but keep structural terms professional. Keep the tone motivational and laser-focused on actual state university entries. Do not use generic placeholders.
 `;
@@ -116,7 +110,7 @@ Please respond in a clean, readable markdown format, using subheadings, bullet p
     if (customPrompt) {
       nextHistory.push({ role: "user", text: customPrompt });
     } else {
-      nextHistory.push({ role: "user", text: `Run comprehensive rank and cutoff analysis for ${district} district.` });
+      nextHistory.push({ role: "user", text: `Run a practice-score improvement analysis for my saved paper results.` });
     }
     setChatHistory(nextHistory);
 
@@ -218,10 +212,10 @@ Please respond in a clean, readable markdown format, using subheadings, bullet p
         <div>
           <h4 className="text-sm font-black text-indigo-400 uppercase tracking-widest flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-indigo-400 animate-pulse" />
-            AI Score & Rank Advisor (Beta)
+            AI Practice Score Advisor
           </h4>
           <p className="text-xs text-slate-400 mt-1 font-medium">
-            Standardize your metrics and get customized State University cutoff predictions.
+            Review actual paper averages and build the next mark-improvement target.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -276,7 +270,7 @@ Please respond in a clean, readable markdown format, using subheadings, bullet p
           className="w-full bg-gradient-to-r from-primary-600 to-indigo-600 hover:from-primary-500 hover:to-indigo-500 text-white font-extrabold py-3.5 px-6 rounded-2xl text-xs flex items-center justify-center gap-2.5 transition-all cursor-pointer active:scale-[0.98] shadow-lg shadow-primary-950/50"
         >
           <Sparkles className="w-4 h-4 text-white animate-spin" style={{ animationDuration: '3s' }} />
-          Analyze Admission & Predict Island Rank
+          Analyze Practice Scores
           <ArrowRight className="w-4 h-4" />
         </button>
       )}
@@ -323,10 +317,10 @@ Please respond in a clean, readable markdown format, using subheadings, bullet p
               </span>
               <button
                 type="button"
-                onClick={() => handleSuggestionClick(`Suggest standard marks needed in ICT, ET and SFT to improve my Island Rank by 500.`)}
+                onClick={() => handleSuggestionClick(`Suggest realistic next-paper marks for ICT, ET and SFT based only on my saved results.`)}
                 className="bg-slate-900 hover:bg-slate-850 text-indigo-300 border border-indigo-950/60 hover:border-indigo-900 rounded-lg px-2.5 py-1 text-[10px] font-bold transition-all cursor-pointer active:scale-95"
               >
-                🎯 Improve Island Rank by 500
+                🎯 Set next-paper targets
               </button>
               <button
                 type="button"

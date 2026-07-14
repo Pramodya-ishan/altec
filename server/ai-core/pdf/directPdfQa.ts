@@ -16,8 +16,9 @@ export async function askGeminiDirectPdfStructured(params: {
   questionType: string;
   questionNo: string;
   prompt: string;
+  allowOfficialAnswer?: boolean;
 }) {
-  const { sourceId, pdfBuffer, year, subject, questionType, questionNo, prompt } = params;
+  const { sourceId, pdfBuffer, year, subject, questionType, questionNo, allowOfficialAnswer = false } = params;
   const modelName = AI_MODELS.pdf;
 
   const systemInstruction = `You are an evidence-first Sri Lankan A/L exam PDF extractor.
@@ -36,7 +37,9 @@ STRICT RULES:
 4. Only if exact questionText is extracted, solve/explain.
 5. If exact question is not visible, return found:false.
 6. Do NOT guess the question or the answer.
-7. Do NOT estimate official paper answers.
+7. ${allowOfficialAnswer
+  ? "Only copy officialAnswer when it is explicitly printed in this marking-scheme source."
+  : "This source is not a verified marking scheme. Always return officialAnswer:null; any solution must be generated later as clearly labelled reasoning."}
 8. Do NOT create a similar or model question.
 9. Do NOT answer from syllabus or general memory.
 10. Do NOT fill answer.estimatedAnswer unless questionText exists.
@@ -105,6 +108,13 @@ Return JSON with exact evidence. If not found, set found:false.
     }
 
     let result = JSON.parse(response.text.trim());
+
+    // A question paper is evidence for the question, not for an official answer.
+    // Never let the model upgrade its own reasoning to an official marking-scheme
+    // answer unless the server verified the source type before the model call.
+    if (!allowOfficialAnswer && result?.answer) {
+      result.answer.officialAnswer = null;
+    }
     
     // Sanitize explanation
     if (result.answer?.explanationSinhala) {

@@ -7,6 +7,7 @@ import { extractPdfText } from "../pdf/extractText";
 import { retryGoogleAuthOperation } from "../utils/retry";
 import multer from "multer";
 import { invalidateInventoryCache, computeIndexStatus } from "../sources/sourceInventoryService";
+import { isGeminiPdfOcrConfigured } from "../pdf/geminiPdfOcr";
 
 export const ragRoutes = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -523,7 +524,7 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
           finalPages = extraction.pages;
         }
       } else if (mode === "ocr") {
-        if (!process.env.GEMINI_API_KEY && process.env.GEMINI_USE_VERTEX !== 'true') {
+        if (!isGeminiPdfOcrConfigured()) {
           invalidateInventoryCache(user.uid);
           return res.json({
             ok: true,
@@ -597,7 +598,7 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
         if (!needsOcr && extraction.pages) {
           finalPages = extraction.pages;
         } else {
-          if (process.env.GEMINI_API_KEY) {
+          if (isGeminiPdfOcrConfigured()) {
             isOcrRun = true;
             try {
               const ai = getAIClient();
@@ -710,7 +711,7 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
         chunkCount: 0,
         needsOcr: true,
         indexStatus: "needs_ocr",
-        ocrUnavailable: (!process.env.GEMINI_API_KEY && process.env.GEMINI_USE_VERTEX !== 'true'),
+        ocrUnavailable: !isGeminiPdfOcrConfigured(),
         message: "OCR provider not configured or PDF empty"
       });
     }

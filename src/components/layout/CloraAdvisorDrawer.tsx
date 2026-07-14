@@ -7,27 +7,17 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { AiProgressDiagnosticsSummary } from '../views/AdmissionPredictorView';
-import {
-  calculateSubjectZ,
-  calculateSubjectAveragePercent
-} from "../../lib/scoreUtils";
+import { buildPracticeZSnapshot } from "../../shared/zscore";
 
 export function CloraAdvisorDrawer() {
   const { isAdvisorOpen, setAdvisorOpen, data, saveData } = useApp();
 
   const targetZ = data.targetZ ?? 2.5;
 
-  const sftMark = calculateSubjectAveragePercent("sft", data);
-  const etMarkBase = calculateSubjectAveragePercent("et", data);
-  const etMark = Math.min(100, (etMarkBase * 0.75) + 25);
-  const ictMark = calculateSubjectAveragePercent("ict", data);
-
-  const sftZ = calculateSubjectZ("sft", sftMark);
-  const etZ = calculateSubjectZ("et", etMark);
-  const ictZ = calculateSubjectZ("ict", ictMark);
-
-  const overallZScore = Number(((sftZ + etZ + ictZ) / 3).toFixed(4));
-  const zScoreHistory = data.zScoreHistory || [];
+  const practiceZ = buildPracticeZSnapshot(data);
+  const zScoreHistory = (data.zScoreHistory || []).filter(
+    (entry) => entry.calculationBasis === "actual_saved_paper_marks",
+  );
 
   return (
     <AnimatePresence>
@@ -66,19 +56,25 @@ export function CloraAdvisorDrawer() {
             </div>
             
             <div className="flex-1 overflow-y-auto px-4 py-2 custom-scrollbar">
+               {practiceZ.complete && practiceZ.overall !== null ? (
                <AiProgressDiagnosticsSummary
                   targetZ={targetZ}
-                  overallZ={overallZScore}
-                  sftZ={sftZ}
-                  etZ={etZ}
-                  ictZ={ictZ}
-                  sftMark={sftMark}
-                  etMark={etMark}
-                  ictMark={ictMark}
+                  overallZ={practiceZ.overall}
+                  sftZ={Number(practiceZ.subjects.sft.z)}
+                  etZ={Number(practiceZ.subjects.et.z)}
+                  ictZ={Number(practiceZ.subjects.ict.z)}
+                  sftMark={Number(practiceZ.subjects.sft.mark)}
+                  etMark={Number(practiceZ.subjects.et.mark)}
+                  ictMark={Number(practiceZ.subjects.ict.mark)}
                   zScoreHistory={zScoreHistory}
                   appData={data}
                   saveData={saveData}
                />
+               ) : (
+                 <div className="m-4 rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm leading-6 text-amber-900">
+                   Add at least one completed paper result for SFT, ET and ICT to unlock the practice diagnostics. Lesson completion is not used as a substitute for marks.
+                 </div>
+               )}
             </div>
           </motion.div>
         </>

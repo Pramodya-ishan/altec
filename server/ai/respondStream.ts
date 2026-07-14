@@ -422,32 +422,31 @@ export async function aiRespondStream(req: any, res: any) {
 
     // A. DETERMINISTIC Z-SCORE INTENT
     if (route.mode === "zscore_prediction") {
-       const zctx = userContext?.zScoreContext;
-       if (zctx && zctx.hasZScoreData) {
+       const zctx = userContext?.zScoreContext || {};
           emitSse(res, "status", { step: "zscore_db", status: "reading" });
-          let fastAns = `ඔයාගේ latest estimated Z-score එක: **${zctx.latestOverallZScore ?? 'Not calculated'}**.\n`;
+          const formatMetric = (value: unknown, digits = 4) =>
+            typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "N/A";
+          const hasCompleteEstimate = zctx.complete === true && typeof zctx.latestOverallZScore === "number";
+          let fastAns = hasCompleteEstimate
+            ? `### Practice Z estimate\n\nActual saved paper totals පමණක් භාවිතා කළ practice estimate එක: **${formatMetric(zctx.latestOverallZScore)}**.\n`
+            : `### Practice Z estimate unavailable\n\nSFT, ET සහ ICT තුනටම අවම වශයෙන් completed paper result එකක් save කළ පසු overall practice estimate එක ගණනය කළ හැක.\n`;
           fastAns += zctx.targetZScore !== undefined
             ? `Target Z-score එක: **${zctx.targetZScore}**.\n`
             : `Target Z-score එක තවම Profile එකේ set කරලා නැහැ.\n`;
-          if (zctx.gapToTarget !== undefined) fastAns += `Target එකට gap එක: **${zctx.gapToTarget}**.\n\n`;
+          if (zctx.gapToTarget !== undefined) fastAns += `Practice target gap එක: **${formatMetric(zctx.gapToTarget)}**.\n\n`;
 
-          fastAns += `**Subject Z (Estimated):**\n`;
-          if (zctx.subjectZScores) {
-            fastAns += `- SFT: ${zctx.subjectZScores.sft ?? 'Not calculated'}\n`;
-            fastAns += `- ET: ${zctx.subjectZScores.et ?? 'Not calculated'}\n`;
-            fastAns += `- ICT: ${zctx.subjectZScores.ict ?? 'Not calculated'}\n\n`;
-          } else {
-            fastAns += `Subject-wise estimates තවම save වෙලා නැහැ. Marks save කළාම ඒවා මෙතැන පෙන්වනවා.\n\n`;
+          fastAns += `**Actual saved-paper averages / practice subject estimates:**\n`;
+          for (const subject of ["sft", "et", "ict"]) {
+            const label = subject.toUpperCase();
+            const mark = zctx.rawPaperAverages?.[subject];
+            const estimate = zctx.subjectZScores?.[subject];
+            const samples = zctx.sampleCounts?.[subject] || 0;
+            fastAns += `- ${label}: ${typeof mark === "number" ? `${mark.toFixed(1)}%` : "No completed papers"} · Z ${formatMetric(estimate)} · ${samples} paper${samples === 1 ? "" : "s"}\n`;
           }
-
-          if (zctx.rankEstimate?.districtRank) {
-            fastAns += `**Rank Estimates:**\n`;
-            fastAns += `- District Rank: ${zctx.rankEstimate.districtRank}\n`;
-            fastAns += `- Island Rank: ${zctx.rankEstimate.islandRank ?? 'N/A'}\n\n`;
-          }
+          fastAns += `\n`;
 
           if (zctx.latestUpdatedAt) fastAns += `*Last updated: ${new Date(zctx.latestUpdatedAt).toLocaleString("en-LK", { timeZone: "Asia/Colombo" })}*\n\n`;
-          fastAns += `මේ estimate එක saved paper marks සහ subject progress අනුව ගණනය කරලා තියෙන්නේ. Official exam Z-score එකක් නොවේ.`;
+          fastAns += `> මෙය official exam Z-score හෝ rank prediction එකක් නොවේ. Official Z-score සඳහා examination-year cohort mean සහ standard deviation අවශ්‍යයි; district/island rank මෙතැන fabricate නොකරයි.`;
 
           emitSse(res, "token", { text: fastAns });
           trace.lastEvent = "token";
@@ -463,7 +462,6 @@ export async function aiRespondStream(req: any, res: any) {
           trace.doneSent = true;
           trace.lastEvent = "done";
           return;
-       }
     }
 
     // B. LESSON MARKS & WEIGHTING INTENT

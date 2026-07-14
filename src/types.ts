@@ -78,6 +78,11 @@ export type AppData = {
     date: string; 
     zScore: number; 
     subjectZScores?: { sft: number; et: number; ict: number }; 
+    rawPaperAverages?: { sft: number; et: number; ict: number };
+    sampleCounts?: { sft: number; et: number; ict: number };
+    calculationBasis?: "actual_saved_paper_marks";
+    official?: false;
+    fingerprint?: string;
     reason?: string; 
   }[];
   targetZ?: number;
