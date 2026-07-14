@@ -8,15 +8,7 @@ import { db, isFirebaseEnabled } from '../../lib/firebase';
 import { getAllVideoKeys, deleteVideoFile, clearAllVideoFiles } from '../../lib/indexedDB';
 import { SYLLABUS } from '../../constants/syllabus';
 import { calculateLessonWiseMarks } from '../../lib/scoreUtils';
-
-const PRESET_AVATARS = [
- 'https://api.dicebear.com/7.x/bottts/svg?seed=Nuwan',
- 'https://api.dicebear.com/7.x/bottts/svg?seed=Dilshan',
- 'https://api.dicebear.com/7.x/bottts/svg?seed=Amara',
- 'https://api.dicebear.com/7.x/bottts/svg?seed=Kavindi',
- 'https://api.dicebear.com/7.x/bottts/svg?seed=Awantha',
- 'https://api.dicebear.com/7.x/bottts/svg?seed=Saman',
-];
+import { resolveProfilePicture } from '../../lib/profilePicture';
 
 
 function ZScoreBrainCard({ data, user, onAskClora }: { data: any, user: any, onAskClora: () => void }) {
@@ -97,7 +89,7 @@ export default function ProfileView() {
  const [isEditing, setIsEditing] = useState(false);
  const [editUsername, setEditUsername] = useState(profile?.username || '');
  const [editBio, setEditBio] = useState(profile?.bio || '');
- const [editPicture, setEditPicture] = useState(profile?.picture || PRESET_AVATARS[0]);
+ const [editPicture, setEditPicture] = useState(() => resolveProfilePicture(profile?.picture, user?.picture, profile?.username || user?.email));
  const [customPicUrl, setCustomPicUrl] = useState('');
 
  const [apiUsage, setApiUsage] = useState({ rpm: 0, rpd: 0, rpmLimit: 15, rpdLimit: 1500 });
@@ -419,7 +411,7 @@ export default function ProfileView() {
  if (profile) {
  setEditUsername(profile.username);
  setEditBio(profile.bio);
- setEditPicture(profile.picture);
+ setEditPicture(resolveProfilePicture(profile.picture, user?.picture, profile.username || user?.email));
  }
  setIsEditing(true);
  };
@@ -457,7 +449,7 @@ export default function ProfileView() {
  <div className="relative group mb-5">
  <div className="absolute inset-0 bg-primary-500 rounded-full blur-sm opacity-20 scale-105 group-hover:opacity-30 transition-opacity" />
  <img
- src={profile?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profile?.username || 'LocalStudent')}`}
+ src={resolveProfilePicture(profile?.picture, user?.picture, profile?.username || user?.email)}
  alt="Avatar"
  className="w-28 h-28 rounded-full border-4 border-white shadow-md relative z-10 bg-slate-50 object-cover"
  referrerPolicy="no-referrer"
@@ -564,27 +556,28 @@ export default function ProfileView() {
 
  <div className="mb-5">
  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">
- Choose Preset Avatar to upload avatar
+ Profile photo
  </label>
  <div className="flex flex-wrap gap-2.5 mb-3">
- {PRESET_AVATARS.map((pic, idx) => (
+ {user?.picture && (
  <button
- key={idx}
  type="button"
  onClick={() => {
- setEditPicture(pic);
+ setEditPicture(user.picture || '');
  setCustomPicUrl('');
  }}
  className={cn(
- "w-12 h-12 rounded-full overflow-hidden border-2 transition-all hover:scale-105 active:scale-95 bg-slate-50 cursor-pointer",
- editPicture === pic && customPicUrl === '' ? "border-primary-600 scale-110 shadow-sm" : "border-slate-200"
+ "relative w-12 h-12 rounded-full overflow-hidden border-2 transition-all hover:scale-105 active:scale-95 bg-slate-50 cursor-pointer",
+ editPicture === user.picture && customPicUrl === '' ? "border-primary-600 scale-105 shadow-sm" : "border-slate-200"
  )}
+ title="Use Google account photo"
+ aria-label="Use Google account photo"
  >
- <img src={pic} alt="Preset" className="w-full h-full" />
+ <img src={user.picture} alt="Google account" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
  </button>
- ))}
+ )}
 
- {/* File upload selector disguised as a preset button */}
+ {/* Custom image selector */}
  <label className="w-12 h-12 rounded-full border-2 border-dashed border-slate-300 hover:border-primary-500 bg-slate-50 hover:bg-slate-100 flex flex-col items-center justify-center cursor-pointer transition-all hover:scale-105 active:scale-95 shadow-sm" title="Upload Custom File">
  <i className="fa-solid fa-arrow-up-from-bracket text-slate-400 text-xs text-center"></i>
  <span className="text-[7px] font-black uppercase text-slate-400 mt-0.5 leading-none">Upload</span>

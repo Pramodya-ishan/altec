@@ -14,6 +14,7 @@ const empty = buildPracticeZSnapshot({
 });
 assert.equal(empty.overall, null, "lesson completion must never produce a Z estimate");
 assert.equal(empty.complete, false);
+assert.doesNotMatch(empty.message, /Save at least one completed paper/i);
 
 const summary = summarizeSavedPaperMarks([
   { title: "Untitled Paper", total: 0, time: 1 },

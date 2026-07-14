@@ -57,6 +57,14 @@ export type VideoDocument = {
   playbackMode?: "direct" | "hls";
 };
 
+export const VIDEO_PROXY_CHUNK_BYTES = 8 * 1024 * 1024;
+
+export type VideoByteRange = {
+  start: number;
+  end: number;
+  length: number;
+};
+
 const QUALITY_LADDER = [
   { key: "144p", width: 256, height: 144, bitrate: 180_000 },
   { key: "240p", width: 426, height: 240, bitrate: 300_000 },
@@ -195,17 +203,40 @@ export async function refreshTranscodeStatus(video: VideoDocument): Promise<Vide
     return { ...video, ...updates };
   }
   if (!video.transcoderJobName || !["queued", "transcoding"].includes(video.status)) return video;
+  const queuedAt = Date.parse(video.updatedAt || video.createdAt || "");
+  const fallbackToDirect = async (reason: string) => {
+    const updates = {
+      status: "ready" as VideoStatus,
+      isPublished: true,
+      allowPlayback: true,
+      playbackMode: "direct" as const,
+      transcoderErrorCode: reason,
+      publishedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await getAdminDb().collection("videos").doc(video.id).set(updates, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "ready", updatedAt: updates.updatedAt }, { merge: true });
+    return { ...video, ...updates };
+  };
+
+  if (Number.isFinite(queuedAt) && Date.now() - queuedAt > 30 * 60 * 1000) {
+    return fallbackToDirect("TRANSCODER_TIMEOUT_DIRECT_FALLBACK");
+  }
   const token = await getGoogleAccessToken();
   const response = await fetch(`https://transcoder.googleapis.com/v1/${video.transcoderJobName}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!response.ok) return video;
+  if (!response.ok) {
+    return Number.isFinite(queuedAt) && Date.now() - queuedAt > 5 * 60 * 1000
+      ? fallbackToDirect(`TRANSCODER_STATUS_${response.status}`)
+      : video;
+  }
   const job = await response.json() as any;
   const state = String(job.state || "").toUpperCase();
   let status: VideoStatus = video.status;
   if (state === "RUNNING") status = "transcoding";
   if (state === "SUCCEEDED") status = "ready";
-  if (state === "FAILED") status = "failed";
+  if (state === "FAILED") return fallbackToDirect("TRANSCODER_FAILED_DIRECT_FALLBACK");
   if (status === video.status) return video;
 
   const updates = {
@@ -225,6 +256,42 @@ export async function refreshTranscodeStatus(video: VideoDocument): Promise<Vide
 
 function base64Url(input: Buffer | string) {
   return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+export function hashPlaybackToken(token: string) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+export function playbackTokenMatches(token: string, expectedHash: string) {
+  if (!token || !expectedHash) return false;
+  const actual = Buffer.from(hashPlaybackToken(token), "hex");
+  const expected = Buffer.from(expectedHash, "hex");
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+export function resolveVideoByteRange(
+  rangeHeader: string | undefined,
+  totalBytes: number,
+  maxChunkBytes = VIDEO_PROXY_CHUNK_BYTES,
+): VideoByteRange {
+  if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0) throw new Error("VIDEO_SIZE_INVALID");
+  const cap = Math.max(1, Math.min(maxChunkBytes, totalBytes));
+  let start = 0;
+  let requestedEnd = totalBytes - 1;
+
+  if (rangeHeader) {
+    const match = /^bytes=(\d+)-(\d*)$/i.exec(rangeHeader.trim());
+    if (!match) throw new Error("VIDEO_RANGE_INVALID");
+    start = Number(match[1]);
+    requestedEnd = match[2] ? Number(match[2]) : totalBytes - 1;
+  }
+
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start < 0 || requestedEnd < start || start >= totalBytes) {
+    throw new Error("VIDEO_RANGE_UNSATISFIABLE");
+  }
+
+  const end = Math.min(requestedEnd, totalBytes - 1, start + cap - 1);
+  return { start, end, length: end - start + 1 };
 }
 
 function decodeSigningKey(value: string) {
@@ -247,18 +314,6 @@ export function createSignedPlaybackCookie(video: VideoDocument) {
     path: `/videos/${video.id}/versions/${video.version}/hls/`,
     expiresAt: new Date(expires * 1000).toISOString(),
   };
-}
-
-export async function createDirectPlaybackUrl(video: VideoDocument) {
-  const bucket = getAdminBucketByName(video.inputBucket);
-  const expiresAtMs = Date.now() + env.VIDEO_SESSION_TTL_SECONDS * 1000;
-  const [url] = await bucket.file(video.inputObjectPath).getSignedUrl({
-    action: "read",
-    expires: expiresAtMs,
-    responseDisposition: "inline",
-    responseType: video.mimeType || "video/mp4",
-  });
-  return { url, expiresAt: new Date(expiresAtMs).toISOString() };
 }
 
 export function canUserPlayVideo(video: VideoDocument, user: { uid: string; admin?: boolean; roles?: string[] }) {

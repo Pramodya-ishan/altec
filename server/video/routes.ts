@@ -9,9 +9,11 @@ import {
 } from "../firebase/admin";
 import {
   canUserPlayVideo,
-  createDirectPlaybackUrl,
   createSignedPlaybackCookie,
+  hashPlaybackToken,
+  playbackTokenMatches,
   refreshTranscodeStatus,
+  resolveVideoByteRange,
   safeVideoFileName,
   startTranscode,
   validateUploadedVideo,
@@ -240,12 +242,11 @@ videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
         await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "queued" }, { merge: true });
       }
     } catch (error: any) {
-      await getAdminDb().collection("videos").doc(video.id).set({
-        status: "failed",
-        transcoderErrorCode: "TRANSCODER_START_FAILED",
-        updatedAt: new Date().toISOString(),
-      }, { merge: true });
-      throw error;
+      // The original upload is already a validated, playable video. A missing
+      // Transcoder permission/configuration must not discard it or leave an
+      // empty lesson card; fall back to signed direct playback.
+      console.warn("Video transcoder unavailable; using original quality playback.", error?.message || error);
+      transcode = { enabled: false, jobName: null };
     }
 
     const fallbackReady = !transcode.enabled;
@@ -435,6 +436,71 @@ videoRoutes.get("/videos/:videoId", async (req, res) => {
   }
 });
 
+videoRoutes.get("/videos/:videoId/stream", async (req, res) => {
+  try {
+    const sessionId = String(req.query.sessionId || "").trim();
+    const token = String(req.query.token || "").trim();
+    if (!sessionId || !token) return res.status(403).end();
+
+    const sessionSnapshot = await getAdminDb().collection("videoPlaybackSessions").doc(sessionId).get();
+    const session = sessionSnapshot.data();
+    const requestUserAgentHash = crypto
+      .createHash("sha256")
+      .update(String(req.header("user-agent") || "unknown"))
+      .digest("hex");
+    if (
+      !sessionSnapshot.exists
+      || session?.status !== "active"
+      || session?.videoId !== req.params.videoId
+      || Number(session?.expiresAtMs || 0) <= Date.now()
+      || session?.userAgentHash !== requestUserAgentHash
+      || !playbackTokenMatches(token, String(session?.streamTokenHash || ""))
+    ) {
+      return res.status(403).end();
+    }
+
+    const video = await loadVideo(req.params.videoId);
+    if (!video.allowPlayback || video.status !== "ready") return res.status(403).end();
+
+    const file = getAdminBucketByName(video.inputBucket).file(video.inputObjectPath);
+    const [metadata] = await file.getMetadata();
+    const totalBytes = Number(metadata.size || video.sourceSizeBytes || 0);
+    let range;
+    try {
+      range = resolveVideoByteRange(req.header("range"), totalBytes);
+    } catch (error: any) {
+      res.setHeader("Content-Range", `bytes */${totalBytes || 0}`);
+      return res.status(String(error?.message).includes("RANGE") ? 416 : 400).end();
+    }
+
+    res.status(206);
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${totalBytes}`);
+    res.setHeader("Content-Length", String(range.length));
+    res.setHeader("Content-Type", metadata.contentType || video.mimeType || "video/mp4");
+    res.setHeader("Content-Disposition", `inline; filename="${safeVideoFileName(video.title || "lesson-video")}.mp4"`);
+    res.setHeader("Cache-Control", "private, no-store, no-cache, max-age=0");
+    res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+    res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+    res.setHeader("X-Playback-Session", sessionId);
+    res.flushHeaders();
+
+    const mediaStream = file.createReadStream({ start: range.start, end: range.end });
+    mediaStream.on("error", () => {
+      if (!res.headersSent) res.status(502);
+      res.end();
+    });
+    req.on("aborted", () => mediaStream.destroy());
+    res.on("close", () => {
+      if (!res.writableEnded) mediaStream.destroy();
+    });
+    mediaStream.pipe(res);
+  } catch {
+    if (!res.headersSent) res.status(403);
+    res.end();
+  }
+});
+
 videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
   try {
     await verifyVideoAppCheck(req);
@@ -457,6 +523,7 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
     const directPlayback = !video.transcoderJobName || (video as any).playbackMode === "direct";
     const signed = directPlayback ? null : createSignedPlaybackCookie(video);
     const sessionRef = db.collection("videoPlaybackSessions").doc();
+    const streamToken = directPlayback ? crypto.randomBytes(32).toString("base64url") : null;
     const expiresAtMs = now + env.VIDEO_SESSION_TTL_SECONDS * 1000;
     await sessionRef.set({
       sessionId: sessionRef.id,
@@ -469,6 +536,7 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
       expiresAt: new Date(expiresAtMs).toISOString(),
       expiresAtMs,
       status: "active",
+      streamTokenHash: streamToken ? hashPlaybackToken(streamToken) : null,
     });
 
     if (signed) {
@@ -481,15 +549,17 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
         maxAge: env.VIDEO_COOKIE_TTL_SECONDS * 1000,
       });
     }
-    const direct = directPlayback ? await createDirectPlaybackUrl(video) : null;
+    const streamUrl = streamToken
+      ? `/api/videos/${encodeURIComponent(video.id)}/stream?sessionId=${encodeURIComponent(sessionRef.id)}&token=${encodeURIComponent(streamToken)}`
+      : null;
     res.setHeader("Cache-Control", "no-store");
     res.json({
       ok: true,
       sessionId: sessionRef.id,
-      playbackMode: direct ? "direct" : "hls",
-      directUrl: direct?.url,
+      playbackMode: streamUrl ? "direct" : "hls",
+      streamUrl,
       manifestUrl: signed?.manifestUrl,
-      expiresAt: direct?.expiresAt || signed?.expiresAt,
+      expiresAt: new Date(expiresAtMs).toISOString(),
       watermark: { userId: user.uid, label: user.email || user.uid },
     });
   } catch (error: any) {

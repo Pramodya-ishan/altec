@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { Check, CheckCircle2, Copy, FileText, Loader2, Sparkles } from 'lucide-react';
 import { MathMarkdown } from '../../chat/MathMarkdown';
 import { VisualBlockRenderer } from '../VisualBlockRenderer';
-import { PdfMiniPreview } from '../PdfMiniPreview';
+import { DocumentCover } from '../DocumentCover';
 
 interface CloraMessageBubbleProps {
   message: any;
@@ -42,7 +42,7 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
               {message.attachments.map((attachment: any, index: number) => (
                 <span key={attachment.storagePath || attachment.name || index} className="inline-flex max-w-[220px] items-center gap-2 rounded-lg bg-white p-2 text-xs text-slate-600 ring-1 ring-slate-200">
                   {attachment.sourceId && /pdf/i.test(`${attachment.mimeType || ''} ${attachment.name || ''}`) ? (
-                    <PdfMiniPreview sourceId={attachment.sourceId} title={attachment.name || 'PDF'} className="h-20 w-14 shrink-0" />
+                    <DocumentCover title={attachment.name || 'PDF'} compact className="h-12 w-12" />
                   ) : <FileText className="h-4 w-4 shrink-0" />}
                   <span className="truncate font-semibold">{attachment.name}</span>
                 </span>

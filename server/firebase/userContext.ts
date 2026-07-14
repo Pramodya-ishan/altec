@@ -325,7 +325,13 @@ export async function loadUserAIContext(uid: string, email?: string) {
       district: flatRanks.district,
       estimated: true,
     };
-    zScoreContext.latestUpdatedAt = predictorHistory[predictorHistory.length - 1]?.date || new Date().toISOString();
+    const rawLatestPredictorDate = predictorHistory[predictorHistory.length - 1]?.date;
+    const parsedLatestPredictorDate = new Date(String(rawLatestPredictorDate || ""));
+    zScoreContext.latestUpdatedAt = Number.isFinite(parsedLatestPredictorDate.getTime())
+      && parsedLatestPredictorDate.getFullYear() >= 2024
+      && parsedLatestPredictorDate.getFullYear() <= new Date().getFullYear() + 1
+      ? parsedLatestPredictorDate.toISOString()
+      : new Date().toISOString();
     zScoreContext.gapToTarget = zScoreContext.targetZScore !== undefined
       ? Number((zScoreContext.targetZScore - predictor.zScore).toFixed(4))
       : undefined;

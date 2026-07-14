@@ -6,6 +6,7 @@ import { stripRawVisualBlocks } from "../lib/ai/stripVisualBlocks";
 import { getUnclosedMathInfo, sanitizeMathMarkdown } from "../lib/mathSanitizer";
 import { extractVisualBlocks } from "../lib/visualBlockExtractor";
 import { apiUrl } from "../lib/apiBase";
+import { askDirectPdfQa } from "../lib/ai/directPdfQa";
 
 const activeDirectQaKeys = new Set<string>();
 
@@ -310,7 +311,7 @@ export function useAIWorkflowStream() {
                message: "PDF source එක හම්බුණා. Direct scan සඳහා file prepare කරනවා..."
             });
 
-            import("../lib/ai/directPdfQa").then(async ({ askDirectPdfQa }) => {
+            void (async () => {
               try {
                 if (!storagePath) {
                    const errorMsg = "PDF source එක තියෙනවා, නමුත් Storage path නැති නිසා open/scan කරන්න බැහැ.";
@@ -457,7 +458,7 @@ export function useAIWorkflowStream() {
                 directPdfQaPending = false;
                 activeStreamRef.current = false;
               }
-            });
+            })();
           }
           if (eventName === "sources") {
             const newSources = data.sources || data.chunks || [];

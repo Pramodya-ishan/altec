@@ -7,9 +7,8 @@ import { db, storage, auth } from '../../lib/firebase';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { apiFetch } from '../../lib/api';
 import { getRecommendedUploadMode } from '../../lib/uploadMode';
-import { uploadPdfWithClientStorage, openPrivateStoragePdf, deletePrivateStorageObject, type UploadProgressSnapshot, type UploadTaskControls } from '../../lib/clientStorageUpload';
-import { OcrTextModal } from '../ui/OcrTextModal';
-import { PdfMiniPreview } from '../ui/PdfMiniPreview';
+import { uploadPdfWithClientStorage, deletePrivateStorageObject, type UploadProgressSnapshot, type UploadTaskControls } from '../../lib/clientStorageUpload';
+import { DocumentCover } from '../ui/DocumentCover';
 
 function normalizeSubject(s: string) {
   return String(s || "").trim().toUpperCase();
@@ -64,7 +63,6 @@ export default function PastPapersView() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadTelemetry, setUploadTelemetry] = useState<UploadTelemetry | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
-  const [selectedOcrPaper, setSelectedOcrPaper] = useState<any | null>(null);
   const uploadStartedAtRef = useRef(0);
   const uploadControlsRef = useRef<UploadTaskControls | null>(null);
 
@@ -90,158 +88,8 @@ export default function PastPapersView() {
     return () => unsubscribe();
   }, [currentSubject]);
 
-  const [reindexingId, setReindexingId] = useState<string | null>(null);
-
-  const handleReprocessFile = async (paper: any, file: File) => {
-    const paperId = paper.sourceId || paper.id;
-    setReindexingId(paperId);
-
-    try {
-      if (file.size > MAX_INLINE_REINDEX_BYTES) {
-        throw new Error("This PDF is larger than the direct Vercel OCR limit. Compress it below 4 MB, then select it again.");
-      }
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await apiFetch(`/api/pdf/reprocess/${paperId}`, {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.error || "Reprocessing failed");
-      }
-      setToast({ type: 'success', message: "PDF reprocessed. OCR/index status will update automatically." });
-    } catch (err: any) {
-      console.error("Reprocessing failed:", err);
-      setToast({ type: 'error', message: `Reprocessing failed: ${err.message || String(err)}` });
-    } finally {
-      setReindexingId(null);
-    }
-  };
-
-  const handleOpenSinhalaTextPdf = async (paper: any, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (paper.ocrTextPdfStoragePath) {
-      try {
-        await openPrivateStoragePdf(paper.ocrTextPdfStoragePath);
-      } catch (err: any) {
-        setToast({ type: 'error', message: `Failed to open Sinhala text PDF: ${err.message}` });
-      }
-    }
-  };
-
-  const renderStatusBadge = (paper: any) => {
-    const status = paper.indexStatus || (Number(paper.chunkCount || 0) > 0 ? "ready" : (paper.needsOcr ? "needs_ocr" : "not_indexed"));
-    const badges: React.ReactNode[] = [];
-
-    // Main status badge
-    if (status === 'ready') {
-      badges.push(<span key="main" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">Ready</span>);
-    } else if (status === 'queued' || status === 'running' || status === 'indexing' || status === 'processing') {
-      badges.push(
-        <span key="main" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-          <i className="fa-solid fa-circle-notch fa-spin text-[8px]"></i> OCR Running
-        </span>
-      );
-    } else if (status === 'needs_ocr') {
-      badges.push(<span key="main" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-rose-50 text-rose-700 border border-rose-200">Needs OCR</span>);
-    } else if (status === 'needs_legacy_conversion') {
-      badges.push(<span key="main" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-50 text-amber-700 border border-amber-200">Legacy</span>);
-    } else if (status === 'legacy_converted') {
-      badges.push(<span key="main" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-violet-50 text-violet-700 border border-violet-200">Converted</span>);
-    } else if (status === 'failed') {
-      badges.push(<span key="main" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-red-50 text-red-700 border border-red-200">Failed</span>);
-    } else {
-      badges.push(<span key="main" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200">Not Indexed</span>);
-    }
-
-    // Companion text PDF readiness badge
-    if (paper.ocrTextPdfStoragePath) {
-      badges.push(
-        <span key="companion" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200" title="Sinhala Text companion PDF is ready">
-          <i className="fa-solid fa-file-pdf text-[8px]"></i> Sinhala Text PDF
-        </span>
-      );
-    }
-
-    return <div className="flex flex-wrap gap-1 items-center">{badges}</div>;
-  };
-
-  const renderActionButtons = (paper: any) => {
-    const paperId = paper.sourceId || paper.id;
-    const status = paper.indexStatus || (Number(paper.chunkCount || 0) > 0 ? "ready" : (paper.needsOcr ? "needs_ocr" : "not_indexed"));
-    
-    if (reindexingId === paperId) {
-      return (
-        <span className="text-[11px] font-black text-blue-600 flex items-center gap-1 select-none">
-          <i className="fa-solid fa-circle-notch fa-spin"></i> Processing...
-        </span>
-      );
-    }
-
-    const buttons: React.ReactNode[] = [];
-
-    // 1. View OCR Text button
-    const hasIndexedText = paper.textIndexed === true || Number(paper.chunkCount || 0) > 0;
-    if (hasIndexedText) {
-      buttons.push(
-        <button
-          key="view_ocr"
-          onClick={(e) => {
-            e.stopPropagation();
-            setSelectedOcrPaper(paper);
-          }}
-          className="px-2 py-1 text-[10px] font-black rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm hover:shadow transition-all flex items-center gap-1 cursor-pointer shrink-0"
-          title="View clean page-by-page extracted Unicode text"
-        >
-          <i className="fa-solid fa-eye text-[8px]"></i> View Text
-        </button>
-      );
-    }
-
-    // 2. Open Sinhala Text PDF button
-    if (paper.ocrTextPdfStoragePath) {
-      buttons.push(
-        <button
-          key="open_sinhala_pdf"
-          onClick={(e) => handleOpenSinhalaTextPdf(paper, e)}
-          className="px-2 py-1 text-[10px] font-black rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm hover:shadow transition-all flex items-center gap-1 cursor-pointer shrink-0"
-          title="Open generated Sinhala Unicode PDF in a new tab"
-        >
-          <i className="fa-solid fa-file-export text-[8px]"></i> Text PDF
-        </button>
-      );
-    }
-
-    // 3. Reprocess only when text is not ready.
-    if (["needs_ocr", "needs_legacy_conversion", "failed", "not_indexed"].includes(status) || !hasIndexedText) buttons.push(
-      <label
-        key="reprocess"
-        onClick={(event) => event.stopPropagation()}
-        className="px-2 py-1 text-[10px] font-bold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 shadow-sm transition-all flex items-center gap-1 cursor-pointer shrink-0"
-        title="Select the original PDF and run OCR without a server-side Storage download"
-      >
-        <input
-          type="file"
-          accept="application/pdf"
-          className="hidden"
-          disabled={reindexingId === paperId}
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            event.target.value = "";
-            if (file) void handleReprocessFile(paper, file);
-          }}
-        />
-        <i className="fa-solid fa-arrows-rotate text-[8px]"></i> Reprocess
-      </label>
-    );
-
-    return <div className="flex items-center gap-1.5 flex-wrap">{buttons}</div>;
-  };
-
   const filteredPapers = dedupeBySourceId([...uploadedPapers, ...papers]).filter(paper => {
-    const matchesSearch = paper.title.toLowerCase().includes(searchTerm.toLowerCase()) || paper.year?.includes(searchTerm);
+    const matchesSearch = String(paper.title || "").toLowerCase().includes(searchTerm.toLowerCase()) || String(paper.year || "").includes(searchTerm);
     const matchesCategory = paper.category === selectedCategory;
     return matchesSearch && matchesCategory;
   });
@@ -605,7 +453,7 @@ export default function PastPapersView() {
  layout
  variants={itemVariants as any}
  exit="exit"
- className="group bg-white border border-slate-200 rounded-xl p-4 hover:shadow-lg hover:border-primary-300 transition-all cursor-pointer flex flex-col justify-between h-full relative overflow-hidden"
+ className="group flex h-full cursor-pointer flex-col justify-between overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_14px_34px_rgba(15,23,42,0.08)]"
  onClick={() => {
     openSourcePdf({ storagePath: paper.storagePath, url: paper.url, id: paper.id }).catch((e: any) => {
       console.error('Download trigger failed:', e);
@@ -640,13 +488,11 @@ export default function PastPapersView() {
  </div>
  <h4 className="font-bold text-slate-800 text-base mb-1 group-hover:text-primary-600 transition-colors leading-tight">{paper.title}</h4>
  <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider mt-2">{paper.category}</p>
- <div className="mt-3" onClick={(event) => event.stopPropagation()}>
-   <PdfMiniPreview sourceId={paper.sourceId || paper.id} title={paper.title} className="h-32" />
- </div>
+ <DocumentCover title={paper.title} eyebrow={`${paper.year || "A/L"} · ${paper.type || "Paper"}`} className="mt-4" />
  </div>
  
  <div className="mt-5 pt-3 border-t border-slate-100 flex justify-between items-center relative z-10">
- <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Open PDF</span>
+ <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Open PDF</span>
  <div className="flex items-center gap-2">
   {isDeleteAllowed(paper) && (
     <button
@@ -703,15 +549,6 @@ export default function PastPapersView() {
  )}
  </AnimatePresence>
 
- <AnimatePresence>
- {selectedOcrPaper && (
-   <OcrTextModal
-     sourceId={selectedOcrPaper.sourceId || selectedOcrPaper.id}
-     title={selectedOcrPaper.title}
-     onClose={() => setSelectedOcrPaper(null)}
-   />
- )}
- </AnimatePresence>
  </div>
  );
 }

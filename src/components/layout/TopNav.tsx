@@ -1,10 +1,11 @@
-import { Menu, Search, Bell, X, LogOut, User, ChevronRight, XCircle, Book, Clock, Cloud, RefreshCw, HardDrive } from "lucide-react";
+import { Menu, Search, Bell, X, LogOut, User, ChevronRight, XCircle, Book, Clock, Cloud, RefreshCw, HardDrive, Plus } from "lucide-react";
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { cn, calculateCurrentGradeFromData } from '../../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { SYLLABUS } from '../../constants/syllabus';
+import { resolveProfilePicture } from '../../lib/profilePicture';
 
 import { isFirebaseEnabled } from '../../lib/firebase';
 
@@ -294,7 +295,15 @@ export function TopNav() {
             </>
           )}
 
-          {/* Quick Profile Icon Access with Dropdown Popup */}
+          {currentView === 'clora-x' ? (
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('clora:new-chat'))}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+            >
+              <Plus className="h-4 w-4" /> New chat
+            </button>
+          ) : (
           <div className="flex items-center gap-3">
             
             <div className="relative">
@@ -307,7 +316,7 @@ export function TopNav() {
               title="User Account Menu"
             >
               <img
-                src={profile?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profile?.username || 'LocalStudent')}`}
+                src={resolveProfilePicture(profile?.picture, user?.picture, profile?.username || user?.email)}
                 alt="Profile"
                 className="w-full h-full object-cover"
                 referrerPolicy="no-referrer"
@@ -330,7 +339,7 @@ export function TopNav() {
                   
                   <div className="flex items-center gap-3 px-3 py-3 mb-1 border-b border-slate-100/80 bg-slate-50/50 rounded-t-xl">
                     <img
-                      src={profile?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profile?.username || 'LocalStudent')}`}
+                      src={resolveProfilePicture(profile?.picture, user?.picture, profile?.username || user?.email)}
                       alt="Profile"
                       className="w-10 h-10 rounded-full bg-slate-200 object-cover shadow-sm ring-2 ring-white"
                       referrerPolicy="no-referrer"
@@ -378,6 +387,7 @@ export function TopNav() {
             </AnimatePresence>
             </div>
           </div>
+          )}
         </div>
       </div>
 

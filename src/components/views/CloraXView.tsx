@@ -43,9 +43,7 @@ import {
   Volume2,
   VolumeX,
   Image as ImageIcon,
-  Lock,
-  Plus,
-  History
+  Lock
 } from 'lucide-react';
 import { SourceCard } from '../ui/SourceCard';
 import { MessageRenderer } from '../ui/MessageRenderer';
@@ -236,7 +234,7 @@ const [messages, setMessages] = useState<{
   }[]>([
     {
       role: 'assistant',
-      content: 'ආයුබෝවන්! මම Clora X Assistant. ඔබට අද කුමන විභාග ප්‍රශ්නයක් හෝ පාඩමක් ගැනද දැනගන්න අවශ්‍ය?',
+      content: 'අද බලන්න ඕන පාඩම, paper question එක හෝ result එක ලියන්න.',
       id: 'welcome'
     }
   ]);
@@ -429,9 +427,6 @@ const [messages, setMessages] = useState<{
   const uploadStartedAtRef = useRef(0);
   const [importingStage, setImportingStage] = useState<string | null>(null);
   const [importProgressText, setImportProgressText] = useState("");
-
-  // Clear chat custom dialog state (Avoid iframe restricted window.confirm)
-  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const beginUploadTelemetry = (file: File) => {
     uploadStartedAtRef.current = performance.now();
@@ -1427,25 +1422,22 @@ const [messages, setMessages] = useState<{
     });
   };
 
-  const executeClearHistory = async () => {
+  const handleNewChat = React.useCallback(() => {
      if (isStreaming) {
        cancel();
      }
-     setShowClearConfirm(false);
-     setMessages([{ role: 'assistant', content: 'ආයුබෝවන්! මම Clora X Assistant. ඔබට අද කුමන විභාග ප්‍රශ්නයක් හෝ පාඩමක් ගැනද දැනගන්න අවශ්‍ය?', id: 'welcome' }]);
-     await apiFetch("/api/ai/chat-history/clear", { method: "POST" });
-  };
-
-  const handleNewChat = () => {
-     if (isStreaming) {
-       cancel();
-     }
-     setMessages([{ role: 'assistant', content: 'ආයුබෝවන්! මම Clora X Assistant. ඔබට අද කුමන විභාග ප්‍රශ්නයක් හෝ පාඩමක් ගැනද දැනගන්න අවශ්‍ය?', id: 'welcome' }]);
+     setMessages([{ role: 'assistant', content: 'අද බලන්න ඕන පාඩම, paper question එක හෝ result එක ලියන්න.', id: 'welcome' }]);
      setInput('');
      setUploadedFile(null);
      setUploadError(null);
      setUploadTelemetry(null);
-  };
+  }, [cancel, isStreaming]);
+
+  useEffect(() => {
+    const startNewChat = () => handleNewChat();
+    window.addEventListener('clora:new-chat', startNewChat);
+    return () => window.removeEventListener('clora:new-chat', startNewChat);
+  }, [handleNewChat]);
 
   const isEmptyChat = messages.length <= 1 && !isStreaming;
 
@@ -1509,58 +1501,6 @@ const [messages, setMessages] = useState<{
             activeSourceId={uploadedFile?.storagePath || undefined}
             recentAttachmentIds={uploadedFile?.storagePath ? [uploadedFile.storagePath] : undefined}
           />
-
-          <div className="z-20 flex h-14 shrink-0 items-center justify-end border-b border-slate-100 bg-white px-4 sm:px-6">
-            <div className="flex items-center gap-1">
-              <button type="button" onClick={handleNewChat} className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900" aria-label="Start a new chat" title="New chat">
-                <Plus className="h-4 w-4" /><span className="hidden sm:inline">New chat</span>
-              </button>
-              <button type="button" onClick={() => setShowClearConfirm(true)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900" aria-label="Clear chat history" title="Clear chat history">
-                <History className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* Custom Clear Chat Confirmation Dialog */}
-          <AnimatePresence>
-            {showClearConfirm && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-sm"
-              >
-                <motion.div
-                  initial={{ scale: 0.95, opacity: 0, y: 10 }}
-                  animate={{ scale: 1, opacity: 1, y: 0 }}
-                  exit={{ scale: 0.95, opacity: 0, y: 10 }}
-                  className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-labelledby="clear-chat-title"
-                >
-                  <h3 id="clear-chat-title" className="text-lg font-bold text-slate-800 mb-2">Clear Chat History?</h3>
-                  <p className="text-sm text-slate-500 mb-6 leading-relaxed text-left">
-                    This will permanently clear your conversation history and reset the assistant. Are you sure you want to continue?
-                  </p>
-                  <div className="flex items-center justify-end gap-3">
-                    <button
-                      onClick={() => setShowClearConfirm(false)}
-                      className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 rounded-xl border border-slate-200 transition"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={executeClearHistory}
-                    className="rounded-xl bg-slate-950 px-4 py-2 text-sm font-semibold text-white transition hover:bg-black"
-                    >
-                      Yes, Clear Chat
-                    </button>
-                  </div>
-                </motion.div>
-              </motion.div>
-            )}
-          </AnimatePresence>
 
           <div className="min-h-0 flex-1 overflow-y-auto bg-white clora-scrollbar" ref={scrollRef}>
             {isEmptyChat ? (

@@ -595,9 +595,21 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
         needsLegacy = extraction.needsLegacyConversion;
         textEncoding = extraction.textEncoding;
 
-        if (!needsOcr && extraction.pages) {
+        const hasLegacyTextLayer = String(textEncoding || "").startsWith("legacy_")
+          && Array.isArray(extraction.pages)
+          && extraction.pages.length > 0;
+        if (hasLegacyTextLayer) {
+          // A selectable legacy-font PDF is not a scanned document. Preserve
+          // its page text for source matching and let direct PDF QA interpret
+          // the original document when an exact question is requested.
           finalPages = extraction.pages;
-        } else {
+          needsOcr = false;
+          needsLegacy = false;
+        }
+
+        if (!hasLegacyTextLayer && !needsOcr && extraction.pages) {
+          finalPages = extraction.pages;
+        } else if (!hasLegacyTextLayer) {
           if (isGeminiPdfOcrConfigured()) {
             isOcrRun = true;
             try {

@@ -88,24 +88,6 @@ export function CloraComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
-  const [viewportOffset, setViewportOffset] = useState(0);
-
-  useEffect(() => {
-    if (!window.visualViewport) return;
-    const viewport = window.visualViewport;
-    const updateOffset = () => {
-      const offset = window.innerHeight - viewport.height;
-      setViewportOffset(Math.max(0, offset - viewport.offsetTop));
-    };
-    viewport.addEventListener('resize', updateOffset);
-    viewport.addEventListener('scroll', updateOffset);
-    updateOffset();
-    return () => {
-      viewport.removeEventListener('resize', updateOffset);
-      viewport.removeEventListener('scroll', updateOffset);
-    };
-  }, []);
-
   useEffect(() => {
     if (!textareaRef.current) return;
     textareaRef.current.style.height = 'auto';
@@ -143,7 +125,7 @@ export function CloraComposer({
 
   const canSubmit = !disabled && (input.trim().length > 0 || attachments.length > 0);
   const telemetryLabel = uploadTelemetry?.phase === 'processing'
-    ? 'Processing for Clora X'
+    ? 'Preparing attachment'
     : uploadTelemetry?.phase === 'success'
       ? 'Upload complete'
       : uploadTelemetry?.phase === 'error'
@@ -152,11 +134,7 @@ export function CloraComposer({
 
   return (
     <div
-      className="relative mx-auto w-full max-w-3xl px-3 pb-3 sm:px-5 sm:pb-4"
-      style={{
-        transform: viewportOffset > 0 ? `translateY(-${viewportOffset}px)` : 'none',
-        transition: 'transform 100ms ease-out',
-      }}
+      className="relative mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5 sm:pb-4"
     >
       <CloraToolPalette
         isOpen={showCommandPalette}
@@ -230,11 +208,11 @@ export function CloraComposer({
           value={input}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
-          placeholder="Message Clora X"
+          placeholder="Ask about a lesson, paper, or result"
           disabled={disabled}
           rows={1}
-          className="block max-h-44 min-h-14 w-full resize-none bg-transparent px-5 pb-2 pt-4 text-[15px] leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed"
-          aria-label="Message Clora X"
+          className="block max-h-36 min-h-12 w-full resize-none bg-transparent px-4 pb-1 pt-3 text-[15px] leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed sm:max-h-44 sm:min-h-14 sm:px-5 sm:pb-2 sm:pt-4"
+          aria-label="Message the study assistant"
         />
 
         <div className="flex items-center justify-between gap-3 px-3 pb-3">
@@ -274,7 +252,7 @@ export function CloraComposer({
           </div>
         </div>
       </motion.div>
-      <p className="mt-2 text-center text-[10px] text-slate-400">Clora X can make mistakes. Check important exam information.</p>
+      <p className="mt-2 text-center text-[10px] text-slate-400">AI answers can be wrong. Verify important exam information.</p>
     </div>
   );
 }

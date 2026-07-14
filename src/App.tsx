@@ -5,15 +5,18 @@ import { AppProvider, useApp } from './context/AppContext';
 import { TopNav } from './components/layout/TopNav';
 import { Sidebar } from './components/layout/Sidebar';
 
-// Lazy loaded views
-const PaperStructureView = lazy(() => import('./components/views/PaperStructureView.tsx'));
-const PaperMarksView = lazy(() => import('./components/views/PaperMarksView.tsx'));
-const ProfileView = lazy(() => import('./components/views/ProfileView.tsx'));
-const PastPapersView = lazy(() => import('./components/views/PastPapersView.tsx'));
-const AdmissionPredictorView = lazy(() => import('./components/views/AdmissionPredictorView.tsx'));
+// Core routes stay in the main bundle so tab switching never replaces the
+// existing workspace with a network-dependent full-page loader.
+import PaperStructureView from './components/views/PaperStructureView.tsx';
+import PaperMarksView from './components/views/PaperMarksView.tsx';
+import ProfileView from './components/views/ProfileView.tsx';
+import PastPapersView from './components/views/PastPapersView.tsx';
+import AdmissionPredictorView from './components/views/AdmissionPredictorView.tsx';
+import CloraXView from './components/views/CloraXView.tsx';
+
+// Administrative and rarely used tools remain route-split.
 const AdminDashboardView = lazy(() => import('./components/views/AdminDashboardView.tsx'));
 const SyllabusLibraryView = lazy(() => import('./components/views/SyllabusLibraryView.tsx'));
-const CloraXView = lazy(() => import('./components/views/CloraXView.tsx'));
 const PdfSourcesPage = lazy(() => import('./pages/PdfSourcesPage.tsx'));
 const QuestionCachePage = lazy(() => import('./pages/QuestionCachePage.tsx'));
 const A3WarRoom = lazy(() => import('./pages/A3WarRoom.tsx'));
@@ -199,9 +202,6 @@ function AuthOverlay() {
 function AppContent() {
   const { theme, isSidebarOpen, setCurrentView, user, isUserDataLoading, hasHydratedUserData } = useApp();
   const location = useLocation();
-  const [displayedPath, setDisplayedPath] = React.useState(location.pathname);
-  const isRouteTransitioning = displayedPath !== location.pathname;
-
   const isChatRoute = location.pathname === "/clora-x" || location.pathname === "/ai-chat";
 
   React.useEffect(() => {
@@ -214,8 +214,6 @@ function AppContent() {
        path = 'clora-x';
      }
      setCurrentView(path as any);
-     const transitionTimer = window.setTimeout(() => setDisplayedPath(location.pathname), 160);
-     return () => window.clearTimeout(transitionTimer);
   }, [location.pathname, setCurrentView]);
 
   return (
@@ -234,17 +232,9 @@ function AppContent() {
               : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
           )}
         >
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={location.pathname}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}
-              className="relative w-full h-full flex-1 flex flex-col min-h-0"
-            >
+          <div className="relative flex h-full min-h-0 w-full flex-1 flex-col">
               <Suspense fallback={<PageSkeleton pathname={location.pathname} />}>
-                {isRouteTransitioning || (user && isUserDataLoading && !hasHydratedUserData) ? (
+                {user && isUserDataLoading && !hasHydratedUserData ? (
                   <PageSkeleton pathname={location.pathname} />
                 ) : (
                 <Routes location={location} key={location.pathname}>
@@ -273,8 +263,7 @@ function AppContent() {
                 </Routes>
                 )}
               </Suspense>
-            </motion.div>
-          </AnimatePresence>
+          </div>
         </main>
       </div>
 

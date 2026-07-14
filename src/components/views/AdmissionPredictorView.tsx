@@ -727,111 +727,48 @@ export default function AdmissionPredictorView() {
   const chartData = useMemo(() => {
     if (!historyPoints || historyPoints.length === 0) return [];
 
-    const parseDateStr = (dateStr?: string) => {
-      if (!dateStr) return new Date(2026, 5, 18, 12, 0, 0);
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    const validYearFloor = 2024;
+    const validYearCeiling = today.getFullYear() + 1;
+    const normalized = historyPoints.map((point, index) => {
+      const raw = new Date(String(point?.date || ""));
+      const hasRealDate = Number.isFinite(raw.getTime())
+        && raw.getFullYear() >= validYearFloor
+        && raw.getFullYear() <= validYearCeiling;
+      const date = hasRealDate
+        ? raw
+        : new Date(today.getTime() - (historyPoints.length - 1 - index) * 86_400_000);
+      date.setHours(12, 0, 0, 0);
+      return { ...point, normalizedDate: date };
+    }).sort((left, right) => left.normalizedDate.getTime() - right.normalizedDate.getTime());
 
-      let cleanStr = dateStr.replace(/\s*\(Today\)/gi, "").trim();
-
-      if (/^\d{4}-\d{2}-\d{2}$/.test(cleanStr)) {
-        const parts = cleanStr.split("-").map(Number);
-
-        if (parts.length === 3) {
-          const [y, m, d] = parts;
-
-          return new Date(y === 2001 ? 2026 : y, m - 1, d, 12, 0, 0);
-        }
-      }
-      const parsed = new Date(cleanStr);
-
-      if (!isNaN(parsed.getTime())) {
-        parsed.setHours(12, 0, 0, 0);
-
-        return parsed;
-      }
-      return new Date(2026, 5, 18, 12, 0, 0);
-    };
-
-    const sortedPoints = [...historyPoints].sort(
-      (a, b) => parseDateStr(a.date).getTime() - parseDateStr(b.date).getTime(),
-    );
-
-    const filledData = [];
-
-    const startDate = parseDateStr(sortedPoints[0].date);
-
-    const endDate = parseDateStr(sortedPoints[sortedPoints.length - 1].date);
-
-    let daysCount = 0;
-
-    let lastKnownZ = sortedPoints[0].zScore;
-
-    for (
-      let d = new Date(startDate);
-      d <= endDate;
-      d.setDate(d.getDate() + 1)
-    ) {
-      if (daysCount++ > 730) break;
-      // 2 years limit
-
-      const dateStr =
-        d.getFullYear() +
-        "-" +
-        String(d.getMonth() + 1).padStart(2, "0") +
-        "-" +
-        String(d.getDate()).padStart(2, "0");
-
-      const exactPoints = sortedPoints.filter((p) => {
-        const pD = parseDateStr(p.date);
-
-        const pFormatted =
-          pD.getFullYear() +
-          "-" +
-          String(pD.getMonth() + 1).padStart(2, "0") +
-          "-" +
-          String(pD.getDate()).padStart(2, "0");
-
-        return pFormatted === dateStr;
+    const byDay = new Map<string, any>();
+    normalized.forEach((point) => {
+      const name = point.normalizedDate.toISOString().slice(0, 10);
+      byDay.set(name, {
+        name,
+        "Calculated Z Score": Number(point.zScore),
+        reason: point.reason,
       });
+    });
 
-      const exactPoint =
-        exactPoints.length > 0
-          ? exactPoints[exactPoints.length - 1]
-          : undefined;
+    const uniquePoints = Array.from(byDay.values());
+    const maximumVisiblePoints = 36;
+    const stride = Math.max(1, Math.ceil(uniquePoints.length / maximumVisiblePoints));
+    const visiblePoints = uniquePoints.filter((_point, index) => index % stride === 0 || index === uniquePoints.length - 1);
 
-      if (exactPoint) {
-        lastKnownZ = exactPoint.zScore;
-      }
-
-      filledData.push({
-        name: dateStr,
-        "Calculated Z Score": lastKnownZ,
-        "My Target": targetZ,
-        reason: exactPoint ? exactPoint.reason : undefined,
-      });
-    }
-
-    if (filledData.length === 1) {
-      const yesterday = new Date(startDate);
-
-      yesterday.setDate(yesterday.getDate() - 1);
-
-      const dateStr =
-        yesterday.getFullYear() +
-        "-" +
-        String(yesterday.getMonth() + 1).padStart(2, "0") +
-        "-" +
-        String(yesterday.getDate()).padStart(2, "0");
-
-      filledData.unshift({
-        name: dateStr,
-        "Calculated Z Score": lastKnownZ,
-        "My Target": targetZ,
+    if (visiblePoints.length === 1) {
+      const previousDate = new Date(`${visiblePoints[0].name}T12:00:00`);
+      previousDate.setDate(previousDate.getDate() - 1);
+      visiblePoints.unshift({
+        ...visiblePoints[0],
+        name: previousDate.toISOString().slice(0, 10),
         reason: "Started tracking",
       });
     }
-
-    return filledData;
-  }, [historyPoints, targetZ]);
+    return visiblePoints;
+  }, [historyPoints]);
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
@@ -1065,11 +1002,11 @@ export default function AdmissionPredictorView() {
                     <div className="flex gap-3 items-center">
                       {chartData.length > 0 && (
                         <span className="text-[10px] font-bold text-slate-400 uppercase">
-                          Start Day: {chartData[0].name}
+                          Tracking since {new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${chartData[0].name}T12:00:00`))}
                         </span>
                       )}
-                      <span className="text-[10px] font-extrabold text-primary-600 bg-primary-50 px-2 py-1 rounded border border-primary-100 uppercase">
-                        Vitals Live
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-500">
+                        Predictor history
                       </span>
                     </div>
                   </div>

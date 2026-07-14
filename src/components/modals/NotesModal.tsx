@@ -13,9 +13,8 @@ import {
   type UploadTaskControls,
 } from "../../lib/clientStorageUpload";
 import { createAndUploadSecureVideo } from "../../lib/videoUpload";
-import { PdfMiniPreview } from "../ui/PdfMiniPreview";
-
-const SecureVideoPlayer = React.lazy(() => import("../video/SecureVideoPlayer").then((module) => ({ default: module.SecureVideoPlayer })));
+import { DocumentCover } from "../ui/DocumentCover";
+import { SecureVideoPlayer } from "../video/SecureVideoPlayer";
 
 type UploadTelemetry = UploadProgressSnapshot & {
   speedBytesPerSecond: number;
@@ -323,8 +322,8 @@ export function NotesModal() {
 
   return (
     <AnimatePresence>
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-sm sm:p-6">
-        <motion.div initial={{ opacity: 0, scale: 0.96, y: 18 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 18 }} transition={{ type: "spring", damping: 25, stiffness: 300 }} className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl sm:h-[86vh]">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6">
+        <motion.div initial={{ opacity: 0, scale: 0.97, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 14 }} transition={{ type: "spring", damping: 28, stiffness: 320 }} className="flex max-h-[92dvh] w-full max-w-4xl flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white shadow-[0_28px_80px_rgba(15,23,42,0.22)]">
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-7">
             <div>
               <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">Lesson Resources</h2>
@@ -333,12 +332,12 @@ export function NotesModal() {
             <button onClick={close} className="rounded-xl p-2 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500" aria-label="Close resources"><X className="h-5 w-5" /></button>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50/70 p-4 sm:p-6">
-            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="clora-scrollbar min-h-0 flex-1 overflow-y-auto bg-white p-4 sm:p-6">
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_8px_28px_rgba(15,23,42,0.05)] sm:p-5">
               <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <h3 className="text-xs font-black uppercase tracking-widest text-slate-700">PDFs, images, audio & secure videos</h3>
-                  <p className="mt-1 text-xs text-slate-400">Video files use resumable private upload and secure processing.</p>
+                  <h3 className="text-xs font-black uppercase tracking-[0.14em] text-slate-700">Lesson files</h3>
+                  <p className="mt-1 text-xs text-slate-400">PDF, image, audio and video resources for this lesson.</p>
                 </div>
                 <input ref={fileInputRef} type="file" accept="application/pdf,image/*,audio/*,video/mp4,video/quicktime,video/webm,.doc,.docx,.ppt,.pptx,.txt" onChange={handleFileInput} className="hidden" id="lesson-resource-upload" disabled={isUploading} />
                 <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isUploading} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 shadow-sm transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60">
@@ -371,7 +370,7 @@ export function NotesModal() {
                 </div>
               )}
 
-              <div onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (event.currentTarget === event.target) setIsDragging(false); }} onDrop={(event) => { event.preventDefault(); setIsDragging(false); const file = event.dataTransfer.files?.[0]; if (file) void processFile(file); }} className={`mt-4 rounded-2xl border-2 border-dashed p-4 transition ${isDragging ? "border-indigo-400 bg-indigo-50" : "border-slate-200 bg-slate-50/60"}`}>
+              <div onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (event.currentTarget === event.target) setIsDragging(false); }} onDrop={(event) => { event.preventDefault(); setIsDragging(false); const file = event.dataTransfer.files?.[0]; if (file) void processFile(file); }} className={`mt-4 rounded-2xl border border-dashed p-3 transition ${isDragging ? "border-indigo-400 bg-indigo-50" : "border-slate-200 bg-slate-50/70"}`}>
                 {resources.length === 0 ? (
                   <button type="button" onClick={() => fileInputRef.current?.click()} className="flex w-full flex-col items-center py-8 text-center">
                     <UploadCloud className="mb-3 h-8 w-8 text-slate-300" />
@@ -379,12 +378,12 @@ export function NotesModal() {
                     <span className="mt-1 text-xs text-slate-400">PDF, image, audio, document{isAdmin ? " or video" : ""}</span>
                   </button>
                 ) : (
-                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     {resources.map((resource, index) => (
                       <div key={resource.id || resource.sourceId || `${resource.title}-${index}`} className="group flex min-w-0 items-center gap-2">
-                        <button type="button" onClick={() => void openResource(resource)} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-300 hover:shadow-md">
+                        <button type="button" onClick={() => void openResource(resource)} className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md">
                           {resource.mediaKind === "pdf" ? (
-                            <PdfMiniPreview sourceId={resource.sourceId} title={resource.title} className="h-20 w-16 shrink-0" />
+                            <DocumentCover title={resource.title} compact />
                           ) : (
                             <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100"><ResourceIcon kind={resource.mediaKind} /></span>
                           )}
@@ -407,9 +406,7 @@ export function NotesModal() {
         </motion.div>
       </motion.div>
       {playerResource?.videoId && (
-        <React.Suspense fallback={<div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/85 text-sm font-bold text-white">Loading secure player…</div>}>
-          <SecureVideoPlayer videoId={playerResource.videoId} title={playerResource.title} onClose={() => setPlayerResource(null)} />
-        </React.Suspense>
+        <SecureVideoPlayer videoId={playerResource.videoId} title={playerResource.title} onClose={() => setPlayerResource(null)} />
       )}
     </AnimatePresence>
   );

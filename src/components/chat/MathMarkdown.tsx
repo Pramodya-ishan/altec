@@ -41,7 +41,7 @@ export const MathMarkdown = memo(function MathMarkdown({
         ]}
         components={{
           p: ({ children }) => (
-            <p className="ai-markdown__paragraph inline">{children}</p>
+            <p className="ai-markdown__paragraph block">{children}</p>
           ),
 
           code: ({ className, children, ...props }: any) => {

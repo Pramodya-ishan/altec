@@ -677,7 +677,8 @@ export async function retrieveExactPaperQuestion({
   }
 
   const chunkCount = Number(sourceData.chunkCount || 0);
-  const needsOcr = sourceData.needsOcr === true || sourceData.indexStatus === "needs_ocr" || chunkCount === 0;
+  const hasLegacyTextLayer = String(sourceData.textEncoding || "").startsWith("legacy_");
+  const needsOcr = !hasLegacyTextLayer && (sourceData.needsOcr === true || sourceData.indexStatus === "needs_ocr");
   const needsLegacyConversion = sourceData.needsLegacyConversion === true || sourceData.indexStatus === "needs_legacy_conversion";
 
   if (needsOcr || chunkCount === 0) {
@@ -686,9 +687,9 @@ export async function retrieveExactPaperQuestion({
       chunks: [],
       hasExactQuestionText: false,
       badTextQuality: false,
-      needsOcr: true,
+      needsOcr,
       needsLegacyConversion,
-      reason: "No chunks indexed or needs OCR."
+      reason: needsOcr ? "This source has no searchable text layer." : "No searchable chunks are indexed; use direct PDF reading."
     };
   }
 

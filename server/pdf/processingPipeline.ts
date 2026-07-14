@@ -123,16 +123,16 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
     let triggerOcr = forceOcr || isScanned || hasHighReplacement;
 
     if (textEncoding.startsWith("legacy_") || legacyPatternScore > 5) {
-      extractionMethod = "legacy_convert";
+      extractionMethod = "legacy_text_layer";
       textEncoding = "legacy_converted_sinhala";
-      console.log(`Legacy Sinhala font detected. Extracted converted text. Length: ${textLength}`);
-      
-      // If legacy conversion still resulted in very little Unicode or high garbage, trigger OCR
-      const postUnicodeCount = fullText.match(/[\u0D80-\u0DFF]/g)?.length || 0;
-      if (postUnicodeCount < 30) {
-        console.warn(`Legacy conversion yielded insufficient Unicode Sinhala (${postUnicodeCount} chars). Forcing OCR fallback.`);
-        triggerOcr = true;
-      }
+      needsOcr = false;
+      needsLegacyConversion = false;
+      // Legacy Sinhala fonts frequently expose a complete, selectable text
+      // layer whose glyph codes are not Unicode. That document is not a scan
+      // and must not be labelled as needing OCR. Keep the extracted pages for
+      // direct-PDF QA; OCR remains an explicit admin action through forceOcr.
+      triggerOcr = Boolean(forceOcr);
+      console.log(`Legacy Sinhala text layer detected. Keeping ${textLength} extracted characters without OCR.`);
     }
 
     if (triggerOcr) {
@@ -159,9 +159,26 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
               textIndexed: false,
               updatedAt: new Date().toISOString(),
             };
-            await sourceRef.update(metaUpdate);
+            await sourceRef.set({
+              sourceId,
+              ownerUid: uid,
+              storagePath,
+              fileName,
+              title,
+              subject: normalizeSubject(subject || ""),
+              resourceType,
+              sourceType: sourceType || resourceType,
+              sourceScope,
+              ...metaUpdate,
+            }, { merge: true });
             if (sourceScope === "past_paper") {
-              await db.collection("past_papers").doc(sourceId).update(metaUpdate).catch(() => {});
+              await db.collection("past_papers").doc(sourceId).set({
+                id: sourceId,
+                sourceId,
+                ownerUid: uid,
+                sourceScope,
+                ...metaUpdate,
+              }, { merge: true }).catch(() => {});
             }
             return {
               ok: true,
@@ -508,16 +525,55 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
   await bulkWriter.close();
   console.log(`Committed ${chunkCount} chunks to Firestore for source: ${sourceId}`);
 
-  // Write sources metadata updates
-  await db.collection("rag_sources").doc(sourceId).update(metaUpdate);
+  // Processing may outlive the request that registered this source. Use an
+  // idempotent upsert so a retry or a missing metadata document cannot turn a
+  // successfully uploaded PDF into a Firestore NOT_FOUND response.
+  await db.collection("rag_sources").doc(sourceId).set({
+    sourceId,
+    ownerUid: uid,
+    storagePath,
+    fileName,
+    title,
+    subject: normalizedSubjectKey,
+    year: year ? String(year) : null,
+    resourceType,
+    sourceType: sourceType || resourceType,
+    sourceScope,
+    visibility: sourceScope === "official" ? "official" : "private",
+    ...metaUpdate,
+  }, { merge: true });
 
   if (sourceScope === "past_paper") {
-    await db.collection("past_papers").doc(sourceId).update(metaUpdate).catch(() => {});
+    await db.collection("past_papers").doc(sourceId).set({
+      id: sourceId,
+      sourceId,
+      ownerUid: uid,
+      storagePath,
+      fileName,
+      title,
+      subject: normalizedSubjectKey,
+      year: year ? String(year) : null,
+      resourceType,
+      sourceType: sourceType || resourceType,
+      sourceScope,
+      ...metaUpdate,
+    }, { merge: true }).catch(() => {});
   } else if (sourceScope === "owner_syllabus") {
-    await db.collection("users").doc(uid).collection("syllabus_resources").doc(sourceId).update({
+    await db.collection("users").doc(uid).collection("syllabus_resources").doc(sourceId).set({
+      id: sourceId,
+      sourceId,
+      ownerUid: uid,
+      storagePath,
+      fileName,
+      title,
+      subject: normalizedSubjectKey,
+      year: year ? String(year) : null,
+      resourceType,
+      sourceType: sourceType || resourceType,
+      sourceScope,
       status: finalIndexStatus,
       ...metaUpdate
-    }).catch(() => {});
+    }, { merge: true }).catch(() => {});
   }
 
   invalidateInventoryCache(uid);
@@ -552,14 +608,29 @@ async function finalizeFailedProcessing(params: {
     updatedAt: new Date().toISOString()
   };
 
-  await db.collection("rag_sources").doc(sourceId).update(metaUpdate).catch(() => {});
+  await db.collection("rag_sources").doc(sourceId).set({
+    sourceId,
+    ownerUid: uid,
+    sourceScope,
+    ...metaUpdate,
+  }, { merge: true }).catch(() => {});
   if (sourceScope === "past_paper") {
-    await db.collection("past_papers").doc(sourceId).update(metaUpdate).catch(() => {});
+    await db.collection("past_papers").doc(sourceId).set({
+      id: sourceId,
+      sourceId,
+      ownerUid: uid,
+      sourceScope,
+      ...metaUpdate,
+    }, { merge: true }).catch(() => {});
   } else if (sourceScope === "owner_syllabus") {
-    await db.collection("users").doc(uid).collection("syllabus_resources").doc(sourceId).update({
+    await db.collection("users").doc(uid).collection("syllabus_resources").doc(sourceId).set({
+      id: sourceId,
+      sourceId,
+      ownerUid: uid,
+      sourceScope,
       status,
       ...metaUpdate
-    }).catch(() => {});
+    }, { merge: true }).catch(() => {});
   }
 
   invalidateInventoryCache(uid);

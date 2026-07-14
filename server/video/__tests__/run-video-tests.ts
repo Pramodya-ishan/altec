@@ -6,7 +6,14 @@ process.env.VIDEO_CDN_KEY_NAME = "test-key";
 process.env.VIDEO_CDN_SIGNING_KEY = Buffer.from("0123456789abcdef").toString("base64url");
 process.env.VIDEO_COOKIE_TTL_SECONDS = "300";
 
-const { canUserPlayVideo, createSignedPlaybackCookie, safeVideoFileName } = await import("../videoService");
+const {
+  canUserPlayVideo,
+  createSignedPlaybackCookie,
+  hashPlaybackToken,
+  playbackTokenMatches,
+  resolveVideoByteRange,
+  safeVideoFileName,
+} = await import("../videoService");
 
 const baseVideo = {
   id: "video_123",
@@ -47,5 +54,14 @@ assert.equal(signed.path, "/videos/video_123/versions/2/hls/");
 assert.match(signed.cookieValue, /^URLPrefix=.*:Expires=\d+:KeyName=test-key:Signature=/);
 const ttlMs = new Date(signed.expiresAt).getTime() - before;
 assert(ttlMs >= 299_000 && ttlMs <= 301_000, `Unexpected signed-cookie TTL: ${ttlMs}`);
+
+const playbackToken = "one-time-playback-token";
+const playbackTokenHash = hashPlaybackToken(playbackToken);
+assert.equal(playbackTokenMatches(playbackToken, playbackTokenHash), true);
+assert.equal(playbackTokenMatches("wrong-token", playbackTokenHash), false);
+assert.deepEqual(resolveVideoByteRange("bytes=100-199", 1_000, 256), { start: 100, end: 199, length: 100 });
+assert.deepEqual(resolveVideoByteRange("bytes=100-", 1_000, 256), { start: 100, end: 355, length: 256 });
+assert.deepEqual(resolveVideoByteRange(undefined, 100, 256), { start: 0, end: 99, length: 100 });
+assert.throws(() => resolveVideoByteRange("bytes=1000-", 1_000), /VIDEO_RANGE_UNSATISFIABLE/);
 
 console.log("ALL SECURE VIDEO TESTS PASSED!");

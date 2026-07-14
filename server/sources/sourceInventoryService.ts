@@ -36,7 +36,8 @@ export function computeIndexStatus(src: {
 }) {
   const chunkCount = Number(src.chunkCount || 0);
   const currentStatus = String(src.indexStatus || "").toLowerCase();
-  const needsOcr = src.needsOcr === true || src.indexStatus === "needs_ocr";
+  const hasLegacyTextLayer = String(src.textEncoding || "").startsWith("legacy_");
+  const needsOcr = !hasLegacyTextLayer && (src.needsOcr === true || src.indexStatus === "needs_ocr");
   const needsLegacy = src.needsLegacyConversion === true || src.indexStatus === "needs_legacy_conversion";
 
   if (["queued", "running", "processing", "indexing"].includes(currentStatus)) return currentStatus;
@@ -131,6 +132,8 @@ export async function getSourceInventory(params: {
       indexStatus: src.indexStatus
     });
 
+    const hasLegacyTextLayer = String(src.textEncoding || "").startsWith("legacy_");
+    const normalizedNeedsOcr = !hasLegacyTextLayer && src.needsOcr === true;
     allSources.push({
       id: sId,
       sourceId: sId,
@@ -144,14 +147,14 @@ export async function getSourceInventory(params: {
       storagePath: src.storagePath || null,
       ownerUid: src.ownerUid || null,
       chunkCount: Number(src.chunkCount || 0),
-      needsOcr: src.needsOcr === true,
+      needsOcr: normalizedNeedsOcr,
       needsLegacyConversion: src.needsLegacyConversion === true,
       textEncoding: src.textEncoding || "unknown",
       indexStatus: calcStatus,
       visibility: src.visibility || "private",
       sourceType: src.sourceType || normResourceType || null,
       tags: Array.isArray(src.tags) ? src.tags : [],
-      textIndexed: Number(src.chunkCount || 0) > 0 && src.needsOcr !== true,
+      textIndexed: Number(src.chunkCount || 0) > 0 && !normalizedNeedsOcr,
       createdAt: src.createdAt || null,
     });
   }

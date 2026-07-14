@@ -6,14 +6,12 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
-import PastPapersView from './PastPapersView';
 import { ResponsiveChartShell } from '../ui/ResponsiveChartShell';
 
 export default function PaperMarksView() {
  const { data, currentSubject, setModals, saveData, showNotification } = useApp();
  const marks = data[currentSubject].paperMarks || [];
 
- const [marksTab, setMarksTab] = useState<'tracker' | 'mcq'>('tracker');
  const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
  const [collapsedLog, setCollapsedLog] = useState(() => {
  return data.collapsedStates?.history_database ?? true;
@@ -59,15 +57,6 @@ export default function PaperMarksView() {
 
  const handleEdit = (index: number) => {
  setModals(prev => ({ ...prev, addPaperMark: { open: true, editIndex: index } }));
- };
-
- const handleExportPDF = () => {
- try {
- window.print();
- showNotification('Print dialog opened for PDF export.', 'success');
- } catch {
- showNotification('Unable to export in this environment. Open app in a new tab to print.', 'error');
- }
  };
 
  const ChartTooltip = ({ active, payload, label }: any) => {
@@ -116,7 +105,7 @@ export default function PaperMarksView() {
  </div>
  <div className="w-full h-[280px]">
  <ResponsiveChartShell minHeight={280}>
- <ResponsiveContainer width="100%" height={300}>
+ <ResponsiveContainer width="100%" height="100%">
  <LineChart data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
  <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 12 ? v.substring(0, 12) + '...' : v} dy={10} />
@@ -138,7 +127,7 @@ export default function PaperMarksView() {
  </h3>
  <div className="w-full h-[200px]">
  <ResponsiveChartShell minHeight={200}>
- <ResponsiveContainer width="100%" height={300}>
+ <ResponsiveContainer width="100%" height="100%">
  <LineChart data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
  <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 10 ? v.substring(0, 10) + '...' : v} dy={10} />
@@ -156,7 +145,7 @@ export default function PaperMarksView() {
  </h3>
  <div className="w-full h-[200px]">
  <ResponsiveChartShell minHeight={200}>
- <ResponsiveContainer width="100%" height={300}>
+ <ResponsiveContainer width="100%" height="100%">
  <LineChart data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
  <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 10 ? v.substring(0, 10) + '...' : v} dy={10} />

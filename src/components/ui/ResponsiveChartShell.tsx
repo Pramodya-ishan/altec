@@ -39,23 +39,21 @@ export const ResponsiveChartShell: React.FC<ResponsiveChartShellProps> = ({
     return () => observer.disconnect();
   }, []);
 
-  if (size.width <= 0 || size.height <= 0) {
-    return (
-      <div 
-        ref={containerRef} 
-        className="min-w-0 w-full relative bg-slate-50/50 rounded-xl" 
-        style={{ height: minHeight }}
-      >
-        <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-400 font-semibold font-mono animate-pulse">
-          Initializing chart...
-        </div>
-      </div>
-    );
-  }
+  const isReady = size.width > 0 && size.height > 0;
 
   return (
-    <div ref={containerRef} className="min-w-0 w-full relative" style={{ height: minHeight }}>
-      {children}
+    <div
+      ref={containerRef}
+      className="min-w-0 w-full relative"
+      style={{ height: minHeight }}
+      aria-busy={!isReady}
+    >
+      {isReady ? children : (
+        <div className="absolute inset-0 overflow-hidden rounded-xl bg-slate-50">
+          <div className="absolute inset-x-5 bottom-7 top-8 rounded-lg bg-[linear-gradient(to_bottom,transparent_24%,#e2e8f0_25%,transparent_26%,transparent_49%,#e2e8f0_50%,transparent_51%,transparent_74%,#e2e8f0_75%,transparent_76%)] opacity-60" />
+          <div className="absolute inset-0 -translate-x-full animate-[shimmer_1.4s_infinite] bg-gradient-to-r from-transparent via-white/80 to-transparent" />
+        </div>
+      )}
     </div>
   );
 };

@@ -1,26 +1,16 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, Captions, Gauge, ListVideo, MessageCircleQuestion, ShieldCheck, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { CheckCircle2, Loader2, X } from "lucide-react";
 import Plyr from "plyr";
 import shaka from "shaka-player";
 import "plyr/dist/plyr.css";
 import { apiFetch } from "../../lib/api";
 
-type Chapter = { id?: string; title: string; startSeconds: number; endSeconds?: number };
-type TranscriptCue = { startSeconds: number; endSeconds?: number; text: string };
-
-type PlayerMetadata = {
-  chapters?: Chapter[];
-  transcriptCues?: TranscriptCue[];
-  silenceIntervals?: Array<{ startSeconds: number; endSeconds: number }>;
-};
-
 type SessionResponse = {
   ok: true;
   sessionId: string;
   playbackMode?: "direct" | "hls";
-  directUrl?: string;
+  streamUrl?: string;
   manifestUrl?: string;
-  expiresAt: string;
   watermark: { userId: string; label: string };
 };
 
@@ -34,46 +24,32 @@ function getDeviceId() {
   return value;
 }
 
-function formatTime(seconds: number) {
-  const safe = Math.max(0, Math.floor(seconds || 0));
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
-  const secs = safe % 60;
-  return hours > 0
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`
-    : `${minutes}:${String(secs).padStart(2, "0")}`;
+interface SecureVideoPlayerProps {
+  videoId: string;
+  title: string;
+  onClose: () => void;
 }
 
-export function SecureVideoPlayer({ videoId, title, onClose }: { videoId: string; title: string; onClose: () => void }) {
+export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const shakaRef = useRef<any>(null);
   const plyrRef = useRef<Plyr | null>(null);
   const sessionIdRef = useRef<string | null>(null);
-  const metadataRef = useRef<PlayerMetadata>({});
-  const skipSilenceRef = useRef(false);
-  const [metadata, setMetadata] = useState<PlayerMetadata>({});
-  const [status, setStatus] = useState("Authorizing secure playback…");
+  const [status, setStatus] = useState("Preparing video…");
   const [error, setError] = useState<string | null>(null);
-  const [showTranscript, setShowTranscript] = useState(false);
-  const [showChapters, setShowChapters] = useState(false);
-  const [skipSilence, setSkipSilence] = useState(false);
-  const [watermark, setWatermark] = useState({ label: "", x: 12, y: 12 });
-  const [currentTime, setCurrentTime] = useState(0);
-
-  const activeCue = useMemo(
-    () => metadata.transcriptCues?.find((cue) => currentTime >= cue.startSeconds && currentTime < (cue.endSeconds ?? cue.startSeconds + 8)),
-    [metadata.transcriptCues, currentTime],
-  );
-
-  useEffect(() => { metadataRef.current = metadata; }, [metadata]);
-  useEffect(() => { skipSilenceRef.current = skipSilence; }, [skipSilence]);
+  const [watermark, setWatermark] = useState("");
+  const [qualityOptions, setQualityOptions] = useState<number[]>([]);
+  const [selectedQuality, setSelectedQuality] = useState(0);
+  const [playbackMode, setPlaybackMode] = useState<"direct" | "hls">("direct");
 
   useEffect(() => {
     let disposed = false;
     let heartbeat: number | undefined;
-    let watermarkTimer: number | undefined;
     const video = videoRef.current;
     if (!video) return;
+    video.setAttribute("controlsList", "nodownload noremoteplayback");
+    video.disablePictureInPicture = true;
+    video.setAttribute("disableRemotePlayback", "true");
 
     const endSession = () => {
       const sessionId = sessionIdRef.current;
@@ -85,72 +61,50 @@ export function SecureVideoPlayer({ videoId, title, onClose }: { videoId: string
     const boot = async () => {
       try {
         const deviceId = getDeviceId();
-        const [metaResponse, sessionResponse] = await Promise.all([
-          apiFetch(`/api/videos/${videoId}`),
-          apiFetch(`/api/videos/${videoId}/playback-session`, {
-            method: "POST",
-            headers: { "X-Device-ID": deviceId },
-          }),
-        ]);
-        const session = await sessionResponse.json() as SessionResponse & { message?: string };
-        if (!sessionResponse.ok || !session.ok) throw new Error(session.message || "Playback authorization failed");
-        const metaPayload = await metaResponse.json().catch(() => ({}));
-        if (!disposed) setMetadata(metaPayload?.video || {});
+        const response = await apiFetch(`/api/videos/${videoId}/playback-session`, {
+          method: "POST",
+          headers: { "X-Device-ID": deviceId },
+        });
+        const session = await response.json() as SessionResponse & { message?: string };
+        if (!response.ok || !session.ok) throw new Error(session.message || "Playback authorization failed");
+        if (disposed) return;
 
         sessionIdRef.current = session.sessionId;
-        setWatermark((current) => ({ ...current, label: session.watermark.label }));
-        let heights: number[] = [];
-        let engine: any = null;
-        if (session.playbackMode === "direct" && session.directUrl) {
-          video.src = session.directUrl;
+        setWatermark(session.watermark?.label || "");
+        const mode = session.playbackMode === "hls" ? "hls" : "direct";
+        setPlaybackMode(mode);
+
+        if (mode === "direct" && session.streamUrl) {
+          video.src = session.streamUrl;
           video.load();
         } else {
-          if (!session.manifestUrl) throw new Error("Secure video source is unavailable.");
+          if (!session.manifestUrl) throw new Error("The secure video source is unavailable.");
           shaka.polyfill.installAll();
-          if (!shaka.Player.isBrowserSupported()) throw new Error("This browser does not support secure HLS playback.");
-          engine = new shaka.Player();
+          if (!shaka.Player.isBrowserSupported()) throw new Error("This browser cannot play the secure stream.");
+          const engine = new shaka.Player();
           await engine.attach(video);
           shakaRef.current = engine;
           engine.configure({
             abr: { enabled: true, defaultBandwidthEstimate: 1_500_000 },
             streaming: { bufferingGoal: 24, rebufferingGoal: 2 },
           });
-          engine.getNetworkingEngine()?.registerRequestFilter((_type: unknown, request: any) => {
-            request.allowCrossSiteCredentials = true;
-          });
           await engine.load(session.manifestUrl);
-          heights = Array.from(new Set<number>(
+          const heights = Array.from(new Set<number>(
             engine.getVariantTracks().map((track: any) => Number(track.height || 0)).filter(Boolean),
-          )).sort((a, b) => a - b);
+          )).sort((left, right) => left - right);
+          setQualityOptions(heights);
         }
-        if (disposed) return;
-        const player = new Plyr(video, {
-          controls: ["play-large", "restart", "rewind", "play", "fast-forward", "progress", "current-time", "duration", "mute", "volume", "captions", "settings", "pip", "airplay", "fullscreen"],
-          settings: heights.length ? ["captions", "quality", "speed"] : ["captions", "speed"],
-          speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] },
-          quality: {
-            default: 0,
-            options: [0, ...heights],
-            forced: true,
-            onChange: (height: number) => {
-              if (!engine) return;
-              if (height === 0) {
-                engine.configure({ abr: { enabled: true } });
-                return;
-              }
-              engine.configure({ abr: { enabled: false } });
-              const tracks = engine.getVariantTracks().filter((track: any) => track.height === height);
-              if (tracks[0]) engine.selectVariantTrack(tracks[0], true, 2);
-            },
-          },
-          i18n: { qualityLabel: { 0: "Auto" } },
-        });
-        plyrRef.current = player;
 
-        const resumeKey = `clora_video_resume_${videoId}`;
-        const saved = Number(localStorage.getItem(resumeKey) || 0);
-        if (saved > 5 && Number.isFinite(saved)) video.currentTime = saved;
-        setStatus(session.playbackMode === "direct" ? "Private video ready" : "Secure stream ready");
+        if (disposed) return;
+        plyrRef.current = new Plyr(video, {
+          controls: ["play-large", "play", "progress", "current-time", "duration", "mute", "volume", "settings", "fullscreen"],
+          settings: ["speed"],
+          speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
+        });
+
+        const resumeAt = Number(localStorage.getItem(`clora_video_resume_${videoId}`) || 0);
+        if (resumeAt > 5 && Number.isFinite(resumeAt)) video.currentTime = resumeAt;
+        setStatus("Ready to play");
 
         heartbeat = window.setInterval(() => {
           if (sessionIdRef.current) {
@@ -160,87 +114,78 @@ export function SecureVideoPlayer({ videoId, title, onClose }: { videoId: string
             });
           }
         }, 45_000);
-        watermarkTimer = window.setInterval(() => {
-          setWatermark((current) => ({ ...current, x: 8 + Math.round(Math.random() * 68), y: 8 + Math.round(Math.random() * 68) }));
-        }, 12_000);
       } catch (caught: any) {
         if (!disposed) setError(caught?.message || "Video playback failed");
       }
     };
 
-    const onTimeUpdate = () => {
-      const time = video.currentTime;
-      setCurrentTime(time);
-      if (Math.floor(time) % 5 === 0) localStorage.setItem(`clora_video_resume_${videoId}`, String(time));
-      if (skipSilenceRef.current) {
-        const interval = metadataRef.current.silenceIntervals?.find((item) => time >= item.startSeconds && time < item.endSeconds);
-        if (interval && interval.endSeconds - time > 0.35) video.currentTime = interval.endSeconds;
+    const saveProgress = () => {
+      if (Number.isFinite(video.currentTime)) {
+        localStorage.setItem(`clora_video_resume_${videoId}`, String(video.currentTime));
       }
     };
-    video.addEventListener("timeupdate", onTimeUpdate);
+    const blockMediaMenu = (event: Event) => event.preventDefault();
+    video.addEventListener("pause", saveProgress);
+    video.addEventListener("contextmenu", blockMediaMenu);
+    video.addEventListener("dragstart", blockMediaMenu);
     window.addEventListener("pagehide", endSession);
     void boot();
 
     return () => {
       disposed = true;
       if (heartbeat) window.clearInterval(heartbeat);
-      if (watermarkTimer) window.clearInterval(watermarkTimer);
-      video.removeEventListener("timeupdate", onTimeUpdate);
+      video.removeEventListener("pause", saveProgress);
+      video.removeEventListener("contextmenu", blockMediaMenu);
+      video.removeEventListener("dragstart", blockMediaMenu);
       window.removeEventListener("pagehide", endSession);
+      saveProgress();
       endSession();
       plyrRef.current?.destroy();
       void shakaRef.current?.destroy();
     };
   }, [videoId]);
 
-  const explainCurrentSection = () => {
-    window.dispatchEvent(new CustomEvent("clora:explain-video-section", {
-      detail: { videoId, title, timeSeconds: videoRef.current?.currentTime || 0, transcript: activeCue?.text || "" },
-    }));
+  const changeQuality = (height: number) => {
+    setSelectedQuality(height);
+    const engine = shakaRef.current;
+    if (!engine) return;
+    if (height === 0) {
+      engine.configure({ abr: { enabled: true } });
+      return;
+    }
+    engine.configure({ abr: { enabled: false } });
+    const track = engine.getVariantTracks().find((candidate: any) => Number(candidate.height) === height);
+    if (track) engine.selectVariantTrack(track, true, 2);
   };
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-md sm:p-6" role="dialog" aria-modal="true" aria-label={`${title} video player`}>
-      <div className="flex max-h-[95vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-950 text-white shadow-2xl">
-        <header className="flex items-center justify-between gap-4 border-b border-white/10 px-5 py-4">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/75 p-3 backdrop-blur-md sm:p-6" role="dialog" aria-modal="true" aria-label={`${title} video player`}>
+      <div className="w-full max-w-5xl overflow-hidden rounded-[28px] border border-white/10 bg-white shadow-2xl">
+        <header className="flex items-center justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-5">
           <div className="min-w-0">
-            <p className="truncate text-sm font-black sm:text-base">{title}</p>
-            <p className="mt-1 flex items-center gap-1.5 text-[11px] font-semibold text-emerald-300"><ShieldCheck className="h-3.5 w-3.5" /> {status}</p>
+            <p className="truncate text-sm font-semibold text-slate-950 sm:text-base">{title}</p>
+            <p className="mt-0.5 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+              {error ? null : status === "Ready to play" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {error || status}
+            </p>
           </div>
-          <button onClick={onClose} className="rounded-xl bg-white/10 p-2 text-slate-300 transition hover:bg-white/20 hover:text-white" aria-label="Close video"><X className="h-5 w-5" /></button>
+          <div className="flex shrink-0 items-center gap-2">
+            <label className="relative">
+                <span className="sr-only">Video quality</span>
+                <select value={selectedQuality} disabled={playbackMode !== "hls" || qualityOptions.length === 0} onChange={(event) => changeQuality(Number(event.target.value))} className="h-9 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 pr-8 text-xs font-semibold text-slate-700 outline-none transition focus:border-slate-400 disabled:cursor-default disabled:text-slate-500">
+                  <option value={0}>{playbackMode === "hls" && qualityOptions.length > 0 ? "Auto quality" : "Original quality"}</option>
+                  {[...qualityOptions].reverse().map((height) => <option key={height} value={height}>{height}p</option>)}
+                </select>
+                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[9px] text-slate-400">▾</span>
+              </label>
+            <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-900" aria-label="Close video"><X className="h-5 w-5" /></button>
+          </div>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px]">
-          <main className="min-w-0 overflow-y-auto bg-black">
-            <div className="relative aspect-video w-full overflow-hidden bg-black">
-              <video ref={videoRef} className="h-full w-full" playsInline />
-              {watermark.label && (
-                <div className="pointer-events-none absolute z-20 select-none rounded-md bg-black/30 px-2 py-1 text-[10px] font-bold text-white/55 transition-all duration-1000" style={{ left: `${watermark.x}%`, top: `${watermark.y}%` }}>
-                  {watermark.label} · {videoId.slice(0, 8)}
-                </div>
-              )}
-              {error && <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/95 p-8 text-center text-sm font-bold text-rose-300">{error}</div>}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 border-t border-white/10 p-3">
-              <button onClick={() => setSkipSilence((value) => !value)} className={`rounded-lg px-3 py-2 text-xs font-bold ${skipSilence ? "bg-indigo-500 text-white" : "bg-white/10 text-slate-300"}`}><Gauge className="mr-1.5 inline h-3.5 w-3.5" /> Skip silence</button>
-              <button onClick={() => setShowTranscript((value) => !value)} className={`rounded-lg px-3 py-2 text-xs font-bold ${showTranscript ? "bg-indigo-500 text-white" : "bg-white/10 text-slate-300"}`}><Captions className="mr-1.5 inline h-3.5 w-3.5" /> Transcript</button>
-              <button onClick={() => setShowChapters((value) => !value)} className={`rounded-lg px-3 py-2 text-xs font-bold ${showChapters ? "bg-indigo-500 text-white" : "bg-white/10 text-slate-300"}`}><ListVideo className="mr-1.5 inline h-3.5 w-3.5" /> Chapters</button>
-              <button onClick={explainCurrentSection} className="ml-auto rounded-lg bg-amber-400 px-3 py-2 text-xs font-black text-slate-950 transition hover:bg-amber-300"><MessageCircleQuestion className="mr-1.5 inline h-3.5 w-3.5" /> මේ කොටස පැහැදිලි කරන්න</button>
-            </div>
-
-            {showTranscript && activeCue && <div className="border-t border-white/10 bg-slate-900 px-5 py-4 text-sm leading-7 text-slate-200"><BookOpen className="mr-2 inline h-4 w-4 text-indigo-300" /> {activeCue.text}</div>}
-          </main>
-
-          <aside className="hidden min-h-0 overflow-y-auto border-l border-white/10 bg-slate-900/80 p-4 lg:block">
-            <h3 className="mb-3 text-xs font-black uppercase tracking-widest text-slate-400">Lesson chapters</h3>
-            {metadata.chapters?.length ? metadata.chapters.map((chapter, index) => (
-              <button key={chapter.id || `${chapter.startSeconds}-${index}`} onClick={() => { if (videoRef.current) videoRef.current.currentTime = chapter.startSeconds; }} className="mb-2 flex w-full items-start gap-3 rounded-xl border border-white/5 bg-white/5 p-3 text-left transition hover:border-indigo-400/40 hover:bg-indigo-400/10">
-                <span className="rounded-md bg-indigo-400/15 px-2 py-1 text-[10px] font-black text-indigo-300">{formatTime(chapter.startSeconds)}</span>
-                <span className="text-xs font-bold leading-5 text-slate-200">{chapter.title}</span>
-              </button>
-            )) : <p className="rounded-xl border border-dashed border-white/10 p-4 text-xs leading-5 text-slate-500">Chapters and transcript appear automatically after video processing finishes.</p>}
-          </aside>
+        <div className="relative aspect-video w-full overflow-hidden bg-black">
+          <video ref={videoRef} className="h-full w-full" playsInline />
+          {watermark && <div className="pointer-events-none absolute right-3 top-3 rounded-md bg-black/30 px-2 py-1 text-[9px] font-medium text-white/45">{watermark}</div>}
+          {error && <div className="absolute inset-0 grid place-items-center bg-slate-950 p-8 text-center text-sm font-semibold text-rose-300">{error}</div>}
         </div>
       </div>
     </div>

@@ -51,14 +51,7 @@ export async function askDirectPdfQa(params: {
 }): Promise<DirectPdfQaResult> {
   const { source, prompt, questionId, questionNo, questionType, subject, year, onProgress, signal } = params;
 
-  console.info("[DirectPDFQA] Starting for source:", {
-    id: source.id || source.sourceId,
-    title: source.title,
-    storagePath: source.storagePath
-  });
-
   if (!source.storagePath) {
-    console.error("[DirectPDFQA] Error: Missing storagePath");
     return {
       ok: false,
       errorCode: "DIRECT_QA_SOURCE_MISSING_STORAGE_PATH",
@@ -67,16 +60,8 @@ export async function askDirectPdfQa(params: {
   }
 
   try {
-    console.info("[DirectPDFQA] Parsed question", {
-      year,
-      subject,
-      questionType,
-      questionNo
-    });
-
     // 1. Normalize PDF path
     const normalized = normalizeStoragePath(source.storagePath);
-    console.info("[DirectPDFQA] Normalized path:", normalized);
 
     // 2. Send only the source identity to our authenticated backend. The server
     // reads the object with Firebase Admin after verifying source ownership.
@@ -97,7 +82,6 @@ export async function askDirectPdfQa(params: {
 
     // 3. POST to backend
     const endpoint = getLargeEndpointUrl("/api/pdf/direct-qa-file");
-    console.info("[DirectPDFQA] Posting to backend:", endpoint);
     onProgress?.("scanning", { serverSide: true });
 
     const token = await auth.currentUser?.getIdToken();
@@ -143,26 +127,19 @@ export async function askDirectPdfQa(params: {
 
     onProgress?.("generating");
     const result = await response.json();
-    console.info("[DirectPDFQA] Backend response received:", result.found ? "FOUND" : "NOT_FOUND");
-
     // Transform structured output to text if needed
     if (result.ok && result.answer && typeof result.answer === 'object') {
        const { officialAnswer, solvedAnswer, explanationSinhala } = result.answer;
        const { questionText, options } = result.sourceEvidence || {};
 
-       let text = "";
-       text += `### 📄 Source evidence\n\n`;
-       text += `- **PDF:** ${source.title || "Paper"}\n`;
-       text += `- **Year:** ${year || source.year || "N/A"}\n`;
-       text += `- **Subject:** ${subject || source.subject || "N/A"}\n`;
-       text += `- **Question:** ${questionType || "MCQ"} ${questionNo || ""}\n`;
-       text += `- **Evidence status:** ${result.found ? "Verified from exact PDF" : "Missing"}\n\n`;
+       let text = `**Source:** ${source.title || "Paper"}`;
+       if (year || source.year) text += ` · ${year || source.year}`;
+       if (questionNo) text += ` · ${questionType || "Question"} ${questionNo}`;
+       text += ` · ${result.found ? "Exact PDF evidence" : "Evidence not found"}\n\n`;
 
        if (questionText) text += `### ❓ Question\n\n${stripRawVisualBlocks(questionText)}\n\n`;
 
-       if (options && options.length) {
-         text += `### 🔘 Options\n\n${options.map((o: string, i: number) => `${i + 1}. ${stripRawVisualBlocks(o)}`).join('\n')}\n\n`;
-       }
+       if (options && options.length) text += `${options.map((option: string, index: number) => `${index + 1}. ${stripRawVisualBlocks(option)}`).join('\n')}\n\n`;
 
        let finalAnswerText = "";
        let answerStatus = "Unknown";
@@ -191,18 +168,18 @@ export async function askDirectPdfQa(params: {
        }
 
        if (whyOthersWrong && whyOthersWrong.length > 0) {
-         text += `### ❌ Why other options are not correct\n\n`;
+         text += `### Why the other options do not fit\n\n`;
          text += whyOthersWrong.map((reason: string) => `- ${stripRawVisualBlocks(reason)}`).join('\n') + "\n\n";
        }
 
-       text += `### 📌 Answer status\n\n${answerStatus}\n`;
+       text += `_${answerStatus}_\n`;
 
        result.answer = text;
     }
 
     return result;
   } catch (err: any) {
-    console.error("[DirectPDFQA] Critical Error:", err);
+    if (import.meta.env.DEV) console.error("[DirectPDFQA]", err);
     return {
       ok: false,
       errorCode: err.errorCode || "DIRECT_QA_UNKNOWN_ERROR",
