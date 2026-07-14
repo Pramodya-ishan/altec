@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Check, CheckCircle2, Copy, FileText, Loader2, MessageCircle } from 'lucide-react';
+import { Check, CheckCircle2, Copy, FileText, Loader2, Sparkles } from 'lucide-react';
 import { MathMarkdown } from '../../chat/MathMarkdown';
 import { VisualBlockRenderer } from '../VisualBlockRenderer';
+import { DocumentCover } from '../DocumentCover';
 
 interface CloraMessageBubbleProps {
   message: any;
@@ -40,7 +41,9 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
             <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
               {message.attachments.map((attachment: any, index: number) => (
                 <span key={attachment.storagePath || attachment.name || index} className="inline-flex max-w-[220px] items-center gap-2 rounded-lg bg-white p-2 text-xs text-slate-600 ring-1 ring-slate-200">
-                  <FileText className="h-4 w-4 shrink-0" />
+                  {attachment.sourceId && /pdf/i.test(`${attachment.mimeType || ''} ${attachment.name || ''}`) ? (
+                    <DocumentCover title={attachment.name || 'PDF'} compact className="h-12 w-12" />
+                  ) : <FileText className="h-4 w-4 shrink-0" />}
                   <span className="truncate font-semibold">{attachment.name}</span>
                 </span>
               ))}
@@ -60,8 +63,8 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
       className="group mb-9 flex w-full justify-start px-4 sm:px-6"
     >
       <div className="flex w-full gap-3 sm:gap-4">
-        <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-slate-600">
-          <MessageCircle className="h-3.5 w-3.5" />
+        <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-950 text-white">
+          <Sparkles className="h-3.5 w-3.5" />
         </div>
 
         <div className="min-w-0 flex-1 space-y-4">

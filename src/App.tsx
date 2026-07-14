@@ -30,7 +30,7 @@ import { NotesModal } from './components/modals/NotesModal';
 import { SilencePlayerModal } from './components/modals/SilencePlayerModal';
 import { AnimatePresence, motion } from 'motion/react';
 import { cn } from './lib/utils';
-import { CheckCircle2, XCircle, Info, X, CloudOff, Loader2 } from 'lucide-react';
+import { CheckCircle2, XCircle, Info, X, CloudOff, GraduationCap, Loader2 } from 'lucide-react';
 import { PageSkeleton } from './components/ui/PageSkeleton';
 
 function ToastNotification() {
@@ -51,7 +51,7 @@ function ToastNotification() {
               exit={{ opacity: 0, scale: 0.95, y: -10 }}
               transition={{ duration: 0.2 }}
               className={cn(
-                "pointer-events-auto min-w-[280px] max-w-[90vw] cursor-pointer overflow-hidden rounded-xl border bg-white px-4 py-3 font-medium text-slate-800 shadow-[0_16px_40px_rgba(15,23,42,0.14)] flex items-center gap-3",
+                "pointer-events-auto px-4 py-3 rounded-2xl shadow-xl font-medium bg-white text-slate-800 flex items-center gap-3 cursor-pointer min-w-[280px] max-w-[90vw] overflow-hidden border",
                 notif.type === 'error' ? 'border-rose-200' :
                 notif.type === 'success' ? 'border-emerald-200' :
                 'border-slate-200'
@@ -146,20 +146,12 @@ function AuthOverlay() {
 
   if (isAuthLoading) {
     return (
-      <div className="fixed inset-0 z-[999999] bg-white" role="status" aria-live="polite" aria-label="Checking sign-in">
-        <div className="mx-auto flex min-h-[100dvh] w-full max-w-6xl flex-col px-5 py-5 sm:px-8">
-          <div className="flex h-12 items-center justify-between border-b border-slate-100">
-            <div className="h-3 w-32 animate-pulse rounded bg-slate-200/80" />
-            <div className="h-8 w-8 animate-pulse rounded-lg bg-slate-200/70" />
-          </div>
-          <div className="flex flex-1 items-center justify-center">
-            <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-              <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-              <div>
-                <p className="text-sm font-semibold text-slate-900">Preparing your workspace</p>
-                <p className="text-xs text-slate-500">Restoring your secure session</p>
-              </div>
-            </div>
+      <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-white" role="status" aria-live="polite" aria-label="Checking sign-in">
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 px-5 py-4 shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
+          <div>
+            <p className="text-sm font-bold text-slate-800">Opening your workspace</p>
+            <p className="text-xs text-slate-500">Checking your secure session…</p>
           </div>
         </div>
       </div>
@@ -169,34 +161,40 @@ function AuthOverlay() {
   if (user) return null;
 
   return (
-    <div className="fixed inset-0 z-[999999] grid min-h-[100dvh] place-items-center overflow-y-auto bg-white p-5">
-      <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(37,99,235,0.07),transparent_38%)]" />
-      <main className="relative w-full max-w-md">
-        <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 grid h-11 w-11 place-items-center rounded-xl bg-slate-950 text-sm font-bold text-white">AL</div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Technology stream</p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-[-0.025em] text-slate-950">Your learning workspace</h1>
-          <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500">Lessons, past papers, results and study tools in one focused place.</p>
-        </div>
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-[0_20px_60px_rgba(15,23,42,0.09)] sm:p-7">
-          <div className="mb-5">
-            <h2 className="text-base font-semibold text-slate-950">Continue to your dashboard</h2>
-            <p className="mt-1 text-sm text-slate-500">Sign in with the Google account connected to your learning data.</p>
+    <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[999999] flex items-center justify-center p-4">
+      <div className="bg-white rounded-[1.5rem] shadow-2xl p-8 max-w-sm w-full text-center flex flex-col gap-6">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shadow-sm border border-indigo-100">
+            <GraduationCap className="w-8 h-8" />
           </div>
-          <button onClick={handleGoogleLogin} disabled={actionLoading} className="ui-button ui-button-secondary h-12 w-full">
-            {actionLoading ? <Loader2 className="h-5 w-5 animate-spin text-slate-500" /> : <>
+          <div className="space-y-1.5">
+            <h2 className="text-2xl font-black text-slate-900 tracking-tight">Clora X</h2>
+            <p className="text-sm font-medium text-slate-500">
+              Sign in with your Google account to access your A/L dashboard.
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={handleGoogleLogin}
+          disabled={actionLoading}
+          className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-800 font-bold py-3.5 px-6 rounded-xl cursor-pointer active:scale-[0.98] transition-all text-sm flex items-center justify-center gap-3 shadow-sm"
+        >
+          {actionLoading ? (
+            <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+          ) : (
+            <>
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="w-5 h-5">
                 <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
                 <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
                 <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
                 <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
               </svg>
-              Continue with Google
-            </>}
-          </button>
-          <p className="mt-5 text-center text-[11px] leading-5 text-slate-400">Your account is used only to securely restore your saved learning progress.</p>
-        </section>
-      </main>
+              Sign in with Google
+            </>
+          )}
+        </button>
+      </div>
     </div>
   );
 }
@@ -218,52 +216,20 @@ function AppContent() {
      setCurrentView(path as any);
   }, [location.pathname, setCurrentView]);
 
-  React.useEffect(() => {
-    const metadata: Record<string, { title: string; description: string }> = {
-      '/paper-structure': {
-        title: 'A/L Technology Syllabus & Exam Score Predictor | Clora X',
-        description: 'Track Sri Lankan G.C.E. A/L SFT, ET and ICT syllabus progress and plan exam preparation lesson by lesson.',
-      },
-      '/past-papers': {
-        title: 'Sri Lanka A/L SFT, ET & ICT Past Papers | Clora X',
-        description: 'Open and organize A/L Technology SFT, ET and ICT past papers, model papers and marking-scheme resources.',
-      },
-      '/admission-predictor': {
-        title: 'A/L Technology Exam Score Predictor | Clora X',
-        description: 'Review SFT, ET and ICT practice scores and planning estimates from your completed work.',
-      },
-      '/clora-x': {
-        title: 'Clora X A/L Technology Learning Assistant',
-        description: 'Ask syllabus-grounded questions about SFT, ET, ICT lessons, past papers and your saved learning resources.',
-      },
-    };
-    const current = metadata[location.pathname] || {
-      title: 'Clora X | Sri Lanka A/L Technology SFT, ET & ICT',
-      description: 'Sinhala-first G.C.E. A/L Technology learning workspace for SFT, ET and ICT.',
-    };
-    const canonicalUrl = `${window.location.origin}${location.pathname}`;
-    document.title = current.title;
-    document.getElementById('app-description')?.setAttribute('content', current.description);
-    document.getElementById('app-canonical')?.setAttribute('href', canonicalUrl);
-    document.getElementById('app-og-title')?.setAttribute('content', current.title);
-    document.getElementById('app-og-description')?.setAttribute('content', current.description);
-    document.getElementById('app-og-url')?.setAttribute('content', canonicalUrl);
-  }, [location.pathname]);
-
   return (
-    <div className="relative min-h-screen bg-[var(--app-bg)] font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-950">
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 relative">
       <OnlineStatus />
       <ToastNotification />
       <AuthOverlay />
       <Sidebar />
-      <div className={cn("flex flex-col transition-[padding] duration-200", isChatRoute ? "h-[100dvh] overflow-hidden bg-white" : "min-h-screen bg-[var(--app-bg)]", isSidebarOpen ? "lg:pl-64" : "pl-0 lg:pl-[72px]")}>
+      <div className={cn("flex flex-col transition-all duration-300", isChatRoute ? "h-[100dvh] overflow-hidden bg-slate-50" : "min-h-screen bg-slate-50", isSidebarOpen ? "lg:pl-72" : "lg:pl-[72px] pl-0")}>
         <TopNav />
         <main
           className={cn(
             "relative w-full flex-1 flex flex-col min-h-0",
             isChatRoute
               ? "max-w-none p-0 overflow-hidden"
-              : "mx-auto max-w-[1440px] px-4 py-5 sm:px-6 sm:py-7 lg:px-8"
+              : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
           )}
         >
           <div className="relative flex h-full min-h-0 w-full flex-1 flex-col">
@@ -271,7 +237,7 @@ function AppContent() {
                 {user && isUserDataLoading && !hasHydratedUserData ? (
                   <PageSkeleton pathname={location.pathname} />
                 ) : (
-                <Routes location={location}>
+                <Routes location={location} key={location.pathname}>
                   <Route path="/" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="/paper-structure" element={<PaperStructureView />} />
                   <Route path="/question-marks" element={<Navigate to="/paper-structure" replace />} />

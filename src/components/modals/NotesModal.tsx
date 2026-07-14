@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { AudioLines, FileImage, FileText, Film, Link2, Pause, Play, UploadCloud, X } from "lucide-react";
 import { useApp } from "../../context/AppContext";
-import type { LessonResource, LessonResourceKind, LessonResourceStatus } from "../../types";
+import type { LessonResource, LessonResourceKind } from "../../types";
 import { auth } from "../../lib/firebase";
 import { apiFetch } from "../../lib/api";
 import {
@@ -13,6 +13,7 @@ import {
   type UploadTaskControls,
 } from "../../lib/clientStorageUpload";
 import { createAndUploadSecureVideo } from "../../lib/videoUpload";
+import { DocumentCover } from "../ui/DocumentCover";
 import { SecureVideoPlayer } from "../video/SecureVideoPlayer";
 
 type UploadTelemetry = UploadProgressSnapshot & {
@@ -58,35 +59,6 @@ function normalizeLegacyResource(resource: LessonResource): LessonResource {
   return { ...resource, mediaKind, mimeType: resource.mimeType || resource.type, sourceId: resource.sourceId || (!resource.url?.startsWith("http") ? resource.url : undefined) };
 }
 
-function normalizeMatchText(value: unknown) {
-  return String(value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-function normalizeVideoStatus(value: unknown): LessonResourceStatus {
-  const status = String(value || "uploaded").toLowerCase();
-  const supported: LessonResourceStatus[] = [
-    "uploading", "uploaded", "queued", "transcoding", "transcribing", "indexing", "ready", "failed",
-  ];
-  return supported.includes(status as LessonResourceStatus) ? status as LessonResourceStatus : "uploaded";
-}
-
-function videoToLessonResource(video: any): LessonResource {
-  return {
-    id: String(video.id),
-    videoId: String(video.id),
-    sourceId: video.sourceId ? String(video.sourceId) : undefined,
-    url: `video://${video.id}`,
-    title: String(video.title || "Lesson video"),
-    type: String(video.mimeType || "video/mp4"),
-    mimeType: String(video.mimeType || "video/mp4"),
-    mediaKind: "video",
-    resourceRole: "video",
-    status: normalizeVideoStatus(video.status),
-    sizeBytes: Number(video.sourceSizeBytes || 0) || undefined,
-    createdAt: String(video.createdAt || new Date().toISOString()),
-  };
-}
-
 function ResourceIcon({ kind }: { kind?: LessonResourceKind }) {
   const className = "h-5 w-5";
   if (kind === "video") return <Film className={`${className} text-violet-500`} />;
@@ -104,7 +76,6 @@ export function NotesModal() {
   const [isPaused, setIsPaused] = useState(false);
   const [telemetry, setTelemetry] = useState<UploadTelemetry | null>(null);
   const [playerResource, setPlayerResource] = useState<LessonResource | null>(null);
-  const [remoteVideos, setRemoteVideos] = useState<LessonResource[]>([]);
   const controlsRef = useRef<UploadTaskControls | null>(null);
   const uploadStartedAtRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -112,18 +83,10 @@ export function NotesModal() {
 
   const topic = modals.playlist.topic;
   const topicData = data[currentSubject]?.topics[topic];
-  const savedResources = useMemo(
+  const resources = useMemo(
     () => (topicData?.resources?.length ? topicData.resources : topicData?.videos || []).map(normalizeLegacyResource),
     [topicData?.resources, topicData?.videos],
   );
-  const resources = useMemo(() => {
-    const merged = new Map<string, LessonResource>();
-    [...savedResources, ...remoteVideos].forEach((resource) => {
-      const key = String(resource.videoId || resource.sourceId || resource.id || `${resource.title}-${resource.createdAt}`);
-      merged.set(key, { ...(merged.get(key) || {}), ...resource });
-    });
-    return Array.from(merged.values());
-  }, [savedResources, remoteVideos]);
 
   useEffect(() => {
     if (!modals.playlist.open) return;
@@ -169,34 +132,6 @@ export function NotesModal() {
     const unsubscribe = auth?.onAuthStateChanged?.(() => void resolveRole());
     return () => { active = false; unsubscribe?.(); };
   }, [modals.playlist.open]);
-
-  useEffect(() => {
-    if (!modals.playlist.open || videoPermission === "loading") return;
-    let active = true;
-    let interval = 0;
-    const loadLessonVideos = async () => {
-      try {
-        const endpoint = videoPermission === "allowed" ? "/api/admin/videos" : "/api/videos";
-        const response = await apiFetch(endpoint);
-        const payload = await response.json().catch(() => null);
-        if (!active || !response.ok || !Array.isArray(payload?.videos)) return;
-        const subject = normalizeMatchText(currentSubject);
-        const lesson = normalizeMatchText(topic);
-        setRemoteVideos(payload.videos
-          .filter((video: any) => normalizeMatchText(video.subject) === subject && normalizeMatchText(video.lesson) === lesson && video.status !== "archived")
-          .map(videoToLessonResource));
-      } catch (error) {
-        console.warn("Could not refresh lesson videos:", error);
-      }
-    };
-    void loadLessonVideos();
-    interval = window.setInterval(loadLessonVideos, 10_000);
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-      setRemoteVideos([]);
-    };
-  }, [modals.playlist.open, videoPermission, currentSubject, topic]);
 
   if (!modals.playlist.open) return null;
 
@@ -387,8 +322,8 @@ export function NotesModal() {
 
   return (
     <AnimatePresence>
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-3 sm:p-6">
-        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} transition={{ duration: 0.16 }} className="flex max-h-[92dvh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-3 backdrop-blur-sm sm:p-6">
+        <motion.div initial={{ opacity: 0, scale: 0.97, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 14 }} transition={{ type: "spring", damping: 28, stiffness: 320 }} className="flex max-h-[92dvh] w-full max-w-4xl flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white shadow-[0_28px_80px_rgba(15,23,42,0.22)]">
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-7">
             <div>
               <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">Lesson Resources</h2>
@@ -398,7 +333,7 @@ export function NotesModal() {
           </div>
 
           <div className="clora-scrollbar min-h-0 flex-1 overflow-y-auto bg-white p-4 sm:p-6">
-            <section className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5">
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_8px_28px_rgba(15,23,42,0.05)] sm:p-5">
               <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h3 className="text-xs font-black uppercase tracking-[0.14em] text-slate-700">Lesson files</h3>
@@ -411,7 +346,7 @@ export function NotesModal() {
               </div>
 
               {isUploading && telemetry && (
-                <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mt-4 overflow-hidden rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4">
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-black text-slate-800">{telemetry.fileName}</p>
@@ -419,7 +354,7 @@ export function NotesModal() {
                     </div>
                     <span className="text-lg font-black text-indigo-700">{Math.round(telemetry.progress * 100)}%</span>
                   </div>
-                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-slate-800 transition-[width] duration-300" style={{ width: `${Math.max(1, telemetry.progress * 100)}%` }} /></div>
+                  <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-indigo-100"><div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-[width] duration-300" style={{ width: `${Math.max(1, telemetry.progress * 100)}%` }} /></div>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
                     <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">Uploaded</span><strong className="text-slate-700">{formatBytes(telemetry.bytesTransferred)} / {formatBytes(telemetry.totalBytes)}</strong></div>
                     <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">Remaining</span><strong className="text-slate-700">{formatBytes(telemetry.remainingBytes)}</strong></div>
@@ -446,8 +381,12 @@ export function NotesModal() {
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     {resources.map((resource, index) => (
                       <div key={resource.id || resource.sourceId || `${resource.title}-${index}`} className="group flex min-w-0 items-center gap-2">
-                        <button type="button" onClick={() => void openResource(resource)} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition-colors hover:border-slate-300 hover:bg-slate-50">
-                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50"><ResourceIcon kind={resource.mediaKind} /></span>
+                        <button type="button" onClick={() => void openResource(resource)} className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md">
+                          {resource.mediaKind === "pdf" ? (
+                            <DocumentCover title={resource.title} compact />
+                          ) : (
+                            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100"><ResourceIcon kind={resource.mediaKind} /></span>
+                          )}
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-sm font-black text-slate-800 group-hover:text-indigo-700">{resource.title}</span>
                             <span className="mt-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">

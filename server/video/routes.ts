@@ -9,11 +9,9 @@ import {
 } from "../firebase/admin";
 import {
   canUserPlayVideo,
+  createDirectPlaybackUrl,
   createSignedPlaybackCookie,
-  hashPlaybackToken,
-  playbackTokenMatches,
   refreshTranscodeStatus,
-  resolveVideoByteRange,
   safeVideoFileName,
   startTranscode,
   validateUploadedVideo,
@@ -392,10 +390,7 @@ videoRoutes.get("/admin/videos", async (req, res) => {
     await verifyVideoAppCheck(req);
     await requireAdmin(req);
     const snapshot = await getAdminDb().collection("videos").orderBy("createdAt", "desc").limit(100).get();
-    const videos = await Promise.all(snapshot.docs.map((doc: any) =>
-      refreshTranscodeStatus({ id: doc.id, ...doc.data() } as VideoDocument),
-    ));
-    res.json({ ok: true, videos: videos.map(publicVideo) });
+    res.json({ ok: true, videos: snapshot.docs.map((doc: any) => publicVideo({ id: doc.id, ...doc.data() } as VideoDocument)) });
   } catch (error: any) {
     res.status(400).json({ ok: false, code: "VIDEOS_LIST_FAILED", message: error.message });
   }
@@ -417,10 +412,8 @@ videoRoutes.get("/videos", async (req, res) => {
     await verifyVideoAppCheck(req);
     const user = await requireUser(req);
     const snapshot = await getAdminDb().collection("videos").where("isPublished", "==", true).limit(100).get();
-    const refreshed = await Promise.all(snapshot.docs.map((doc: any) =>
-      refreshTranscodeStatus({ id: doc.id, ...doc.data() } as VideoDocument),
-    ));
-    const videos = refreshed
+    const videos = snapshot.docs
+      .map((doc: any) => ({ id: doc.id, ...doc.data() } as VideoDocument))
       .filter((video: VideoDocument) => canUserPlayVideo(video, user))
       .map(publicVideo);
     res.json({ ok: true, videos });
@@ -441,71 +434,6 @@ videoRoutes.get("/videos/:videoId", async (req, res) => {
   }
 });
 
-videoRoutes.get("/videos/:videoId/stream", async (req, res) => {
-  try {
-    const sessionId = String(req.query.sessionId || "").trim();
-    const token = String(req.query.token || "").trim();
-    if (!sessionId || !token) return res.status(403).end();
-
-    const sessionSnapshot = await getAdminDb().collection("videoPlaybackSessions").doc(sessionId).get();
-    const session = sessionSnapshot.data();
-    const requestUserAgentHash = crypto
-      .createHash("sha256")
-      .update(String(req.header("user-agent") || "unknown"))
-      .digest("hex");
-    if (
-      !sessionSnapshot.exists
-      || session?.status !== "active"
-      || session?.videoId !== req.params.videoId
-      || Number(session?.expiresAtMs || 0) <= Date.now()
-      || session?.userAgentHash !== requestUserAgentHash
-      || !playbackTokenMatches(token, String(session?.streamTokenHash || ""))
-    ) {
-      return res.status(403).end();
-    }
-
-    const video = await loadVideo(req.params.videoId);
-    if (!video.allowPlayback || video.status !== "ready") return res.status(403).end();
-
-    const file = getAdminBucketByName(video.inputBucket).file(video.inputObjectPath);
-    const [metadata] = await file.getMetadata();
-    const totalBytes = Number(metadata.size || video.sourceSizeBytes || 0);
-    let range;
-    try {
-      range = resolveVideoByteRange(req.header("range"), totalBytes);
-    } catch (error: any) {
-      res.setHeader("Content-Range", `bytes */${totalBytes || 0}`);
-      return res.status(String(error?.message).includes("RANGE") ? 416 : 400).end();
-    }
-
-    res.status(206);
-    res.setHeader("Accept-Ranges", "bytes");
-    res.setHeader("Content-Range", `bytes ${range.start}-${range.end}/${totalBytes}`);
-    res.setHeader("Content-Length", String(range.length));
-    res.setHeader("Content-Type", metadata.contentType || video.mimeType || "video/mp4");
-    res.setHeader("Content-Disposition", `inline; filename="${safeVideoFileName(video.title || "lesson-video")}.mp4"`);
-    res.setHeader("Cache-Control", "private, no-store, no-cache, max-age=0");
-    res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-    res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
-    res.setHeader("X-Playback-Session", sessionId);
-    res.flushHeaders();
-
-    const mediaStream = file.createReadStream({ start: range.start, end: range.end });
-    mediaStream.on("error", () => {
-      if (!res.headersSent) res.status(502);
-      res.end();
-    });
-    req.on("aborted", () => mediaStream.destroy());
-    res.on("close", () => {
-      if (!res.writableEnded) mediaStream.destroy();
-    });
-    mediaStream.pipe(res);
-  } catch {
-    if (!res.headersSent) res.status(403);
-    res.end();
-  }
-});
-
 videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
   try {
     await verifyVideoAppCheck(req);
@@ -517,48 +445,29 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
     const active = await db.collection("videoPlaybackSessions")
       .where("userId", "==", user.uid)
       .where("status", "==", "active")
-      .limit(25)
+      .limit(Math.max(1, video.maxConcurrentSessions))
       .get();
     const now = Date.now();
-    const deviceId = String(req.header("X-Device-ID") || "unknown").slice(0, 160);
-    const expiredOrSameDevice = active.docs.filter((document: any) => {
-      const session = document.data();
-      return Number(session.expiresAtMs || 0) <= now
-        || (session.videoId === video.id && session.deviceId === deviceId);
-    });
-    if (expiredOrSameDevice.length) {
-      const cleanup = db.batch();
-      expiredOrSameDevice.forEach((document: any) => cleanup.set(document.ref, { status: "revoked", endedAt: new Date(now).toISOString() }, { merge: true }));
-      await cleanup.commit();
-    }
-    const liveSessions = active.docs.filter((document: any) => {
-      const session = document.data();
-      return session.videoId === video.id
-        && session.deviceId !== deviceId
-        && Number(session.expiresAtMs || 0) > now;
-    });
+    const liveSessions = active.docs.filter((doc: any) => Number(doc.data().expiresAtMs || 0) > now);
     if (liveSessions.length >= video.maxConcurrentSessions) {
       return res.status(409).json({ ok: false, code: "PLAYBACK_SESSION_LIMIT", message: "This account already has an active playback session." });
     }
 
-    const cdnConfigured = Boolean(env.VIDEO_CDN_BASE_URL && env.VIDEO_CDN_KEY_NAME && env.VIDEO_CDN_SIGNING_KEY);
-    const directPlayback = !video.transcoderJobName || (video as any).playbackMode === "direct" || !cdnConfigured;
+    const directPlayback = !video.transcoderJobName || (video as any).playbackMode === "direct";
     const signed = directPlayback ? null : createSignedPlaybackCookie(video);
     const sessionRef = db.collection("videoPlaybackSessions").doc();
-    const streamToken = directPlayback ? crypto.randomBytes(32).toString("base64url") : null;
     const expiresAtMs = now + env.VIDEO_SESSION_TTL_SECONDS * 1000;
     await sessionRef.set({
       sessionId: sessionRef.id,
       userId: user.uid,
       videoId: video.id,
-      deviceId,
+      deviceId: String(req.header("X-Device-ID") || "unknown").slice(0, 160),
       userAgentHash: crypto.createHash("sha256").update(String(req.header("user-agent") || "unknown")).digest("hex"),
       createdAt: new Date(now).toISOString(),
       lastHeartbeatAt: new Date(now).toISOString(),
       expiresAt: new Date(expiresAtMs).toISOString(),
       expiresAtMs,
       status: "active",
-      streamTokenHash: streamToken ? hashPlaybackToken(streamToken) : null,
     });
 
     if (signed) {
@@ -571,17 +480,15 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
         maxAge: env.VIDEO_COOKIE_TTL_SECONDS * 1000,
       });
     }
-    const streamUrl = streamToken
-      ? `/api/videos/${encodeURIComponent(video.id)}/stream?sessionId=${encodeURIComponent(sessionRef.id)}&token=${encodeURIComponent(streamToken)}`
-      : null;
+    const direct = directPlayback ? await createDirectPlaybackUrl(video) : null;
     res.setHeader("Cache-Control", "no-store");
     res.json({
       ok: true,
       sessionId: sessionRef.id,
-      playbackMode: streamUrl ? "direct" : "hls",
-      streamUrl,
+      playbackMode: direct ? "direct" : "hls",
+      directUrl: direct?.url,
       manifestUrl: signed?.manifestUrl,
-      expiresAt: new Date(expiresAtMs).toISOString(),
+      expiresAt: direct?.expiresAt || signed?.expiresAt,
       watermark: { userId: user.uid, label: user.email || user.uid },
     });
   } catch (error: any) {

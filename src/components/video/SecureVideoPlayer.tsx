@@ -9,7 +9,7 @@ type SessionResponse = {
   ok: true;
   sessionId: string;
   playbackMode?: "direct" | "hls";
-  streamUrl?: string;
+  directUrl?: string;
   manifestUrl?: string;
   watermark: { userId: string; label: string };
 };
@@ -47,9 +47,6 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
     let heartbeat: number | undefined;
     const video = videoRef.current;
     if (!video) return;
-    video.setAttribute("controlsList", "nodownload noremoteplayback");
-    video.disablePictureInPicture = true;
-    video.setAttribute("disableRemotePlayback", "true");
 
     const endSession = () => {
       const sessionId = sessionIdRef.current;
@@ -74,8 +71,8 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
         const mode = session.playbackMode === "hls" ? "hls" : "direct";
         setPlaybackMode(mode);
 
-        if (mode === "direct" && session.streamUrl) {
-          video.src = session.streamUrl;
+        if (mode === "direct" && session.directUrl) {
+          video.src = session.directUrl;
           video.load();
         } else {
           if (!session.manifestUrl) throw new Error("The secure video source is unavailable.");
@@ -97,7 +94,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
 
         if (disposed) return;
         plyrRef.current = new Plyr(video, {
-          controls: ["play-large", "play", "progress", "current-time", "duration", "mute", "volume", "settings", "fullscreen"],
+          controls: ["play-large", "play", "progress", "current-time", "duration", "mute", "volume", "settings", "pip", "fullscreen"],
           settings: ["speed"],
           speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
         });
@@ -124,10 +121,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
         localStorage.setItem(`clora_video_resume_${videoId}`, String(video.currentTime));
       }
     };
-    const blockMediaMenu = (event: Event) => event.preventDefault();
     video.addEventListener("pause", saveProgress);
-    video.addEventListener("contextmenu", blockMediaMenu);
-    video.addEventListener("dragstart", blockMediaMenu);
     window.addEventListener("pagehide", endSession);
     void boot();
 
@@ -135,8 +129,6 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
       disposed = true;
       if (heartbeat) window.clearInterval(heartbeat);
       video.removeEventListener("pause", saveProgress);
-      video.removeEventListener("contextmenu", blockMediaMenu);
-      video.removeEventListener("dragstart", blockMediaMenu);
       window.removeEventListener("pagehide", endSession);
       saveProgress();
       endSession();

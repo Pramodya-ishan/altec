@@ -101,6 +101,8 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   }
 }
 
+const clientId = (import.meta as any).env.VITE_GOOGLE_CLIENT_ID || '100000000000-dummy.apps.googleusercontent.com';
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     

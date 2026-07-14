@@ -42,15 +42,6 @@ function validateVercelEnvironment() {
     console.warn("[VERCEL_ENV] ADMIN_EMAILS/SYLLABUS_OWNER_EMAIL is not configured; lesson video upload will be unavailable to the project owner.");
   }
 
-  if (isVercel) {
-    const googleClientId = process.env.VITE_GOOGLE_CLIENT_ID?.trim() || "";
-    if (!/^\d+-[a-z0-9_-]+\.apps\.googleusercontent\.com$/i.test(googleClientId)) {
-      throw new GoogleCredentialConfigurationError(
-        "VITE_GOOGLE_CLIENT_ID must contain a valid Google OAuth 2.0 Web client ID for production sign-in",
-      );
-    }
-  }
-
   console.log(`Validated Google service-account configuration for project ${credential.project_id}.`);
 }
 
@@ -61,6 +52,7 @@ try {
   console.error("\n[VERCEL_ENV] Firebase/Google credential validation failed:");
   console.error(`  ${detail}`);
   console.error("  Fix: Vercel Project Settings -> Environment Variables -> GOOGLE_APPLICATION_CREDENTIALS_JSON");
-  console.error("  Replace the placeholder with the complete Firebase service-account JSON, then redeploy.\n");
+  console.error("  Set it to the complete Firebase service-account JSON or one-line Base64 of that JSON, then redeploy.");
+  console.error("  Do not use a filename, partial private key, or placeholder.\n");
   process.exit(1);
 }

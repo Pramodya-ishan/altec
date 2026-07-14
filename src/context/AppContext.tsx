@@ -4,53 +4,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useRe
 import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
 import { isFirebaseEnabled, db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, deleteDoc } from 'firebase/firestore';
-import { GoogleAuthProvider, signInWithCredential, signInWithPopup, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, setPersistence, browserLocalPersistence } from 'firebase/auth';
-
-const GOOGLE_IDENTITY_SCRIPT = 'https://accounts.google.com/gsi/client';
-
-function loadGoogleIdentityServices(): Promise<void> {
-  if ((window as any).google?.accounts?.oauth2) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(`script[src="${GOOGLE_IDENTITY_SCRIPT}"]`);
-    const script = existing || document.createElement('script');
-    const cleanup = () => {
-      script.removeEventListener('load', onLoad);
-      script.removeEventListener('error', onError);
-    };
-    const onLoad = () => {
-      cleanup();
-      (window as any).google?.accounts?.oauth2 ? resolve() : reject(new Error('Google Identity Services did not initialize.'));
-    };
-    const onError = () => {
-      cleanup();
-      reject(new Error('Could not load Google Identity Services.'));
-    };
-    script.addEventListener('load', onLoad, { once: true });
-    script.addEventListener('error', onError, { once: true });
-    if (!existing) {
-      script.src = GOOGLE_IDENTITY_SCRIPT;
-      script.async = true;
-      script.defer = true;
-      document.head.appendChild(script);
-    }
-  });
-}
-
-async function requestGoogleAccessToken(clientId: string): Promise<string> {
-  await loadGoogleIdentityServices();
-  return new Promise((resolve, reject) => {
-    const client = (window as any).google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: 'openid email profile',
-      callback: (response: { access_token?: string; error?: string; error_description?: string }) => {
-        if (response?.access_token) resolve(response.access_token);
-        else reject(new Error(response?.error_description || response?.error || 'Google did not return an access token.'));
-      },
-      error_callback: (error: { type?: string }) => reject(new Error(error?.type || 'Google sign-in window failed.')),
-    });
-    client.requestAccessToken({ prompt: 'select_account' });
-  });
-}
+import { GoogleAuthProvider, signInWithCredential, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 
 type ModalsState = {
   playlist: { open: boolean; topic: string };
@@ -207,7 +161,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [localFriends, setLocalFriends] = useState<string[]>(['dilshan@alblueprint.com', 'amara@alblueprint.com']);
 
   const [adminTargetEmail, setAdminTargetEmailState] = useState<string | null>(null);
-  const hydratedAuthUidRef = useRef<string | null>(null);
 
   const fetchProfile = async (rawEmail: string) => {
     const email = rawEmail.toLowerCase();
@@ -246,7 +199,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setProfile({
       email,
       username: email.split('@')[0],
-      picture: user?.picture || '',
+      picture: user?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
       bio: 'Student on A/L Tech Blueprint journey!',
       updatedAt: new Date().toISOString()
     });
@@ -289,74 +242,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
     } catch (e) {
       console.error("Express save profile failed: ", e);
-    }
-  };
-
-  const establishFirebaseSession = async (firebaseUser: any, accessToken = '') => {
-    const email = String(firebaseUser?.email || '').trim().toLowerCase();
-    if (!email || firebaseUser?.isAnonymous) return;
-
-    const localUser: User = {
-      email,
-      name: firebaseUser.displayName || email.split('@')[0],
-      picture: firebaseUser.photoURL || '',
-      token: accessToken || localStorage.getItem('google_access_token') || '',
-      emailVerified: firebaseUser.emailVerified === true,
-    };
-    let cachedProfile: Partial<UserProfile> = {};
-    try {
-      cachedProfile = JSON.parse(localStorage.getItem('email_user_profile') || '{}');
-    } catch {
-      localStorage.removeItem('email_user_profile');
-    }
-    const initialProfile: UserProfile = {
-      ...cachedProfile,
-      email,
-      username: cachedProfile.username || localUser.name,
-      picture: firebaseUser.photoURL || cachedProfile.picture || '',
-      bio: cachedProfile.bio || '',
-      updatedAt: cachedProfile.updatedAt || new Date().toISOString(),
-      isVerified: firebaseUser.emailVerified === true,
-    };
-
-    setUser(localUser);
-    setProfile(initialProfile);
-    localStorage.setItem('email_user_session', JSON.stringify(localUser));
-    localStorage.setItem('email_user_profile', JSON.stringify(initialProfile));
-
-    const savedData = localStorage.getItem(`student_progress_data_${email}`);
-    if (savedData) {
-      try { setData(JSON.parse(savedData)); } catch { localStorage.removeItem(`student_progress_data_${email}`); }
-    }
-
-    // Authentication must not wait on profile or progress network requests.
-    setIsAuthLoading(false);
-    void fetchUserDataFromDB(email, { showLoading: !savedData });
-    void fetchYoutubeCookies(email);
-
-    try {
-      const idToken = await firebaseUser.getIdToken();
-      const response = await apiFetch('/api/auth/session', {
-        method: 'POST',
-        body: JSON.stringify({ idToken, profileData: initialProfile }),
-      });
-      const payload = await response.json().catch(() => null);
-      if (response.ok && payload?.user) {
-        const nextUser = { ...localUser, ...payload.user, token: localUser.token };
-        const nextProfile = {
-          ...initialProfile,
-          ...(payload.profile || {}),
-          picture: payload.profile?.picture || localUser.picture || '',
-        };
-        setUser(nextUser);
-        setProfile(nextProfile);
-        localStorage.setItem('email_user_session', JSON.stringify(nextUser));
-        localStorage.setItem('email_user_profile', JSON.stringify(nextProfile));
-      }
-    } catch (error) {
-      // Firebase bearer-token APIs remain usable even when optional profile
-      // synchronization is temporarily unavailable.
-      console.warn('Background session profile sync failed:', error);
     }
   };
 
@@ -781,66 +666,139 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    let active = true;
     let unsubscribeAutoAuth = () => {};
-    const authDeadline = window.setTimeout(() => {
-      if (active) setIsAuthLoading(false);
-    }, 3500);
-
-    const restoreLegacySession = () => {
-      const savedUserSession = localStorage.getItem('email_user_session');
-      if (!savedUserSession) return false;
-      try {
-        const parsedUser = JSON.parse(savedUserSession);
-        if (!parsedUser?.email) return false;
-        setUser(parsedUser);
-        const savedProfile = localStorage.getItem('email_user_profile');
-        if (savedProfile) setProfile(JSON.parse(savedProfile));
-        const savedData = localStorage.getItem(`student_progress_data_${parsedUser.email.toLowerCase()}`);
-        if (savedData) setData(JSON.parse(savedData));
-        setIsAuthLoading(false);
-        void fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData });
-        return true;
-      } catch {
-        localStorage.removeItem('email_user_session');
-        localStorage.removeItem('email_user_profile');
-        return false;
-      }
-    };
-
+    
     if (isFirebaseEnabled && auth) {
-      void setPersistence(auth, browserLocalPersistence).catch((error) => {
-        console.warn('Could not enable persistent Firebase authentication:', error);
+      void getRedirectResult(auth).then((redirectResult) => {
+        if (!redirectResult) return;
+        const credential = GoogleAuthProvider.credentialFromResult(redirectResult);
+        if (credential?.accessToken) localStorage.setItem('google_access_token', credential.accessToken);
+      }).catch((error) => {
+        console.error("Google Redirect Login Error:", error);
+        showNotification("Google login could not be completed. Please try again.", "error");
       });
-      unsubscribeAutoAuth = onAuthStateChanged(auth, (firebaseUser) => {
-        window.clearTimeout(authDeadline);
-        if (!active) return;
-        if (firebaseUser && !firebaseUser.isAnonymous) {
-          if (hydratedAuthUidRef.current !== firebaseUser.uid) {
-            hydratedAuthUidRef.current = firebaseUser.uid;
-            void establishFirebaseSession(firebaseUser);
-          } else {
+      unsubscribeAutoAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+        if (firebaseUser) {
+          if (firebaseUser.isAnonymous) {
+            const savedUserSession = localStorage.getItem('email_user_session');
+            if (savedUserSession) {
+               try {
+                  const parsedUser = JSON.parse(savedUserSession);
+                  setUser(parsedUser);
+                  const savedProfile = localStorage.getItem('email_user_profile');
+                  if (savedProfile) setProfile(JSON.parse(savedProfile));
+                  
+                  const savedData = localStorage.getItem(`student_progress_data_${parsedUser.email.toLowerCase()}`);
+                  if (savedData) {
+                     try { setData(JSON.parse(savedData)); } catch(e) {}
+                  }
+
+                  setIsAuthLoading(false);
+                  void fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData });
+                  void fetchYoutubeCookies(parsedUser.email);
+               } catch(e) {}
+            }
             setIsAuthLoading(false);
+            return;
           }
-          return;
+          const savedToken = localStorage.getItem('google_access_token') || '';
+          setUser({
+            email: firebaseUser.email || '',
+            name: firebaseUser.displayName || '',
+            picture: firebaseUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(firebaseUser.email || '')}`,
+            token: savedToken,
+            emailVerified: firebaseUser.emailVerified
+          });
+
+          const savedData = localStorage.getItem(`student_progress_data_${(firebaseUser.email || '').toLowerCase()}`);
+          if (savedData) {
+             try { setData(JSON.parse(savedData)); } catch(e) {}
+          }
+
+          setIsAuthLoading(false);
+          void fetchUserDataFromDB(firebaseUser.email || '', { showLoading: !savedData });
+          setTimeout(() => {
+            fetchYoutubeCookies(firebaseUser.email || '').catch(() => {});
+          }, 1500);
+          setIsAuthLoading(false);
+        } else {
+          // If Firebase has no user but we have local fallback, we can try
+          const savedUserSession = localStorage.getItem('email_user_session');
+          if (savedUserSession) {
+             try {
+                const parsedUser = JSON.parse(savedUserSession);
+                setUser(parsedUser);
+                const savedProfile = localStorage.getItem('email_user_profile');
+                if (savedProfile) setProfile(JSON.parse(savedProfile));
+                
+                const savedData = localStorage.getItem(`student_progress_data_${parsedUser.email.toLowerCase()}`);
+                if (savedData) {
+                   try { setData(JSON.parse(savedData)); } catch(e) {}
+                }
+
+                try {
+                  await signInAnonymously(auth);
+                } catch(e) {}
+                
+                setIsAuthLoading(false);
+                void fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData });
+                setTimeout(() => {
+                  fetchYoutubeCookies(parsedUser.email).catch(() => {});
+                }, 1500);
+             } catch(e) {}
+          } else {
+             const savedToken = localStorage.getItem('google_access_token');
+             if (savedToken) {
+               await fetchUserInfo(savedToken);
+             }
+          }
+          setIsAuthLoading(false);
         }
-        if (firebaseUser?.isAnonymous && restoreLegacySession()) return;
-        hydratedAuthUidRef.current = null;
-        setUser(null);
-        setIsAuthLoading(false);
       });
-    } else if (!restoreLegacySession()) {
-      setIsAuthLoading(false);
+    } else {
+      // Offline mode
+      const savedUserSession = localStorage.getItem('email_user_session');
+      const savedUserProfile = localStorage.getItem('email_user_profile');
+      
+      if (savedUserSession && savedUserProfile) {
+        try {
+          const parsedUser = JSON.parse(savedUserSession);
+          const parsedProfile = JSON.parse(savedUserProfile);
+          setUser(parsedUser);
+          setProfile(parsedProfile);
+          
+          const savedData = localStorage.getItem(`student_progress_data_${parsedUser.email.toLowerCase()}`);
+          if (savedData) {
+             try { setData(JSON.parse(savedData)); } catch(e) {}
+          }
+
+          // Fetch latest details in the background
+          fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData }).then(() => {
+            setTimeout(() => {
+              fetchYoutubeCookies(parsedUser.email).catch(() => {});
+            }, 1500);
+          });
+          setIsAuthLoading(false);
+        } catch (e) {
+          console.error("Local session parsing failed:", e);
+          setIsAuthLoading(false);
+        }
+      } else {
+        const savedToken = localStorage.getItem('google_access_token');
+        if (savedToken) {
+           fetchUserInfo(savedToken);
+        } else {
+           setIsAuthLoading(false);
+        }
+      }
     }
 
     const localCookies = localStorage.getItem('youtube_bypass_cookies');
-    if (localCookies) setYoutubeCookies(localCookies);
+    if (localCookies) {
+        setYoutubeCookies(localCookies);
+    }
 
-    return () => {
-      active = false;
-      window.clearTimeout(authDeadline);
-      unsubscribeAutoAuth();
-    };
+    return () => unsubscribeAutoAuth();
   }, [isFirebaseEnabled]);
 
   
@@ -848,42 +806,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsAuthLoading(true);
     try {
       if (isFirebaseEnabled && auth) {
-        await setPersistence(auth, browserLocalPersistence);
-        const clientId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
-        let result;
-        let accessToken = '';
-        if (clientId) {
-          accessToken = await requestGoogleAccessToken(clientId);
-          const credential = GoogleAuthProvider.credential(null, accessToken);
-          result = await signInWithCredential(auth, credential);
-        } else if (import.meta.env.DEV) {
-          const provider = new GoogleAuthProvider();
-          provider.setCustomParameters({ prompt: 'select_account' });
-          result = await signInWithPopup(auth, provider);
-          accessToken = GoogleAuthProvider.credentialFromResult(result)?.accessToken || '';
-        } else {
-          const configurationError = new Error('VITE_GOOGLE_CLIENT_ID is not configured for production Google sign-in.');
-          (configurationError as any).code = 'auth/missing-google-client-id';
-          throw configurationError;
+        const provider = new GoogleAuthProvider();
+        
+        // Remove unnecessary sensitive scopes and keep only standard ones
+        provider.addScope('openid');
+        provider.addScope('https://www.googleapis.com/auth/userinfo.email');
+        provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
+        
+        provider.setCustomParameters({ prompt: 'select_account' });
+        if (import.meta.env.PROD) {
+          await signInWithRedirect(auth, provider);
+          return;
         }
+        const result = await signInWithPopup(auth, provider);
+        
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        const accessToken = credential?.accessToken;
         if (accessToken) {
           localStorage.setItem('google_access_token', accessToken);
         }
 
-        hydratedAuthUidRef.current = result.user.uid;
-        await establishFirebaseSession(result.user, accessToken);
-        showNotification("Signed in successfully.", "success");
+        const idToken = await result.user.getIdToken();
+        const res = await apiFetch('/api/auth/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken })
+        });
+        const resData = await res.json();
+        if (res.ok) {
+          setUser({ ...resData.user, token: accessToken || resData.user.token });
+          setProfile(resData.profile);
+          localStorage.setItem('email_user_session', JSON.stringify({ ...resData.user, token: accessToken || resData.user.token }));
+          localStorage.setItem('email_user_profile', JSON.stringify(resData.profile));
+          const savedData = localStorage.getItem(`student_progress_data_${resData.user.email.toLowerCase()}`);
+          if (savedData) {
+             try { setData(JSON.parse(savedData)); } catch(e) {}
+          }
+          await fetchUserDataFromDB(resData.user.email);
+          await fetchYoutubeCookies(resData.user.email);
+          showNotification("Successfully logged in with Google!", "success");
+        } else {
+          showNotification(resData.error || "Login failed", "error");
+        }
       } else {
          showNotification("Firebase is required for Google login", "error");
       }
     } catch (error: any) {
       console.error("Google Popup Login Error:", error);
-      const message = error?.code === 'auth/missing-google-client-id'
-        ? "Google sign-in is not configured. Add VITE_GOOGLE_CLIENT_ID in Vercel and redeploy."
-        : error?.code === 'auth/popup-closed-by-user' || /popup_closed|cancelled/i.test(String(error?.message || ''))
-          ? "Sign-in was closed before it finished."
-          : "Google sign-in failed. Verify the OAuth JavaScript origin for this site.";
-      showNotification(message, "error");
+      showNotification("Google login failed or was cancelled.", "error");
     }
     setIsAuthLoading(false);
   };
@@ -947,7 +917,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('google_access_token');
     localStorage.removeItem('email_user_session');
     localStorage.removeItem('email_user_profile');
-    hydratedAuthUidRef.current = null;
     setUser(null);
     setData(defaultData);
     setYoutubeCookies('');
@@ -962,42 +931,63 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const showLoading = options.showLoading !== false;
       if (showLoading) setIsUserDataLoading(true);
       try {
-         // The authenticated UID document is canonical. Reading the legacy
-         // email document first could restore stale progress and make newly
-         // uploaded lesson videos disappear on the next refresh.
+         // Try fetching from Firestore first if enabled
+         if (isFirebaseEnabled && db) {
+            try {
+               
+               if (auth?.currentUser && auth.currentUser.email && auth.currentUser.email.toLowerCase() !== email) {
+                   console.warn("Skipping direct firestore read because auth.currentUser.email does not match requested email");
+                   return;
+               }
+               const docRef = doc(db, 'users', email, 'progress', 'data');
+               const docSnap = await getDoc(docRef);
+               if (docSnap.exists()) {
+                  const docData = docSnap.data();
+                  if (docData && docData.data) {
+                     setData(docData.data);
+                     localStorage.setItem(`student_progress_data_${email}`, JSON.stringify(docData.data));
+                     if (import.meta.env.DEV) {
+                       console.info("Loaded student data from Firebase Firestore successfully");
+                     }
+                     
+                     // Keep the initial screen responsive; this mirror write does not
+                     // need to block the Firestore data already rendered above.
+                     void apiFetch('/api/data', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: email, data: docData.data })
+                     }).catch((e) => {
+                       console.error('Failed to sync loaded Firestore data to Express backend', e);
+                     });
+                     return;
+                  }
+               }
+            } catch (fsErr: any) {
+               console.warn("Failed to read progress from Firestore, falling back to local DB:", fsErr);
+            }
+         }
+
          const res = await apiFetch(`/api/data?email=${encodeURIComponent(email)}`);
          if (res.ok) {
              const result = await res.json();
              if (result.data) {
                  setData(result.data);
                  localStorage.setItem(`student_progress_data_${email}`, JSON.stringify(result.data));
+                 
+                 // Sync Express data back to Firebase so it's not lost
+                 if (isFirebaseEnabled && db) {
+                    try {
+                       const docRef = doc(db, 'users', email, 'progress', 'data');
+                       await setDoc(docRef, {
+                          email: email,
+                          data: result.data,
+                          updatedAt: new Date().toISOString()
+                       }, { merge: true });
+                    } catch(e) {}
+                 }
+                 
                  return;
              }
-         }
-
-         // Direct Firestore is an offline/server-failure fallback. Prefer UID,
-         // then read the old email path for accounts created by earlier builds.
-         if (isFirebaseEnabled && db && auth?.currentUser) {
-            try {
-               if (auth.currentUser.email && auth.currentUser.email.toLowerCase() !== email) {
-                 throw new Error("AUTH_EMAIL_MISMATCH");
-               }
-               const references = [
-                 doc(db, 'users', auth.currentUser.uid, 'progress', 'data'),
-                 doc(db, 'users', email, 'progress', 'data'),
-               ];
-               for (const reference of references) {
-                 const snapshot = await getDoc(reference);
-                 const fallbackData = snapshot.exists() ? snapshot.data()?.data : null;
-                 if (fallbackData) {
-                   setData(fallbackData);
-                   localStorage.setItem(`student_progress_data_${email}`, JSON.stringify(fallbackData));
-                   return;
-                 }
-               }
-            } catch (fsErr) {
-               console.warn("Direct Firestore progress fallback failed:", fsErr);
-            }
          }
 
          // Fallback to local storage if both failed or returned no data
@@ -1005,6 +995,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
          if (savedData) {
             try {
                setData(JSON.parse(savedData));
+               console.log("Successfully restored student progress from local storage fallback");
             } catch(e) {}
          }
       } catch (e) {

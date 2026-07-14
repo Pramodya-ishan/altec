@@ -190,6 +190,9 @@ async function runTests() {
 
     const parsed = parseGoogleServiceAccountJson(JSON.stringify(serviceAccount));
     const doubleEncoded = parseGoogleServiceAccountJson(JSON.stringify(JSON.stringify(serviceAccount)));
+    const base64Encoded = parseGoogleServiceAccountJson(Buffer.from(JSON.stringify(serviceAccount)).toString("base64"));
+    const fenced = parseGoogleServiceAccountJson(`\`\`\`json\n${JSON.stringify(serviceAccount)}\n\`\`\``);
+    const assignment = parseGoogleServiceAccountJson(`GOOGLE_APPLICATION_CREDENTIALS_JSON=${JSON.stringify(serviceAccount)}`);
     let placeholderRejected = false;
     try {
       parseGoogleServiceAccountJson("PASTE_SERVICE_ACCOUNT_JSON_HERE");
@@ -200,6 +203,9 @@ async function runTests() {
     if (
       parsed.project_id === serviceAccount.project_id
       && doubleEncoded.client_email === serviceAccount.client_email
+      && base64Encoded.client_email === serviceAccount.client_email
+      && fenced.project_id === serviceAccount.project_id
+      && assignment.project_id === serviceAccount.project_id
       && placeholderRejected
     ) {
       logTest("Strict Google service-account parsing", true);

@@ -57,14 +57,6 @@ export type VideoDocument = {
   playbackMode?: "direct" | "hls";
 };
 
-export const VIDEO_PROXY_CHUNK_BYTES = 8 * 1024 * 1024;
-
-export type VideoByteRange = {
-  start: number;
-  end: number;
-  length: number;
-};
-
 const QUALITY_LADDER = [
   { key: "144p", width: 256, height: 144, bitrate: 180_000 },
   { key: "240p", width: 426, height: 240, bitrate: 300_000 },
@@ -258,42 +250,6 @@ function base64Url(input: Buffer | string) {
   return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-export function hashPlaybackToken(token: string) {
-  return crypto.createHash("sha256").update(token).digest("hex");
-}
-
-export function playbackTokenMatches(token: string, expectedHash: string) {
-  if (!token || !expectedHash) return false;
-  const actual = Buffer.from(hashPlaybackToken(token), "hex");
-  const expected = Buffer.from(expectedHash, "hex");
-  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
-}
-
-export function resolveVideoByteRange(
-  rangeHeader: string | undefined,
-  totalBytes: number,
-  maxChunkBytes = VIDEO_PROXY_CHUNK_BYTES,
-): VideoByteRange {
-  if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0) throw new Error("VIDEO_SIZE_INVALID");
-  const cap = Math.max(1, Math.min(maxChunkBytes, totalBytes));
-  let start = 0;
-  let requestedEnd = totalBytes - 1;
-
-  if (rangeHeader) {
-    const match = /^bytes=(\d+)-(\d*)$/i.exec(rangeHeader.trim());
-    if (!match) throw new Error("VIDEO_RANGE_INVALID");
-    start = Number(match[1]);
-    requestedEnd = match[2] ? Number(match[2]) : totalBytes - 1;
-  }
-
-  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start < 0 || requestedEnd < start || start >= totalBytes) {
-    throw new Error("VIDEO_RANGE_UNSATISFIABLE");
-  }
-
-  const end = Math.min(requestedEnd, totalBytes - 1, start + cap - 1);
-  return { start, end, length: end - start + 1 };
-}
-
 function decodeSigningKey(value: string) {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
   const padding = normalized.length % 4 ? "=".repeat(4 - (normalized.length % 4)) : "";
@@ -314,6 +270,18 @@ export function createSignedPlaybackCookie(video: VideoDocument) {
     path: `/videos/${video.id}/versions/${video.version}/hls/`,
     expiresAt: new Date(expires * 1000).toISOString(),
   };
+}
+
+export async function createDirectPlaybackUrl(video: VideoDocument) {
+  const bucket = getAdminBucketByName(video.inputBucket);
+  const expiresAtMs = Date.now() + env.VIDEO_SESSION_TTL_SECONDS * 1000;
+  const [url] = await bucket.file(video.inputObjectPath).getSignedUrl({
+    action: "read",
+    expires: expiresAtMs,
+    responseDisposition: "inline",
+    responseType: video.mimeType || "video/mp4",
+  });
+  return { url, expiresAt: new Date(expiresAtMs).toISOString() };
 }
 
 export function canUserPlayVideo(video: VideoDocument, user: { uid: string; admin?: boolean; roles?: string[] }) {

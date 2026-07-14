@@ -11,21 +11,21 @@ export interface PageShellProps {
   maxWidth?: 'md' | 'lg' | 'xl' | '7xl' | 'full';
 }
 
-export const PageShell = ({
+export const PageShell: React.FC<PageShellProps> = ({
   title,
   subtitle,
   actions,
   className,
   children,
   maxWidth = '7xl'
-}: PageShellProps) => {
+}) => {
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.16, ease: [0.2, 0, 0, 1] }}
+      transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
       className={cn(
-        "mx-auto w-full py-1",
+        "w-full px-4 sm:px-6 lg:px-8 py-6 sm:py-8 mx-auto",
         maxWidth === 'md' && "max-w-3xl",
         maxWidth === 'lg' && "max-w-4xl",
         maxWidth === 'xl' && "max-w-5xl",
@@ -34,10 +34,10 @@ export const PageShell = ({
       )}
     >
       {(title || subtitle || actions) && (
-        <div className="mb-6 flex flex-col gap-4 border-b border-[var(--app-border)] pb-5 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8 pb-4 border-b border-[var(--app-border)]">
           <div>
             {title && (
-              <h1 className="text-2xl font-semibold tracking-[-0.025em] text-[var(--app-text)] sm:text-[28px]">
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[var(--app-text)] font-sans">
                 {title}
               </h1>
             )}
