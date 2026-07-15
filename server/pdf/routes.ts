@@ -1,12 +1,16 @@
 import express, { Router } from "express";
 import multer from "multer";
-import { requireFirebaseUser } from "../firebase/authMiddleware";
+import { requireFirebaseUser, requireNonAnonymousUser } from "../firebase/authMiddleware";
 import { getAdminDb, getAdminBucket } from "../firebase/admin";
 import { processUploadedPdf, finalizePipelineProcessing } from "./processingPipeline";
 import { checkOcrJobStatus } from "../ocr/cloudVisionOcr";
 import { askGeminiDirectPdf } from "./directPdfQa";
 import { stripRawVisualBlocks } from "../ai-core/answer/stripVisualBlocks";
 import { retrieveExactPaperQuestion } from "../knowledge/retrieve";
+import { loadPdfSourceBuffer, storageGsUri, validatedPdfDownloadUrl } from "./sourceBuffer";
+import { getSftSyllabusGroundingPdf } from "./syllabusGrounding";
+import { createPdfPageSubset } from "./pdfSubset";
+import { isVertexAiEnabled } from "../ai/client";
 
 export const pdfRoutes = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -40,7 +44,7 @@ function canUseStoragePath(user: any, path: string) {
     || path.startsWith(`rag_uploads/${user.uid}/`);
 }
 
-async function resolveDirectQaSource(user: any, sourceId: string, submittedPath: unknown) {
+async function resolveDirectQaSource(user: any, sourceId: string, submittedPath: unknown, submittedDownloadUrl?: unknown) {
   const db = getAdminDb();
   const snapshots = await Promise.all([
     sourceId ? db.collection("rag_sources").doc(sourceId).get() : Promise.resolve(null),
@@ -58,11 +62,15 @@ async function resolveDirectQaSource(user: any, sourceId: string, submittedPath:
   if (!privileged && !visible && !owned) {
     throw Object.assign(new Error("You do not have access to this PDF source."), { status: 403, code: "DIRECT_QA_SOURCE_FORBIDDEN" });
   }
-  return { source, path };
+  const downloadUrl = validatedPdfDownloadUrl(
+    submittedDownloadUrl || source?.downloadUrl || source?.url,
+    path,
+  );
+  return { source, path, downloadUrl };
 }
 
 // 1. Process uploaded PDF immediately after upload
-pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (req: any, res) => {
+pdfRoutes.post("/process-uploaded", requireNonAnonymousUser, express.json(), async (req: any, res) => {
   try {
     const user = req.user;
     const {
@@ -77,6 +85,7 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (
       sourceScope,
       lesson,
       deferProcessing,
+      downloadUrl,
     } = req.body;
 
     if (!sourceId || !storagePath) {
@@ -93,10 +102,12 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (
     // raised Firestore NOT_FOUND and surfaced as /process-uploaded 500.
     const db = getAdminDb();
     const now = new Date().toISOString();
+    const verifiedDownloadUrl = validatedPdfDownloadUrl(downloadUrl, normalizedStoragePath) || null;
     await db.collection("rag_sources").doc(sourceId).set({
       sourceId,
       ownerUid: user.uid,
       storagePath: normalizedStoragePath,
+      downloadUrl: verifiedDownloadUrl,
       title: title || fileName || "Uploaded PDF",
       fileName: fileName || "upload.pdf",
       subject: String(subject || "").toUpperCase(),
@@ -120,6 +131,7 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (
         sourceId,
         ownerUid: user.uid,
         storagePath: normalizedStoragePath,
+        downloadUrl: verifiedDownloadUrl,
         title: title || fileName || "Uploaded PDF",
         fileName: fileName || "upload.pdf",
         subject: String(subject || "").toUpperCase(),
@@ -169,7 +181,7 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (
 });
 
 // 2. Reprocess OCR or Legacy Convert for a source
-pdfRoutes.post("/reprocess/:sourceId", requireFirebaseUser, upload.single("file"), async (req: any, res) => {
+pdfRoutes.post("/reprocess/:sourceId", requireNonAnonymousUser, upload.single("file"), async (req: any, res) => {
   try {
     const user = req.user;
     const { sourceId } = req.params;
@@ -372,9 +384,26 @@ pdfRoutes.get("/ocr-text/:sourceId", requireFirebaseUser, async (req: any, res) 
 const inFlightDirectQa = new Map<string, Promise<any>>();
 const failedDirectQaCooldown = new Map<string, number>();
 
-pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), async (req: any, res) => {
+function directQaHttpError(error: any) {
+  const code = String(error?.code || error?.errorCode || "DIRECT_QA_BACKEND_FAILED");
+  const sourceDownloadFailed = code === "DIRECT_QA_SOURCE_DOWNLOAD_FAILED";
+  return {
+    status: Number(error?.status) || (sourceDownloadFailed ? 424 : 500),
+    body: {
+      ok: false,
+      found: false,
+      errorCode: code,
+      stage: error?.stage || (sourceDownloadFailed ? "SOURCE_DOWNLOAD" : "MODEL_CALL"),
+      message: sourceDownloadFailed
+        ? "PDF source එක direct read කරන්න බැරි වුණා. Source access/IAM settings පරීක්ෂා කර නැවත උත්සාහ කරන්න."
+        : (error?.message || "Direct PDF QA failed"),
+    },
+  };
+}
+
+pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload.single("file"), async (req: any, res) => {
   try {
-    const { sourceId, storagePath, prompt, questionId, questionNo, questionType, subject, year } = req.body;
+    const { sourceId, storagePath, downloadUrl, prompt, questionId, questionNo, questionType, subject, year } = req.body;
     console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}`);
 
     const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}`;
@@ -402,7 +431,8 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         }
         return res.json(result);
       } catch (e: any) {
-        return res.status(500).json({ ok: false, errorCode: "DIRECT_QA_BACKEND_ERROR", error: e.message });
+        const mapped = directQaHttpError(e);
+        return res.status(mapped.status).json(mapped.body);
       }
     }
 
@@ -413,8 +443,10 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         buffer = req.file.buffer;
         console.log(`[DirectPDFQA] File received via upload. Buffer size: ${req.file.buffer.length} bytes`);
       } else {
-        const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath);
-        resolvedSource = resolved.source;
+        const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath, downloadUrl);
+        resolvedSource = resolved.source || {};
+        (resolvedSource as any).__resolvedStoragePath = resolved.path;
+        (resolvedSource as any).__verifiedDownloadUrl = resolved.downloadUrl;
       }
       const effectivePrompt = prompt?.trim() || `${year || ""} ${subject || ""} ${questionType || "question"} ${questionNo} answer`;
       if (!questionNo || !questionType) {
@@ -438,6 +470,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
 
         console.log(`[DirectPDFQA] Using structured extraction for ${questionType} ${questionNo}`);
         const { askGeminiDirectPdfStructured, askIndexedPdfQuestionStructured } = await import("../ai-core/pdf/directPdfQa");
+        const syllabusGrounding = await getSftSyllabusGroundingPdf(req.user.uid, subject);
         let result: any;
 
         if (!req.file) {
@@ -449,30 +482,132 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
             questionNo,
             questionType,
           });
-          if (indexed.needsOcr || indexed.needsLegacyConversion || indexed.chunks.length === 0) {
-            return {
-              ok: false,
-              status: 409,
-              found: false,
-              errorCode: "PDF_REINDEX_REQUIRED",
-              stage: "INDEX_LOOKUP",
-              needsOcr: indexed.needsOcr,
-              needsLegacyConversion: indexed.needsLegacyConversion,
-              message: indexed.needsOcr
-                ? "This PDF needs OCR before exact questions can be read."
-                : "This PDF index is missing or incomplete. Reindex it and retry.",
-            };
+          const canTrustIndex = indexed.hasExactQuestionText
+            && !indexed.badTextQuality
+            && !indexed.needsOcr
+            && !indexed.needsLegacyConversion
+            && indexed.chunks.length > 0;
+
+          if (canTrustIndex) {
+            result = await askIndexedPdfQuestionStructured({
+              uid: req.user.uid,
+              sourceId,
+              chunks: indexed.chunks,
+              year: year || "unknown",
+              subject: subject || "unknown",
+              questionType,
+              questionNo,
+              allowOfficialAnswer,
+              syllabusPdfBuffer: syllabusGrounding?.buffer,
+              syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
+            });
+          } else if (
+            indexed.hasExactQuestionText
+            && indexed.badTextQuality
+            && indexed.chunks.length > 0
+          ) {
+            // Old Sinhala font PDFs often expose an ASCII-looking text layer
+            // that is useful for locating Q1/Q2 but cannot be read as Unicode.
+            // Download the verified object once, copy only the matching page
+            // (plus the following page when available), and visually scan that
+            // tiny subset. This avoids the old 180-second whole-document scan.
+            const matchedPages = [...new Set(indexed.chunks
+              .map((chunk: any) => Number(chunk.pageNumber || 0))
+              .filter((page: number) => Number.isFinite(page) && page > 0))];
+            const primaryPage = matchedPages[0];
+            const targetPages = primaryPage
+              ? [primaryPage, primaryPage + 1]
+              : [];
+
+            if (targetPages.length === 0) {
+              return {
+                ok: false,
+                status: 409,
+                found: false,
+                errorCode: "PDF_REINDEX_REQUIRED",
+                stage: "INDEX_LOOKUP",
+                reason: "The legacy text index could not locate the requested page.",
+                message: "PDF page index එක refresh කරමින් තිබේ. ඉන්පසු ප්‍රශ්නය නැවත answer කරයි.",
+              };
+            }
+
+            try {
+              const loaded = await loadPdfSourceBuffer({
+                source: resolvedSource,
+                storagePath: resolvedSource.__resolvedStoragePath,
+                submittedDownloadUrl: resolvedSource.__verifiedDownloadUrl,
+              });
+              const subset = await createPdfPageSubset(loaded.buffer, targetPages);
+              result = await askGeminiDirectPdfStructured({
+                uid: req.user.uid,
+                sourceId,
+                pdfBuffer: subset.buffer,
+                originalPageNumbers: subset.originalPageNumbers,
+                year: year || "unknown",
+                subject: subject || "unknown",
+                questionType,
+                questionNo,
+                prompt: effectivePrompt,
+                allowOfficialAnswer,
+                syllabusPdfBuffer: syllabusGrounding?.buffer,
+                syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
+              });
+            } catch (downloadError: any) {
+              const sourceGcsUri = isVertexAiEnabled()
+                ? storageGsUri(resolvedSource.__resolvedStoragePath)
+                : "";
+              if (!sourceGcsUri || downloadError?.code !== "DIRECT_QA_SOURCE_DOWNLOAD_FAILED") {
+                throw downloadError;
+              }
+              // Byte-free fallback: Vertex reads the private object through
+              // service-account IAM. The Firebase download token never leaves
+              // the server and Vercel does not proxy the PDF payload.
+              result = await askGeminiDirectPdfStructured({
+                uid: req.user.uid,
+                sourceId,
+                pdfGcsUri: sourceGcsUri,
+                year: year || "unknown",
+                subject: subject || "unknown",
+                questionType,
+                questionNo,
+                prompt: effectivePrompt,
+                allowOfficialAnswer,
+                syllabusPdfBuffer: syllabusGrounding?.buffer,
+                syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
+              });
+            }
+          } else {
+            const sourceGcsUri = isVertexAiEnabled()
+              ? storageGsUri(resolvedSource.__resolvedStoragePath)
+              : "";
+            if (sourceGcsUri) {
+              result = await askGeminiDirectPdfStructured({
+                uid: req.user.uid,
+                sourceId,
+                pdfGcsUri: sourceGcsUri,
+                year: year || "unknown",
+                subject: subject || "unknown",
+                questionType,
+                questionNo,
+                prompt: effectivePrompt,
+                allowOfficialAnswer,
+                syllabusPdfBuffer: syllabusGrounding?.buffer,
+                syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
+              });
+            } else {
+              return {
+                ok: false,
+                status: 409,
+                found: false,
+                errorCode: "PDF_REINDEX_REQUIRED",
+                stage: "INDEX_LOOKUP",
+                needsOcr: indexed.needsOcr,
+                needsLegacyConversion: indexed.needsLegacyConversion,
+                reason: indexed.reason || "The saved PDF needs a searchable text index before question answering.",
+                message: "PDF index එක සකස් කරමින් තිබේ. ඉන්පසු ප්‍රශ්නය නැවත answer කරයි.",
+              };
+            }
           }
-          result = await askIndexedPdfQuestionStructured({
-            uid: req.user.uid,
-            sourceId,
-            chunks: indexed.chunks,
-            year: year || "unknown",
-            subject: subject || "unknown",
-            questionType,
-            questionNo,
-            allowOfficialAnswer,
-          });
         } else {
           result = await askGeminiDirectPdfStructured({
             uid: req.user.uid,
@@ -484,6 +619,8 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
             questionNo,
             prompt: effectivePrompt,
             allowOfficialAnswer,
+            syllabusPdfBuffer: syllabusGrounding?.buffer,
+            syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
           });
         }
         console.log(`[DirectPDFQA] Structured extraction result: ${result.found ? "FOUND" : "NOT_FOUND"}`);
@@ -507,6 +644,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
 
           return {
             ok: false,
+            status: result.errorCode === "PDF_REINDEX_REQUIRED" ? 409 : undefined,
             found: false,
             errorCode: isRequire ? "AI_CLIENT_RUNTIME_ERROR" : (isRateLimit ? "AI_RATE_LIMITED" : (result.errorCode || "EXACT_QUESTION_EVIDENCE_MISSING")),
             stage: result.stage || "MODEL_CALL",
@@ -568,13 +706,8 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
     }
   } catch (err: any) {
     console.error("[DirectPDFQA] Backend error:", err);
-    return res.status(Number(err.status) || 500).json({
-       ok: false,
-       found: false,
-       errorCode: err.code || err.errorCode || "DIRECT_QA_BACKEND_FAILED",
-       stage: err.stage || "MODEL_CALL",
-       message: err.message || "Direct PDF QA failed"
-    });
+    const mapped = directQaHttpError(err);
+    return res.status(mapped.status).json(mapped.body);
   }
 });
 
@@ -731,7 +864,12 @@ pdfRoutes.get("/sources", requireFirebaseUser, async (req: any, res) => {
 pdfRoutes.post("/admin/repair-source/:sourceId", requireFirebaseUser, async (req: any, res) => {
   try {
     const { sourceId } = req.params;
-    // In a real app, verify admin claims. Here we assume owner or admin.
+    const roles = Array.isArray(req.user?.roles) ? req.user.roles : [];
+    const canRepair = req.user?.admin === true
+      || roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
+    if (!canRepair) {
+      return res.status(403).json({ ok: false, code: "ADMIN_REQUIRED", message: "Admin or content-editor access is required." });
+    }
     const db = getAdminDb();
     const sourceSnap = await db.collection("rag_sources").doc(sourceId).get();
     if (!sourceSnap.exists) {

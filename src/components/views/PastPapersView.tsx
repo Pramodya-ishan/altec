@@ -149,6 +149,7 @@ export default function PastPapersView() {
         const payload = {
           sourceId: uploaded.sourceId,
           storagePath: uploaded.storagePath,
+          downloadUrl: uploaded.downloadUrl,
           title: title,
           fileName: file.name,
           subject: normSubj,
@@ -206,6 +207,7 @@ export default function PastPapersView() {
             paperType: type,
             resourceType: resType,
             storagePath: uploaded.storagePath,
+            downloadUrl: uploaded.downloadUrl,
             chunkCount: indexingData.chunkCount || 0,
             needsOcr: indexingData.needsOcr || false,
             indexStatus: indexingData.indexStatus || indexingData.status || "queued",

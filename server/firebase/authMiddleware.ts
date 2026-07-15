@@ -88,6 +88,7 @@ export async function verifyAndExtractUser(req: Request): Promise<any> {
       decodedToken.email,
       decodedToken.email_verified === true,
       roles,
+      decodedToken.uid,
     );
 
     if (roles.includes("admin")) {

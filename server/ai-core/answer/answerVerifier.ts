@@ -36,7 +36,7 @@ export function verifyFinalAnswer(params: {
            return { 
                ok: false, 
                reason: "Unverified claims made without evidence contract.", 
-               blockedMessage: "PDF source එක හම්බුණා. හැබැයි Direct PDF scan එක complete වුණේ නැහැ, ඒ නිසා මම answer එක guess කරන්නේ නැහැ. Open/Preview හෝ Direct Scan/Reindex action එකෙන් scan කරලා answer දෙන්නම්." 
+               blockedMessage: "PDF evidence එකෙන් exact answer එක තහවුරු කරගන්න බැරි වුණා. වැරදි answer එකක් නොදී request එක නවතා තිබේ; session එක refresh කර එම question number එක නැවත යවන්න."
            };
        }
     }

@@ -5,7 +5,7 @@ import { getStorage } from 'firebase/storage';
 import { initializeAppCheck, ReCaptchaV3Provider, getToken } from 'firebase/app-check';
 import localConfig from '../../firebase-applet-config.json';
 
-const firebaseConfig = {
+const configuredFirebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
@@ -15,7 +15,13 @@ const firebaseConfig = {
   firestoreDatabaseId: import.meta.env.VITE_FIRESTORE_DATABASE_ID,
 };
 
-const activeConfig = (firebaseConfig.apiKey && firebaseConfig.apiKey.trim() !== "") ? firebaseConfig : localConfig;
+const selectedConfig = (configuredFirebaseConfig.apiKey && configuredFirebaseConfig.apiKey.trim() !== "")
+  ? configuredFirebaseConfig
+  : localConfig;
+const productionAuthDomain = typeof window !== "undefined" && window.location.hostname === "tecal.vercel.app"
+  ? window.location.hostname
+  : selectedConfig.authDomain;
+const activeConfig = { ...selectedConfig, authDomain: productionAuthDomain };
 
 let firebaseApp: any = null;
 let db: any = null;

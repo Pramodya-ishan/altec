@@ -1,4 +1,5 @@
-import { getAIClient, AI_MODELS } from "../../ai/client";
+import { callGeminiWithFallback } from "../../ai/modelRouter";
+import { AI_MODELS } from "../../ai/client";
 
 export interface SolveMcqParams {
   questionText: string;
@@ -6,6 +7,9 @@ export interface SolveMcqParams {
   subject: string;
   year: string;
   questionNo: string;
+  referencePdfBuffer?: Buffer | null;
+  referencePdfGcsUri?: string | null;
+  referenceLabel?: string;
 }
 
 export interface SolvedMcqResult {
@@ -16,13 +20,13 @@ export interface SolvedMcqResult {
   whyOthersWrong: string[] | null;
   confidence: number;
   answerStatus: "official_marking_scheme" | "ai_solved_from_extracted_question" | "unknown";
+  syllabusEvidence?: string | null;
+  usedSyllabus?: boolean;
 }
 
 export async function solveExtractedMcqQuestion(params: SolveMcqParams): Promise<SolvedMcqResult | null> {
-  const { questionText, options, subject, year, questionNo } = params;
-  
-  const ai = getAIClient();
-  const modelName = AI_MODELS.pdf; // Using Flash for solver
+  const { questionText, options, subject, year, questionNo, referencePdfBuffer, referencePdfGcsUri, referenceLabel } = params;
+  const hasReferencePdf = Boolean(referencePdfBuffer || referencePdfGcsUri);
 
   const systemInstruction = `
 You are solving an already verified Sri Lankan A/L ${subject} MCQ.
@@ -34,6 +38,8 @@ RULES:
 - Do not create a new question.
 - Choose exactly one option (1, 2, 3, 4, or 5).
 - Explain the logic clearly in Sinhala.
+- ${hasReferencePdf ? `Use the attached ${referenceLabel || "official syllabus PDF"} as the primary theory reference. Never claim that it contains the question itself.` : "No syllabus PDF is attached. Do not claim that one was used."}
+- If the reference does not support a confident conclusion, return optionNo:null instead of inventing evidence.
 - Return JSON only.
 `;
 
@@ -52,17 +58,27 @@ Return JSON:
   "explanationSinhala": "clear explanation in Sinhala",
   "whyOthersWrong": ["reason 1", "reason 2"],
   "confidence": 0.0-1.0,
-  "answerStatus": "ai_solved_from_extracted_question"
+  "answerStatus": "ai_solved_from_extracted_question",
+  "syllabusEvidence": "relevant syllabus topic/principle or null",
+  "usedSyllabus": ${hasReferencePdf ? "true" : "false"}
 }
 `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: modelName,
+    const parts: any[] = [];
+    if (referencePdfBuffer) {
+      parts.push({ inlineData: { mimeType: "application/pdf", data: referencePdfBuffer.toString("base64") } });
+    } else if (referencePdfGcsUri) {
+      parts.push({ fileData: { mimeType: "application/pdf", fileUri: referencePdfGcsUri } });
+    }
+    parts.push({ text: userPrompt });
+
+    const { result: response } = await callGeminiWithFallback("direct_pdf_solve", {
+      model: AI_MODELS.pdf,
       contents: [
         {
           role: "user",
-          parts: [{ text: userPrompt }]
+          parts,
         }
       ],
       config: {

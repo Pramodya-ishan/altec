@@ -21,6 +21,7 @@ import { generateContentStreamWithFallback, callGeminiWithFallback, AITask } fro
 import { resolveAnswerPolicy } from "./answerPolicy";
 import { scoreSource } from "../sources/sourceScoring";
 import { isLessonEvidenceMode } from "../knowledge/lessonResolver";
+import { parseSelectedPdfQuestionFollowup } from "./selectedPdfFollowup";
 
 interface StreamTrace {
   requestId: string;
@@ -358,6 +359,87 @@ export async function aiRespondStream(req: any, res: any) {
       return;
     }
 
+    // A short follow-up such as "1", "q1", or "1st mcq" must stay locked
+    // to the PDF selected in the previous turn. Previously the lesson lookup
+    // returned before persisting selectedSourceId, so this fell through to the
+    // generic model and could fabricate a question.
+    const selectedPdfQuestion = parseSelectedPdfQuestionFollowup(prompt);
+    if (activeConversationState.selectedSourceId && selectedPdfQuestion) {
+      const { getSourceInventory } = await import("../sources/sourceInventoryService");
+      const selectedSubject = evidence.subject || activeConversationState.activeSubject || activeSubject || "SFT";
+      const isAdminUser = user.roles?.includes("admin") || user.admin === true;
+      const inventory = await getSourceInventory({ uid: user.uid, subject: selectedSubject, isAdmin: isAdminUser });
+      const availableSources = [
+        ...inventory.groups.pastPapers,
+        ...inventory.groups.markingSchemes,
+        ...inventory.groups.syllabus,
+        ...inventory.groups.uploadedPdfs,
+        ...inventory.groups.paperStructure,
+      ];
+      const selectedSource = availableSources.find((source: any) => {
+        const id = String(source.sourceId || source.id || "");
+        return id === String(activeConversationState.selectedSourceId);
+      });
+
+      if (selectedSource) {
+        const sourceId = selectedSource.sourceId || selectedSource.id;
+        const sourcePayload = {
+          ...selectedSource,
+          id: sourceId,
+          sourceId,
+          url: selectedSource.url || `/api/rag/sources/${sourceId}/download`,
+          usedInAnswer: true,
+        };
+        await updateConversationState(user.uid, {
+          activeSubject: selectedSubject,
+          activeSourceIds: [sourceId],
+          selectedSourceId: sourceId,
+          selectedQuestionId: selectedPdfQuestion.questionNo,
+          currentQuestionIndex: Number(selectedPdfQuestion.questionNo),
+          evidenceMode: "strict",
+          allowGeneratedContent: false,
+          lastIntent: "selected_resource_discussion",
+        });
+
+        emitSse(res, "sources", { sources: [sourcePayload] });
+        emitSse(res, "direct_pdf_handoff_required", {
+          sourceId,
+          storagePath: selectedSource.storagePath,
+          downloadUrl: selectedSource.downloadUrl || selectedSource.url,
+          title: selectedSource.title,
+          subject: selectedSubject,
+          year: selectedSource.year,
+          questionNo: selectedPdfQuestion.questionNo,
+          questionType: selectedPdfQuestion.questionType,
+          prompt,
+          reason: "SELECTED_PDF_QUESTION_FOLLOWUP",
+          message: "Selected PDF එකෙන් exact question evidence එක සොයමින් පවතී.",
+        });
+        emitSse(res, "done", {
+          ok: true,
+          completed: false,
+          pending: true,
+          requestId,
+          finishReason: "pending_direct_pdf_qa",
+          reason: "SELECTED_PDF_QUESTION_FOLLOWUP",
+          canContinue: true,
+          sources: [sourcePayload],
+          paperInfo: {
+            sourceId,
+            questionNo: selectedPdfQuestion.questionNo,
+            year: selectedSource.year,
+            subject: selectedSubject,
+            questionType: selectedPdfQuestion.questionType,
+            prompt,
+            extractionMethod: "pending_direct_pdf_qa",
+          },
+        });
+        trace.doneSent = true;
+        trace.completed = false;
+        return;
+      }
+    }
+
     // A lesson PDF lookup is an inventory operation, not a generative answer.
     // Return exact Firebase matches so the model cannot invent a web source.
     if (route.mode === "lesson_pdf_search") {
@@ -377,15 +459,27 @@ export async function aiRespondStream(req: any, res: any) {
         ? [
             `**${lessonName}** lesson එකට match වෙන saved PDF resource${lessonSources.length === 1 ? " එක" : "s"}:`,
             "",
-            ...lessonSources.map((source: any, index: number) => {
-              return `${index + 1}. [${source.title}](${source.url})`;
-            }),
+            ...lessonSources.map((source: any, index: number) => `${index + 1}. **${source.title}**`),
             "",
-            "මෙය saved lesson resources වල exact result එකයි. Web candidate PDFs හෝ source එකේ නැති exam details add කරන්නේ නැහැ.",
+            "PDF එක open කරන්න authenticated source card එකේ **Open PDF** භාවිත කරන්න. මෙය saved lesson resources වල exact result එකයි; source එකේ නැති exam details add කරන්නේ නැහැ.",
           ].join("\n")
         : `**${lessonName}** lesson එකට match වෙන saved PDF resource එකක් හමු වුණේ නැහැ. Lesson resource එක නිවැරදි lesson name එක යටතේ upload කර index කරන්න.`;
 
-      if (lessonSources.length > 0) emitSse(res, "sources", { sources: lessonSources });
+      if (lessonSources.length > 0) {
+        const selected = lessonSources[0];
+        await updateConversationState(user.uid, {
+          activeSubject: route.entities.subject || activeSubject || activeConversationState.activeSubject,
+          activeLessonIds: evidence.lessonIds.length > 0 ? evidence.lessonIds : activeConversationState.activeLessonIds,
+          activeSourceIds: lessonSources.map((source: any) => source.sourceId || source.id).filter(Boolean),
+          selectedSourceId: selected.sourceId || selected.id,
+          selectedQuestionId: null,
+          currentQuestionIndex: null,
+          evidenceMode: "strict",
+          allowGeneratedContent: false,
+          lastIntent: "lesson_pdf_search",
+        });
+        emitSse(res, "sources", { sources: lessonSources });
+      }
       emitSse(res, "token", { text: answer });
       const chatRes = await saveFinalChat({
         uid: user.uid,
@@ -838,6 +932,7 @@ export async function aiRespondStream(req: any, res: any) {
             emitSse(res, "direct_pdf_handoff_required", {
               sourceId: paperSource.id || paperSource.sourceId,
               storagePath: paperSource.storagePath,
+              downloadUrl: paperSource.downloadUrl || paperSource.url,
               title: paperSource.title,
               subject: requestedSubject,
               year: requestedYear,
@@ -870,8 +965,9 @@ export async function aiRespondStream(req: any, res: any) {
               }
             });
 
-            // The frontend starts the follow-up request while the backend reads
-            // the verified source path. No cross-origin Storage fetch is used.
+            // The frontend starts the follow-up request and can hand over a
+            // Firebase download URL obtained through the signed-in SDK. The
+            // browser never fetches the PDF cross-origin.
             trace.doneSent = true;
             trace.completed = false;
             return;
@@ -890,7 +986,7 @@ export async function aiRespondStream(req: any, res: any) {
           let composedAnswer = "";
           if (route.mode === "pdf_link_request") {
             const pSrc = resolution.paperSource;
-            composedAnswer = `✅ **ඔයා හෙව්ව PDF එක හමු වුණා!**\n\n📌 **${pSrc?.title}**\n- **Subject:** ${requestedSubject}\n- **Year:** ${requestedYear}\n- **Source:** Local Verified Store 🏛️\n\n📥 **Download Link:** [මත ක්ලික් කරන්න](${pSrc?.url || `/api/rag/sources/${pSrc?.id}/download`})\n\nමෙම ලින්ක් එක පැය 24 පුරාම සක්‍රීයව පවතිනවා.`;
+            composedAnswer = `**${pSrc?.title || "PDF source"}** හමු වුණා.\n\n- Subject: ${requestedSubject}\n- Year: ${requestedYear}\n- Source: verified saved resource\n\nපහළ source card එකේ **Open PDF** භාවිත කරන්න. එය ඔබගේ Firebase session token එක සමඟ secure ලෙස file එක විවෘත කරනවා.`;
           } else {
             const { composeMarkingSchemeAnswer } = await import("./markingSchemeResolver");
             composedAnswer = composeMarkingSchemeAnswer({

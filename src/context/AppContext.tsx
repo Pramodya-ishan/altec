@@ -596,6 +596,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
             emailVerified: firebaseUser.emailVerified
           });
 
+          // Reconcile the restored Firebase session with the server on every
+          // page load. This refreshes configured admin/content-editor claims
+          // without blocking the UI or falling back to an anonymous identity.
+          void (async () => {
+            try {
+              const idToken = await firebaseUser.getIdToken();
+              const sessionResponse = await apiFetch('/api/auth/session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ idToken }),
+              });
+              if (!sessionResponse.ok) return;
+              const sessionData = await sessionResponse.json();
+              if (sessionData?.claimsUpdated) {
+                await firebaseUser.getIdToken(true);
+              }
+              if (sessionData?.profile) {
+                setProfile(sessionData.profile);
+                localStorage.setItem('email_user_profile', JSON.stringify(sessionData.profile));
+              }
+              if (sessionData?.user) {
+                localStorage.setItem('email_user_session', JSON.stringify({
+                  ...sessionData.user,
+                  token: savedToken,
+                }));
+              }
+            } catch {
+              // Firebase Auth remains the source of truth. A temporary API
+              // failure must never reopen the sign-in overlay.
+            }
+          })();
+
           const savedData = localStorage.getItem(`student_progress_data_${(firebaseUser.email || '').toLowerCase()}`);
           if (savedData) {
              try { setData(JSON.parse(savedData)); } catch(e) {}
@@ -667,6 +699,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setIsAuthLoading(true);
     try {
       if (isFirebaseEnabled && auth) {
+        await authPersistenceReady;
         const provider = new GoogleAuthProvider();
         
         // Remove unnecessary sensitive scopes and keep only standard ones
@@ -683,7 +716,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
           localStorage.setItem('google_access_token', accessToken);
         }
 
-        const idToken = await result.user.getIdToken();
+        const idToken = await result.user.getIdToken(true);
+        const fallbackProfile: UserProfile = {
+          email: result.user.email || '',
+          username: result.user.displayName || result.user.email?.split('@')[0] || 'Student',
+          picture: result.user.photoURL || '',
+          bio: 'Technology Stream Learner',
+          isVerified: result.user.emailVerified,
+          updatedAt: new Date().toISOString(),
+        };
+        setUser({
+          email: result.user.email || '',
+          name: result.user.displayName || '',
+          picture: result.user.photoURL || '',
+          token: accessToken || '',
+          emailVerified: result.user.emailVerified,
+        });
+        setProfile(fallbackProfile);
         const res = await apiFetch('/api/auth/session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -691,6 +740,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
         const resData = await res.json();
         if (res.ok) {
+          if (resData.claimsUpdated) {
+            // Refresh once so Firestore/Storage rules immediately receive the
+            // configured admin claims added by the verified server session.
+            await result.user.getIdToken(true).catch(() => undefined);
+          }
           setUser({ ...resData.user, token: accessToken || resData.user.token });
           setProfile(resData.profile);
           localStorage.setItem('email_user_session', JSON.stringify({ ...resData.user, token: accessToken || resData.user.token }));
@@ -703,14 +757,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
           await fetchYoutubeCookies(resData.user.email);
           showNotification("Successfully logged in with Google!", "success");
         } else {
-          showNotification(resData.error || "Login failed", "error");
+          // Firebase Auth is the source of truth. A profile/session bootstrap
+          // failure must not sign the user back out or reopen the login overlay.
+          showNotification("Signed in. Profile data will sync in the background.", "info");
+          if (result.user.email) void fetchUserDataFromDB(result.user.email, { showLoading: false });
         }
       } else {
          showNotification("Firebase is required for Google login", "error");
       }
     } catch (error: any) {
       console.error("Google Popup Login Error:", error);
-      showNotification("Google login failed or was cancelled.", "error");
+      if (auth?.currentUser && !auth.currentUser.isAnonymous) {
+        setUser({
+          email: auth.currentUser.email || '',
+          name: auth.currentUser.displayName || '',
+          picture: auth.currentUser.photoURL || '',
+          emailVerified: auth.currentUser.emailVerified,
+        });
+        showNotification("Signed in. Profile data will sync in the background.", "info");
+      } else {
+        showNotification("Google login failed or was cancelled.", "error");
+      }
     }
     setIsAuthLoading(false);
   };

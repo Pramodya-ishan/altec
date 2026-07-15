@@ -686,6 +686,7 @@ const [messages, setMessages] = useState<{
         body: JSON.stringify({
           sourceId: uploaded.sourceId,
           storagePath: uploaded.storagePath,
+          downloadUrl: uploaded.downloadUrl,
           title: file.name,
           fileName: file.name,
           subject: currentSubject,
@@ -706,6 +707,7 @@ const [messages, setMessages] = useState<{
           file,
           sourceId: uploaded.sourceId,
           storagePath: uploaded.storagePath,
+          downloadUrl: uploaded.downloadUrl,
           title: file.name,
           subject: currentSubject,
           resourceType: "uploaded_pdf",

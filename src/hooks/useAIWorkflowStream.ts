@@ -293,7 +293,7 @@ export function useAIWorkflowStream() {
             // Trigger direct PDF QA flow
             if (import.meta.env.DEV) console.info("[DirectPDFQA] Pending mode started. Keeping stream alive.");
 
-            const { sourceId, storagePath, title, subject, year, reason, message } = data;
+            const { sourceId, storagePath, downloadUrl, title, subject, year } = data;
             const questionNo = data.questionNo || data.parsedIntent?.questionNo || data.question?.questionNo;
             const questionType = data.questionType || data.parsedIntent?.questionType || "MCQ";
 
@@ -326,7 +326,7 @@ export function useAIWorkflowStream() {
                 }
 
                 const result = await askDirectPdfQa({
-                  source: { id: sourceId, storagePath, title, subject, year, fileName: `${sourceId}.pdf` },
+                  source: { id: sourceId, storagePath, downloadUrl, title, subject, year, fileName: `${sourceId}.pdf` },
                   prompt: data.prompt || data.question || "",
                   questionId: data.questionId,
                   questionNo,
@@ -390,7 +390,7 @@ export function useAIWorkflowStream() {
                   });
                 } else {
                   if (import.meta.env.DEV) console.error("[DirectPDFQA] Failed to get answer:", result);
-                  let userMsg = "PDF source එක Firebase එකේ හම්බුණා. හැබැයි server-side PDF download එක fail වුණා, ඒ නිසා මම answer එක guess කරන්නේ නැහැ. Direct Scan/Reindex action එක run කළාම PDF එකෙන්ම answer දෙන්නම්.";
+                  let userMsg = "PDF එකේ exact question evidence එක කියවීමට නොහැකි වුණා. Answer එක guess කරලා නැහැ; source access හෝ index එක නැවත සකස් කර retry කරන්න.";
 
                   const errorStr = String(result.error || "").toLowerCase();
                   const isBillingExhausted = result.errorCode === "AI_BILLING_EXHAUSTED" ||
@@ -409,8 +409,8 @@ export function useAIWorkflowStream() {
                      userMsg = "AI client runtime configuration/import issue. Please check server console.";
                   } else if (result.found === false) {
                      userMsg = (result as any).message || result.reason || "PDF scan කළා. හැබැයි exact question text හම්බුණේ නැහැ. Reindex/OCR/page image අවශ්‍යයි.";
-                  } else if (result.errorCode === "DIRECT_QA_FIREBASE_FETCH_FAILED" || result.errorCode === "ADMIN_STORAGE_DEGRADED_USE_CLIENT_HANDOFF") {
-                     userMsg = "PDF source එක තියෙනවා, නමුත් Storage permission නිසා open/scan කරන්න බැහැ. Storage rules/App Check/login check කරන්න.";
+                  } else if (["DIRECT_QA_FIREBASE_FETCH_FAILED", "ADMIN_STORAGE_DEGRADED_USE_CLIENT_HANDOFF", "DIRECT_QA_SOURCE_DOWNLOAD_FAILED"].includes(String(result.errorCode || ""))) {
+                     userMsg = "PDF source එක තියෙනවා, නමුත් Firebase download URL සහ Admin Storage දෙකෙන්ම original file එක read කරන්න බැරි වුණා. නැවත sign in කර source එක reopen කර retry කරන්න.";
                   }
 
                   setStatus({

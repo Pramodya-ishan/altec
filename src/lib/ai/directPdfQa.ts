@@ -2,6 +2,8 @@ import { stripRawVisualBlocks } from "./stripVisualBlocks";
 import { normalizeStoragePath } from "./normalizeStoragePath";
 import { getLargeEndpointUrl } from "../apiBase";
 import { apiFetch } from "../api";
+import { getDownloadURL, ref } from "firebase/storage";
+import { storage } from "../firebase";
 
 export type DirectPdfQaResult = {
   ok: boolean;
@@ -63,14 +65,26 @@ export async function askDirectPdfQa(params: {
     // 1. Normalize PDF path
     const normalized = normalizeStoragePath(source.storagePath);
 
-    // 2. Send only the source identity to our authenticated backend. The server
-    // reads the object with Firebase Admin after verifying source ownership.
-    // Browser-side download URLs are intentionally not fetched here: Firebase
-    // Storage CORS rules are not an authorization boundary and were causing the
-    // DirectPDFQA flow to fail before it reached the backend.
+    // 2. Send the verified source identity plus a short-lived/persistent
+    // Firebase download URL. The browser does not download the PDF (so Storage
+    // CORS is not involved); it only obtains the URL through the signed-in
+    // Firebase SDK. The backend validates that the URL points at the exact
+    // resolved source object before reading it.
     const formData = new FormData();
-    onProgress?.("fetching", { serverSide: true });
+    onProgress?.("fetching", { resolvingSource: true });
     formData.append("storagePath", normalized.kind === "path" ? normalized.path : normalized.url);
+
+    let downloadUrl = source.downloadUrl || source.url || (normalized.kind === "downloadUrl" ? normalized.url : "");
+    if (!downloadUrl && normalized.kind === "path") {
+      try {
+        downloadUrl = await getDownloadURL(ref(storage, normalized.path));
+      } catch (error) {
+        // Admin Storage remains a server fallback. Do not fail the request just
+        // because client rules do not expose a download token.
+        if (import.meta.env.DEV) console.warn("[DirectPDFQA] Firebase URL hand-off unavailable", error);
+      }
+    }
+    if (downloadUrl) formData.append("downloadUrl", downloadUrl);
 
     formData.append("sourceId", source.id || source.sourceId);
     formData.append("prompt", prompt);
@@ -116,6 +130,7 @@ export async function askDirectPdfQa(params: {
       const reindexBody = new FormData();
       reindexBody.append("sourceId", String(source.id || source.sourceId));
       reindexBody.append("mode", reindexHint.needsOcr ? "ocr" : "auto");
+      if (downloadUrl) reindexBody.append("downloadUrl", downloadUrl);
       onProgress?.("scanning", { reindexing: true, needsOcr: Boolean(reindexHint.needsOcr) });
 
       const reindexController = new AbortController();

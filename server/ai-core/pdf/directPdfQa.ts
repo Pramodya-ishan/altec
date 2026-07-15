@@ -7,19 +7,110 @@ import { solveExtractedMcqQuestion } from "./solveExtractedQuestion";
 import { trackAIUsage, checkSpecificLimit } from "../../cost/usageTracker";
 import { classifyAiError } from "../../ai/aiErrorClassifier";
 
+function directQaCacheId(sourceId: string, questionType: string, questionNo: string) {
+  return `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
+}
+
+async function readVerifiedQuestionCache(params: {
+  sourceId: string;
+  subject: string;
+  year: string;
+  questionType: string;
+  questionNo: string;
+  allowOfficialAnswer: boolean;
+  requiresSyllabusGrounding: boolean;
+}) {
+  try {
+    const snapshot = await getAdminDb()
+      .collection("pdf_question_cache")
+      .doc(directQaCacheId(params.sourceId, params.questionType, params.questionNo))
+      .get();
+    if (!snapshot.exists) return null;
+
+    const cached = snapshot.data() || {};
+    const questionText = String(cached.questionText || "").trim();
+    const options = Array.isArray(cached.options)
+      ? cached.options.map((value: unknown) => String(value).trim()).filter(Boolean)
+      : [];
+    const isMcq = String(params.questionType).toLowerCase().includes("mcq");
+    const subjectMatches = !cached.subject || String(cached.subject).toUpperCase() === String(params.subject).toUpperCase();
+    const yearMatches = !cached.year || String(cached.year) === String(params.year) || params.year === "unknown";
+    const verified = Number(cached.evidenceVersion || 0) >= 2
+      && cached.validationStatus !== "rejected"
+      && subjectMatches
+      && yearMatches
+      && questionText.length >= 12
+      && (!isMcq || options.length >= 4)
+      && (!params.requiresSyllabusGrounding || cached.syllabusGrounded === true);
+    if (!verified) return null;
+
+    return {
+      ok: true,
+      found: true,
+      fromCache: true,
+      sourceEvidence: {
+        sourceId: params.sourceId,
+        pageNumber: Number.isFinite(Number(cached.pageNumber)) ? Number(cached.pageNumber) : null,
+        questionNo: params.questionNo,
+        questionText,
+        options: options.length > 0 ? options : null,
+      },
+      answer: {
+        officialAnswer: params.allowOfficialAnswer ? (cached.officialAnswer || null) : null,
+        estimatedAnswer: cached.estimatedAnswer || null,
+        explanationSinhala: cached.explanationSinhala || null,
+        lesson: cached.lesson || null,
+        solvedAnswer: cached.solvedAnswer || null,
+      },
+      confidence: Number(cached.confidence || 0),
+      reason: "VERIFIED_EVIDENCE_CACHE",
+    };
+  } catch (error) {
+    console.warn("[DirectPDFQA] Verified cache lookup skipped:", String((error as any)?.message || error));
+    return null;
+  }
+}
+
 export async function askGeminiDirectPdfStructured(params: {
   uid: string;
   sourceId: string;
-  pdfBuffer: Buffer;
+  pdfBuffer?: Buffer | null;
+  pdfGcsUri?: string | null;
   year: string;
   subject: string;
   questionType: string;
   questionNo: string;
   prompt: string;
   allowOfficialAnswer?: boolean;
+  syllabusPdfBuffer?: Buffer | null;
+  syllabusPdfGcsUri?: string | null;
+  originalPageNumbers?: number[];
 }) {
-  const { sourceId, pdfBuffer, year, subject, questionType, questionNo, allowOfficialAnswer = false } = params;
+  const {
+    sourceId,
+    pdfBuffer = null,
+    pdfGcsUri = null,
+    year,
+    subject,
+    questionType,
+    questionNo,
+    allowOfficialAnswer = false,
+    syllabusPdfBuffer = null,
+    syllabusPdfGcsUri = null,
+    originalPageNumbers = [],
+  } = params;
   const modelName = AI_MODELS.pdf;
+
+  const cached = await readVerifiedQuestionCache({
+    sourceId,
+    subject,
+    year,
+    questionType,
+    questionNo,
+    allowOfficialAnswer,
+    requiresSyllabusGrounding: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri),
+  });
+  if (cached) return cached;
 
   const systemInstruction = `You are an evidence-first Sri Lankan A/L exam PDF extractor.
 You are reading the exact locked PDF source.
@@ -29,6 +120,7 @@ Year: ${year}
 Subject: ${subject}
 Question Type: ${questionType}
 Question Number: ${questionNo}
+${originalPageNumbers.length > 0 ? `The attached subset pages map to original PDF pages: ${originalPageNumbers.join(", ")}.` : ""}
 
 STRICT RULES:
 1. First find the exact requested question in the PDF.
@@ -64,12 +156,12 @@ Return JSON only:
   "reason": string
 }`;
 
-  const pdfPart = {
-    inlineData: {
-      mimeType: "application/pdf",
-      data: pdfBuffer.toString("base64"),
-    },
-  };
+  if (!pdfBuffer && !pdfGcsUri) {
+    throw new Error("Direct PDF QA requires either PDF bytes or a verified Vertex GCS URI.");
+  }
+  const pdfPart = pdfBuffer
+    ? { inlineData: { mimeType: "application/pdf", data: pdfBuffer.toString("base64") } }
+    : { fileData: { mimeType: "application/pdf", fileUri: pdfGcsUri as string } };
 
   const userPrompt = `
 Requested:
@@ -78,6 +170,7 @@ Subject: ${subject}
 Question Type: ${questionType}
 Question Number: ${questionNo}
 Source ID: ${sourceId}
+${originalPageNumbers.length > 0 ? `Subset page mapping (subset page 1 first): ${originalPageNumbers.join(", ")}` : ""}
 
 Return JSON with exact evidence. If not found, set found:false.
 `;
@@ -108,6 +201,13 @@ Return JSON with exact evidence. If not found, set found:false.
     }
 
     let result = JSON.parse(response.text.trim());
+
+    if (originalPageNumbers.length > 0 && result?.sourceEvidence) {
+      const subsetPage = Number(result.sourceEvidence.pageNumber || 0);
+      result.sourceEvidence.pageNumber = subsetPage >= 1
+        ? (originalPageNumbers[subsetPage - 1] || originalPageNumbers[0])
+        : originalPageNumbers[0];
+    }
 
     // A question paper is evidence for the question, not for an official answer.
     // Never let the model upgrade its own reasoning to an official marking-scheme
@@ -166,7 +266,10 @@ Return JSON with exact evidence. If not found, set found:false.
           options: result.sourceEvidence.options,
           subject,
           year,
-          questionNo
+          questionNo,
+          referencePdfBuffer: syllabusPdfBuffer,
+          referencePdfGcsUri: syllabusPdfGcsUri,
+          referenceLabel: "Sri Lankan A/L SFT syllabus PDF",
         });
         if (solved) {
           // [PHASE 1] Track Solver Call
@@ -188,7 +291,7 @@ Return JSON with exact evidence. If not found, set found:false.
     // Save to cache if found
     if (result.found && result.sourceEvidence?.questionText) {
        const db = getAdminDb();
-       const cacheId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
+       const cacheId = directQaCacheId(sourceId, questionType, questionNo);
        
        const cacheData = {
          sourceId,
@@ -199,8 +302,12 @@ Return JSON with exact evidence. If not found, set found:false.
          ...result.sourceEvidence,
          ...result.answer,
          confidence: result.confidence,
-         extractionMethod: "gemini_direct_pdf_qa",
+         extractionMethod: originalPageNumbers.length > 0
+           ? "gemini_targeted_legacy_page"
+           : "gemini_direct_pdf_qa",
          validationStatus: result.confidence > 0.8 ? "valid" : "needs_review",
+         evidenceVersion: 2,
+         syllabusGrounded: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri),
          updatedAt: new Date().toISOString()
        };
 
@@ -263,6 +370,8 @@ export async function askIndexedPdfQuestionStructured(params: {
   questionType: string;
   questionNo: string;
   allowOfficialAnswer?: boolean;
+  syllabusPdfBuffer?: Buffer | null;
+  syllabusPdfGcsUri?: string | null;
 }) {
   const {
     uid,
@@ -273,7 +382,20 @@ export async function askIndexedPdfQuestionStructured(params: {
     questionType,
     questionNo,
     allowOfficialAnswer = false,
+    syllabusPdfBuffer = null,
+    syllabusPdfGcsUri = null,
   } = params;
+
+  const cached = await readVerifiedQuestionCache({
+    sourceId,
+    subject,
+    year,
+    questionType,
+    questionNo,
+    allowOfficialAnswer,
+    requiresSyllabusGrounding: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri),
+  });
+  if (cached) return cached;
 
   const ordered = [...chunks]
     .sort((a, b) => Number(a.pageNumber || a.chunkIndex || 0) - Number(b.pageNumber || b.chunkIndex || 0))
@@ -341,11 +463,14 @@ Rules:
         subject,
         year,
         questionNo,
+        referencePdfBuffer: syllabusPdfBuffer,
+        referencePdfGcsUri: syllabusPdfGcsUri,
+        referenceLabel: "Sri Lankan A/L SFT syllabus PDF",
       }).catch(() => null);
       if (solved) result.answer.solvedAnswer = solved;
     }
 
-    const cacheId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
+    const cacheId = directQaCacheId(sourceId, questionType, questionNo);
     await getAdminDb().collection("pdf_question_cache").doc(cacheId).set(removeUndefinedDeep({
       sourceId,
       subject,
@@ -357,6 +482,8 @@ Rules:
       confidence: Number(result.confidence || 0),
       extractionMethod: "indexed_pdf_text",
       validationStatus: Number(result.confidence || 0) >= 0.8 ? "valid" : "needs_review",
+      evidenceVersion: 2,
+      syllabusGrounded: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri),
       updatedAt: new Date().toISOString(),
     }), { merge: true });
 

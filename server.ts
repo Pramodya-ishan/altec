@@ -111,6 +111,21 @@ app.use("/api", globalLimiter);
 
 // API Routes
 
+// Firebase's redirect helper requests this same-origin public configuration.
+// Only browser Firebase identifiers are returned; service-account credentials
+// and all server secrets are deliberately excluded.
+app.get("/api/firebase/init", (_req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=300, s-maxage=300");
+  res.json({
+    apiKey: process.env.VITE_FIREBASE_API_KEY || "",
+    authDomain: "tecal.vercel.app",
+    projectId: process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || "",
+    storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET || "",
+    messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+    appId: process.env.VITE_FIREBASE_APP_ID || "",
+  });
+});
+
 app.use("/api/rag", ragRoutes);
 app.use("/api/syllabus", syllabusRoutes);
 app.use("/api/pdf", pdfRoutes);

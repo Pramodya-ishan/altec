@@ -8,6 +8,7 @@ import { retryGoogleAuthOperation } from "../utils/retry";
 import multer from "multer";
 import { invalidateInventoryCache, computeIndexStatus } from "../sources/sourceInventoryService";
 import { isGeminiPdfOcrConfigured } from "../pdf/geminiPdfOcr";
+import { loadPdfSourceBuffer, validatedPdfDownloadUrl } from "../pdf/sourceBuffer";
 
 export const ragRoutes = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -98,8 +99,10 @@ ragRoutes.get("/sources/:sourceId/download", requireFirebaseUser, async (req: an
       return res.status(404).json({ ok: false, error: "Storage path not found" });
     }
     
-    // Ensure only the owner of the source document can download the file
-    if (data.ownerUid !== user.uid) {
+    const roles = Array.isArray(user?.roles) ? user.roles : [];
+    const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
+    // Owners and configured content administrators may open managed sources.
+    if (data.ownerUid !== user.uid && !privileged) {
       return res.status(403).json({ ok: false, error: "Unauthorized access to source. Only the owner of the source document can download the file." });
     }
     
@@ -186,6 +189,7 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
       sourceType,
       sourceScope,
       storagePath,
+      downloadUrl,
       chunkCount,
       needsOcr,
       createdAt,
@@ -216,6 +220,7 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
       sourceType: sourceType || resourceType || "past_paper",
       sourceScope: sourceScope || "past_paper",
       storagePath: storagePath || null,
+      downloadUrl: storagePath ? (validatedPdfDownloadUrl(downloadUrl, storagePath) || existing.downloadUrl || null) : null,
       ownerUid: req.user.uid,
       ownerEmail: req.user.email || "unknown",
       uploaded: true,
@@ -453,7 +458,7 @@ ragRoutes.delete("/sources/:sourceId", requireNonAnonymousUser, async (req: any,
 ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUser, async (req: any, res) => {
   try {
     const user = req.user;
-    const { sourceId, pages, mode = "auto" } = req.body;
+    const { sourceId, pages, mode = "auto", downloadUrl } = req.body;
     
     if (!sourceId) {
       return res.status(400).json({ ok: false, error: "Missing sourceId." });
@@ -504,20 +509,30 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
     let isOcrFailed = false;
 
     let pdfData: Buffer | null = null;
+    let pdfLoadError: any = null;
     if (req.file) {
       pdfData = req.file.buffer;
     } else if (!pages && sourceData?.storagePath) {
       try {
-        const bucket = getAdminBucket();
-        const file = bucket.file(sourceData.storagePath);
-        const [exists] = await file.exists();
-        if (exists) {
-          const [buffer] = await retryGoogleAuthOperation("fileDownload", async () => await file.download());
-          pdfData = buffer;
-        }
+        const loaded = await loadPdfSourceBuffer({
+          source: sourceData,
+          storagePath: sourceData.storagePath,
+          submittedDownloadUrl: downloadUrl,
+        });
+        pdfData = loaded.buffer;
       } catch (err: any) {
         console.error("Failed to download PDF from storage for reindexing:", err);
+        pdfLoadError = err;
       }
+    }
+
+    if (!pdfData && !pages && pdfLoadError) {
+      return res.status(424).json({
+        ok: false,
+        code: pdfLoadError.code || "DIRECT_QA_SOURCE_DOWNLOAD_FAILED",
+        error: "The PDF could not be read from its verified Firebase URL or Admin Storage.",
+        message: "PDF source එක download කරන්න බැරි වුණා. File එක නැවත upload කළොත් original File එකෙන් index කරයි.",
+      });
     }
 
     // 2. Either process newly uploaded/downloaded file OR use passed-in pages array

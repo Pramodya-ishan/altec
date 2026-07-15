@@ -20,6 +20,15 @@ function shouldUseVertex(): boolean {
   return !process.env.GEMINI_API_KEY;
 }
 
+/**
+ * GCS fileData URIs are supported by Vertex AI, but not by the Gemini API-key
+ * transport. Export the resolved mode so document routes can choose a safe
+ * byte-free fallback without attempting an unsupported request shape.
+ */
+export function isVertexAiEnabled(): boolean {
+  return shouldUseVertex();
+}
+
 export function prepareGoogleCredentials() {
   const serviceAccount = getGoogleServiceAccountFromEnvironment();
   if (serviceAccount && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {

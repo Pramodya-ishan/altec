@@ -102,7 +102,20 @@ export async function uploadPdfWithClientStorage({
       },
     );
   });
-  return { sourceId, storagePath };
+  // Persist the Firebase token URL alongside metadata. The backend validates
+  // that it resolves to this exact object before using it, then falls back to
+  // Admin Storage. This avoids repeat failures when the Vercel service account
+  // can read Firestore but temporarily lacks Storage object IAM.
+  let downloadUrl = "";
+  try {
+    downloadUrl = await getDownloadURL(storageRef);
+  } catch (error) {
+    // The upload itself is already complete. Some Storage rule sets allow the
+    // write but do not expose a token URL to the client. Keep the upload valid;
+    // the backend can still use Admin Storage as a secondary path.
+    if (import.meta.env.DEV) console.warn("[clientStorageUpload] Download URL unavailable", error);
+  }
+  return { sourceId, storagePath, downloadUrl };
 }
 
 export async function uploadFileWithClientStorage(args: Parameters<typeof uploadPdfWithClientStorage>[0]) {

@@ -265,7 +265,7 @@ export function NotesModal() {
           onTask: (controls) => { controlsRef.current = controls; },
         });
 
-        let processed: any = { sourceId: upload.sourceId, storagePath: upload.storagePath };
+        let processed: any = { sourceId: upload.sourceId, storagePath: upload.storagePath, downloadUrl: upload.downloadUrl };
         if (mediaKind === "pdf") {
           const response = await apiFetch("/api/pdf/process-uploaded", {
             method: "POST",
@@ -279,6 +279,7 @@ export function NotesModal() {
               sourceScope: "paper_structure",
               sourceId: upload.sourceId,
               storagePath: upload.storagePath,
+              downloadUrl: upload.downloadUrl,
             }),
           });
           const payload = await response.json().catch(() => null);

@@ -260,6 +260,7 @@ export async function verifyFirebaseToken(authHeader: string | undefined) {
       decodedToken.email,
       decodedToken.email_verified === true,
       roles,
+      decodedToken.uid,
     );
 
     if (roles.includes('admin')) {
