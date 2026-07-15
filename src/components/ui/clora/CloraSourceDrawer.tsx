@@ -5,7 +5,7 @@ import { FileText, X, ExternalLink } from 'lucide-react';
 interface CloraSourceDrawerProps {
   sources: any[];
   onClose: () => void;
-  onSourceClick: (source: any) => void;
+  onSourceClick: (source: any, preview: boolean) => void;
 }
 
 export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSourceDrawerProps) {
@@ -72,14 +72,21 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
                 )}
               </div>
 
-              {/* Open the authenticated source directly. */}
+              {/* Action buttons offering Open PDF and Preview */}
               <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-slate-100" onClick={e => e.stopPropagation()}>
                 <button
-                  onClick={() => onSourceClick(source)}
+                  onClick={() => onSourceClick(source, false)}
                   className="flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg bg-slate-900 px-2 py-1.5 text-[11px] font-bold text-white transition hover:bg-black"
                 >
                   <ExternalLink className="w-3 h-3" />
                   Open PDF
+                </button>
+                <button
+                  onClick={() => onSourceClick(source, true)}
+                  className="flex-1 py-1.5 px-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 font-bold rounded-lg transition text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <FileText className="w-3 h-3" />
+                  Preview
                 </button>
               </div>
             </motion.div>

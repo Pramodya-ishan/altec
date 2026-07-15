@@ -25,7 +25,6 @@ import reportRoutes from "./server/routes/reportRoutes";
 import { ttsRoutes } from "./server/tts/routes";
 import { voiceRoutes } from "./server/voice/routes";
 import { videoRoutes } from "./server/video/routes";
-import { RPM_LIMIT, RPD_LIMIT, requestCountPM, requestCountPD } from "./server/ai/queue";
 
 import { globalLimiter, aiLimiter, adminLimiter } from "./server/utils/rateLimiter";
 
@@ -45,7 +44,7 @@ app.use((req, res, next) => {
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob: https://*.googleusercontent.com https://api.dicebear.com https://*.firebaseapp.com https://*.firebasestorage.app",
     `connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.firebaseapp.com https://*.run.app wss://*.run.app ${videoCdnOrigin}`.trim(),
-    `media-src 'self' blob: https://storage.googleapis.com https://*.googleapis.com https://*.firebasestorage.app ${videoCdnOrigin}`.trim(),
+    `media-src 'self' blob: ${videoCdnOrigin}`.trim(),
     "frame-src 'self' https://*.firebaseapp.com https://*.google.com https://accounts.google.com",
     "object-src 'none'",
     "frame-ancestors 'self' https://ai.studio https://*.google.com"
@@ -457,13 +456,15 @@ app.post("/api/admin/support/data", requireFirebaseUser, requireRole("admin"), a
 });
 
 app.get("/api/quota", async (req, res) => {
-  res.json({
-    ok: true,
-    rpmUsed: requestCountPM,
-    rpmLimit: RPM_LIMIT,
-    rpdUsed: requestCountPD,
-    rpdLimit: RPD_LIMIT,
-  });
+  res.json({ ok: true, rpmUsed: 0, rpmLimit: 60, rpdUsed: 0, rpdLimit: 1500 });
+});
+
+// Keep the platform liveness probe deliberately dependency-free. The richer
+// AI health endpoint is available under /api/ai/health, but must never make a
+// Vercel function liveness check depend on Firestore credentials or network
+// metadata discovery.
+app.get("/api/health", (_req, res) => {
+  res.status(200).json({ ok: true, status: "ok" });
 });
 
 
@@ -597,7 +598,7 @@ app.get(["/manifest.json", "/manifest.webmanifest"], (req, res) => {
 });
 
 // Explicit PDF worker route to serve correct MIME type
-app.get(["/pdf.worker.min.mjs", "/pdf.worker.min.js"], (req, res) => {
+app.get(["/pdf.worker.min.mjs", "/pdf.worker.mjs", "/pdf.worker.min.js"], (req, res) => {
   const file = getPublicOrDistFile(req.path.substring(1));
   if (file) {
     res.type("text/javascript");

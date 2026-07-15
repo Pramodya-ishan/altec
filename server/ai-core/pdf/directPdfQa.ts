@@ -248,3 +248,128 @@ Return JSON with exact evidence. If not found, set found:false.
     await trackAIUsage(uid, modelName, 1000, 500, "directPdfQaCalls");
   }
 }
+
+/**
+ * Answers from the text index instead of uploading the complete PDF to Gemini.
+ * Persistent lesson/past-paper sources always take this path.  It is faster,
+ * avoids serverless timeouts, and keeps the answer tied to stored evidence.
+ */
+export async function askIndexedPdfQuestionStructured(params: {
+  uid: string;
+  sourceId: string;
+  chunks: Array<{ text?: string; pageNumber?: number; chunkIndex?: number }>;
+  year: string;
+  subject: string;
+  questionType: string;
+  questionNo: string;
+  allowOfficialAnswer?: boolean;
+}) {
+  const {
+    uid,
+    sourceId,
+    chunks,
+    year,
+    subject,
+    questionType,
+    questionNo,
+    allowOfficialAnswer = false,
+  } = params;
+
+  const ordered = [...chunks]
+    .sort((a, b) => Number(a.pageNumber || a.chunkIndex || 0) - Number(b.pageNumber || b.chunkIndex || 0))
+    .map((chunk) => `[Page ${chunk.pageNumber || "?"}]\n${String(chunk.text || "").trim()}`)
+    .filter(Boolean)
+    .join("\n\n")
+    .slice(0, 70_000);
+
+  if (ordered.replace(/\s/g, "").length < 80) {
+    return {
+      ok: false,
+      found: false,
+      errorCode: "PDF_REINDEX_REQUIRED",
+      stage: "INDEX_LOOKUP",
+      reason: "The indexed PDF text is empty or incomplete.",
+    };
+  }
+
+  const systemInstruction = `You extract one exact Sri Lankan A/L exam question from INDEXED PDF TEXT.
+Requested: ${year} ${subject} ${questionType} ${questionNo}.
+Rules:
+- Use only the supplied indexed text. Never invent a question, option, answer, page, or source detail.
+- Match question markers such as 01., 1., Q1, Question 1, or Sinhala question numbering.
+- Extract the complete question and, for MCQ, all printed options.
+- If the exact question is absent or unreadable return found:false.
+- ${allowOfficialAnswer ? "Copy an official answer only when it is explicitly printed in this verified marking-scheme text." : "Always set officialAnswer:null. This is not a verified marking scheme."}
+- Return JSON only.`;
+
+  try {
+    const { result: response } = await callGeminiWithFallback("direct_pdf_extract", {
+      model: AI_MODELS.pdf,
+      contents: [{
+        role: "user",
+        parts: [{
+          text: `${systemInstruction}\n\nINDEXED PDF TEXT:\n${ordered}\n\nReturn {"found":boolean,"sourceEvidence":{"sourceId":"${sourceId}","pageNumber":number|null,"questionNo":"${questionNo}","questionText":string|null,"options":string[]|null},"answer":{"officialAnswer":string|null,"explanationSinhala":string|null,"lesson":string|null},"confidence":number,"reason":string}.`,
+        }],
+      }],
+      config: { temperature: 0, responseMimeType: "application/json" },
+    });
+
+    const result = JSON.parse(String(response.text || "{}").trim());
+    const questionText = String(result?.sourceEvidence?.questionText || "").trim();
+    const options = Array.isArray(result?.sourceEvidence?.options)
+      ? result.sourceEvidence.options.map((value: unknown) => String(value).trim()).filter(Boolean)
+      : [];
+    const isMcq = String(questionType).toLowerCase().includes("mcq");
+
+    if (!result?.found || questionText.length < 12 || (isMcq && options.length < 4)) {
+      return {
+        ok: false,
+        found: false,
+        errorCode: "EXACT_QUESTION_EVIDENCE_MISSING",
+        stage: "INDEX_LOOKUP",
+        reason: "The exact question is not readable in the indexed PDF text.",
+      };
+    }
+
+    if (!allowOfficialAnswer && result.answer) result.answer.officialAnswer = null;
+    if (!result.answer) result.answer = { officialAnswer: null };
+
+    if (isMcq && !result.answer.officialAnswer) {
+      const solved = await solveExtractedMcqQuestion({
+        questionText,
+        options,
+        subject,
+        year,
+        questionNo,
+      }).catch(() => null);
+      if (solved) result.answer.solvedAnswer = solved;
+    }
+
+    const cacheId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
+    await getAdminDb().collection("pdf_question_cache").doc(cacheId).set(removeUndefinedDeep({
+      sourceId,
+      subject,
+      year,
+      questionType,
+      questionNo,
+      ...result.sourceEvidence,
+      ...result.answer,
+      confidence: Number(result.confidence || 0),
+      extractionMethod: "indexed_pdf_text",
+      validationStatus: Number(result.confidence || 0) >= 0.8 ? "valid" : "needs_review",
+      updatedAt: new Date().toISOString(),
+    }), { merge: true });
+
+    await trackAIUsage(uid, AI_MODELS.pdf, Math.ceil(ordered.length / 4), 500, "directPdfQaCalls");
+    return { ok: true, ...result };
+  } catch (error: any) {
+    const classified = classifyAiError(error);
+    return {
+      ok: false,
+      found: false,
+      errorCode: classified.code || "INDEXED_PDF_QA_FAILED",
+      stage: "MODEL_CALL",
+      reason: String(error?.message || error).slice(0, 400),
+    };
+  }
+}

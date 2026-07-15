@@ -38,9 +38,8 @@ export default defineConfig(() => {
           manifest: {
              name: 'Tec A/L',
              short_name: 'Tec A/L',
-             description: 'Sri Lankan A/L Technology learning workspace',
-             theme_color: '#ffffff',
-             background_color: '#ffffff',
+             description: 'Sri Lankan A/L Technology study workspace',
+             theme_color: '#2563eb',
              icons: []
           }
        })

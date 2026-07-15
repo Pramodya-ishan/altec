@@ -27,7 +27,7 @@ function SubjectToggle({ layoutIdPrefix, currentSubject, setCurrentSubject }: { 
             <motion.div
               layoutId={`${layoutIdPrefix}-active-subject`}
               className="absolute inset-0 bg-white shadow-sm border border-slate-200/60 rounded-full -z-10"
-              transition={{ type: "spring", stiffness: 520, damping: 38, mass: 0.6 }}
+              transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
             />
           )}
           <span className="relative z-10">{sub}</span>
@@ -57,8 +57,6 @@ export function TopNav() {
   const [countdown, setCountdown] = useState({ days: 0, hours: 0, active: false });
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [showProfilePopup, setShowProfilePopup] = useState(false);
-  const profilePhoto = profile?.picture || user?.picture || '';
-  const profileInitial = (profile?.username || user?.name || user?.email || 'S').trim().charAt(0).toUpperCase();
 
   // Syllabus Search State and Reference Data
   const [searchQuery, setSearchQuery] = useState("");
@@ -316,16 +314,15 @@ export function TopNav() {
               )}
               title="User Account Menu"
             >
-              <span className="absolute inset-0 grid place-items-center text-sm font-black text-slate-600">{profileInitial}</span>
-              {profilePhoto && <img
-                src={profilePhoto}
+              <img
+                src={profile?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profile?.username || 'LocalStudent')}`}
                 alt="Profile"
-                className="relative h-full w-full object-cover"
-                loading="eager"
-                fetchPriority="high"
+                className="w-full h-full object-cover"
                 referrerPolicy="no-referrer"
-                onError={(e) => { e.currentTarget.style.display = 'none'; }}
-              />}
+                onError={(e) => {
+                  e.currentTarget.src = `https://api.dicebear.com/7.x/bottts/svg?seed=LocalStudent`;
+                }}
+              />
             </button>
 
                         <AnimatePresence>
@@ -340,10 +337,15 @@ export function TopNav() {
                   className="absolute right-0 mt-3 w-64 bg-white border border-slate-200 rounded-[1.25rem] shadow-2xl shadow-slate-200/50 z-50 p-1.5 flex flex-col origin-top-right">
                   
                   <div className="flex items-center gap-3 px-3 py-3 mb-1 border-b border-slate-100/80 bg-slate-50/50 rounded-t-xl">
-                    <span className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full bg-slate-200 text-sm font-black text-slate-600 shadow-sm ring-2 ring-white">
-                      {profileInitial}
-                      {profilePhoto && <img src={profilePhoto} alt="Profile" className="absolute inset-0 h-full w-full object-cover" loading="eager" fetchPriority="high" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
-                    </span>
+                    <img
+                      src={profile?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profile?.username || 'LocalStudent')}`}
+                      alt="Profile"
+                      className="w-10 h-10 rounded-full bg-slate-200 object-cover shadow-sm ring-2 ring-white"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        e.currentTarget.src = `https://api.dicebear.com/7.x/bottts/svg?seed=LocalStudent`;
+                      }}
+                    />
                     <div className="flex-1 min-w-0 flex flex-col justify-center">
                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider leading-none">Logged In As</p>
                       <p className="text-sm font-black text-slate-800 truncate mt-1 leading-tight">@{profile?.username || user?.name || 'Student'}</p>

@@ -138,17 +138,35 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
 
   let db: any = null;
   if (tests.adminInitialized) {
-    try {
-      db = getAdminDb();
-    } catch (err: any) {
+    const usesApplicationDefault = dbInfo.credentialMode === "application_default";
+    const runsOnGoogleInfrastructure = Boolean(
+      process.env.K_SERVICE || process.env.FUNCTION_TARGET || process.env.GAE_SERVICE,
+    );
+
+    // Vercel and ordinary local processes do not provide Google ADC. Trying
+    // applicationDefault() there starts metadata detection which can reject
+    // outside the request lifecycle. Report the configuration problem as JSON
+    // instead of risking a FUNCTION_INVOCATION_FAILED process termination.
+    if (usesApplicationDefault && !runsOnGoogleInfrastructure) {
       errors.push({
         test: "getAdminDb",
-        code: "FIRESTORE_GET_DB_FAILED",
-        message: err.message,
-        hint: err.message.includes("CONFIG_ERROR_FIRESTORE_DATABASE_ID_MISSING")
-          ? "FIRESTORE_DATABASE_ID environment variable is missing."
-          : "Firestore database retrieval failed."
+        code: "GOOGLE_CREDENTIALS_NOT_CONFIGURED",
+        message: "Google service-account credentials are not configured.",
+        hint: "Set GOOGLE_APPLICATION_CREDENTIALS_JSON to the complete service-account JSON.",
       });
+    } else {
+      try {
+        db = getAdminDb();
+      } catch (err: any) {
+        errors.push({
+          test: "getAdminDb",
+          code: "FIRESTORE_GET_DB_FAILED",
+          message: err.message,
+          hint: err.message.includes("CONFIG_ERROR_FIRESTORE_DATABASE_ID_MISSING")
+            ? "FIRESTORE_DATABASE_ID environment variable is missing."
+            : "Firestore database retrieval failed."
+        });
+      }
     }
   }
 
@@ -881,4 +899,3 @@ aiRoutes.post("/web/pdf-proxy", async (req, res) => {
     res.status(500).json({ ok: false, error: error.message || "Fetch timeout or network issue" });
   }
 });
-

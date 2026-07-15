@@ -1,9 +1,10 @@
-import { auth, getFirebaseAppCheckToken } from './firebase';
+import { auth, authPersistenceReady, getFirebaseAppCheckToken } from './firebase';
 import { apiUrl, getLargeEndpointUrl } from './apiBase';
 
 export async function getAuthToken(): Promise<string | null> {
   if (!auth) return null;
-  if (auth.currentUser) {
+  await authPersistenceReady;
+  if (auth.currentUser && !auth.currentUser.isAnonymous) {
     try {
       return await auth.currentUser.getIdToken();
     } catch (e) {
@@ -13,28 +14,18 @@ export async function getAuthToken(): Promise<string | null> {
   
   // Wait for auth state if not loaded
   return new Promise((resolve) => {
-    let settled = false;
-    let unsubscribe = () => {};
-    let timeout = 0;
-    const finish = (token: string | null) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timeout);
+    const unsubscribe = auth.onAuthStateChanged(async (user: any) => {
       unsubscribe();
-      resolve(token);
-    };
-    unsubscribe = auth.onAuthStateChanged(async (user: any) => {
-      if (user) {
+      if (user && !user.isAnonymous) {
         try {
-          finish(await user.getIdToken());
+          resolve(await user.getIdToken());
         } catch (e) {
-          finish(null);
+          resolve(null);
         }
       } else {
-        finish(null);
+        resolve(null);
       }
     });
-    timeout = window.setTimeout(() => finish(null), 2500);
   });
 }
 

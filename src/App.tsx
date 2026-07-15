@@ -161,8 +161,8 @@ function AuthOverlay() {
   if (user) return null;
 
   return (
-    <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-slate-50 p-4">
-      <div className="flex w-full max-w-sm flex-col gap-6 rounded-[1.5rem] border border-slate-200 bg-white p-8 text-center shadow-[0_20px_60px_rgba(15,23,42,0.1)]">
+    <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-sm z-[999999] flex items-center justify-center p-4">
+      <div className="bg-white rounded-[1.5rem] shadow-2xl p-8 max-w-sm w-full text-center flex flex-col gap-6">
         <div className="flex flex-col items-center gap-4">
           <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shadow-sm border border-indigo-100">
             <GraduationCap className="w-8 h-8" />
@@ -200,10 +200,9 @@ function AuthOverlay() {
 }
 
 function AppContent() {
-  const { theme, isSidebarOpen, setCurrentView, user, isUserDataLoading, hasHydratedUserData, currentSubject } = useApp();
+  const { theme, isSidebarOpen, setCurrentView, user, isUserDataLoading, hasHydratedUserData } = useApp();
   const location = useLocation();
   const isChatRoute = location.pathname === "/clora-x" || location.pathname === "/ai-chat";
-  const previousSubjectRef = React.useRef(currentSubject);
 
   React.useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -217,19 +216,22 @@ function AppContent() {
      setCurrentView(path as any);
   }, [location.pathname, setCurrentView]);
 
-  React.useEffect(() => {
-    if (previousSubjectRef.current === currentSubject) return;
-    previousSubjectRef.current = currentSubject;
-    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
-  }, [currentSubject]);
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-white font-sans text-slate-900">
+        <OnlineStatus />
+        <ToastNotification />
+        <AuthOverlay />
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-white font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-950 relative">
+    <div className="min-h-screen bg-white font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 relative">
       <OnlineStatus />
       <ToastNotification />
-      <AuthOverlay />
       <Sidebar />
-      <div className={cn("flex flex-col bg-white transition-all duration-300", isChatRoute ? "h-[100dvh] overflow-hidden" : "min-h-screen", isSidebarOpen ? "lg:pl-72" : "lg:pl-[72px] pl-0")}>
+      <div className={cn("flex flex-col transition-all duration-300", isChatRoute ? "h-[100dvh] overflow-hidden bg-white" : "min-h-screen bg-white", isSidebarOpen ? "lg:pl-72" : "lg:pl-[72px] pl-0")}>
         <TopNav />
         <main
           className={cn(
@@ -244,7 +246,7 @@ function AppContent() {
                 {user && isUserDataLoading && !hasHydratedUserData ? (
                   <PageSkeleton pathname={location.pathname} />
                 ) : (
-                <Routes location={location}>
+                <Routes location={location} key={location.pathname}>
                   <Route path="/" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="/paper-structure" element={<PaperStructureView />} />
                   <Route path="/question-marks" element={<Navigate to="/paper-structure" replace />} />

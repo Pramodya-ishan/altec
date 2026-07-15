@@ -291,7 +291,7 @@ export function useAIWorkflowStream() {
           }
           if (eventName === "direct_pdf_handoff_required") {
             // Trigger direct PDF QA flow
-            console.info("[DirectPDFQA] Pending mode started. Keeping stream alive.");
+            if (import.meta.env.DEV) console.info("[DirectPDFQA] Pending mode started. Keeping stream alive.");
 
             const { sourceId, storagePath, title, subject, year, reason, message } = data;
             const questionNo = data.questionNo || data.parsedIntent?.questionNo || data.question?.questionNo;
@@ -299,7 +299,7 @@ export function useAIWorkflowStream() {
 
             const qaKey = data.idempotencyKey || `${sourceId}:${questionType}:${questionNo}`;
             if (activeDirectQaKeysRef.current.has(qaKey)) {
-              console.warn("[DirectPDFQA] Skipping duplicate call for key:", qaKey);
+              if (import.meta.env.DEV) console.warn("[DirectPDFQA] Skipping duplicate call for key:", qaKey);
               return;
             }
             activeDirectQaKeysRef.current.add(qaKey);
@@ -315,10 +315,11 @@ export function useAIWorkflowStream() {
               try {
                 if (!storagePath) {
                    const errorMsg = "PDF source එක තියෙනවා, නමුත් Storage path නැති නිසා open/scan කරන්න බැහැ.";
-                   console.error("[DirectPDFQA] Error:", errorMsg);
+                   if (import.meta.env.DEV) console.error("[DirectPDFQA] Error:", errorMsg);
                    setStatus({ stage: "error", label: "Source Error", message: errorMsg });
                    onToken?.(errorMsg);
                    setIsStreaming(false);
+                   doneReceived = true;
                   doneReceived = true;
                    onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: "DIRECT_QA_SOURCE_MISSING_STORAGE_PATH", sources: [{ id: sourceId }] });
                    return;
@@ -364,7 +365,7 @@ export function useAIWorkflowStream() {
                 });
 
                 if (result.ok && result.found === true && result.answer) {
-                  console.info("[DirectPDFQA] Success! Displaying answer.");
+                  if (import.meta.env.DEV) console.info("[DirectPDFQA] Success! Displaying answer.");
                   onToken?.(result.answer);
 
                   // Complete the stream
@@ -388,7 +389,7 @@ export function useAIWorkflowStream() {
                     }
                   });
                 } else {
-                  console.error("[DirectPDFQA] Failed to get answer:", result);
+                  if (import.meta.env.DEV) console.error("[DirectPDFQA] Failed to get answer:", result);
                   let userMsg = "PDF source එක Firebase එකේ හම්බුණා. හැබැයි server-side PDF download එක fail වුණා, ඒ නිසා මම answer එක guess කරන්නේ නැහැ. Direct Scan/Reindex action එක run කළාම PDF එකෙන්ම answer දෙන්නම්.";
 
                   const errorStr = String(result.error || "").toLowerCase();
@@ -408,8 +409,6 @@ export function useAIWorkflowStream() {
                      userMsg = "AI client runtime configuration/import issue. Please check server console.";
                   } else if (result.found === false) {
                      userMsg = (result as any).message || result.reason || "PDF scan කළා. හැබැයි exact question text හම්බුණේ නැහැ. Reindex/OCR/page image අවශ්‍යයි.";
-                  } else if (result.errorCode === "DIRECT_QA_INDEX_REQUIRED") {
-                     userMsg = "මේ PDF එක විශාල නිසා full scan එක නවතා තිබෙනවා. PDF එක එක වරක් index කළ පසු ප්‍රශ්නවලට ඉක්මනින් පිළිතුරු ලැබේ.";
                   } else if (result.errorCode === "DIRECT_QA_FIREBASE_FETCH_FAILED" || result.errorCode === "ADMIN_STORAGE_DEGRADED_USE_CLIENT_HANDOFF") {
                      userMsg = "PDF source එක තියෙනවා, නමුත් Storage permission නිසා open/scan කරන්න බැහැ. Storage rules/App Check/login check කරන්න.";
                   }
@@ -424,7 +423,7 @@ export function useAIWorkflowStream() {
                   onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: result.errorCode, sources: [{ id: sourceId, title, storagePath }] });
                 }
               } catch (err: any) {
-                console.error("[DirectPDFQA] Unexpected Error:", err);
+                if (import.meta.env.DEV) console.error("[DirectPDFQA] Unexpected Error:", err);
                 setIsStreaming(false);
                 doneReceived = true;
 
@@ -497,7 +496,7 @@ export function useAIWorkflowStream() {
           }
           if (eventName === "done") {
             if (data.finishReason === "pending_direct_pdf_qa" || data.pending === true || directPdfQaPending) {
-              console.info("[DirectPDFQA] Ignoring parent stream done because Direct PDF QA is pending.");
+              if (import.meta.env.DEV) console.info("[DirectPDFQA] Ignoring parent stream done because Direct PDF QA is pending.");
               doneReceived = true;
               setStatus({
                 stage: "processing",

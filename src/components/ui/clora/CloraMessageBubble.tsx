@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { BookOpen, Check, CheckCircle2, Copy, FileText, Loader2 } from 'lucide-react';
+import { Check, CheckCircle2, Copy, FileText, Loader2 } from 'lucide-react';
 import { MathMarkdown } from '../../chat/MathMarkdown';
 import { VisualBlockRenderer } from '../VisualBlockRenderer';
 
@@ -59,16 +59,12 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
       transition={{ duration: isStreaming ? 0 : 0.2 }}
       className="group mb-9 flex w-full justify-start px-4 sm:px-6"
     >
-      <div className="flex w-full gap-3 sm:gap-4">
-        <div className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600">
-          <BookOpen className="h-3.5 w-3.5" />
-        </div>
-
-        <div className="min-w-0 flex-1 space-y-4">
+      <div className="w-full">
+        <div className="min-w-0 space-y-4">
           {message.status && (message.status === 'streaming' || message.status === 'searching') && (
             <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500">
               <Loader2 className="h-3 w-3 animate-spin" />
-              {message.status === 'searching' ? 'Searching sources' : 'Thinking'}
+              {message.status === 'searching' ? 'Checking sources' : 'Preparing answer'}
             </div>
           )}
 
@@ -100,7 +96,7 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
                   <FileText className="h-4 w-4" /> {message.sources.length} sources
                 </button>
               )}
-              {message.status === 'done' && <CheckCircle2 className="ml-1 h-3.5 w-3.5 text-slate-400" aria-label="Answer complete" />}
+              {message.status === 'done' && <CheckCircle2 className="ml-1 h-3.5 w-3.5 text-emerald-500" aria-label="Answer complete" />}
             </div>
           )}
         </div>

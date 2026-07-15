@@ -200,17 +200,17 @@ export function PredictorWidget() {
   };
 
   return (
-    <section className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm overflow-hidden text-left">
+    <section className="bg-gradient-to-b from-white to-indigo-50/30 border border-slate-200/60 rounded-3xl p-6 sm:p-8 shadow-lg overflow-hidden text-left">
       {/* COLLAPSE TRIGGER AS AN ACCESSIBLE BUTTON */}
       <button
         type="button"
         onClick={toggleCollapse}
         className="w-full flex items-center justify-between focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/30 rounded-xl p-1 -m-1 cursor-pointer select-none"
         aria-expanded={!isCollapsed}
-        aria-label="Toggle marks summary details"
+        aria-label="Toggle Exam Score Predictor details"
       >
         <span className="text-lg sm:text-xl font-extrabold text-slate-900 flex items-center gap-2">
-          Marks summary
+          Exam Score Predictor
           <span className="text-[10px] bg-primary-50 text-primary-600 px-3 py-1 rounded-full font-black uppercase tracking-wider">
             {currentSubject.toUpperCase()}
           </span>
@@ -232,7 +232,7 @@ export function PredictorWidget() {
                 <h3 className="text-[10px] text-slate-500 uppercase tracking-widest font-extrabold mb-1">
                   Final Projected
                 </h3>
-                <div className="text-3xl font-mono font-black tracking-tight text-slate-900 leading-none flex items-center justify-center gap-3">
+                <div className="text-3xl font-mono font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-primary-600 to-indigo-900 leading-none flex items-center justify-center gap-3">
                   <span>{displayFinal}</span>
                   <span className="text-sm font-bold bg-primary-50/80 text-primary-700 px-2 py-0.5 rounded-full border border-transparent">{displayGrade}</span>
                 </div>

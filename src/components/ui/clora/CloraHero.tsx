@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { ArrowUpRight, BookOpen } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 
 interface CloraHeroProps {
   onSelectPrompt?: (prompt: string) => void;
@@ -11,10 +11,8 @@ export function CloraHero({ onSelectPrompt, prompts = [] }: CloraHeroProps) {
   return (
     <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-5 py-10 sm:px-8">
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45 }}>
-        <div className="mb-6 flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-700">
-          <BookOpen className="h-5 w-5" />
-        </div>
-        <h1 className="max-w-xl text-3xl font-semibold tracking-[-0.035em] text-slate-950 sm:text-4xl">How can I help you learn?</h1>
+        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Tec A/L study assistant</p>
+        <h1 className="max-w-xl text-3xl font-semibold tracking-[-0.035em] text-slate-950 sm:text-4xl">What do you want to study?</h1>
         <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500 sm:text-base">
           Sri Lankan A/L විෂයයන්, past papers, lesson resources සහ ඔබේ notes සමඟ ඉගෙන ගන්න.
         </p>

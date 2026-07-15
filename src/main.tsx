@@ -21,7 +21,7 @@ console.warn = (...args: any[]) => {
 // Suppress Vite websocket warnings in AI Studio preview
 if (typeof window !== 'undefined') {
   const recoverFromStaleChunk = async () => {
-    const recoveryKey = 'clora_chunk_recovery';
+    const recoveryKey = 'tecal_chunk_recovery';
     const lastRecovery = Number(sessionStorage.getItem(recoveryKey) || 0);
     if (Date.now() - lastRecovery < 30_000) return;
     sessionStorage.setItem(recoveryKey, String(Date.now()));
@@ -31,7 +31,7 @@ if (typeof window !== 'undefined') {
     }
     if (typeof caches !== 'undefined') {
       const keys = await caches.keys().catch(() => []);
-      await Promise.all(keys.filter((key) => key.startsWith('workbox') || key.startsWith('clora')).map((key) => caches.delete(key)));
+      await Promise.all(keys.filter((key) => key.startsWith('workbox') || key.startsWith('clora') || key.startsWith('tecal')).map((key) => caches.delete(key)));
     }
     window.location.reload();
   };
@@ -90,7 +90,7 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
     if (typeof caches !== 'undefined') {
       caches.keys().then((keys) => {
         keys.forEach((key) => {
-          if (key.startsWith('workbox') || key.startsWith('clora')) {
+          if (key.startsWith('workbox') || key.startsWith('clora') || key.startsWith('tecal')) {
             caches.delete(key).then(() => {
               console.log(`[APP_VERSION] Purged old cache key: ${key}`);
             });

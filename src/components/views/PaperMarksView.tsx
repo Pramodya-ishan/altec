@@ -13,10 +13,10 @@ export default function PaperMarksView() {
  const marks = data[currentSubject].paperMarks || [];
 
  const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
+ const [chartsCollapsed, setChartsCollapsed] = useState(true);
  const [collapsedLog, setCollapsedLog] = useState(() => {
  return data.collapsedStates?.history_database ?? true;
  });
- const [collapsedBreakdown, setCollapsedBreakdown] = useState(true);
 
  React.useEffect(() => {
  if (data.collapsedStates?.history_database !== undefined) {
@@ -64,15 +64,15 @@ export default function PaperMarksView() {
  if (active && payload && payload.length) {
  const dataPoint = payload[0].payload;
  return (
- <div className="relative z-50 rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-800 shadow-xl">
- <p className="font-bold mb-1 text-slate-900">{label}</p>
+ <div className="bg-slate-900/90 text-white p-3 rounded-xl shadow-lg border border-slate-700/50 text-sm z-50 relative">
+ <p className="font-bold mb-1">{label}</p>
  {payload.map((entry: any, i: number) => {
  if (entry.value === null || isNaN(entry.value)) return null;
  return (
  <p key={i} style={{ color: entry.color }} className="font-medium flex gap-2">
  <span>{entry.name}: {entry.value}</span>
  {entry.name === 'Total Marks' && dataPoint.grade && (
- <span className="text-slate-400">({dataPoint.grade})</span>
+ <span className="text-slate-300">({dataPoint.grade})</span>
  )}
  </p>
  );
@@ -122,14 +122,13 @@ export default function PaperMarksView() {
 
  {/* SUB MARKS CHARTS */}
  <div className="overflow-hidden rounded-[1.8rem] border border-slate-200 bg-white shadow-sm">
- <button type="button" onClick={() => setCollapsedBreakdown((value) => !value)} className="flex w-full items-center justify-between px-6 py-5 text-left transition hover:bg-slate-50" aria-expanded={!collapsedBreakdown}>
- <span className="text-sm font-black text-slate-800">MCQ & Essay marks</span>
- <i className={cn("fa-solid text-xs text-slate-400 transition-transform", collapsedBreakdown ? "fa-chevron-down" : "fa-chevron-up")} />
+ <button type="button" onClick={() => setChartsCollapsed((value) => !value)} className="flex w-full items-center justify-between px-6 py-5 text-left transition hover:bg-slate-50">
+ <span className="text-sm font-black text-slate-800">MCQ &amp; Essay</span>
+ <i className={cn("fa-solid fa-chevron-up text-xs text-slate-400 transition-transform", chartsCollapsed && "rotate-180")} />
  </button>
  <AnimatePresence initial={false}>
- {!collapsedBreakdown && (
- <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.22 }} className="overflow-hidden">
- <div className="grid grid-cols-1 divide-y divide-slate-100 border-t border-slate-100 md:grid-cols-2 md:divide-x md:divide-y-0">
+ {!chartsCollapsed && (
+ <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="grid grid-cols-1 divide-y divide-slate-100 overflow-hidden border-t border-slate-100 md:grid-cols-2 md:divide-x md:divide-y-0">
  <div className="p-6 h-[280px] hover:bg-slate-50/50 transition-colors">
  <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
  <i className="fa-solid fa-circle text-[8px] text-amber-500"></i> MCQ Marks <span className="text-slate-300">/</span> {maxSubScale}
@@ -164,7 +163,6 @@ export default function PaperMarksView() {
  </LineChart>
  </ResponsiveContainer>
  </ResponsiveChartShell>
- </div>
  </div>
  </div>
  </motion.div>

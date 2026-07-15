@@ -6,6 +6,7 @@ import { processUploadedPdf, finalizePipelineProcessing } from "./processingPipe
 import { checkOcrJobStatus } from "../ocr/cloudVisionOcr";
 import { askGeminiDirectPdf } from "./directPdfQa";
 import { stripRawVisualBlocks } from "../ai-core/answer/stripVisualBlocks";
+import { retrieveExactPaperQuestion } from "../knowledge/retrieve";
 
 export const pdfRoutes = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -406,8 +407,18 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
     }
 
     const requestPromise = async () => {
+      let buffer: Buffer | null = null;
+      let resolvedSource: any = null;
+      if (req.file) {
+        buffer = req.file.buffer;
+        console.log(`[DirectPDFQA] File received via upload. Buffer size: ${req.file.buffer.length} bytes`);
+      } else {
+        const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath);
+        resolvedSource = resolved.source;
+      }
       const effectivePrompt = prompt?.trim() || `${year || ""} ${subject || ""} ${questionType || "question"} ${questionNo} answer`;
       if (!questionNo || !questionType) {
+        console.error("[DirectPDFQA] Missing questionNo or questionType");
         return {
           ok: false,
           status: 400,
@@ -417,76 +428,64 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
           message: "Direct PDF QA requires questionNo and questionType."
         };
       }
-
-      let buffer: Buffer;
-      let resolvedSource: any = null;
-      if (req.file) {
-        buffer = req.file.buffer;
-        console.log(`[DirectPDFQA] File received via upload. Buffer size: ${buffer.length} bytes`);
-      } else {
-        const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath);
-        resolvedSource = resolved.source;
-        const allowOfficialAnswer = [
-          resolvedSource?.resourceType,
-          resolvedSource?.sourceType,
-          resolvedSource?.sourceScope,
-        ].some((value) => String(value || "").toLowerCase().includes("marking"))
-          || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || ""));
-
-        // Fast path: existing question cache and indexed chunks. This avoids
-        // uploading a complete large PDF to Gemini for every follow-up.
-        const { answerStructuredFromIndexedPdf } = await import("../ai-core/pdf/indexedDirectPdfQa");
-        const indexedResult = await answerStructuredFromIndexedPdf({
-          uid: req.user.uid,
-          sourceId,
-          year: year || resolvedSource?.year || "unknown",
-          subject: subject || resolvedSource?.subject || "unknown",
-          questionType,
-          questionNo,
-          allowOfficialAnswer,
-        });
-        if (indexedResult) return indexedResult;
-
-        console.log(`[DirectPDFQA] Reading verified source from Firebase Admin: ${resolved.path}`);
-        const file = getAdminBucket().file(resolved.path);
-        const [metadata] = await file.getMetadata().catch(() => ([{}] as any));
-        const sizeBytes = Number((metadata as any)?.size || resolvedSource?.sizeBytes || 0);
-        if (sizeBytes > 20 * 1024 * 1024) {
-          return {
-            ok: false,
-            status: 409,
-            found: false,
-            errorCode: "DIRECT_QA_INDEX_REQUIRED",
-            stage: "INDEXING",
-            message: "This large PDF needs searchable indexing before question answering. Reindex it once, then retry.",
-            canRetry: true,
-          };
-        }
-        const [downloaded] = await file.download();
-        buffer = downloaded;
-        if (!buffer?.length) {
-          return { ok: false, status: 404, errorCode: "DIRECT_QA_SOURCE_EMPTY", error: "The stored PDF is empty or unavailable." };
-        }
-      }
       if (questionNo && questionType) {
-        console.log(`[DirectPDFQA] Using structured extraction for ${questionType} ${questionNo}`);
-        const { askGeminiDirectPdfStructured } = await import("../ai-core/pdf/directPdfQa");
-        const result = await askGeminiDirectPdfStructured({
-          uid: req.user.uid,
-          sourceId: sourceId || "uploaded_temp",
-          pdfBuffer: buffer,
-          year: year || "unknown",
-          subject: subject || "unknown",
-          questionType,
-          questionNo,
-          prompt: effectivePrompt,
-          allowOfficialAnswer: [
+        const allowOfficialAnswer = [
             resolvedSource?.resourceType,
             resolvedSource?.sourceType,
             resolvedSource?.sourceScope,
           ].some((value) => String(value || "").toLowerCase().includes("marking"))
-            || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
-        });
+            || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || ""));
+
+        console.log(`[DirectPDFQA] Using structured extraction for ${questionType} ${questionNo}`);
+        const { askGeminiDirectPdfStructured, askIndexedPdfQuestionStructured } = await import("../ai-core/pdf/directPdfQa");
+        let result: any;
+
+        if (!req.file) {
+          const indexed = await retrieveExactPaperQuestion({
+            uid: req.user.uid,
+            sourceId,
+            subject,
+            year,
+            questionNo,
+            questionType,
+          });
+          if (indexed.needsOcr || indexed.needsLegacyConversion || indexed.chunks.length === 0) {
+            return {
+              ok: false,
+              status: 409,
+              found: false,
+              errorCode: "PDF_REINDEX_REQUIRED",
+              stage: "INDEX_LOOKUP",
+              needsOcr: indexed.needsOcr,
+              needsLegacyConversion: indexed.needsLegacyConversion,
+              message: indexed.needsOcr
+                ? "This PDF needs OCR before exact questions can be read."
+                : "This PDF index is missing or incomplete. Reindex it and retry.",
+            };
+          }
+          result = await askIndexedPdfQuestionStructured({
+            uid: req.user.uid,
+            sourceId,
+            chunks: indexed.chunks,
+            year: year || "unknown",
+            subject: subject || "unknown",
+            questionType,
+            questionNo,
+            allowOfficialAnswer,
+          });
+        } else {
+          result = await askGeminiDirectPdfStructured({
+            uid: req.user.uid,
+            sourceId: sourceId || "uploaded_temp",
+            pdfBuffer: buffer as Buffer,
+            year: year || "unknown",
+            subject: subject || "unknown",
+            questionType,
+            questionNo,
+            prompt: effectivePrompt,
+            allowOfficialAnswer,
+          });
+        }
         console.log(`[DirectPDFQA] Structured extraction result: ${result.found ? "FOUND" : "NOT_FOUND"}`);
         if (!result.ok || !result.found || !result.sourceEvidence?.questionText) {
           const isRequire = result.errorCode === "AI_CLIENT_RUNTIME_ERROR" || (result.error && String(result.error).includes("require is not defined"));
@@ -521,9 +520,17 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         };
       }
       console.log("[DirectPDFQA] Using general extraction");
+      if (!buffer) {
+        return {
+          ok: false,
+          status: 400,
+          errorCode: "DIRECT_QA_MISSING_STRUCTURED_INTENT",
+          message: "Select a question number before asking from a saved PDF.",
+        };
+      }
       const result = await askGeminiDirectPdf({
         sourceId: sourceId || "uploaded_temp",
-        pdfBuffer: buffer,
+        pdfBuffer: buffer as Buffer,
         prompt: effectivePrompt,
         questionId,
         subject,

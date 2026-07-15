@@ -29,28 +29,6 @@ function publicVideo(video: VideoDocument) {
   return safe;
 }
 
-function normalizeVideoFilter(value: unknown) {
-  return String(value || "").trim().toLocaleLowerCase();
-}
-
-function matchesVideoFilter(video: VideoDocument, subject: unknown, lesson: unknown) {
-  const requestedSubject = normalizeVideoFilter(subject);
-  const requestedLesson = normalizeVideoFilter(lesson);
-  return (!requestedSubject || normalizeVideoFilter(video.subject) === requestedSubject)
-    && (!requestedLesson || normalizeVideoFilter(video.lesson) === requestedLesson);
-}
-
-function setPlaybackCookie(res: express.Response, signed: ReturnType<typeof createSignedPlaybackCookie>) {
-  res.cookie("Cloud-CDN-Cookie", signed.cookieValue, {
-    secure: true,
-    httpOnly: true,
-    sameSite: "none",
-    domain: env.VIDEO_COOKIE_DOMAIN || undefined,
-    path: signed.path,
-    maxAge: env.VIDEO_COOKIE_TTL_SECONDS * 1000,
-  });
-}
-
 async function loadVideo(videoId: string) {
   const snapshot = await getAdminDb().collection("videos").doc(videoId).get();
   if (!snapshot.exists) throw new Error("VIDEO_NOT_FOUND");
@@ -262,25 +240,25 @@ videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
         await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "queued" }, { merge: true });
       }
     } catch (error: any) {
-      // The original upload is already a validated, playable video. A missing
-      // Transcoder permission/configuration must not discard it or leave an
-      // empty lesson card; fall back to signed direct playback.
-      console.warn("Video transcoder unavailable; using original quality playback.", error?.message || error);
+      console.warn("Secure video transcoding unavailable.", error?.message || error);
       transcode = { enabled: false, jobName: null };
     }
 
     const fallbackReady = !transcode.enabled;
     if (fallbackReady) {
+      const allowDirect = env.VIDEO_ALLOW_DIRECT_PLAYBACK;
       await getAdminDb().collection("videos").doc(video.id).set({
-        status: "ready",
-        isPublished: true,
-        allowPlayback: true,
-        playbackMode: "direct",
-        publishedAt: now,
+        status: allowDirect ? "ready" : "failed",
+        isPublished: allowDirect,
+        allowPlayback: allowDirect,
+        playbackMode: allowDirect ? "direct" : "hls",
+        transcoderErrorCode: allowDirect ? null : "SECURE_TRANSCODING_REQUIRED",
+        publishedAt: allowDirect ? now : null,
         updatedAt: now,
       }, { merge: true });
       await getAdminDb().collection("sources").doc(video.sourceId).set({
-        processingStatus: "ready",
+        processingStatus: allowDirect ? "ready" : "failed",
+        lastErrorCode: allowDirect ? null : "SECURE_TRANSCODING_REQUIRED",
         updatedAt: now,
       }, { merge: true });
     } else {
@@ -296,9 +274,12 @@ videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
       ok: true,
       videoId: video.id,
       sourceId: video.sourceId,
-      status: transcode.enabled ? "queued" : "ready",
+      status: transcode.enabled ? "queued" : (env.VIDEO_ALLOW_DIRECT_PLAYBACK ? "ready" : "failed"),
       transcodeQueued: transcode.enabled,
-      playbackMode: transcode.enabled ? "hls" : "direct",
+      playbackMode: transcode.enabled ? "hls" : (env.VIDEO_ALLOW_DIRECT_PLAYBACK ? "direct" : "hls"),
+      message: !transcode.enabled && !env.VIDEO_ALLOW_DIRECT_PLAYBACK
+        ? "Upload saved. Secure HLS processing is not configured; the video remains available for admin reprocessing."
+        : undefined,
     });
   } catch (error: any) {
     res.status(400).json({ ok: false, code: "VIDEO_FINALIZE_FAILED", message: error.message });
@@ -412,14 +393,7 @@ videoRoutes.get("/admin/videos", async (req, res) => {
     await verifyVideoAppCheck(req);
     await requireAdmin(req);
     const snapshot = await getAdminDb().collection("videos").orderBy("createdAt", "desc").limit(100).get();
-    const candidates = snapshot.docs
-      .map((doc: any) => ({ id: doc.id, ...doc.data() } as VideoDocument))
-      .filter((video: VideoDocument) => video.status !== "archived")
-      .filter((video: VideoDocument) => matchesVideoFilter(video, req.query.subject, req.query.lesson));
-    const videos = (await Promise.all(candidates.map((video: VideoDocument) => refreshTranscodeStatus(video))))
-      .map(publicVideo);
-    res.setHeader("Cache-Control", "private, no-store");
-    res.json({ ok: true, videos });
+    res.json({ ok: true, videos: snapshot.docs.map((doc: any) => publicVideo({ id: doc.id, ...doc.data() } as VideoDocument)) });
   } catch (error: any) {
     res.status(400).json({ ok: false, code: "VIDEOS_LIST_FAILED", message: error.message });
   }
@@ -441,13 +415,10 @@ videoRoutes.get("/videos", async (req, res) => {
     await verifyVideoAppCheck(req);
     const user = await requireUser(req);
     const snapshot = await getAdminDb().collection("videos").where("isPublished", "==", true).limit(100).get();
-    const candidates = snapshot.docs
+    const videos = snapshot.docs
       .map((doc: any) => ({ id: doc.id, ...doc.data() } as VideoDocument))
-      .filter((video: VideoDocument) => matchesVideoFilter(video, req.query.subject, req.query.lesson));
-    const videos = (await Promise.all(candidates.map((video: VideoDocument) => refreshTranscodeStatus(video))))
       .filter((video: VideoDocument) => canUserPlayVideo(video, user))
       .map(publicVideo);
-    res.setHeader("Cache-Control", "private, no-store");
     res.json({ ok: true, videos });
   } catch (error: any) {
     res.status(401).json({ ok: false, code: "VIDEOS_ACCESS_FAILED", message: error.message });
@@ -480,15 +451,20 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
       .limit(Math.max(1, video.maxConcurrentSessions))
       .get();
     const now = Date.now();
-    const liveSessions = active.docs.filter((doc: any) => {
-      const session = doc.data();
-      return session.videoId === video.id && Number(session.expiresAtMs || 0) > now;
-    });
+    const liveSessions = active.docs.filter((doc: any) => Number(doc.data().expiresAtMs || 0) > now);
     if (liveSessions.length >= video.maxConcurrentSessions) {
       return res.status(409).json({ ok: false, code: "PLAYBACK_SESSION_LIMIT", message: "This account already has an active playback session." });
     }
 
-    const directPlayback = !video.transcoderJobName || (video as any).playbackMode === "direct";
+    const directPlayback = env.VIDEO_ALLOW_DIRECT_PLAYBACK
+      && (!video.transcoderJobName || (video as any).playbackMode === "direct");
+    if (!directPlayback && ((video as any).playbackMode === "direct" || !video.transcoderJobName)) {
+      return res.status(409).json({
+        ok: false,
+        code: "VIDEO_SECURE_STREAM_NOT_READY",
+        message: "Secure HLS processing is not complete. Ask an admin to reprocess this video.",
+      });
+    }
     const signed = directPlayback ? null : createSignedPlaybackCookie(video);
     const sessionRef = db.collection("videoPlaybackSessions").doc();
     const expiresAtMs = now + env.VIDEO_SESSION_TTL_SECONDS * 1000;
@@ -505,7 +481,16 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
       status: "active",
     });
 
-    if (signed) setPlaybackCookie(res, signed);
+    if (signed) {
+      res.cookie("Cloud-CDN-Cookie", signed.cookieValue, {
+        secure: true,
+        httpOnly: true,
+        sameSite: "none",
+        domain: env.VIDEO_COOKIE_DOMAIN || undefined,
+        path: signed.path,
+        maxAge: env.VIDEO_COOKIE_TTL_SECONDS * 1000,
+      });
+    }
     const direct = directPlayback ? await createDirectPlaybackUrl(video) : null;
     res.setHeader("Cache-Control", "no-store");
     res.json({
@@ -519,46 +504,6 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
     });
   } catch (error: any) {
     res.status(400).json({ ok: false, code: "PLAYBACK_SESSION_FAILED", message: error.message });
-  }
-});
-
-videoRoutes.post("/video-sessions/:sessionId/refresh", async (req, res) => {
-  try {
-    await verifyVideoAppCheck(req);
-    const user = await requireUser(req);
-    const ref = getAdminDb().collection("videoPlaybackSessions").doc(req.params.sessionId);
-    const snapshot = await ref.get();
-    const session = snapshot.data();
-    if (!snapshot.exists || session?.userId !== user.uid || session?.status !== "active") {
-      return res.status(403).json({ ok: false, code: "SESSION_REVOKED" });
-    }
-
-    const video = await refreshTranscodeStatus(await loadVideo(String(session.videoId || "")));
-    if (!canUserPlayVideo(video, user)) {
-      return res.status(403).json({ ok: false, code: "VIDEO_FORBIDDEN" });
-    }
-
-    const directPlayback = !video.transcoderJobName || (video as any).playbackMode === "direct";
-    const signed = directPlayback ? null : createSignedPlaybackCookie(video);
-    if (signed) setPlaybackCookie(res, signed);
-    const direct = directPlayback ? await createDirectPlaybackUrl(video) : null;
-    const expiresAtMs = Date.now() + env.VIDEO_SESSION_TTL_SECONDS * 1000;
-    await ref.set({
-      lastHeartbeatAt: new Date().toISOString(),
-      expiresAt: new Date(expiresAtMs).toISOString(),
-      expiresAtMs,
-    }, { merge: true });
-
-    res.setHeader("Cache-Control", "private, no-store");
-    return res.json({
-      ok: true,
-      playbackMode: direct ? "direct" : "hls",
-      directUrl: direct?.url,
-      manifestUrl: signed?.manifestUrl,
-      expiresAt: direct?.expiresAt || signed?.expiresAt,
-    });
-  } catch (error: any) {
-    return res.status(400).json({ ok: false, code: "SESSION_REFRESH_FAILED", message: error.message });
   }
 });
 

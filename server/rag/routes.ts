@@ -155,6 +155,21 @@ ragRoutes.post("/upload", upload.single("file"), requireNonAnonymousUser, async 
 });
 
 // 3. Create past paper doc
+ragRoutes.get("/past-papers", requireNonAnonymousUser, async (req: any, res) => {
+  try {
+    const subject = normalizeSubject(String(req.query.subject || ""));
+    let query: FirebaseFirestore.Query = getAdminDb().collection("past_papers");
+    if (subject) query = query.where("subject", "==", subject);
+    const snapshot = await query.limit(200).get();
+    const papers = snapshot.docs
+      .map((doc) => ({ id: doc.id, ...doc.data() }))
+      .sort((left: any, right: any) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")));
+    res.json({ ok: true, papers });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, code: "PAST_PAPERS_READ_FAILED", message: err.message });
+  }
+});
+
 ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) => {
   try {
     const {

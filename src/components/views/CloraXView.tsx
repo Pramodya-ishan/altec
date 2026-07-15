@@ -19,6 +19,7 @@ import { CloraToolPalette } from '../ui/clora/CloraToolPalette';
 import { CloraSourceDrawer } from '../ui/clora/CloraSourceDrawer';
 import { openSourcePdf } from '../../lib/sourceActions';
 import { ErrorLogModal } from '../modals/ErrorLogModal';
+const PdfViewerModal = React.lazy(() => import('../PdfViewerModal').then(m => ({ default: m.PdfViewerModal })));
 import {
   Paperclip,
   Loader2,
@@ -212,6 +213,8 @@ export default function CloraXView() {
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [activeSources, setActiveSources] = useState<any[]>([]);
+  const [pdfModalOpen, setPdfModalOpen] = useState(false);
+  const [pdfModalUrl, setPdfModalUrl] = useState('');
 
 const [messages, setMessages] = useState<{
     role: 'user' | 'assistant',
@@ -1454,16 +1457,36 @@ const [messages, setMessages] = useState<{
         <CloraSourceDrawer
           sources={activeSources}
           onClose={() => setIsDrawerOpen(false)}
-          onSourceClick={(source) => {
-            openSourcePdf(source).catch((e: any) => {
-              console.error("Failed to open source:", e);
-              showNotification("PDF එක open කරන්න බැහැ. නැවත sign in කර retry කරන්න.", "error");
-            });
+          onSourceClick={async (source, preview) => {
+             if (preview) {
+                try {
+                  const { getPdfUrl } = await import("../../lib/sourceActions");
+                  const url = await getPdfUrl(source);
+                  setPdfModalUrl(url);
+                  setPdfModalOpen(true);
+                } catch (e) {
+                  showNotification("PDF preview open කරන්න බැහැ. Open in new tab try කරන්න.", "error");
+                }
+             } else {
+                openSourcePdf(source).catch((e: any) => {
+                   console.error("Failed to open source:", e);
+                });
+             }
           }}
         />
       }
       main={
         <>
+          {pdfModalOpen && (
+            <React.Suspense fallback={null}>
+              <PdfViewerModal
+                isOpen={pdfModalOpen}
+                onClose={() => setPdfModalOpen(false)}
+                pdfUrl={pdfModalUrl}
+                title="Source Document"
+              />
+            </React.Suspense>
+          )}
           <TtsComposerModal uploadedFile={uploadedFile}
              isOpen={showTtsModal}
              onClose={() => setShowTtsModal(false)}
@@ -1524,14 +1547,14 @@ const [messages, setMessages] = useState<{
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.95 }}
                 onClick={() => scrollToBottom('smooth')}
-                className="absolute bottom-28 left-1/2 z-30 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg transition-colors hover:bg-slate-50 sm:bottom-36"
+                className="absolute bottom-36 left-1/2 z-30 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg transition-colors hover:bg-slate-50"
               >
                 New message ↓
               </motion.button>
             )}
           </AnimatePresence>
 
-          <div className="relative shrink-0 border-t border-slate-100 bg-white/95 pt-2 backdrop-blur sm:pt-3">
+          <div className="relative shrink-0 border-t border-slate-100 bg-white/95 pt-3 backdrop-blur">
             <CloraComposer
               input={input}
               setInput={setInput}

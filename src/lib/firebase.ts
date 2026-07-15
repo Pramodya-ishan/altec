@@ -15,15 +15,7 @@ const firebaseConfig = {
   firestoreDatabaseId: import.meta.env.VITE_FIRESTORE_DATABASE_ID,
 };
 
-// Vercel projects often override only one or two public Firebase values.  Do
-// not replace the complete checked-in client config with a partial env object:
-// an undefined authDomain/appId makes Google sign-in appear to succeed and
-// then immediately return to the sign-in screen.
-const activeConfig = Object.fromEntries(
-  Object.entries({ ...localConfig, ...firebaseConfig }).filter(([, value]) =>
-    typeof value === 'string' ? value.trim().length > 0 : value != null
-  )
-) as typeof firebaseConfig;
+const activeConfig = (firebaseConfig.apiKey && firebaseConfig.apiKey.trim() !== "") ? firebaseConfig : localConfig;
 
 let firebaseApp: any = null;
 let db: any = null;
@@ -31,6 +23,10 @@ let auth: any = null;
 let storage: any = null;
 let appCheck: any = null;
 let isFirebaseEnabled = false;
+let resolveAuthPersistence: () => void = () => {};
+export const authPersistenceReady = new Promise<void>((resolve) => {
+  resolveAuthPersistence = resolve;
+});
 
 if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
   try {
@@ -41,11 +37,9 @@ if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
     }, dbId);
 
     auth = getAuth(firebaseApp);
-    // Persist the Firebase user across page navigation, reloads and OAuth
-    // popup completion. Failure is non-fatal (for example, private browsing).
-    void setPersistence(auth, browserLocalPersistence).catch((error) => {
-      console.warn('Firebase local auth persistence is unavailable:', error);
-    });
+    void setPersistence(auth, browserLocalPersistence)
+      .catch((error) => console.warn('Firebase auth persistence could not be enabled', error))
+      .finally(resolveAuthPersistence);
     storage = getStorage(firebaseApp);
     storage.maxOperationRetryTime = 2000;
     storage.maxUploadRetryTime = 5000;
@@ -61,9 +55,11 @@ if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
       console.info("Firebase client initialized successfully.");
     }
   } catch (error) {
+    resolveAuthPersistence();
     console.error("Failed to initialize Firebase:", error);
   }
 } else {
+  resolveAuthPersistence();
   console.info("Firebase API Key is missing. Operating in client-server DB file synchronization mode.");
 }
 

@@ -182,32 +182,33 @@ export async function startTranscode(video: VideoDocument) {
 
 export async function refreshTranscodeStatus(video: VideoDocument): Promise<VideoDocument> {
   if (!env.ENABLE_VIDEO_TRANSCODING && video.status === "uploaded") {
+    const allowDirect = env.VIDEO_ALLOW_DIRECT_PLAYBACK;
     const updates = {
-      status: "ready" as VideoStatus,
-      isPublished: true,
-      allowPlayback: true,
-      playbackMode: "direct" as const,
-      publishedAt: video.updatedAt || new Date().toISOString(),
+      status: (allowDirect ? "ready" : "failed") as VideoStatus,
+      isPublished: allowDirect,
+      allowPlayback: allowDirect,
+      playbackMode: (allowDirect ? "direct" : "hls") as "direct" | "hls",
+      transcoderErrorCode: allowDirect ? undefined : "SECURE_TRANSCODING_REQUIRED",
       updatedAt: new Date().toISOString(),
     };
     await getAdminDb().collection("videos").doc(video.id).set(updates, { merge: true });
-    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "ready", updatedAt: updates.updatedAt }, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: updates.status, lastErrorCode: updates.transcoderErrorCode || null, updatedAt: updates.updatedAt }, { merge: true });
     return { ...video, ...updates };
   }
   if (!video.transcoderJobName || !["queued", "transcoding"].includes(video.status)) return video;
   const queuedAt = Date.parse(video.updatedAt || video.createdAt || "");
   const fallbackToDirect = async (reason: string) => {
+    const allowDirect = env.VIDEO_ALLOW_DIRECT_PLAYBACK;
     const updates = {
-      status: "ready" as VideoStatus,
-      isPublished: true,
-      allowPlayback: true,
-      playbackMode: "direct" as const,
+      status: (allowDirect ? "ready" : "failed") as VideoStatus,
+      isPublished: allowDirect,
+      allowPlayback: allowDirect,
+      playbackMode: (allowDirect ? "direct" : "hls") as "direct" | "hls",
       transcoderErrorCode: reason,
-      publishedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
     await getAdminDb().collection("videos").doc(video.id).set(updates, { merge: true });
-    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "ready", updatedAt: updates.updatedAt }, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: updates.status, lastErrorCode: reason, updatedAt: updates.updatedAt }, { merge: true });
     return { ...video, ...updates };
   };
 

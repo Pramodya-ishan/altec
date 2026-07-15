@@ -55,7 +55,6 @@ const PreComponent = ({ children, ...props }: any) => {
 import { stripRawVisualBlocks } from "../../lib/ai/stripVisualBlocks";
 import { sanitizeMathText } from "../../lib/markdown/mathTextSanitizer";
 import { normalizeAnswerMarkdown } from "../../lib/markdown/normalizeAnswerMarkdown";
-import { openProtectedApiPdf } from "../../lib/sourceActions";
 
 export function MessageRenderer({ content }: MessageRendererProps) {
   const cleanedContent = normalizeAnswerMarkdown(stripRawVisualBlocks(content));
@@ -67,25 +66,6 @@ export function MessageRenderer({ content }: MessageRendererProps) {
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         components={{
-          a: ({ href, children, ...props }) => {
-            const protectedPdf = typeof href === 'string'
-              && /^\/api\/(?:rag\/sources|syllabus\/resources)\/[^/]+\/download(?:\?.*)?$/.test(href);
-            if (protectedPdf) {
-              return (
-                <a
-                  {...props}
-                  href={href}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    void openProtectedApiPdf(href).catch((error) => console.error('Unable to open protected PDF:', error));
-                  }}
-                >
-                  {children}
-                </a>
-              );
-            }
-            return <a {...props} href={href} target="_blank" rel="noreferrer noopener">{children}</a>;
-          },
           img: ({ node, ...props }) => {
             const src = props.src || "";
             if (src.startsWith("http://") || src.startsWith("https://") || src.startsWith("data:image/")) {

@@ -7402,7 +7402,8 @@ var init_solveExtractedQuestion = __esm({
 // server/ai-core/pdf/directPdfQa.ts
 var directPdfQa_exports = {};
 __export(directPdfQa_exports, {
-  askGeminiDirectPdfStructured: () => askGeminiDirectPdfStructured
+  askGeminiDirectPdfStructured: () => askGeminiDirectPdfStructured,
+  askIndexedPdfQuestionStructured: () => askIndexedPdfQuestionStructured
 });
 async function askGeminiDirectPdfStructured(params) {
   const { sourceId, pdfBuffer, year, subject, questionType, questionNo, allowOfficialAnswer = false } = params;
@@ -7590,12 +7591,112 @@ Return JSON with exact evidence. If not found, set found:false.
     await trackAIUsage(uid, modelName, 1e3, 500, "directPdfQaCalls");
   }
 }
+async function askIndexedPdfQuestionStructured(params) {
+  const {
+    uid,
+    sourceId,
+    chunks,
+    year,
+    subject,
+    questionType,
+    questionNo,
+    allowOfficialAnswer = false
+  } = params;
+  const ordered = [...chunks].sort((a, b) => Number(a.pageNumber || a.chunkIndex || 0) - Number(b.pageNumber || b.chunkIndex || 0)).map((chunk) => `[Page ${chunk.pageNumber || "?"}]
+${String(chunk.text || "").trim()}`).filter(Boolean).join("\n\n").slice(0, 7e4);
+  if (ordered.replace(/\s/g, "").length < 80) {
+    return {
+      ok: false,
+      found: false,
+      errorCode: "PDF_REINDEX_REQUIRED",
+      stage: "INDEX_LOOKUP",
+      reason: "The indexed PDF text is empty or incomplete."
+    };
+  }
+  const systemInstruction = `You extract one exact Sri Lankan A/L exam question from INDEXED PDF TEXT.
+Requested: ${year} ${subject} ${questionType} ${questionNo}.
+Rules:
+- Use only the supplied indexed text. Never invent a question, option, answer, page, or source detail.
+- Match question markers such as 01., 1., Q1, Question 1, or Sinhala question numbering.
+- Extract the complete question and, for MCQ, all printed options.
+- If the exact question is absent or unreadable return found:false.
+- ${allowOfficialAnswer ? "Copy an official answer only when it is explicitly printed in this verified marking-scheme text." : "Always set officialAnswer:null. This is not a verified marking scheme."}
+- Return JSON only.`;
+  try {
+    const { result: response } = await callGeminiWithFallback("direct_pdf_extract", {
+      model: AI_MODELS.pdf,
+      contents: [{
+        role: "user",
+        parts: [{
+          text: `${systemInstruction}
+
+INDEXED PDF TEXT:
+${ordered}
+
+Return {"found":boolean,"sourceEvidence":{"sourceId":"${sourceId}","pageNumber":number|null,"questionNo":"${questionNo}","questionText":string|null,"options":string[]|null},"answer":{"officialAnswer":string|null,"explanationSinhala":string|null,"lesson":string|null},"confidence":number,"reason":string}.`
+        }]
+      }],
+      config: { temperature: 0, responseMimeType: "application/json" }
+    });
+    const result = JSON.parse(String(response.text || "{}").trim());
+    const questionText = String(result?.sourceEvidence?.questionText || "").trim();
+    const options = Array.isArray(result?.sourceEvidence?.options) ? result.sourceEvidence.options.map((value) => String(value).trim()).filter(Boolean) : [];
+    const isMcq = String(questionType).toLowerCase().includes("mcq");
+    if (!result?.found || questionText.length < 12 || isMcq && options.length < 4) {
+      return {
+        ok: false,
+        found: false,
+        errorCode: "EXACT_QUESTION_EVIDENCE_MISSING",
+        stage: "INDEX_LOOKUP",
+        reason: "The exact question is not readable in the indexed PDF text."
+      };
+    }
+    if (!allowOfficialAnswer && result.answer) result.answer.officialAnswer = null;
+    if (!result.answer) result.answer = { officialAnswer: null };
+    if (isMcq && !result.answer.officialAnswer) {
+      const solved = await solveExtractedMcqQuestion({
+        questionText,
+        options,
+        subject,
+        year,
+        questionNo
+      }).catch(() => null);
+      if (solved) result.answer.solvedAnswer = solved;
+    }
+    const cacheId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
+    await getAdminDb().collection("pdf_question_cache").doc(cacheId).set(removeUndefinedDeep({
+      sourceId,
+      subject,
+      year,
+      questionType,
+      questionNo,
+      ...result.sourceEvidence,
+      ...result.answer,
+      confidence: Number(result.confidence || 0),
+      extractionMethod: "indexed_pdf_text",
+      validationStatus: Number(result.confidence || 0) >= 0.8 ? "valid" : "needs_review",
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    }), { merge: true });
+    await trackAIUsage(uid, AI_MODELS.pdf, Math.ceil(ordered.length / 4), 500, "directPdfQaCalls");
+    return { ok: true, ...result };
+  } catch (error) {
+    const classified = classifyAiError(error);
+    return {
+      ok: false,
+      found: false,
+      errorCode: classified.code || "INDEXED_PDF_QA_FAILED",
+      stage: "MODEL_CALL",
+      reason: String(error?.message || error).slice(0, 400)
+    };
+  }
+}
 var init_directPdfQa = __esm({
   "server/ai-core/pdf/directPdfQa.ts"() {
     "use strict";
     init_client();
     init_modelRouter();
     init_stripVisualBlocks();
+    init_chatSanitizer();
     init_admin();
     init_solveExtractedQuestion();
     init_usageTracker();
@@ -7877,6 +7978,7 @@ var RATE_LIMIT_UID_WINDOW_MS = validateNumber("RATE_LIMIT_UID_WINDOW_MS", 6e4, 1
 var RATE_LIMIT_UID_MAX = validateNumber("RATE_LIMIT_UID_MAX", 100, 1);
 var ENABLE_VIDEO = validateBoolean("ENABLE_VIDEO", true);
 var ENABLE_VIDEO_TRANSCODING = validateBoolean("ENABLE_VIDEO_TRANSCODING", false);
+var VIDEO_ALLOW_DIRECT_PLAYBACK = validateBoolean("VIDEO_ALLOW_DIRECT_PLAYBACK", NODE_ENV !== "production");
 var VIDEO_REQUIRE_APP_CHECK = validateBoolean("VIDEO_REQUIRE_APP_CHECK", false);
 var VIDEO_INPUT_BUCKET = validateOptional("VIDEO_INPUT_BUCKET", FIREBASE_STORAGE_BUCKET);
 var VIDEO_OUTPUT_BUCKET = validateOptional("VIDEO_OUTPUT_BUCKET", "");
@@ -7940,6 +8042,7 @@ var env = {
   RATE_LIMIT_UID_MAX,
   ENABLE_VIDEO,
   ENABLE_VIDEO_TRANSCODING,
+  VIDEO_ALLOW_DIRECT_PLAYBACK,
   VIDEO_REQUIRE_APP_CHECK,
   VIDEO_INPUT_BUCKET,
   VIDEO_OUTPUT_BUCKET,
@@ -8418,15 +8521,28 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
   }
   let db = null;
   if (tests.adminInitialized) {
-    try {
-      db = getAdminDb2();
-    } catch (err) {
+    const usesApplicationDefault = dbInfo.credentialMode === "application_default";
+    const runsOnGoogleInfrastructure = Boolean(
+      process.env.K_SERVICE || process.env.FUNCTION_TARGET || process.env.GAE_SERVICE
+    );
+    if (usesApplicationDefault && !runsOnGoogleInfrastructure) {
       errors2.push({
         test: "getAdminDb",
-        code: "FIRESTORE_GET_DB_FAILED",
-        message: err.message,
-        hint: err.message.includes("CONFIG_ERROR_FIRESTORE_DATABASE_ID_MISSING") ? "FIRESTORE_DATABASE_ID environment variable is missing." : "Firestore database retrieval failed."
+        code: "GOOGLE_CREDENTIALS_NOT_CONFIGURED",
+        message: "Google service-account credentials are not configured.",
+        hint: "Set GOOGLE_APPLICATION_CREDENTIALS_JSON to the complete service-account JSON."
       });
+    } else {
+      try {
+        db = getAdminDb2();
+      } catch (err) {
+        errors2.push({
+          test: "getAdminDb",
+          code: "FIRESTORE_GET_DB_FAILED",
+          message: err.message,
+          hint: err.message.includes("CONFIG_ERROR_FIRESTORE_DATABASE_ID_MISSING") ? "FIRESTORE_DATABASE_ID environment variable is missing." : "Firestore database retrieval failed."
+        });
+      }
     }
   }
   if (db) {
@@ -9672,6 +9788,18 @@ ragRoutes.post("/upload", upload.single("file"), requireNonAnonymousUser, async 
     message: "Firebase Admin Storage is degraded in this workspace. Please use client-side storage uploads directly."
   });
 });
+ragRoutes.get("/past-papers", requireNonAnonymousUser, async (req, res) => {
+  try {
+    const subject = normalizeSubject4(String(req.query.subject || ""));
+    let query = getAdminDb().collection("past_papers");
+    if (subject) query = query.where("subject", "==", subject);
+    const snapshot = await query.limit(200).get();
+    const papers = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((left, right) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")));
+    res.json({ ok: true, papers });
+  } catch (err) {
+    res.status(500).json({ ok: false, code: "PAST_PAPERS_READ_FAILED", message: err.message });
+  }
+});
 ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req, res) => {
   try {
     const {
@@ -10622,7 +10750,7 @@ authRoutes.post("/session", async (req, res) => {
       userData.profile = {
         email: email.toLowerCase(),
         username: profileData?.username || decodedToken.name || email.split("@")[0],
-        picture: decodedToken.picture || "",
+        picture: decodedToken.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
         nic: profileData?.nic || "",
         mobileNumber: profileData?.mobileNumber || "",
         bday: profileData?.bday || "",
@@ -11737,6 +11865,7 @@ Instructions:
 
 // server/pdf/routes.ts
 init_stripVisualBlocks();
+init_retrieve();
 init_aiCircuitBreaker();
 var pdfRoutes = (0, import_express5.Router)();
 var upload2 = (0, import_multer2.default)({ storage: import_multer2.default.memoryStorage() });
@@ -12075,20 +12204,14 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload2.single("file"), a
       }
     }
     const requestPromise = async () => {
-      let buffer;
+      let buffer = null;
       let resolvedSource = null;
       if (req.file) {
         buffer = req.file.buffer;
-        console.log(`[DirectPDFQA] File received via upload. Buffer size: ${buffer.length} bytes`);
+        console.log(`[DirectPDFQA] File received via upload. Buffer size: ${req.file.buffer.length} bytes`);
       } else {
         const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath);
         resolvedSource = resolved.source;
-        console.log(`[DirectPDFQA] Reading verified source from Firebase Admin: ${resolved.path}`);
-        const [downloaded] = await getAdminBucket().file(resolved.path).download();
-        buffer = downloaded;
-        if (!buffer?.length) {
-          return { ok: false, status: 404, errorCode: "DIRECT_QA_SOURCE_EMPTY", error: "The stored PDF is empty or unavailable." };
-        }
       }
       const effectivePrompt = prompt?.trim() || `${year || ""} ${subject || ""} ${questionType || "question"} ${questionNo} answer`;
       if (!questionNo || !questionType) {
@@ -12103,23 +12226,58 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload2.single("file"), a
         };
       }
       if (questionNo && questionType) {
+        const allowOfficialAnswer = [
+          resolvedSource?.resourceType,
+          resolvedSource?.sourceType,
+          resolvedSource?.sourceScope
+        ].some((value) => String(value || "").toLowerCase().includes("marking")) || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || ""));
         console.log(`[DirectPDFQA] Using structured extraction for ${questionType} ${questionNo}`);
-        const { askGeminiDirectPdfStructured: askGeminiDirectPdfStructured2 } = await Promise.resolve().then(() => (init_directPdfQa(), directPdfQa_exports));
-        const result2 = await askGeminiDirectPdfStructured2({
-          uid: req.user.uid,
-          sourceId: sourceId || "uploaded_temp",
-          pdfBuffer: buffer,
-          year: year || "unknown",
-          subject: subject || "unknown",
-          questionType,
-          questionNo,
-          prompt: effectivePrompt,
-          allowOfficialAnswer: [
-            resolvedSource?.resourceType,
-            resolvedSource?.sourceType,
-            resolvedSource?.sourceScope
-          ].some((value) => String(value || "").toLowerCase().includes("marking")) || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || ""))
-        });
+        const { askGeminiDirectPdfStructured: askGeminiDirectPdfStructured2, askIndexedPdfQuestionStructured: askIndexedPdfQuestionStructured2 } = await Promise.resolve().then(() => (init_directPdfQa(), directPdfQa_exports));
+        let result2;
+        if (!req.file) {
+          const indexed = await retrieveExactPaperQuestion({
+            uid: req.user.uid,
+            sourceId,
+            subject,
+            year,
+            questionNo,
+            questionType
+          });
+          if (indexed.needsOcr || indexed.needsLegacyConversion || indexed.chunks.length === 0) {
+            return {
+              ok: false,
+              status: 409,
+              found: false,
+              errorCode: "PDF_REINDEX_REQUIRED",
+              stage: "INDEX_LOOKUP",
+              needsOcr: indexed.needsOcr,
+              needsLegacyConversion: indexed.needsLegacyConversion,
+              message: indexed.needsOcr ? "This PDF needs OCR before exact questions can be read." : "This PDF index is missing or incomplete. Reindex it and retry."
+            };
+          }
+          result2 = await askIndexedPdfQuestionStructured2({
+            uid: req.user.uid,
+            sourceId,
+            chunks: indexed.chunks,
+            year: year || "unknown",
+            subject: subject || "unknown",
+            questionType,
+            questionNo,
+            allowOfficialAnswer
+          });
+        } else {
+          result2 = await askGeminiDirectPdfStructured2({
+            uid: req.user.uid,
+            sourceId: sourceId || "uploaded_temp",
+            pdfBuffer: buffer,
+            year: year || "unknown",
+            subject: subject || "unknown",
+            questionType,
+            questionNo,
+            prompt: effectivePrompt,
+            allowOfficialAnswer
+          });
+        }
         console.log(`[DirectPDFQA] Structured extraction result: ${result2.found ? "FOUND" : "NOT_FOUND"}`);
         if (!result2.ok || !result2.found || !result2.sourceEvidence?.questionText) {
           const isRequire = result2.errorCode === "AI_CLIENT_RUNTIME_ERROR" || result2.error && String(result2.error).includes("require is not defined");
@@ -12152,6 +12310,14 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload2.single("file"), a
         };
       }
       console.log("[DirectPDFQA] Using general extraction");
+      if (!buffer) {
+        return {
+          ok: false,
+          status: 400,
+          errorCode: "DIRECT_QA_MISSING_STRUCTURED_INTENT",
+          message: "Select a question number before asking from a saved PDF."
+        };
+      }
       const result = await askGeminiDirectPdf({
         sourceId: sourceId || "uploaded_temp",
         pdfBuffer: buffer,
@@ -13342,32 +13508,33 @@ async function startTranscode(video) {
 }
 async function refreshTranscodeStatus(video) {
   if (!env.ENABLE_VIDEO_TRANSCODING && video.status === "uploaded") {
+    const allowDirect = env.VIDEO_ALLOW_DIRECT_PLAYBACK;
     const updates2 = {
-      status: "ready",
-      isPublished: true,
-      allowPlayback: true,
-      playbackMode: "direct",
-      publishedAt: video.updatedAt || (/* @__PURE__ */ new Date()).toISOString(),
+      status: allowDirect ? "ready" : "failed",
+      isPublished: allowDirect,
+      allowPlayback: allowDirect,
+      playbackMode: allowDirect ? "direct" : "hls",
+      transcoderErrorCode: allowDirect ? void 0 : "SECURE_TRANSCODING_REQUIRED",
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     await getAdminDb().collection("videos").doc(video.id).set(updates2, { merge: true });
-    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "ready", updatedAt: updates2.updatedAt }, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: updates2.status, lastErrorCode: updates2.transcoderErrorCode || null, updatedAt: updates2.updatedAt }, { merge: true });
     return { ...video, ...updates2 };
   }
   if (!video.transcoderJobName || !["queued", "transcoding"].includes(video.status)) return video;
   const queuedAt = Date.parse(video.updatedAt || video.createdAt || "");
   const fallbackToDirect = async (reason) => {
+    const allowDirect = env.VIDEO_ALLOW_DIRECT_PLAYBACK;
     const updates2 = {
-      status: "ready",
-      isPublished: true,
-      allowPlayback: true,
-      playbackMode: "direct",
+      status: allowDirect ? "ready" : "failed",
+      isPublished: allowDirect,
+      allowPlayback: allowDirect,
+      playbackMode: allowDirect ? "direct" : "hls",
       transcoderErrorCode: reason,
-      publishedAt: (/* @__PURE__ */ new Date()).toISOString(),
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     await getAdminDb().collection("videos").doc(video.id).set(updates2, { merge: true });
-    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "ready", updatedAt: updates2.updatedAt }, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: updates2.status, lastErrorCode: reason, updatedAt: updates2.updatedAt }, { merge: true });
     return { ...video, ...updates2 };
   };
   if (Number.isFinite(queuedAt) && Date.now() - queuedAt > 30 * 60 * 1e3) {
@@ -13451,24 +13618,6 @@ var VIDEO_MIME_TYPES = /* @__PURE__ */ new Set(["video/mp4", "video/quicktime", 
 function publicVideo(video) {
   const { inputBucket, inputObjectPath, transcoderJobName, ...safe } = video;
   return safe;
-}
-function normalizeVideoFilter(value) {
-  return String(value || "").trim().toLocaleLowerCase();
-}
-function matchesVideoFilter(video, subject, lesson) {
-  const requestedSubject = normalizeVideoFilter(subject);
-  const requestedLesson = normalizeVideoFilter(lesson);
-  return (!requestedSubject || normalizeVideoFilter(video.subject) === requestedSubject) && (!requestedLesson || normalizeVideoFilter(video.lesson) === requestedLesson);
-}
-function setPlaybackCookie(res, signed) {
-  res.cookie("Cloud-CDN-Cookie", signed.cookieValue, {
-    secure: true,
-    httpOnly: true,
-    sameSite: "none",
-    domain: env.VIDEO_COOKIE_DOMAIN || void 0,
-    path: signed.path,
-    maxAge: env.VIDEO_COOKIE_TTL_SECONDS * 1e3
-  });
 }
 async function loadVideo(videoId) {
   const snapshot = await getAdminDb().collection("videos").doc(videoId).get();
@@ -13667,21 +13816,24 @@ videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
         await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "queued" }, { merge: true });
       }
     } catch (error) {
-      console.warn("Video transcoder unavailable; using original quality playback.", error?.message || error);
+      console.warn("Secure video transcoding unavailable.", error?.message || error);
       transcode = { enabled: false, jobName: null };
     }
     const fallbackReady = !transcode.enabled;
     if (fallbackReady) {
+      const allowDirect = env.VIDEO_ALLOW_DIRECT_PLAYBACK;
       await getAdminDb().collection("videos").doc(video.id).set({
-        status: "ready",
-        isPublished: true,
-        allowPlayback: true,
-        playbackMode: "direct",
-        publishedAt: now,
+        status: allowDirect ? "ready" : "failed",
+        isPublished: allowDirect,
+        allowPlayback: allowDirect,
+        playbackMode: allowDirect ? "direct" : "hls",
+        transcoderErrorCode: allowDirect ? null : "SECURE_TRANSCODING_REQUIRED",
+        publishedAt: allowDirect ? now : null,
         updatedAt: now
       }, { merge: true });
       await getAdminDb().collection("sources").doc(video.sourceId).set({
-        processingStatus: "ready",
+        processingStatus: allowDirect ? "ready" : "failed",
+        lastErrorCode: allowDirect ? null : "SECURE_TRANSCODING_REQUIRED",
         updatedAt: now
       }, { merge: true });
     } else {
@@ -13696,9 +13848,10 @@ videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
       ok: true,
       videoId: video.id,
       sourceId: video.sourceId,
-      status: transcode.enabled ? "queued" : "ready",
+      status: transcode.enabled ? "queued" : env.VIDEO_ALLOW_DIRECT_PLAYBACK ? "ready" : "failed",
       transcodeQueued: transcode.enabled,
-      playbackMode: transcode.enabled ? "hls" : "direct"
+      playbackMode: transcode.enabled ? "hls" : env.VIDEO_ALLOW_DIRECT_PLAYBACK ? "direct" : "hls",
+      message: !transcode.enabled && !env.VIDEO_ALLOW_DIRECT_PLAYBACK ? "Upload saved. Secure HLS processing is not configured; the video remains available for admin reprocessing." : void 0
     });
   } catch (error) {
     res.status(400).json({ ok: false, code: "VIDEO_FINALIZE_FAILED", message: error.message });
@@ -13806,10 +13959,7 @@ videoRoutes.get("/admin/videos", async (req, res) => {
     await verifyVideoAppCheck(req);
     await requireAdmin(req);
     const snapshot = await getAdminDb().collection("videos").orderBy("createdAt", "desc").limit(100).get();
-    const candidates = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((video) => video.status !== "archived").filter((video) => matchesVideoFilter(video, req.query.subject, req.query.lesson));
-    const videos = (await Promise.all(candidates.map((video) => refreshTranscodeStatus(video)))).map(publicVideo);
-    res.setHeader("Cache-Control", "private, no-store");
-    res.json({ ok: true, videos });
+    res.json({ ok: true, videos: snapshot.docs.map((doc) => publicVideo({ id: doc.id, ...doc.data() })) });
   } catch (error) {
     res.status(400).json({ ok: false, code: "VIDEOS_LIST_FAILED", message: error.message });
   }
@@ -13829,9 +13979,7 @@ videoRoutes.get("/videos", async (req, res) => {
     await verifyVideoAppCheck(req);
     const user = await requireUser(req);
     const snapshot = await getAdminDb().collection("videos").where("isPublished", "==", true).limit(100).get();
-    const candidates = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((video) => matchesVideoFilter(video, req.query.subject, req.query.lesson));
-    const videos = (await Promise.all(candidates.map((video) => refreshTranscodeStatus(video)))).filter((video) => canUserPlayVideo(video, user)).map(publicVideo);
-    res.setHeader("Cache-Control", "private, no-store");
+    const videos = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((video) => canUserPlayVideo(video, user)).map(publicVideo);
     res.json({ ok: true, videos });
   } catch (error) {
     res.status(401).json({ ok: false, code: "VIDEOS_ACCESS_FAILED", message: error.message });
@@ -13857,14 +14005,18 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
     const db = getAdminDb();
     const active = await db.collection("videoPlaybackSessions").where("userId", "==", user.uid).where("status", "==", "active").limit(Math.max(1, video.maxConcurrentSessions)).get();
     const now = Date.now();
-    const liveSessions = active.docs.filter((doc) => {
-      const session = doc.data();
-      return session.videoId === video.id && Number(session.expiresAtMs || 0) > now;
-    });
+    const liveSessions = active.docs.filter((doc) => Number(doc.data().expiresAtMs || 0) > now);
     if (liveSessions.length >= video.maxConcurrentSessions) {
       return res.status(409).json({ ok: false, code: "PLAYBACK_SESSION_LIMIT", message: "This account already has an active playback session." });
     }
-    const directPlayback = !video.transcoderJobName || video.playbackMode === "direct";
+    const directPlayback = env.VIDEO_ALLOW_DIRECT_PLAYBACK && (!video.transcoderJobName || video.playbackMode === "direct");
+    if (!directPlayback && (video.playbackMode === "direct" || !video.transcoderJobName)) {
+      return res.status(409).json({
+        ok: false,
+        code: "VIDEO_SECURE_STREAM_NOT_READY",
+        message: "Secure HLS processing is not complete. Ask an admin to reprocess this video."
+      });
+    }
     const signed = directPlayback ? null : createSignedPlaybackCookie(video);
     const sessionRef = db.collection("videoPlaybackSessions").doc();
     const expiresAtMs = now + env.VIDEO_SESSION_TTL_SECONDS * 1e3;
@@ -13880,7 +14032,16 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
       expiresAtMs,
       status: "active"
     });
-    if (signed) setPlaybackCookie(res, signed);
+    if (signed) {
+      res.cookie("Cloud-CDN-Cookie", signed.cookieValue, {
+        secure: true,
+        httpOnly: true,
+        sameSite: "none",
+        domain: env.VIDEO_COOKIE_DOMAIN || void 0,
+        path: signed.path,
+        maxAge: env.VIDEO_COOKIE_TTL_SECONDS * 1e3
+      });
+    }
     const direct = directPlayback ? await createDirectPlaybackUrl(video) : null;
     res.setHeader("Cache-Control", "no-store");
     res.json({
@@ -13894,42 +14055,6 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
     });
   } catch (error) {
     res.status(400).json({ ok: false, code: "PLAYBACK_SESSION_FAILED", message: error.message });
-  }
-});
-videoRoutes.post("/video-sessions/:sessionId/refresh", async (req, res) => {
-  try {
-    await verifyVideoAppCheck(req);
-    const user = await requireUser(req);
-    const ref = getAdminDb().collection("videoPlaybackSessions").doc(req.params.sessionId);
-    const snapshot = await ref.get();
-    const session = snapshot.data();
-    if (!snapshot.exists || session?.userId !== user.uid || session?.status !== "active") {
-      return res.status(403).json({ ok: false, code: "SESSION_REVOKED" });
-    }
-    const video = await refreshTranscodeStatus(await loadVideo(String(session.videoId || "")));
-    if (!canUserPlayVideo(video, user)) {
-      return res.status(403).json({ ok: false, code: "VIDEO_FORBIDDEN" });
-    }
-    const directPlayback = !video.transcoderJobName || video.playbackMode === "direct";
-    const signed = directPlayback ? null : createSignedPlaybackCookie(video);
-    if (signed) setPlaybackCookie(res, signed);
-    const direct = directPlayback ? await createDirectPlaybackUrl(video) : null;
-    const expiresAtMs = Date.now() + env.VIDEO_SESSION_TTL_SECONDS * 1e3;
-    await ref.set({
-      lastHeartbeatAt: (/* @__PURE__ */ new Date()).toISOString(),
-      expiresAt: new Date(expiresAtMs).toISOString(),
-      expiresAtMs
-    }, { merge: true });
-    res.setHeader("Cache-Control", "private, no-store");
-    return res.json({
-      ok: true,
-      playbackMode: direct ? "direct" : "hls",
-      directUrl: direct?.url,
-      manifestUrl: signed?.manifestUrl,
-      expiresAt: direct?.expiresAt || signed?.expiresAt
-    });
-  } catch (error) {
-    return res.status(400).json({ ok: false, code: "SESSION_REFRESH_FAILED", message: error.message });
   }
 });
 videoRoutes.post("/video-sessions/:sessionId/heartbeat", async (req, res) => {
@@ -14109,8 +14234,8 @@ function requireRole(...allowedRoles) {
 // server/ocr/ocrWorker.ts
 init_admin();
 function startOcrWorker(intervalMs = 6e4) {
-  if (process.env.NODE_ENV === "test") return;
-  setInterval(async () => {
+  if (process.env.NODE_ENV === "test" || !env.OCR_ENABLED) return;
+  const timer = setInterval(async () => {
     try {
       const db = getAdminDb();
       const snapshot = await db.collection("ocr_jobs").where("status", "==", "running").limit(10).get();
@@ -14160,6 +14285,7 @@ function startOcrWorker(intervalMs = 6e4) {
       console.error("[OCR Worker] Error in worker loop:", err);
     }
   }, intervalMs);
+  timer.unref?.();
 }
 
 // server/ai-core/routes.ts
@@ -15151,7 +15277,10 @@ app.post("/api/admin/support/data", requireFirebaseUser, requireRole("admin"), a
   }
 });
 app.get("/api/quota", async (req, res) => {
-  res.status(501).json({ ok: false, error: "not_implemented" });
+  res.json({ ok: true, rpmUsed: 0, rpmLimit: 60, rpdUsed: 0, rpdLimit: 1500 });
+});
+app.get("/api/health", (_req, res) => {
+  res.status(200).json({ ok: true, status: "ok" });
 });
 app.post("/api/send-email", async (req, res) => {
   res.status(501).json({ ok: false, error: "not_implemented" });
@@ -15245,7 +15374,7 @@ app.get(["/manifest.json", "/manifest.webmanifest"], (req, res) => {
   }
   res.status(404).json({ error: "manifest not found" });
 });
-app.get(["/pdf.worker.min.mjs", "/pdf.worker.min.js"], (req, res) => {
+app.get(["/pdf.worker.min.mjs", "/pdf.worker.mjs", "/pdf.worker.min.js"], (req, res) => {
   const file = getPublicOrDistFile(req.path.substring(1));
   if (file) {
     res.type("text/javascript");

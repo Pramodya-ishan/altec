@@ -23,6 +23,7 @@ export interface ServerEnv {
   RATE_LIMIT_UID_MAX: number;
   ENABLE_VIDEO: boolean;
   ENABLE_VIDEO_TRANSCODING: boolean;
+  VIDEO_ALLOW_DIRECT_PLAYBACK: boolean;
   VIDEO_REQUIRE_APP_CHECK: boolean;
   VIDEO_INPUT_BUCKET: string;
   VIDEO_OUTPUT_BUCKET: string;
@@ -122,6 +123,9 @@ const RATE_LIMIT_UID_MAX = validateNumber("RATE_LIMIT_UID_MAX", 100, 1);
 
 const ENABLE_VIDEO = validateBoolean("ENABLE_VIDEO", true);
 const ENABLE_VIDEO_TRANSCODING = validateBoolean("ENABLE_VIDEO_TRANSCODING", false);
+// Direct object URLs are useful for local development only. Production uses
+// authenticated HLS sessions so the original file URL is never returned.
+const VIDEO_ALLOW_DIRECT_PLAYBACK = validateBoolean("VIDEO_ALLOW_DIRECT_PLAYBACK", NODE_ENV !== "production");
 const VIDEO_REQUIRE_APP_CHECK = validateBoolean("VIDEO_REQUIRE_APP_CHECK", false);
 const VIDEO_INPUT_BUCKET = validateOptional("VIDEO_INPUT_BUCKET", FIREBASE_STORAGE_BUCKET);
 const VIDEO_OUTPUT_BUCKET = validateOptional("VIDEO_OUTPUT_BUCKET", "");
@@ -189,6 +193,7 @@ export const env: ServerEnv = {
   RATE_LIMIT_UID_MAX,
   ENABLE_VIDEO,
   ENABLE_VIDEO_TRANSCODING,
+  VIDEO_ALLOW_DIRECT_PLAYBACK,
   VIDEO_REQUIRE_APP_CHECK,
   VIDEO_INPUT_BUCKET,
   VIDEO_OUTPUT_BUCKET,

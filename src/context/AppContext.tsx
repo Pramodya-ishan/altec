@@ -2,9 +2,8 @@ import { calculateCurrentGradeFromData } from '../lib/utils';
 import { apiFetch } from "../lib/api";
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
-import { isFirebaseEnabled, db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
-import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, deleteDoc } from 'firebase/firestore';
-import { GoogleAuthProvider, signInWithCredential, signInWithPopup, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { isFirebaseEnabled, auth, authPersistenceReady } from '../lib/firebase';
+import { GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 
 type ModalsState = {
   playlist: { open: boolean; topic: string };
@@ -158,38 +157,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [pushNotifications, setPushNotifications] = useState<PushNotification[]>([]);
+  const notificationPollRef = useRef<number | null>(null);
   const [localFriends, setLocalFriends] = useState<string[]>(['dilshan@alblueprint.com', 'amara@alblueprint.com']);
 
   const [adminTargetEmail, setAdminTargetEmailState] = useState<string | null>(null);
 
   const fetchProfile = async (rawEmail: string) => {
     const email = rawEmail.toLowerCase();
-    if (isFirebaseEnabled && db && auth?.currentUser) {
-      try {
-        const docRef = doc(db, 'users', email, 'profile', 'info');
-        const snap = await getDoc(docRef);
-        if (snap.exists()) {
-          const pData = snap.data() as UserProfile;
-          setProfile(pData);
-          try {
-             await apiFetch('/api/profile', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, profile: pData })
-             });
-          } catch(err) {}
-          return;
-        }
-      } catch (e) {
-        console.warn("Firestore fetch profile failed: ", e);
-      }
-    }
     try {
       const res = await apiFetch(`/api/profile?email=${encodeURIComponent(email)}`);
       if (res.ok) {
         const data = await res.json();
         if (data.profile) {
-          setProfile(data.profile);
+          const googlePicture = auth?.currentUser?.photoURL || user?.picture || '';
+          const storedPicture = String(data.profile.picture || '');
+          setProfile({
+            ...data.profile,
+            picture: (!storedPicture || storedPicture.includes('api.dicebear.com')) && googlePicture
+              ? googlePicture
+              : storedPicture,
+          });
           return;
         }
       }
@@ -199,7 +186,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setProfile({
       email,
       username: email.split('@')[0],
-      picture: user?.picture || '',
+      picture: auth?.currentUser?.photoURL || user?.picture || '',
       bio: 'Student on A/L Tech Blueprint journey!',
       updatedAt: new Date().toISOString()
     });
@@ -226,14 +213,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setProfile(nextProfile);
     let rawEmail = adminTargetEmail || user?.email || 'local_user';
     const email = rawEmail.toLowerCase();
-    if (isFirebaseEnabled && db && auth?.currentUser) {
-      try {
-        const docRef = doc(db, 'users', email, 'profile', 'info');
-        await setDoc(docRef, nextProfile, { merge: true });
-      } catch (e) {
-        console.error("Firestore save profile failed: ", e);
-      }
-    }
     try {
       await apiFetch('/api/profile', {
         method: 'POST',
@@ -275,7 +254,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setProfile({
         email: 'local_user',
         username: 'LocalStudent',
-        picture: '',
+        picture: `https://api.dicebear.com/7.x/bottts/svg?seed=LocalStudent`,
         bio: 'Student on A/L Tech/SFT/ICT journey!',
         updatedAt: new Date().toISOString()
       });
@@ -296,7 +275,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    let unsubscribe: () => void = () => {};
     let isCancelled = false;
 
     const timer = setTimeout(() => {
@@ -304,52 +282,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fetchProfile(email);
       fetchExpressNotifications();
 
-      if (isFirebaseEnabled && db && auth?.currentUser) {
-        try {
-          if (auth?.currentUser && auth.currentUser.email && auth.currentUser.email.toLowerCase() !== email.toLowerCase()) {
-            console.warn("Skipping direct firestore notification read because auth.currentUser.email does not match requested email");
-            return;
-          }
-          const notifCollectionRef = collection(db, 'users', email, 'notifications');
-          const notifQuery = query(notifCollectionRef, orderBy('timestamp', 'desc'));
-          unsubscribe = onSnapshot(notifQuery, (snapshot) => {
-            const notifs: PushNotification[] = [];
-            snapshot.forEach((subDoc) => {
-              const d = subDoc.data();
-              notifs.push({
-                id: subDoc.id,
-                title: d.title,
-                message: d.message,
-                type: d.type as any,
-                senderEmail: d.senderEmail,
-                senderName: d.senderName,
-                read: d.read,
-                timestamp: d.timestamp
-              });
-            });
-            setPushNotifications(notifs);
-          }, (error) => {
-            try {
-               handleFirestoreError(error, OperationType.LIST, `users/${email}/notifications`);
-            } catch(err) {
-               console.error("Firestore onSnapshot error:", error);
-            }
-          });
-        } catch (err) {
-          console.warn("Setting up Firestore onSnapshot failed, falling back to express polling:", err);
-          const intervalId = setInterval(fetchExpressNotifications, 10000);
-          unsubscribe = () => clearInterval(intervalId);
-        }
-      } else {
-        const intervalId = setInterval(fetchExpressNotifications, 10000);
-        unsubscribe = () => clearInterval(intervalId);
-      }
+      const intervalId = window.setInterval(fetchExpressNotifications, 30_000);
+      notificationPollRef.current = intervalId;
     }, 1200);
 
     return () => {
       isCancelled = true;
       clearTimeout(timer);
-      if (unsubscribe) unsubscribe();
+      if (notificationPollRef.current !== null) {
+        window.clearInterval(notificationPollRef.current);
+        notificationPollRef.current = null;
+      }
     };
   }, [user]);
 
@@ -380,15 +323,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (isFirebaseEnabled && db && auth?.currentUser) {
-      try {
-        const docRef = doc(db, 'users', email, 'notifications', newNotif.id);
-        await setDoc(docRef, newNotif);
-      } catch (e) {
-        console.error("Firestore push trigger failed: ", e);
-      }
-    }
-
     try {
       await apiFetch('/api/notifications/trigger', {
         method: 'POST',
@@ -410,15 +344,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (isFirebaseEnabled && db) {
-      try {
-        const docRef = doc(db, 'users', user.email, 'notifications', id);
-        await setDoc(docRef, { read: true }, { merge: true });
-      } catch (e) {
-        console.error("Firestore read mark failed: ", e);
-      }
-    }
-
     try {
       await apiFetch('/api/notifications/read', {
         method: 'POST',
@@ -437,17 +362,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (isFirebaseEnabled && db && auth?.currentUser) {
-      try {
-        pushNotifications.forEach(async (notif) => {
-          if (!notif.read) {
-            const docRef = doc(db, 'users', user.email, 'notifications', notif.id);
-            await setDoc(docRef, { read: true }, { merge: true });
-          }
-        });
-      } catch (e) {}
-    }
-
     try {
       await apiFetch('/api/notifications/read', {
         method: 'POST',
@@ -464,13 +378,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!user?.email) {
       localStorage.setItem('local_push_notifications', JSON.stringify(updated));
       return;
-    }
-
-    if (isFirebaseEnabled && db && auth?.currentUser) {
-      try {
-        const docRef = doc(db, 'users', user.email, 'notifications', id);
-        await deleteDoc(docRef);
-      } catch (e) {}
     }
 
     try {
@@ -667,29 +574,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let unsubscribeAutoAuth = () => {};
+    let disposed = false;
     
     if (isFirebaseEnabled && auth) {
-      unsubscribeAutoAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      void authPersistenceReady.then(() => {
+        if (disposed) return;
+        unsubscribeAutoAuth = onAuthStateChanged(auth, async (firebaseUser) => {
         if (firebaseUser) {
           if (firebaseUser.isAnonymous) {
-            const savedUserSession = localStorage.getItem('email_user_session');
-            if (savedUserSession) {
-               try {
-                  const parsedUser = JSON.parse(savedUserSession);
-                  setUser(parsedUser);
-                  const savedProfile = localStorage.getItem('email_user_profile');
-                  if (savedProfile) setProfile(JSON.parse(savedProfile));
-                  
-                  const savedData = localStorage.getItem(`student_progress_data_${parsedUser.email.toLowerCase()}`);
-                  if (savedData) {
-                     try { setData(JSON.parse(savedData)); } catch(e) {}
-                  }
-
-                  setIsAuthLoading(false);
-                  void fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData });
-                  void fetchYoutubeCookies(parsedUser.email);
-               } catch(e) {}
-            }
+            await signOut(auth).catch(() => undefined);
+            setUser(null);
             setIsAuthLoading(false);
             return;
           }
@@ -714,15 +608,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }, 1500);
           setIsAuthLoading(false);
         } else {
-          // Firebase Auth is the source of truth. A cached profile must never be
-          // promoted into an anonymous session because the API then receives an
-          // anonymous ID token and correctly rejects the user as unauthenticated.
           setUser(null);
-          setProfile(null);
-          localStorage.removeItem('email_user_session');
-          localStorage.removeItem('email_user_profile');
           setIsAuthLoading(false);
         }
+        });
       });
     } else {
       // Offline mode
@@ -767,7 +656,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setYoutubeCookies(localCookies);
     }
 
-    return () => unsubscribeAutoAuth();
+    return () => {
+      disposed = true;
+      unsubscribeAutoAuth();
+    };
   }, [isFirebaseEnabled]);
 
   
@@ -777,11 +669,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (isFirebaseEnabled && auth) {
         const provider = new GoogleAuthProvider();
         
+        // Remove unnecessary sensitive scopes and keep only standard ones
+        provider.addScope('openid');
+        provider.addScope('https://www.googleapis.com/auth/userinfo.email');
+        provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
+        
         provider.setCustomParameters({ prompt: 'select_account' });
-        // Redirect auth depends on Firebase Hosting's /__/auth/handler. This
-        // project is hosted on Vercel, so a redirect fallback can land on a
-        // blank firebaseapp.com page and lose the app session. Keep the flow
-        // popup-only and surface a useful message if the browser blocks it.
         const result = await signInWithPopup(auth, provider);
         
         const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -790,25 +683,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           localStorage.setItem('google_access_token', accessToken);
         }
 
-        const immediateUser = {
-          email: result.user.email || '',
-          name: result.user.displayName || result.user.email?.split('@')[0] || 'Student',
-          picture: result.user.photoURL || '',
-          token: accessToken || '',
-          emailVerified: result.user.emailVerified,
-        };
-        setUser(immediateUser);
-        if (!profile || profile.email !== immediateUser.email) {
-          setProfile({
-            email: immediateUser.email,
-            username: immediateUser.name,
-            picture: immediateUser.picture,
-            bio: 'Technology Stream student',
-            updatedAt: new Date().toISOString(),
-          });
-        }
-
-        const idToken = await result.user.getIdToken(true);
+        const idToken = await result.user.getIdToken();
         const res = await apiFetch('/api/auth/session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -824,28 +699,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (savedData) {
              try { setData(JSON.parse(savedData)); } catch(e) {}
           }
-          void fetchUserDataFromDB(resData.user.email, { showLoading: false });
-          void fetchYoutubeCookies(resData.user.email);
+          await fetchUserDataFromDB(resData.user.email);
+          await fetchYoutubeCookies(resData.user.email);
           showNotification("Successfully logged in with Google!", "success");
         } else {
-          // Firebase authentication already succeeded. Keep the signed-in user
-          // usable while the optional server profile recovers.
-          localStorage.setItem('email_user_session', JSON.stringify(immediateUser));
-          showNotification("Signed in. Profile sync will retry in the background.", "info");
+          showNotification(resData.error || "Login failed", "error");
         }
       } else {
          showNotification("Firebase is required for Google login", "error");
       }
     } catch (error: any) {
       console.error("Google Popup Login Error:", error);
-      const code = String(error?.code || '');
-      if (code === 'auth/popup-blocked') {
-        showNotification("Allow pop-ups for this site, then try Google sign-in again.", "error");
-      } else if (code === 'auth/unauthorized-domain') {
-        showNotification("Add this Vercel domain to Firebase Authentication → Authorized domains.", "error");
-      } else {
-        showNotification("Google login failed or was cancelled. Please try again.", "error");
-      }
+      showNotification("Google login failed or was cancelled.", "error");
     }
     setIsAuthLoading(false);
   };
@@ -859,26 +724,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         
-        if (isFirebaseEnabled && auth) {
-          try {
-            const credential = GoogleAuthProvider.credential(null, token);
-            await signInWithCredential(auth, credential);
-            console.log("Firebase Auth signed in via standard token!");
-          } catch (e) {
-            console.warn("Standard Google-Firebase Auth credential exchange restricted in sandbox. Falling back to anonymous Auth session to enable Firestore storage:", e);
-            try {
-              await signInAnonymously(auth);
-              console.log("Firebase Auth signed in anonymously as fallback!");
-            } catch (anonErr: any) {
-              if (anonErr.code === 'auth/admin-restricted-operation') {
-                console.warn("Firebase anonymous authentication is disabled in the Firebase Console. Progress will be saved offline only.");
-              } else {
-                console.error("Firebase fallback anonymous login failed:", anonErr);
-              }
-            }
-          }
-        }
-
         setUser({
           email: data.email,
           name: data.name,
@@ -923,60 +768,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const showLoading = options.showLoading !== false;
       if (showLoading) setIsUserDataLoading(true);
       try {
-         // Try fetching from Firestore first if enabled
-         if (isFirebaseEnabled && db) {
-            try {
-               
-               if (auth?.currentUser && auth.currentUser.email && auth.currentUser.email.toLowerCase() !== email) {
-                   console.warn("Skipping direct firestore read because auth.currentUser.email does not match requested email");
-                   return;
-               }
-               const docRef = doc(db, 'users', email, 'progress', 'data');
-               const docSnap = await getDoc(docRef);
-               if (docSnap.exists()) {
-                  const docData = docSnap.data();
-                  if (docData && docData.data) {
-                     setData(docData.data);
-                     localStorage.setItem(`student_progress_data_${email}`, JSON.stringify(docData.data));
-                     if (import.meta.env.DEV) {
-                       console.info("Loaded student data from Firebase Firestore successfully");
-                     }
-                     
-                     // Keep the initial screen responsive; this mirror write does not
-                     // need to block the Firestore data already rendered above.
-                     void apiFetch('/api/data', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ email: email, data: docData.data })
-                     }).catch((e) => {
-                       console.error('Failed to sync loaded Firestore data to Express backend', e);
-                     });
-                     return;
-                  }
-               }
-            } catch (fsErr: any) {
-               console.warn("Failed to read progress from Firestore, falling back to local DB:", fsErr);
-            }
-         }
-
          const res = await apiFetch(`/api/data?email=${encodeURIComponent(email)}`);
          if (res.ok) {
              const result = await res.json();
              if (result.data) {
                  setData(result.data);
                  localStorage.setItem(`student_progress_data_${email}`, JSON.stringify(result.data));
-                 
-                 // Sync Express data back to Firebase so it's not lost
-                 if (isFirebaseEnabled && db) {
-                    try {
-                       const docRef = doc(db, 'users', email, 'progress', 'data');
-                       await setDoc(docRef, {
-                          email: email,
-                          data: result.data,
-                          updatedAt: new Date().toISOString()
-                       }, { merge: true });
-                    } catch(e) {}
-                 }
                  
                  return;
              }
@@ -1007,29 +804,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const fetchYoutubeCookies = async (rawEmail: string) => {
      const email = rawEmail.toLowerCase();
-     if (isFirebaseEnabled && db && auth?.currentUser) {
-        try {
-           const docRef = doc(db, 'users', email, 'bypass', 'config');
-           const snap = await getDoc(docRef);
-           if (snap.exists() && snap.data()?.cookies) {
-              const loadedCookies = snap.data().cookies;
-              setYoutubeCookies(loadedCookies);
-              localStorage.setItem('youtube_bypass_cookies', loadedCookies);
-              
-              try {
-                await apiFetch('/api/cookies', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ email, cookies: loadedCookies })
-                });
-              } catch(err) {}
-              return;
-           }
-        } catch (e) {
-           console.warn("Firestore bypass cookies fetch failed:", e);
-        }
-     }
-     
      try {
         const res = await apiFetch(`/api/cookies?email=${encodeURIComponent(email)}`);
         if (res.ok) {
@@ -1053,19 +827,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
      localStorage.setItem('youtube_bypass_cookies', cookies);
      if (!user?.email) return;
      const email = user.email.toLowerCase();
-     
-     if (isFirebaseEnabled && db && auth?.currentUser) {
-        try {
-           const docRef = doc(db, 'users', email, 'bypass', 'config');
-           await setDoc(docRef, {
-              email: email,
-              cookies,
-              updatedAt: new Date().toISOString()
-           }, { merge: true });
-        } catch (e) {
-           console.error("Firestore bypass cookies save failed:", e);
-        }
-     }
      
      try {
         await apiFetch('/api/cookies', {
@@ -1138,22 +899,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const unsyncedData = JSON.parse(unsyncedRaw);
           showNotification("Connection restored! Synchronizing your offline changes...", "info");
 
-          let fireSynced = false;
           let serverSynced = false;
-
-          if (isFirebaseEnabled && db && auth?.currentUser) {
-            try {
-              const docRef = doc(db, 'users', email, 'progress', 'data');
-              await setDoc(docRef, {
-                 email: email,
-                 data: unsyncedData,
-                 updatedAt: new Date().toISOString()
-              }, { merge: true });
-              fireSynced = true;
-            } catch (fsErr) {
-              console.warn("Firestore sync failed during auto-sync:", fsErr);
-            }
-          }
 
           try {
             const res = await apiFetch('/api/data', {
@@ -1168,7 +914,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             console.warn("Express sync failed during auto-sync:", e);
           }
 
-          if (fireSynced || serverSynced) {
+          if (serverSynced) {
             localStorage.removeItem(unsyncedKey);
             showNotification("Your offline changes have been fully synchronized with the cloud db!", "success");
             setData(unsyncedData);
@@ -1183,7 +929,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       window.removeEventListener('online', handleOnline);
     };
-  }, [user, isFirebaseEnabled]);
+  }, [user]);
 
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveRef = useRef<AppData | null>(null);
@@ -1238,21 +984,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const clearLocalStorage = async () => {
     setData(defaultData);
     if (!user?.email) return;
-
-    if (isFirebaseEnabled && db && auth?.currentUser) {
-       try {
-          if (auth.currentUser.email && auth.currentUser.email.toLowerCase() !== user.email.toLowerCase()) {
-              console.warn("Skipping direct firestore write because auth.currentUser.email does not match requested email");
-              return;
-          }
-          const docRef = doc(db, 'users', user.email, 'progress', 'data');
-          await setDoc(docRef, {
-             email: user.email,
-             data: defaultData,
-             updatedAt: new Date().toISOString()
-          }, { merge: true });
-       } catch (err) {}
-    }
 
     try {
       await apiFetch('/api/data', {
@@ -1362,7 +1093,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
              try { setData(JSON.parse(savedData)); } catch(e) {}
           }
 
-          try { if (isFirebaseEnabled && auth && !auth.currentUser) await signInAnonymously(auth); } catch(e) {}
           await fetchUserDataFromDB(resData.user.email);
           await fetchYoutubeCookies(resData.user.email);
           showNotification("සතුටුදායකයි! සාර්ථකව සම්බන්ධ වුණා. (Successfully logged in!)", "success");
@@ -1434,7 +1164,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
              try { setData(JSON.parse(savedData)); } catch(e) {}
           }
 
-          try { if (isFirebaseEnabled && auth && !auth.currentUser) await signInAnonymously(auth); } catch(e) {}
           await fetchUserDataFromDB(resData.user.email);
           await fetchYoutubeCookies(resData.user.email);
           showNotification(resData.message || "ලියාපදිංචිය සාර්ථකයි! (Registration successful!)", "success");
@@ -1471,7 +1200,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
            try { setData(JSON.parse(savedData)); } catch(e) {}
         }
 
-        try { if (isFirebaseEnabled && auth && !auth.currentUser) await signInAnonymously(auth); } catch(e) {}
         await fetchUserDataFromDB(resData.user.email);
         await fetchYoutubeCookies(resData.user.email);
         showNotification("සත්‍යාපනය සාර්ථකයි! ලොග් වීම සම්පූර්ණයි. (Email verified & logged in!)", "success");

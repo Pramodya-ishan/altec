@@ -299,21 +299,6 @@ export async function aiRespondStream(req: any, res: any) {
     // Check previous message context for correction
     const lastMsg = (history && history.length > 0) ? history[history.length - 1] : null;
     const lastPaperInfo = lastMsg?.metadata?.paperInfo || lastMsg?.paperInfo;
-    const terseQuestionMatch = prompt.trim().match(/^(?:q(?:uestion)?\s*)?(\d{1,3})\s*$/i);
-    const carriedSourceId = route.entities.activeSourceId
-      || activeConversationState.activeSourceIds?.[activeConversationState.activeSourceIds.length - 1]
-      || lastPaperInfo?.sourceId;
-
-    // A short follow-up such as "1" or "Q1" belongs to the PDF the user just
-    // selected. Preserve that source instead of reclassifying the message as a
-    // new lesson lookup or asking the user to paste the question again.
-    if (terseQuestionMatch && carriedSourceId) {
-      route.mode = "paper_question_qa";
-      route.entities.activeSourceId = carriedSourceId;
-      route.entities.questionNo = terseQuestionMatch[1];
-      route.entities.questionType = route.entities.questionType || "MCQ";
-      route.answerHints.mustUseRag = true;
-    }
 
     if (isCorrection && lastPaperInfo?.sourceId && lastPaperInfo?.questionNo) {
       console.log(`[AI_RESPOND_STREAM] Correction phrase detected for ${lastPaperInfo.sourceId} Q${lastPaperInfo.questionNo}`);
@@ -662,7 +647,7 @@ export async function aiRespondStream(req: any, res: any) {
       const requestedYear = route.entities.year;
       const requestedQuestionNo = route.entities.questionNo;
 
-      if (requestedSubject && (requestedYear || route.entities.activeSourceId)) {
+      if (requestedSubject && requestedYear) {
         emitSse(res, "status", { step: "exam_db", status: "searching" });
 
         let paperSource: any = null;
@@ -678,7 +663,7 @@ export async function aiRespondStream(req: any, res: any) {
         const strictRes = resolveStrictSource(allAvailableSources, {
           year: requestedYear,
           subject: requestedSubject,
-          activeSourceId: route.entities.activeSourceId || null,
+          activeSourceId: null,
           prompt
         });
 
@@ -803,7 +788,7 @@ export async function aiRespondStream(req: any, res: any) {
           let badTextQuality = false;
           let healthyChunks: any[] = [];
 
-          if (paperSource.id) {
+          if (paperSource.id && !noChunks) {
             try {
               const { retrieveExactPaperQuestion } = await import("../knowledge/retrieve");
               const exactResult = await retrieveExactPaperQuestion({
@@ -812,11 +797,11 @@ export async function aiRespondStream(req: any, res: any) {
                 subject: requestedSubject,
                 year: requestedYear,
                 questionNo: requestedQuestionNo,
-                questionType: paperIntent.questionType || "MCQ",
               });
               if (exactResult) {
-                noChunks = exactResult.chunks.length === 0;
-                needsOcr = exactResult.needsOcr;
+                if (exactResult.needsOcr || exactResult.chunks.length === 0) {
+                  noChunks = true;
+                }
                 if (exactResult.badTextQuality) {
                   badTextQuality = true;
                 }
@@ -827,11 +812,8 @@ export async function aiRespondStream(req: any, res: any) {
                    const chunkText = (healthyChunks || []).map((c: any) => c.text).join("\n");
 
                    // [FIX 10] Stricter Chunk Quality Check
-                   const qNumber = String(requestedQuestionNo).match(/\d+/)?.[0] || "";
-                   const qNoMarker = qNumber
-                     ? new RegExp(`(?:^|\\n)\\s*(?:MCQ\\s*)?(?:Q(?:uestion)?\\s*)?0*${qNumber}\\s*[.\\):\\-]`, "im")
-                     : null;
-                   const hasQuestionMarker = qNoMarker ? qNoMarker.test(chunkText) : true;
+                   const qNoMarker = new RegExp(`\\b${requestedQuestionNo}\\b`);
+                   const hasQuestionMarker = qNoMarker.test(chunkText);
                    const hasOptions = /1\)|2\)|3\)|4\)|5\)/.test(chunkText) || /\(1\)|\(2\)|\(3\)|\(4\)|\(5\)/.test(chunkText);
 
                    const isHealthy = hasQuestionMarker && (paperIntent.questionType === "MCQ" ? hasOptions : true);

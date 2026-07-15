@@ -1,11 +1,11 @@
 {
   "name": "Tec A/L",
   "short_name": "Tec A/L",
-  "description": "Sri Lankan A/L Technology learning workspace",
+  "description": "Sinhala-first A/L Technology AI tutor",
   "start_url": "/clora-x",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#ffffff",
+  "background_color": "#080b14",
+  "theme_color": "#2563eb",
   "icons": []
 }

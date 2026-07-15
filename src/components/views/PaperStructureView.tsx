@@ -440,7 +440,7 @@ export default function PaperStructureView() {
  <button
  className={cn(
  "shrink-0 flex items-center gap-1.5 transition-all text-xl cursor-pointer active:scale-95",
- isChecked ? "text-emerald-500" : "text-slate-300 hover:text-emerald-400"
+ isChecked ? "text-emerald-500" : "text-slate-300 hover:text-slate-400"
  )}
  onClick={() => toggleTopic(topic)}
  >
@@ -659,7 +659,7 @@ export default function PaperStructureView() {
  }
  if (isAnswerSubmitted) {
  if (isCorrect) {
- optionStyle = "border-emerald-200 bg-emerald-50 text-emerald-950 font-semibold shadow-xs";
+ optionStyle = "border-emerald-500 bg-emerald-50/60 text-emerald-900 font-semibold shadow-xs";
  } else if (isSelected) {
  optionStyle = "border-rose-500 bg-rose-50/60 text-rose-900 font-semibold shadow-xs";
  } else {
@@ -681,7 +681,7 @@ export default function PaperStructureView() {
  </span>
  <span className="flex-1 leading-snug">{option}</span>
  {isAnswerSubmitted && isCorrect && (
- <i className="fa-solid fa-circle-check text-emerald-500 text-lg"></i>
+ <i className="fa-solid fa-circle-check text-emerald-600 text-lg"></i>
  )}
  {isAnswerSubmitted && isSelected && !isCorrect && (
  <i className="fa-solid fa-circle-xmark text-rose-600 text-lg"></i>
@@ -791,10 +791,11 @@ export default function PaperStructureView() {
  <AnimatePresence initial={false}>
  {!collapsedSections['mcq'] && (
  <motion.div
- initial={{ opacity: 0, y: -8 }}
- animate={{ opacity: 1, y: 0 }}
- exit={{ opacity: 0, y: -8 }}
- transition={{ duration: 0.18, ease: 'easeOut' }}
+ initial={{ height: 0, opacity: 0 }}
+ animate={{ height: 'auto', opacity: 1 }}
+ exit={{ height: 0, opacity: 0 }}
+ transition={{ duration: 0.3, ease: 'easeInOut' }}
+ className="overflow-hidden"
  >
  <div className="bg-white border border-slate-200 rounded-[1.5rem] p-6 sm:p-8 shadow-sm hover:shadow-md transition-all duration-300">
  <div className="mb-6 flex justify-between items-center flex-wrap gap-4">
@@ -843,10 +844,11 @@ export default function PaperStructureView() {
  <AnimatePresence initial={false}>
  {!collapsedSections['partA'] && (
  <motion.article 
- initial={{ opacity: 0, y: -8 }}
- animate={{ opacity: 1, y: 0 }}
- exit={{ opacity: 0, y: -8 }}
- transition={{ duration: 0.18, ease: 'easeOut' }}
+ initial={{ height: 0, opacity: 0 }}
+ animate={{ height: 'auto', opacity: 1 }}
+ exit={{ height: 0, opacity: 0 }}
+ transition={{ duration: 0.3, ease: 'easeInOut' }}
+ className="overflow-hidden"
  >
  <div className="bg-white border border-slate-200 rounded-[1.5rem] p-6 sm:p-8 shadow-sm hover:shadow-md transition-all duration-300">
  <div className="mb-6">
@@ -918,10 +920,11 @@ export default function PaperStructureView() {
  <AnimatePresence initial={false}>
  {!collapsedSections['partBCD'] && (
  <motion.div 
- initial={{ opacity: 0, y: -8 }}
- animate={{ opacity: 1, y: 0 }}
- exit={{ opacity: 0, y: -8 }}
- transition={{ duration: 0.18, ease: 'easeOut' }}
+ initial={{ height: 0, opacity: 0 }}
+ animate={{ height: 'auto', opacity: 1 }}
+ exit={{ height: 0, opacity: 0 }}
+ transition={{ duration: 0.3, ease: 'easeInOut' }}
+ className="overflow-hidden"
  >
  <motion.div 
  className="grid grid-cols-1 md:grid-cols-2 gap-6"

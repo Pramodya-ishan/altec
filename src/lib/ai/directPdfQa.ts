@@ -1,7 +1,7 @@
-import { auth } from "../firebase";
 import { stripRawVisualBlocks } from "./stripVisualBlocks";
 import { normalizeStoragePath } from "./normalizeStoragePath";
 import { getLargeEndpointUrl } from "../apiBase";
+import { apiFetch } from "../api";
 
 export type DirectPdfQaResult = {
   ok: boolean;
@@ -84,27 +84,62 @@ export async function askDirectPdfQa(params: {
     const endpoint = getLargeEndpointUrl("/api/pdf/direct-qa-file");
     onProgress?.("scanning", { serverSide: true });
 
-    const token = await auth.currentUser?.getIdToken();
-    const backendController = new AbortController();
-    if (signal) {
-      signal.addEventListener("abort", () => backendController.abort(new Error("USER_CANCELLED")));
-    }
-    const backendTimeout = setTimeout(() => backendController.abort(), 90_000);
+    const postQuestion = async () => {
+      const backendController = new AbortController();
+      const abort = () => backendController.abort(new Error("USER_CANCELLED"));
+      signal?.addEventListener("abort", abort, { once: true });
+      const backendTimeout = window.setTimeout(() => backendController.abort(), 80_000);
+      try {
+        return await apiFetch(endpoint, {
+          method: "POST",
+          body: formData,
+          signal: backendController.signal,
+        });
+      } catch (error: any) {
+        throw makeDirectQaError("DIRECT_QA_BACKEND_ERROR", source, {
+          message: error?.name === "AbortError"
+            ? "PDF answer request timed out. The source will be reindexed before the next retry."
+            : String(error?.message || error),
+        });
+      } finally {
+        window.clearTimeout(backendTimeout);
+        signal?.removeEventListener("abort", abort);
+      }
+    };
 
-    let response;
-    try {
-      response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token || ""}`,
-        },
-        body: formData,
-        signal: backendController.signal,
-      });
-    } catch (e: any) {
-      throw makeDirectQaError("DIRECT_QA_BACKEND_ERROR", source, { message: e.name === "AbortError" ? "PDF answer request timed out. Reindex this source once, then retry." : e.message });
-    } finally {
-      clearTimeout(backendTimeout);
+    let response = await postQuestion();
+
+    // A saved PDF is never scanned as one giant serverless request. If its
+    // text index is missing, rebuild that index once and retry the exact query.
+    if (response.status === 409) {
+      const reindexHint = await response.clone().json().catch(() => ({}));
+      const reindexBody = new FormData();
+      reindexBody.append("sourceId", String(source.id || source.sourceId));
+      reindexBody.append("mode", reindexHint.needsOcr ? "ocr" : "auto");
+      onProgress?.("scanning", { reindexing: true, needsOcr: Boolean(reindexHint.needsOcr) });
+
+      const reindexController = new AbortController();
+      const abortReindex = () => reindexController.abort(new Error("USER_CANCELLED"));
+      signal?.addEventListener("abort", abortReindex, { once: true });
+      const reindexTimeout = window.setTimeout(() => reindexController.abort(), reindexHint.needsOcr ? 170_000 : 90_000);
+      try {
+        const reindexResponse = await apiFetch("/api/rag/reindex-uploaded", {
+          method: "POST",
+          body: reindexBody,
+          signal: reindexController.signal,
+        });
+        const reindexResult = await reindexResponse.json().catch(() => ({}));
+        if (!reindexResponse.ok || Number(reindexResult.chunkCount || 0) === 0) {
+          throw makeDirectQaError("PDF_REINDEX_FAILED", source, {
+            status: reindexResponse.status,
+            message: reindexResult.message || reindexResult.error || "The PDF text index could not be rebuilt.",
+          });
+        }
+      } finally {
+        window.clearTimeout(reindexTimeout);
+        signal?.removeEventListener("abort", abortReindex);
+      }
+      response = await postQuestion();
     }
 
     if (!response.ok) {
@@ -118,10 +153,9 @@ export async function askDirectPdfQa(params: {
         });
       }
       const errorData = await response.json().catch(() => ({}));
-      throw makeDirectQaError(errorData.errorCode || "DIRECT_QA_BACKEND_ERROR", source, {
+      throw makeDirectQaError("DIRECT_QA_BACKEND_ERROR", source, {
         endpoint,
         status: response.status,
-        stage: errorData.stage,
         message: errorData.error || errorData.message || `Backend error: ${response.status}`
       });
     }

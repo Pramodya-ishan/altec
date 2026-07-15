@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { AudioLines, FileImage, FileText, Film, Link2, Loader2, Pause, Play, UploadCloud, X } from "lucide-react";
+import { AudioLines, FileImage, FileText, Film, Link2, Pause, Play, UploadCloud, X } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import type { LessonResource, LessonResourceKind } from "../../types";
 import { auth } from "../../lib/firebase";
@@ -58,27 +58,6 @@ function normalizeLegacyResource(resource: LessonResource): LessonResource {
   return { ...resource, mediaKind, mimeType: resource.mimeType || resource.type, sourceId: resource.sourceId || (!resource.url?.startsWith("http") ? resource.url : undefined) };
 }
 
-function videoRecordToResource(video: any): LessonResource {
-  return normalizeLegacyResource({
-    id: String(video.id || video.videoId || ""),
-    videoId: String(video.id || video.videoId || ""),
-    sourceId: video.sourceId ? String(video.sourceId) : undefined,
-    url: `video://${video.id || video.videoId}`,
-    title: String(video.title || "Lesson video"),
-    type: String(video.mimeType || "video/mp4"),
-    mimeType: String(video.mimeType || "video/mp4"),
-    mediaKind: "video",
-    resourceRole: "video",
-    status: String(video.status || "uploaded") as LessonResource["status"],
-    sizeBytes: Number(video.sourceSizeBytes || video.sizeBytes || 0) || undefined,
-    createdAt: String(video.createdAt || new Date().toISOString()),
-  });
-}
-
-function resourceKey(resource: LessonResource) {
-  return String(resource.videoId || resource.sourceId || resource.id || resource.storagePath || resource.url || resource.title);
-}
-
 function ResourceIcon({ kind }: { kind?: LessonResourceKind }) {
   const className = "h-5 w-5";
   if (kind === "video") return <Film className={`${className} text-violet-500`} />;
@@ -96,9 +75,8 @@ export function NotesModal() {
   const [isPaused, setIsPaused] = useState(false);
   const [telemetry, setTelemetry] = useState<UploadTelemetry | null>(null);
   const [playerResource, setPlayerResource] = useState<LessonResource | null>(null);
+  const [libraryTab, setLibraryTab] = useState<"resources" | "videos">("resources");
   const [remoteVideos, setRemoteVideos] = useState<LessonResource[]>([]);
-  const [isLoadingVideos, setIsLoadingVideos] = useState(false);
-  const [activeTab, setActiveTab] = useState<"resources" | "videos">("resources");
   const controlsRef = useRef<UploadTaskControls | null>(null);
   const uploadStartedAtRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -106,20 +84,16 @@ export function NotesModal() {
 
   const topic = modals.playlist.topic;
   const topicData = data[currentSubject]?.topics[topic];
-  const localResources = useMemo(
-    () => (topicData?.resources?.length ? topicData.resources : topicData?.videos || []).map(normalizeLegacyResource),
-    [topicData?.resources, topicData?.videos],
-  );
   const resources = useMemo(() => {
+    const local = (topicData?.resources?.length ? topicData.resources : topicData?.videos || []).map(normalizeLegacyResource);
     const merged = new Map<string, LessonResource>();
-    [...localResources, ...remoteVideos].forEach((resource) => {
-      const key = resourceKey(resource);
-      merged.set(key, { ...(merged.get(key) || {}), ...resource });
-    });
-    return [...merged.values()];
-  }, [localResources, remoteVideos]);
-  const videoResources = useMemo(() => resources.filter((resource) => resource.mediaKind === "video"), [resources]);
-  const fileResources = useMemo(() => resources.filter((resource) => resource.mediaKind !== "video"), [resources]);
+    [...local, ...remoteVideos].forEach((resource) => merged.set(String(resource.videoId || resource.sourceId || resource.id || resource.title), resource));
+    return Array.from(merged.values());
+  }, [topicData?.resources, topicData?.videos, remoteVideos]);
+  const visibleResources = useMemo(
+    () => resources.filter((resource) => libraryTab === "videos" ? resource.mediaKind === "video" : resource.mediaKind !== "video"),
+    [resources, libraryTab],
+  );
 
   useEffect(() => {
     if (!modals.playlist.open) return;
@@ -167,32 +141,36 @@ export function NotesModal() {
   }, [modals.playlist.open]);
 
   useEffect(() => {
-    if (!modals.playlist.open || videoPermission === "loading") return;
+    if (!modals.playlist.open || videoPermission !== "allowed") return;
     let active = true;
-    const loadPersistedVideos = async (showLoader = false) => {
-      if (showLoader) setIsLoadingVideos(true);
-      try {
-        const search = new URLSearchParams({ subject: currentSubject.toUpperCase(), lesson: topic });
-        const endpoint = videoPermission === "allowed" ? "/api/admin/videos" : "/api/videos";
-        const response = await apiFetch(`${endpoint}?${search.toString()}`);
-        const payload = await response.json().catch(() => null);
-        if (active && response.ok && Array.isArray(payload?.videos)) {
-          setRemoteVideos(payload.videos.map(videoRecordToResource));
-        }
-      } catch (error) {
-        console.warn("Lesson video refresh failed", error);
-      } finally {
-        if (active && showLoader) setIsLoadingVideos(false);
-      }
+    const syncVideos = async () => {
+      const response = await apiFetch("/api/admin/videos");
+      const payload = await response.json().catch(() => null);
+      if (!active || !response.ok || !Array.isArray(payload?.videos)) return;
+      const matching = payload.videos
+        .filter((video: any) => String(video.subject || "").toLowerCase() === currentSubject.toLowerCase()
+          && String(video.lesson || "").trim().toLowerCase() === String(topic || "").trim().toLowerCase()
+          && video.status !== "archived")
+        .map((video: any): LessonResource => ({
+          id: video.id,
+          videoId: video.id,
+          sourceId: video.sourceId,
+          url: `video://${video.id}`,
+          title: video.title || "Lesson video",
+          type: video.mimeType || "video/mp4",
+          mimeType: video.mimeType || "video/mp4",
+          mediaKind: "video",
+          resourceRole: "video",
+          status: video.status,
+          sizeBytes: video.sourceSizeBytes,
+          createdAt: video.createdAt,
+        }));
+      setRemoteVideos(matching);
     };
-    void loadPersistedVideos(true);
-    const refreshTimer = window.setInterval(() => void loadPersistedVideos(false), 45_000);
-    return () => { active = false; window.clearInterval(refreshTimer); };
+    void syncVideos();
+    const timer = window.setInterval(syncVideos, 30_000);
+    return () => { active = false; window.clearInterval(timer); };
   }, [currentSubject, modals.playlist.open, topic, videoPermission]);
-
-  useEffect(() => {
-    if (activeTab === "videos" && videoResources.length === 0 && !isLoadingVideos) setActiveTab("resources");
-  }, [activeTab, isLoadingVideos, videoResources.length]);
 
   if (!modals.playlist.open) return null;
 
@@ -274,19 +252,6 @@ export function NotesModal() {
           sizeBytes: file.size,
           createdAt: new Date().toISOString(),
         });
-        setRemoteVideos((current) => {
-          const created = videoRecordToResource({
-            id: result.videoId,
-            sourceId: result.sourceId,
-            title: file.name,
-            mimeType: file.type,
-            sourceSizeBytes: file.size,
-            status: result.status || "uploaded",
-            createdAt: new Date().toISOString(),
-          });
-          return [...current.filter((item) => resourceKey(item) !== resourceKey(created)), created];
-        });
-        setActiveTab("videos");
         showNotification(result.transcodeQueued ? "Video uploaded. Secure processing has started." : "Video uploaded and ready to play.", "success");
       } else {
         const upload = await uploadPdfWithClientStorage({
@@ -372,7 +337,7 @@ export function NotesModal() {
     else if (resource.storagePath) void openPrivateStoragePdf(resource.storagePath);
   };
 
-  const deleteResource = async (resource: LessonResource) => {
+  const deleteResource = async (resource: LessonResource, index: number) => {
     if (!isAdmin || !confirm(`Delete “${resource.title}”?`)) return;
     try {
       if (resource.mediaKind === "video" && resource.videoId) {
@@ -384,12 +349,10 @@ export function NotesModal() {
       }
       const nextData = structuredClone(data);
       const nextTopic = nextData[currentSubject].topics[topic];
-      const deletingKey = resourceKey(resource);
-      const nextResources = localResources.filter((item) => resourceKey(item) !== deletingKey);
+      const nextResources = resources.filter((_, resourceIndex) => resourceIndex !== index);
       nextTopic.resources = nextResources;
       nextTopic.videos = nextResources;
       saveData(nextData);
-      setRemoteVideos((current) => current.filter((item) => resourceKey(item) !== deletingKey));
       showNotification("Resource removed.", "success");
     } catch (error: any) {
       showNotification(error?.message || "Delete failed", "error");
@@ -410,19 +373,12 @@ export function NotesModal() {
 
           <div className="clora-scrollbar min-h-0 flex-1 overflow-y-auto bg-white p-4 sm:p-6">
             <section className="bg-white">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="inline-grid grid-cols-2 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Lesson resources view">
+              <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="inline-flex w-fit rounded-xl bg-slate-100 p-1">
                   {(["resources", "videos"] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      role="tab"
-                      aria-selected={activeTab === tab}
-                      onClick={() => setActiveTab(tab)}
-                      className="relative min-w-24 rounded-lg px-4 py-2 text-xs font-bold text-slate-500 transition-colors"
-                    >
-                      {activeTab === tab && <motion.span layoutId="lesson-resource-tab" className="absolute inset-0 rounded-lg bg-white shadow-sm ring-1 ring-slate-200" transition={{ type: "spring", stiffness: 420, damping: 34 }} />}
-                      <span className="relative z-10">{tab === "resources" ? "Resources" : `Videos (${videoResources.length})`}</span>
+                    <button key={tab} type="button" onClick={() => setLibraryTab(tab)} className="relative min-w-24 rounded-lg px-4 py-2 text-xs font-semibold capitalize text-slate-600">
+                      {libraryTab === tab && <motion.span layoutId="lesson-library-tab" className="absolute inset-0 rounded-lg bg-white shadow-sm" transition={{ type: "spring", stiffness: 420, damping: 34 }} />}
+                      <span className="relative">{tab}{tab === "videos" ? ` (${resources.filter((item) => item.mediaKind === "video").length})` : ""}</span>
                     </button>
                   ))}
                 </div>
@@ -457,10 +413,8 @@ export function NotesModal() {
                 </div>
               )}
 
-              <div onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (event.currentTarget === event.target) setIsDragging(false); }} onDrop={(event) => { event.preventDefault(); setIsDragging(false); const file = event.dataTransfer.files?.[0]; if (file) void processFile(file); }} className={`mt-4 rounded-2xl transition ${isDragging ? "bg-slate-50 ring-2 ring-slate-300" : "bg-white"}`}>
-                {isLoadingVideos && activeTab === "videos" ? (
-                  <div className="flex items-center justify-center gap-2 py-10 text-xs font-semibold text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading saved videos…</div>
-                ) : (activeTab === "videos" ? videoResources : fileResources).length === 0 ? (
+              <div onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (event.currentTarget === event.target) setIsDragging(false); }} onDrop={(event) => { event.preventDefault(); setIsDragging(false); const file = event.dataTransfer.files?.[0]; if (file) void processFile(file); }} className={`mt-4 rounded-2xl p-1 transition ${isDragging ? "bg-slate-100" : "bg-white"}`}>
+                {visibleResources.length === 0 ? (
                   <button type="button" onClick={() => fileInputRef.current?.click()} className="flex w-full flex-col items-center py-8 text-center">
                     <UploadCloud className="mb-3 h-8 w-8 text-slate-300" />
                     <span className="text-sm font-bold text-slate-500">Drop a lesson resource here or click to browse</span>
@@ -468,10 +422,12 @@ export function NotesModal() {
                   </button>
                 ) : (
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {(activeTab === "videos" ? videoResources : fileResources).map((resource, index) => (
+                    {visibleResources.map((resource) => {
+                      const index = resources.findIndex((item) => String(item.videoId || item.sourceId || item.id) === String(resource.videoId || resource.sourceId || resource.id));
+                      return (
                       <div key={resource.id || resource.sourceId || `${resource.title}-${index}`} className="group flex min-w-0 items-center gap-2">
-                        <button type="button" onClick={() => void openResource(resource)} className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md">
-                          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100"><ResourceIcon kind={resource.mediaKind} /></span>
+                        <button type="button" onClick={() => void openResource(resource)} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:border-slate-400 hover:shadow-sm">
+                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100"><ResourceIcon kind={resource.mediaKind} /></span>
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-sm font-black text-slate-800 group-hover:text-indigo-700">{resource.title}</span>
                             <span className="mt-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
@@ -480,9 +436,9 @@ export function NotesModal() {
                             </span>
                           </span>
                         </button>
-                        {isAdmin && <button type="button" onClick={() => void deleteResource(resource)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500" aria-label={`Delete ${resource.title}`}><i className="fa-regular fa-trash-can text-sm" /></button>}
+                        {isAdmin && <button type="button" onClick={() => void deleteResource(resource, index)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500" aria-label={`Delete ${resource.title}`}><i className="fa-regular fa-trash-can text-sm" /></button>}
                       </div>
-                    ))}
+                    );})}
                   </div>
                 )}
               </div>

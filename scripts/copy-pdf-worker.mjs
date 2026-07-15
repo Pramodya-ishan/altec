@@ -21,6 +21,7 @@ for (const workerPath of possibleWorkerPaths) {
     const isMjs = workerPath.endsWith(".mjs");
     const destName = isMjs ? "pdf.worker.min.mjs" : "pdf.worker.min.js";
     fs.copyFileSync(fullPath, path.join(destDir, destName));
+    if (isMjs) fs.copyFileSync(fullPath, path.join(destDir, "pdf.worker.mjs"));
     console.log(`Copied worker from ${workerPath} to public/${destName}`);
     fs.writeFileSync(path.join(destDir, "pdf-worker-manifest.json"), JSON.stringify({ worker: `/${destName}` }));
     copied = true;

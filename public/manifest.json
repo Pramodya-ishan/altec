@@ -1,10 +1,10 @@
 {
   "name": "Tec A/L",
   "short_name": "Tec A/L",
-  "description": "Sri Lankan A/L Technology learning workspace",
+  "description": "AI Progress Assistant and Data Analyst",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#ffffff",
+  "background_color": "#f8fafd",
+  "theme_color": "#1f1f1f",
   "icons": []
 }

@@ -9,6 +9,16 @@ import { getAllVideoKeys, deleteVideoFile, clearAllVideoFiles } from '../../lib/
 import { SYLLABUS } from '../../constants/syllabus';
 import { calculateLessonWiseMarks } from '../../lib/scoreUtils';
 
+const PRESET_AVATARS = [
+ 'https://api.dicebear.com/7.x/bottts/svg?seed=Nuwan',
+ 'https://api.dicebear.com/7.x/bottts/svg?seed=Dilshan',
+ 'https://api.dicebear.com/7.x/bottts/svg?seed=Amara',
+ 'https://api.dicebear.com/7.x/bottts/svg?seed=Kavindi',
+ 'https://api.dicebear.com/7.x/bottts/svg?seed=Awantha',
+ 'https://api.dicebear.com/7.x/bottts/svg?seed=Saman',
+];
+
+
 function ZScoreBrainCard({ data, user, onAskClora }: { data: any, user: any, onAskClora: () => void }) {
   const [targetZ, setTargetZ] = useState<string>(String(data.targetZ || 1.85));
   const [saving, setSaving] = useState(false);
@@ -87,7 +97,8 @@ export default function ProfileView() {
  const [isEditing, setIsEditing] = useState(false);
  const [editUsername, setEditUsername] = useState(profile?.username || '');
  const [editBio, setEditBio] = useState(profile?.bio || '');
- const [editPicture, setEditPicture] = useState(profile?.picture || user?.picture || '');
+ const [editPicture, setEditPicture] = useState(profile?.picture || PRESET_AVATARS[0]);
+ const [customPicUrl, setCustomPicUrl] = useState('');
 
  const [apiUsage, setApiUsage] = useState({ rpm: 0, rpd: 0, rpmLimit: 15, rpdLimit: 1500 });
  const [adminInput, setAdminInput] = useState('');
@@ -103,6 +114,10 @@ export default function ProfileView() {
  const [showRawEditor, setShowRawEditor] = useState(false);
  const [rawJsonData, setRawJsonData] = useState('');
  const [rawEditorStatus, setRawEditorStatus] = useState('');
+ const googleProfilePicture = user?.picture || '';
+ const displayedPicture = profile?.picture && !profile.picture.includes('api.dicebear.com')
+   ? profile.picture
+   : googleProfilePicture || profile?.picture || PRESET_AVATARS[0];
 
  // Local storage telemetry metric states
  const [storageUsage, setStorageUsage] = useState<number | null>(null);
@@ -408,7 +423,7 @@ export default function ProfileView() {
  if (profile) {
  setEditUsername(profile.username);
  setEditBio(profile.bio);
- setEditPicture(profile.picture || user?.picture || '');
+ setEditPicture(profile.picture);
  }
  setIsEditing(true);
  };
@@ -416,7 +431,7 @@ export default function ProfileView() {
  const handleSave = async (e: React.FormEvent) => {
  e.preventDefault();
  if (!profile) return;
- const finalPic = editPicture || user?.picture || profile.picture || '';
+ const finalPic = customPicUrl.trim() !== '' ? customPicUrl.trim() : editPicture;
  const updated: UserProfile = {
  ...profile,
  username: editUsername.trim() !== '' ? editUsername : profile.username,
@@ -426,10 +441,8 @@ export default function ProfileView() {
  };
  await saveProfile(updated);
  setIsEditing(false);
+ setCustomPicUrl('');
  };
-
- const profilePicture = profile?.picture || user?.picture || '';
- const profileInitial = (profile?.username || user?.name || user?.email || 'T').trim().charAt(0).toUpperCase();
 
  return (
  <div id="profile-dashboard-view" className="max-w-2xl mx-auto flex flex-col gap-8">
@@ -447,20 +460,15 @@ export default function ProfileView() {
  {/* Avatar block */}
  <div className="relative group mb-5">
  <div className="absolute inset-0 bg-primary-500 rounded-full blur-sm opacity-20 scale-105 group-hover:opacity-30 transition-opacity" />
- <div className="relative z-10 flex h-28 w-28 items-center justify-center overflow-hidden rounded-full border-4 border-white bg-slate-900 text-3xl font-bold text-white shadow-md" aria-label="Profile photo">
- <span aria-hidden="true">{profileInitial}</span>
- {profilePicture && (
  <img
- src={profilePicture}
- alt={`${profile?.username || user?.name || 'User'} profile`}
- className="absolute inset-0 h-full w-full object-cover"
+ src={displayedPicture}
+ alt="Avatar"
+ className="w-28 h-28 rounded-full border-4 border-white shadow-md relative z-10 bg-slate-50 object-cover"
  referrerPolicy="no-referrer"
- loading="eager"
- fetchPriority="high"
- onError={(event) => { event.currentTarget.hidden = true; }}
+ onError={(e) => {
+ e.currentTarget.src = `https://api.dicebear.com/7.x/bottts/svg?seed=LocalStudent`;
+ }}
  />
- )}
- </div>
  {!isEditing && (
  <button
  onClick={handleEditInit}
@@ -559,21 +567,47 @@ export default function ProfileView() {
  </div>
 
  <div className="mb-5">
- <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Profile photo</label>
- <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+ <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">
+ Profile photo
+ </label>
+ <div className="flex flex-wrap gap-2.5 mb-3">
+ {googleProfilePicture && (
  <button
  type="button"
- onClick={() => setEditPicture(user?.picture || profile?.picture || '')}
- className="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white p-2 text-left ring-1 ring-slate-200 transition hover:ring-slate-300"
+ onClick={() => {
+ setEditPicture(googleProfilePicture);
+ setCustomPicUrl('');
+ }}
+ className={cn(
+ "h-12 w-12 overflow-hidden rounded-full border-2 bg-slate-50 transition-all hover:scale-105 active:scale-95",
+ editPicture === googleProfilePicture && customPicUrl === '' ? "border-primary-600 shadow-sm" : "border-slate-200"
+ )}
+ title="Use Google account photo"
  >
- <span className="grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-full bg-slate-200 text-sm font-bold text-slate-600">
- {(user?.picture || profile?.picture) ? <img src={user?.picture || profile?.picture} alt="Google account" className="h-full w-full object-cover" referrerPolicy="no-referrer" /> : (profile?.username || user?.name || 'S').charAt(0).toUpperCase()}
- </span>
- <span className="min-w-0"><strong className="block truncate text-sm text-slate-800">Google account photo</strong><span className="text-xs text-slate-500">Use your signed-in account image</span></span>
+ <img src={googleProfilePicture} alt="Google account" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
  </button>
- <label className="flex h-16 w-20 shrink-0 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white text-slate-500 transition hover:border-slate-400 hover:text-slate-800" title="Upload a photo">
- <i className="fa-solid fa-arrow-up-from-bracket text-sm"></i>
- <span className="mt-1 text-[9px] font-bold uppercase">Upload</span>
+ )}
+ {PRESET_AVATARS.map((pic, idx) => (
+ <button
+ key={idx}
+ type="button"
+ onClick={() => {
+ setEditPicture(pic);
+ setCustomPicUrl('');
+ }}
+ className={cn(
+ "w-12 h-12 rounded-full overflow-hidden border-2 transition-all hover:scale-105 active:scale-95 bg-slate-50 cursor-pointer",
+ editPicture === pic && customPicUrl === '' ? "border-primary-600 scale-110 shadow-sm" : "border-slate-200"
+ )}
+ >
+ <img src={pic} alt="Preset" className="w-full h-full" />
+ </button>
+ ))}
+
+ {/* File upload selector disguised as a preset button */}
+ <label className="w-12 h-12 rounded-full border-2 border-dashed border-slate-300 hover:border-primary-500 bg-slate-50 hover:bg-slate-100 flex flex-col items-center justify-center cursor-pointer transition-all hover:scale-105 active:scale-95 shadow-sm" title="Upload Custom File">
+ <i className="fa-solid fa-arrow-up-from-bracket text-slate-400 text-xs text-center"></i>
+ <span className="text-[7px] font-black uppercase text-slate-400 mt-0.5 leading-none">Upload</span>
  <input
  type="file"
  accept="image/*"
@@ -585,6 +619,7 @@ export default function ProfileView() {
  reader.onload = (evt) => {
  if (evt.target?.result) {
  setEditPicture(evt.target.result as string);
+ setCustomPicUrl('');
  }
  };
  reader.readAsDataURL(file);
@@ -593,6 +628,20 @@ export default function ProfileView() {
  />
  </label>
  </div>
+
+ <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">
+ Or Enter Custom Profile Pic URL
+ </label>
+ <input
+ type="url"
+ value={customPicUrl}
+ onChange={(e) => {
+ setCustomPicUrl(e.target.value);
+ setEditPicture('');
+ }}
+ placeholder="https://example.com/avatar.png"
+ className="w-full text-xs font-semibold p-3 border border-slate-200 rounded-xl bg-white focus:border-primary-600 outline-none"
+ />
  </div>
 
  <button

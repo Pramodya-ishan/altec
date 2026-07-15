@@ -4,6 +4,7 @@ dist/
 coverage/
 public/pdf.worker.min.js
 public/pdf.worker.min.mjs
+public/pdf.worker.mjs
 .DS_Store
 *.log
 .env*

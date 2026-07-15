@@ -1,14 +1,10 @@
 import { getAdminDb } from "../firebase/admin";
 import { checkOcrJobStatus } from "./cloudVisionOcr";
 import { finalizePipelineProcessing } from "../pdf/processingPipeline";
+import { env } from "../utils/env";
 
 export function startOcrWorker(intervalMs = 60000) {
-  if (
-    process.env.NODE_ENV === "test" ||
-    process.env.ENABLE_CLOUD_VISION_OCR !== "true"
-  ) {
-    return;
-  }
+  if (process.env.NODE_ENV === "test" || !env.OCR_ENABLED) return;
 
   const timer = setInterval(async () => {
     try {
@@ -68,7 +64,7 @@ export function startOcrWorker(intervalMs = 60000) {
     }
   }, intervalMs);
 
-  // The HTTP server owns the process lifecycle. A background status poll must
-  // never keep a local build, test, or graceful shutdown alive by itself.
+  // Do not make a one-shot local process or serverless invocation stay alive
+  // solely because the background poller exists.
   timer.unref?.();
 }

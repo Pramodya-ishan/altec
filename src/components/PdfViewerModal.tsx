@@ -6,8 +6,9 @@ import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { motion, AnimatePresence } from 'motion/react';
 
-// Keep the worker in Vite's hashed asset graph. Root-level worker URLs are
-// swallowed by the Vercel SPA fallback and returned as index.html.
+// Let Vite fingerprint the worker with the rest of the application assets.
+// A missing public worker used to fall through to index.html, which browsers
+// rejected as a module because its MIME type was text/html.
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 interface PdfViewerModalProps {
