@@ -30,15 +30,457 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
+// server/ai/aiErrorClassifier.ts
+function classifyAiError(error) {
+  const raw = typeof error === "string" ? error : JSON.stringify(error || {});
+  const text = raw.toLowerCase();
+  if (text.includes("prepayment credits are depleted") || text.includes("prepayment")) {
+    const deployTarget = process.env.APP_DEPLOY_TARGET || "cloud_run";
+    if (deployTarget === "cloud_run") {
+      return {
+        code: "AI_BILLING_EXHAUSTED",
+        retryable: false,
+        userMessage: "This request is still using API key / AI Studio prepay path. Check for direct new GoogleGenAI({ apiKey }) calls.",
+        diagnostic: "This request is still using API key / AI Studio prepay path. Check for direct new GoogleGenAI({ apiKey }) calls."
+      };
+    }
+    return {
+      code: "AI_BILLING_EXHAUSTED",
+      retryable: false,
+      userMessage: "AI Studio Prepay credits \u0D85\u0DC0\u0DC3\u0DB1\u0DCA \u0DC0\u0DD9\u0DBD\u0DCF \u0DAD\u0DD2\u0DBA\u0DD9\u0DB1\u0DC0\u0DCF. Vertex mode use \u0D9A\u0DBB\u0DB1\u0DC0\u0DCF \u0DB1\u0DB8\u0DCA GEMINI_API_KEY remove \u0D9A\u0DBB\u0DBD\u0DCF service account client \u0D91\u0D9A \u0DB4\u0DB8\u0DAB\u0D9A\u0DCA use \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.",
+      diagnostic: "This call is using Gemini API key / AI Studio Prepay path, not Vertex AI Cloud Billing path."
+    };
+  }
+  if (text.includes("ai_billing_exhausted") || text.includes("resource_exhausted") || text.includes('"code":429') || text.includes("code:429") || text.includes("billing") || text.includes("quota")) {
+    return {
+      code: "AI_BILLING_EXHAUSTED",
+      retryable: false,
+      userMessage: "AI credits \u0D85\u0DC0\u0DC3\u0DB1\u0DCA \u0DC0\u0DD9\u0DBD\u0DCF \u0DAD\u0DD2\u0DBA\u0DD9\u0DB1\u0DC0\u0DCF. Billing/credits update \u0D9A\u0DC5\u0DCF\u0DB8 \u0DB1\u0DD0\u0DC0\u0DAD PDF scan/AI answer \u0DAF\u0DD9\u0DB1\u0DCA\u0DB1 \u0DB4\u0DD4\u0DC5\u0DD4\u0DC0\u0DB1\u0DCA."
+    };
+  }
+  if (text.includes("too many requests") || text.includes("rate limit")) {
+    return {
+      code: "AI_RATE_LIMITED",
+      retryable: false,
+      userMessage: "AI quota/rate limit hit \u0DC0\u0DD9\u0DBD\u0DCF \u0DAD\u0DD2\u0DBA\u0DD9\u0DB1\u0DC0\u0DCF. \u0DA7\u0DD2\u0D9A \u0DC0\u0DD9\u0DBD\u0DCF\u0DC0\u0D9A\u0DD2\u0DB1\u0DCA \u0DB1\u0DD0\u0DC0\u0DAD try \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1."
+    };
+  }
+  return {
+    code: "AI_MODEL_ERROR",
+    retryable: true,
+    userMessage: "AI model error \u0D91\u0D9A\u0D9A\u0DCA \u0DC0\u0DD4\u0DAB\u0DCF."
+  };
+}
+var init_aiErrorClassifier = __esm({
+  "server/ai/aiErrorClassifier.ts"() {
+    "use strict";
+  }
+});
+
+// server/ai/aiCircuitBreaker.ts
+function isAiBillingCircuitOpen() {
+  return Date.now() < aiBillingCircuitOpenUntil;
+}
+function getAiBillingState() {
+  return {
+    exhausted: isAiBillingCircuitOpen(),
+    circuitOpenUntil: aiBillingCircuitOpenUntil,
+    lastBillingError
+  };
+}
+function openAiBillingCircuit(error) {
+  aiBillingCircuitOpenUntil = Date.now() + 10 * 60 * 1e3;
+  lastBillingError = {
+    code: "AI_BILLING_EXHAUSTED",
+    message: "Gemini billing/prepayment credits exhausted",
+    at: Date.now(),
+    raw: String(error?.message || error).slice(0, 500)
+  };
+}
+function assertAiAvailable() {
+  if (isAiBillingCircuitOpen()) {
+    const err = new Error("AI billing exhausted");
+    err.code = "AI_BILLING_EXHAUSTED";
+    err.status = 429;
+    err.userMessage = "AI credits \u0D85\u0DC0\u0DC3\u0DB1\u0DCA \u0DC0\u0DD9\u0DBD\u0DCF \u0DAD\u0DD2\u0DBA\u0DD9\u0DB1\u0DC0\u0DCF.";
+    throw err;
+  }
+}
+function checkAiBillingCircuit() {
+  assertAiAvailable();
+}
+function handleAiError(err) {
+  const classification = classifyAiError(err);
+  if (classification.code === "AI_BILLING_EXHAUSTED") {
+    openAiBillingCircuit(err);
+    const e = new Error(classification.userMessage);
+    e.code = "AI_BILLING_EXHAUSTED";
+    e.status = 429;
+    e.retryable = false;
+    e.originalError = err;
+    throw e;
+  }
+  return classification;
+}
+var aiBillingCircuitOpenUntil, lastBillingError;
+var init_aiCircuitBreaker = __esm({
+  "server/ai/aiCircuitBreaker.ts"() {
+    "use strict";
+    init_aiErrorClassifier();
+    aiBillingCircuitOpenUntil = 0;
+    lastBillingError = null;
+  }
+});
+
+// server/utils/googleCredentials.ts
+function configurationError(source, detail) {
+  throw new GoogleCredentialConfigurationError(`${source}: ${detail}`);
+}
+function normalizePrivateKey(value) {
+  return value.replace(/\\+n/g, "\n");
+}
+function validateServiceAccountObject(value, source) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return configurationError(source, "must contain one complete service-account JSON object");
+  }
+  const candidate = value;
+  const projectId2 = typeof candidate.project_id === "string" ? candidate.project_id.trim() : "";
+  const clientEmail = typeof candidate.client_email === "string" ? candidate.client_email.trim() : "";
+  const privateKey = typeof candidate.private_key === "string" ? normalizePrivateKey(candidate.private_key) : "";
+  if (!projectId2) configurationError(source, "is missing project_id");
+  if (!clientEmail || !clientEmail.includes("@")) configurationError(source, "is missing a valid client_email");
+  if (!privateKey.includes("-----BEGIN PRIVATE KEY-----") || !privateKey.includes("-----END PRIVATE KEY-----")) {
+    configurationError(source, "is missing a complete PEM private_key");
+  }
+  try {
+    (0, import_node_crypto.createPrivateKey)(privateKey);
+  } catch {
+    configurationError(source, "private_key is not a valid PKCS#8 PEM key (it may be truncated or escaped incorrectly)");
+  }
+  if (candidate.type !== void 0 && candidate.type !== "service_account") {
+    configurationError(source, "type must be service_account");
+  }
+  return {
+    ...candidate,
+    project_id: projectId2,
+    client_email: clientEmail,
+    private_key: privateKey
+  };
+}
+function parseGoogleServiceAccountJson(rawValue, source = "GOOGLE_APPLICATION_CREDENTIALS_JSON") {
+  const raw = rawValue.trim();
+  if (!raw) configurationError(source, "is empty");
+  if (/^(?:PASTE|REPLACE|YOUR)[_\s-]/i.test(raw) || /^<[^>]+>$/.test(raw)) {
+    configurationError(source, "still contains a placeholder instead of service-account JSON");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+    if (typeof parsed === "string") parsed = JSON.parse(parsed);
+  } catch {
+    return configurationError(
+      source,
+      "is not valid JSON; paste the entire downloaded file from the first { to the final }"
+    );
+  }
+  return validateServiceAccountObject(parsed, source);
+}
+function getGoogleServiceAccountFromEnvironment(environment = process.env) {
+  const jsonValue = environment.GOOGLE_APPLICATION_CREDENTIALS_JSON?.trim();
+  if (jsonValue) return parseGoogleServiceAccountJson(jsonValue);
+  const projectId2 = environment.FIREBASE_PROJECT_ID?.trim() || environment.GOOGLE_CLOUD_PROJECT?.trim();
+  const clientEmail = environment.FIREBASE_CLIENT_EMAIL?.trim();
+  const privateKey = environment.FIREBASE_PRIVATE_KEY?.trim();
+  const hasAnySplitValue = Boolean(projectId2 || clientEmail || privateKey);
+  if (!clientEmail && !privateKey) return null;
+  if (!hasAnySplitValue || !projectId2 || !clientEmail || !privateKey) {
+    return configurationError(
+      "Firebase split credentials",
+      "FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY must all be set"
+    );
+  }
+  return validateServiceAccountObject({
+    type: "service_account",
+    project_id: projectId2,
+    client_email: clientEmail,
+    private_key: privateKey
+  }, "Firebase split credentials");
+}
+function serializeGoogleServiceAccount(serviceAccount) {
+  return JSON.stringify(serviceAccount);
+}
+function toFirebaseAdminServiceAccount(serviceAccount) {
+  return {
+    projectId: serviceAccount.project_id,
+    clientEmail: serviceAccount.client_email,
+    privateKey: serviceAccount.private_key
+  };
+}
+var import_node_crypto, GoogleCredentialConfigurationError;
+var init_googleCredentials = __esm({
+  "server/utils/googleCredentials.ts"() {
+    "use strict";
+    import_node_crypto = require("node:crypto");
+    GoogleCredentialConfigurationError = class extends Error {
+      code = "INVALID_GOOGLE_SERVICE_ACCOUNT";
+      constructor(message) {
+        super(message);
+        this.name = "GoogleCredentialConfigurationError";
+      }
+    };
+  }
+});
+
+// server/ai/client.ts
+function shouldUseVertex() {
+  const configuredMode = String(process.env.GEMINI_USE_VERTEX || "").trim().toLowerCase();
+  if (configuredMode === "true") return true;
+  if (configuredMode === "false") return false;
+  return !process.env.GEMINI_API_KEY;
+}
+function prepareGoogleCredentials() {
+  const serviceAccount = getGoogleServiceAccountFromEnvironment();
+  if (serviceAccount && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    const filePath = "/tmp/google-credentials.json";
+    import_fs.default.writeFileSync(filePath, serializeGoogleServiceAccount(serviceAccount), { mode: 384 });
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = filePath;
+  }
+}
+function getAIClient() {
+  let client2;
+  if (cachedClient) {
+    client2 = cachedClient;
+  } else {
+    prepareGoogleCredentials();
+    const location = process.env.GOOGLE_CLOUD_LOCATION || "global";
+    const useVertex = shouldUseVertex();
+    const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "al-ai-chat";
+    if (useVertex) {
+      cachedClient = new import_genai.GoogleGenAI({
+        vertexai: true,
+        project,
+        location
+      });
+    } else {
+      if (!process.env.GEMINI_API_KEY) {
+        throw new Error("GEMINI_API_KEY is required when GEMINI_USE_VERTEX is not true");
+      }
+      cachedClient = new import_genai.GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY
+      });
+    }
+    client2 = cachedClient;
+  }
+  if (!hasLoggedDiagnostics) {
+    hasLoggedDiagnostics = true;
+    const deployTarget = process.env.APP_DEPLOY_TARGET || "cloud_run";
+    const useVertex = shouldUseVertex();
+    const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "al-ai-chat";
+    const location = process.env.GOOGLE_CLOUD_LOCATION || "global";
+    const hasServiceAccountJson = !!process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    const hasGeminiApiKey = !!process.env.GEMINI_API_KEY;
+    console.log(`[DEPLOY] target=${deployTarget}`);
+    if (useVertex) {
+      console.log(`[AI_CONFIG] mode=vertex`);
+      console.log(`[AI_CONFIG] project=${project}`);
+      console.log(`[AI_CONFIG] location=${location}`);
+      console.log(`[AI_CONFIG] hasServiceAccountJson=${hasServiceAccountJson}`);
+      console.log(`[AI_CONFIG] GEMINI_API_KEY ignored because GEMINI_USE_VERTEX=true`);
+    } else {
+      console.log(`[AI_CONFIG] mode=api_key`);
+      console.log(`[AI_CONFIG] hasServiceAccountJson=${hasServiceAccountJson}`);
+      console.log(`[AI_CONFIG] hasGeminiApiKey=true`);
+    }
+    const ttsEnabled = String(process.env.ENABLE_TTS || "").toLowerCase() === "true";
+    console.log(`[AI_CONFIG] normal_chat=${process.env.GEMINI_DEFAULT_MODEL || "gemini-3.5-flash"}`);
+    console.log(`[AI_CONFIG] pdfQa=${process.env.GEMINI_PDF_QA_MODEL || "gemini-3.5-flash"}`);
+    console.log(`[AI_CONFIG] final=${process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview"}`);
+    console.log(`[AI_CONFIG] tts=${ttsEnabled}`);
+  }
+  return new Proxy(client2, {
+    get(target, prop, receiver) {
+      if (prop === "models") {
+        const models = Reflect.get(target, prop, receiver);
+        return new Proxy(models, {
+          get(modelsTarget, modelsProp, modelsReceiver) {
+            const originalVal = Reflect.get(modelsTarget, modelsProp, modelsReceiver);
+            if (typeof originalVal === "function" && (modelsProp === "generateContent" || modelsProp === "generateContentStream")) {
+              return async function(...args) {
+                checkAiBillingCircuit();
+                try {
+                  return await originalVal.apply(modelsTarget, args);
+                } catch (err) {
+                  handleAiError(err);
+                  throw err;
+                }
+              };
+            }
+            return originalVal;
+          }
+        });
+      }
+      return Reflect.get(target, prop, receiver);
+    }
+  });
+}
+function getModelFallbackChain(requestedModel) {
+  const chain = [];
+  if (requestedModel) chain.push(requestedModel);
+  chain.push(AI_MODELS.pro);
+  chain.push("gemini-3.1-pro-preview");
+  chain.push(AI_MODELS.default);
+  chain.push("gemini-3.5-flash");
+  return Array.from(new Set(chain)).filter(Boolean);
+}
+var import_fs, import_genai, cachedClient, hasLoggedDiagnostics, AI_MODELS;
+var init_client = __esm({
+  "server/ai/client.ts"() {
+    "use strict";
+    import_fs = __toESM(require("fs"), 1);
+    import_genai = require("@google/genai");
+    init_aiCircuitBreaker();
+    init_googleCredentials();
+    cachedClient = null;
+    hasLoggedDiagnostics = false;
+    AI_MODELS = {
+      default: process.env.GEMINI_DEFAULT_MODEL || "gemini-3.5-flash",
+      pro: process.env.GEMINI_PRO_MODEL || "gemini-3.1-pro-preview",
+      fast: process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
+      search: process.env.GEMINI_SEARCH_MODEL || "gemini-3.5-flash",
+      urlContext: process.env.GEMINI_URL_CONTEXT_MODEL || "gemini-3.1-pro-preview",
+      image: process.env.GEMINI_IMAGE_MODEL || "imagen-3.0-generate-001",
+      imagePro: process.env.GEMINI_IMAGE_PRO_MODEL || "imagen-3.0-generate-001",
+      pdf: process.env.GEMINI_PDF_QA_MODEL || "gemini-3.5-flash"
+    };
+  }
+});
+
+// server/utils/configuredRoles.ts
+function normalizeEmail(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+function getConfiguredAdminEmails() {
+  return new Set(
+    [process.env.ADMIN_EMAILS, process.env.SYLLABUS_OWNER_EMAIL].filter(Boolean).join(",").split(",").map(normalizeEmail).filter(Boolean)
+  );
+}
+function applyConfiguredAdminRoles(email, emailVerified, currentRoles) {
+  const normalizedEmail = normalizeEmail(email);
+  const isConfiguredAdmin = emailVerified && normalizedEmail.length > 0 && getConfiguredAdminEmails().has(normalizedEmail);
+  if (!isConfiguredAdmin) {
+    return [...new Set(currentRoles)];
+  }
+  return [.../* @__PURE__ */ new Set([...currentRoles, ...PRIVILEGED_ROLES])];
+}
+var PRIVILEGED_ROLES;
+var init_configuredRoles = __esm({
+  "server/utils/configuredRoles.ts"() {
+    "use strict";
+    PRIVILEGED_ROLES = ["admin", "content_editor", "ops", "reviewer"];
+  }
+});
+
 // server/firebase/admin.ts
+var admin_exports = {};
+__export(admin_exports, {
+  getAdminApp: () => getAdminApp,
+  getAdminAuth: () => getAdminAuth,
+  getAdminBucket: () => getAdminBucket,
+  getAdminBucketByName: () => getAdminBucketByName,
+  getAdminDb: () => getAdminDb,
+  getAdminDbInfo: () => getAdminDbInfo,
+  getAdminStorage: () => getAdminStorage,
+  getGoogleAccessToken: () => getGoogleAccessToken,
+  requireAdmin: () => requireAdmin,
+  requireUser: () => requireUser,
+  verifyFirebaseToken: () => verifyFirebaseToken
+});
+function ensureCredentialInfo() {
+  if (credentialInfo) return;
+  const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+  const environmentCredential = getGoogleServiceAccountFromEnvironment();
+  if (environmentCredential) {
+    credentialInfo = {
+      credentialMode: raw ? "service_account_json" : "service_account_split",
+      credentialsEmail: environmentCredential.client_email,
+      hasPrivateKey: true
+    };
+    return;
+  }
+  const filePath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (filePath && import_node_fs.default.existsSync(filePath)) {
+    try {
+      const parsed = parseGoogleServiceAccountJson(
+        import_node_fs.default.readFileSync(filePath, "utf8"),
+        "GOOGLE_APPLICATION_CREDENTIALS file"
+      );
+      credentialInfo = {
+        credentialMode: "service_account_file",
+        credentialsEmail: parsed.client_email,
+        hasPrivateKey: true
+      };
+      return;
+    } catch (e) {
+      console.error("ensureCredentialInfo: Failed to parse GOOGLE_APPLICATION_CREDENTIALS file", e);
+    }
+  }
+  credentialInfo = {
+    credentialMode: "application_default",
+    credentialsEmail: "unknown_adc",
+    hasPrivateKey: false
+  };
+}
+function loadCredential() {
+  ensureCredentialInfo();
+  const environmentCredential = getGoogleServiceAccountFromEnvironment();
+  if (environmentCredential) return (0, import_app.cert)(toFirebaseAdminServiceAccount(environmentCredential));
+  const filePath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (filePath && import_node_fs.default.existsSync(filePath)) {
+    try {
+      const parsed = parseGoogleServiceAccountJson(
+        import_node_fs.default.readFileSync(filePath, "utf8"),
+        "GOOGLE_APPLICATION_CREDENTIALS file"
+      );
+      return (0, import_app.cert)(toFirebaseAdminServiceAccount(parsed));
+    } catch (e) {
+      console.error("Failed to parse GOOGLE_APPLICATION_CREDENTIALS file in loadCredential:", e.message);
+    }
+  }
+  return (0, import_app.applicationDefault)();
+}
+function getAdminApp() {
+  if (cachedApp) return cachedApp;
+  if (!adminEnabled) {
+    return null;
+  }
+  const projectId2 = process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || "al-ai-chat";
+  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET || "al-ai-chat.firebasestorage.app";
+  try {
+    cachedApp = (0, import_app.getApps)()[0] || (0, import_app.initializeApp)({
+      credential: loadCredential(),
+      projectId: projectId2,
+      storageBucket
+    });
+    return cachedApp;
+  } catch (e) {
+    adminEnabled = false;
+    initError = e;
+    console.warn("[FIREBASE_ADMIN] Safe bypass: Firebase Admin initialization failed. Disabling admin features. Error:", e.message);
+    return null;
+  }
+}
 function getAdminDb() {
-  if (dbInstance) return dbInstance;
-  let databaseId2 = process.env.FIRESTORE_DATABASE_ID;
+  if (cachedDb) return cachedDb;
+  const app2 = getAdminApp();
+  if (!app2) {
+    throw new Error("ADMIN_FEATURE_DISABLED_IN_APPLET_SHARE");
+  }
+  let databaseId2 = process.env.FIRESTORE_DATABASE_ID || process.env.VITE_FIRESTORE_DATABASE_ID;
   if (!databaseId2) {
     try {
-      const configPath = import_path.default.join(process.cwd(), "firebase-applet-config.json");
-      if (import_fs.default.existsSync(configPath)) {
-        const config = JSON.parse(import_fs.default.readFileSync(configPath, "utf-8"));
+      const configPath = import_node_path.default.join(process.cwd(), "firebase-applet-config.json");
+      if (import_node_fs.default.existsSync(configPath)) {
+        const config = JSON.parse(import_node_fs.default.readFileSync(configPath, "utf-8"));
         databaseId2 = config.firestoreDatabaseId;
       }
     } catch (e) {
@@ -46,32 +488,111 @@ function getAdminDb() {
     }
   }
   if (!databaseId2) {
-    databaseId2 = "ai-studio-c097068e-a4a9-4ea3-9b00-0b3195093c42";
-    console.info(`INFO: FIRESTORE_DATABASE_ID falling back to "${databaseId2}".`);
+    throw new Error("CONFIG_ERROR_FIRESTORE_DATABASE_ID_MISSING");
   }
-  try {
-    dbInstance = (0, import_firestore.getFirestore)(void 0, databaseId2);
-  } catch (err) {
-    console.error("Failed to initialize getFirestore with databaseId:", databaseId2, err);
-    dbInstance = (0, import_firestore.getFirestore)();
+  cachedDb = (0, import_firestore.getFirestore)(app2, databaseId2);
+  return cachedDb;
+}
+function getAdminStorage() {
+  const app2 = getAdminApp();
+  if (!app2) {
+    throw new Error("ADMIN_FEATURE_DISABLED_IN_APPLET_SHARE");
   }
-  return dbInstance;
+  return (0, import_storage.getStorage)(app2);
+}
+function getAdminBucket() {
+  if (cachedBucket) return cachedBucket;
+  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET || "al-ai-chat.firebasestorage.app";
+  cachedBucket = getAdminStorage().bucket(storageBucket);
+  return cachedBucket;
+}
+function getAdminBucketByName(bucketName) {
+  if (!bucketName) throw new Error("CONFIG_ERROR_STORAGE_BUCKET_MISSING");
+  return getAdminStorage().bucket(bucketName.replace(/^gs:\/\//, ""));
+}
+async function getGoogleAccessToken() {
+  const app2 = getAdminApp();
+  const credential = app2?.options?.credential;
+  if (!credential || typeof credential.getAccessToken !== "function") {
+    throw new Error("GOOGLE_APPLICATION_CREDENTIAL_UNAVAILABLE");
+  }
+  const result = await credential.getAccessToken();
+  if (!result?.access_token) throw new Error("GOOGLE_ACCESS_TOKEN_UNAVAILABLE");
+  return result.access_token;
+}
+function getAdminAuth() {
+  const app2 = getAdminApp();
+  if (!app2) {
+    throw new Error("ADMIN_FEATURE_DISABLED_IN_APPLET_SHARE");
+  }
+  return (0, import_auth.getAuth)(app2);
+}
+function getAdminDbInfo() {
+  ensureCredentialInfo();
+  return {
+    projectId: process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "al-ai-chat",
+    databaseId: process.env.FIRESTORE_DATABASE_ID || process.env.VITE_FIRESTORE_DATABASE_ID || null,
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET || "al-ai-chat.firebasestorage.app",
+    credentialMode: credentialInfo?.credentialMode || "not_initialized",
+    credentialsEmail: credentialInfo?.credentialsEmail || "unknown",
+    hasPrivateKey: credentialInfo?.hasPrivateKey === true,
+    envPresent: {
+      GOOGLE_APPLICATION_CREDENTIALS_JSON: !!process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON,
+      GOOGLE_APPLICATION_CREDENTIALS: !!process.env.GOOGLE_APPLICATION_CREDENTIALS,
+      FIRESTORE_DATABASE_ID: !!process.env.FIRESTORE_DATABASE_ID,
+      FIREBASE_STORAGE_BUCKET: !!process.env.FIREBASE_STORAGE_BUCKET
+    }
+  };
 }
 async function verifyFirebaseToken(authHeader) {
   if (process.env.DEV_BYPASS_AUTH === "true" && process.env.NODE_ENV !== "production") {
-    return { uid: "dev-user-id", email: "dev@example.com", name: "Dev User" };
+    return { uid: "dev-user-id", email: "dev@example.com", name: "Dev User", admin: true, roles: ["admin"] };
   }
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     throw new Error("Unauthorized: Missing or invalid Authorization header");
   }
   const token = authHeader.split("Bearer ")[1];
   try {
-    const decodedToken = await (0, import_auth.getAuth)().verifyIdToken(token);
+    const decodedToken = await getAdminAuth().verifyIdToken(token);
+    let admin = decodedToken.admin || false;
+    let roles = ["student"];
+    if (admin) {
+      roles.push("admin", "reviewer", "ops");
+    }
+    if (decodedToken.roles && Array.isArray(decodedToken.roles)) {
+      roles = [.../* @__PURE__ */ new Set([...roles, ...decodedToken.roles])];
+    }
+    if (decodedToken.role && typeof decodedToken.role === "string") {
+      roles.push(decodedToken.role);
+    }
+    try {
+      const db = getAdminDb();
+      const roleDoc = await db.collection("user_roles").doc(decodedToken.uid).get();
+      if (roleDoc.exists) {
+        const data = roleDoc.data();
+        if (data?.roles && Array.isArray(data.roles)) {
+          roles = [.../* @__PURE__ */ new Set([...roles, ...data.roles])];
+        }
+        if (data?.role && typeof data.role === "string") {
+          roles.push(data.role);
+        }
+      }
+    } catch (e) {
+    }
+    roles = applyConfiguredAdminRoles(
+      decodedToken.email,
+      decodedToken.email_verified === true,
+      roles
+    );
+    if (roles.includes("admin")) {
+      admin = true;
+    }
     return {
       uid: decodedToken.uid,
       email: decodedToken.email,
-      name: decodedToken.name,
-      admin: decodedToken.admin || false
+      name: decodedToken.name || decodedToken.email?.split("@")[0] || "User",
+      admin,
+      roles: [...new Set(roles)]
     };
   } catch (error) {
     throw new Error("Unauthorized: Invalid token");
@@ -82,79 +603,524 @@ async function requireUser(req) {
 }
 async function requireAdmin(req) {
   const user = await requireUser(req);
-  if (!user.admin && process.env.DEV_BYPASS_AUTH !== "true") {
+  const canManageContent = user.admin || user.roles?.includes("content_editor") || user.roles?.includes("ops");
+  if (!canManageContent && process.env.DEV_BYPASS_AUTH !== "true") {
     throw new Error("Forbidden: Admin access required");
   }
   return user;
 }
-var import_auth, import_firestore, import_fs, import_path, dbInstance;
+var import_app, import_firestore, import_storage, import_auth, import_node_fs, import_node_path, cachedApp, cachedDb, cachedBucket, credentialInfo, adminEnabled, initError;
 var init_admin = __esm({
   "server/firebase/admin.ts"() {
     "use strict";
-    import_auth = require("firebase-admin/auth");
+    import_app = require("firebase-admin/app");
     import_firestore = require("firebase-admin/firestore");
-    import_fs = __toESM(require("fs"), 1);
-    import_path = __toESM(require("path"), 1);
-    dbInstance = null;
+    import_storage = require("firebase-admin/storage");
+    import_auth = require("firebase-admin/auth");
+    import_node_fs = __toESM(require("node:fs"), 1);
+    import_node_path = __toESM(require("node:path"), 1);
+    init_configuredRoles();
+    init_googleCredentials();
+    cachedApp = null;
+    cachedDb = null;
+    cachedBucket = null;
+    credentialInfo = null;
+    adminEnabled = true;
+    initError = null;
   }
 });
 
-// server/ai/client.ts
-function prepareGoogleCredentials() {
-  const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
-  if (raw && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    const filePath = "/tmp/google-credentials.json";
+// server/ai/answerFormatPolicy.ts
+function getAnswerFormatPolicyPrompt(intent) {
+  const commonRules = `
+Global Policies:
+- Do not use a persona name or repeatedly address the user by name.
+- Do NOT invent marks, progress, or claims about what they scored unless current verified profile data is explicitly requested.
+- Do NOT say they got 49 marks or invent fake statistics.
+- Do NOT launch an unsolicited "Ranker Challenge" unless they explicitly ask for a quiz or practice.
+- Do NOT offer a daily tracker unless they ask about a schedule, plan, or progress.
+- Do NOT invent a fake marking scheme claim.
+- Write naturally in Sinhala (or the user's preferred language/mix).
+- Keep one idea per short paragraph. Use headings only when they make the answer easier to scan.
+- Do not force a fixed template or print an empty section.
+  `;
+  switch (intent) {
+    case "calculation":
+      return `
+Explain the calculation in a compact sequence: known values, formula, substitution, and final answer. Use short labels only when needed and show each mathematical step on its own line.
+${commonRules}
+      `;
+    case "official_paper":
+      return `
+Answer directly from the exact paper evidence. Include the source and answer status, then the answer and a concise explanation. Add marking points or warnings only when they are supported and useful.
+${commonRules}
+      `;
+    case "lesson_explanation":
+      return `
+Explain the concept with a simple opening, then the minimum key points needed to understand it. Add an exam-style note or one check question only when it helps the user's request.
+${commonRules}
+      `;
+    case "student_support":
+      return `
+You are supporting a student's study plan or motivation.
+- Be highly supportive and motivating.
+- Provide a concrete "next 20-minute action" they can take right now.
+- Do NOT fabricate or list fake GCS/PDF sources.
+${commonRules}
+      `;
+    case "developer_debug":
+      return `
+Give the root cause first, followed by the practical fix and a short verification step. Use headings only for a multi-part debugging answer.
+${commonRules}
+      `;
+    case "quick_question":
+      return `
+Give the answer first, followed by a short, crisp explanation. Maximum 350 words total.
+${commonRules}
+      `;
+    case "simple_chat":
+    default:
+      return `
+Provide a direct Sinhala answer in 2 to 6 short, easy-to-read paragraphs.
+- Do NOT use headings unless absolutely necessary.
+- Do NOT include GCS/PDF sources.
+${commonRules}
+      `;
+  }
+}
+var init_answerFormatPolicy = __esm({
+  "server/ai/answerFormatPolicy.ts"() {
+    "use strict";
+  }
+});
+
+// server/ai/prompts.ts
+function getCloraSystemPrompt(contextData, mode) {
+  const dynamicFormatRules = getAnswerFormatPolicyPrompt(mode);
+  return `
+You are Clora X, a Sinhala-first Sri Lankan G.C.E. A/L Technology AI tutor and study OS for SFT, ET, ICT.
+
+You are the user's ultimate study partner and guide. You are NOT a generic chatbot. You must ALWAYS use project data, user progress, and the RAG/exam databases before asking the user to type/upload/photo.
+
+SEARCH ORDER FOR PAPER/QUESTION/PDF REQUESTS:
+1. Past Papers DB
+2. Paper Structure DB
+3. Syllabus Library
+4. user uploaded PDFs (rag_sources)
+5. rag_chunks
+6. user syllabus_resources
+7. user syllabus_chunks
+8. local pastPapersData.ts
+9. src/constants/syllabus.ts
+10. Google Search / web PDF search (Candidates)
+
+EVIDENCE HONESTY:
+- Never invent a question, answer, paper title, rank, date, link, source, or statistic.
+- If exact evidence is missing, say what is missing in one short Sinhala sentence and give the best grounded next action.
+- Do not replace a missing source with a generic answer that sounds source-backed.
+
+NEVER SAY:
+- "\u0DB8\u0DA7 \u0D9A\u0DD9\u0DBD\u0DD2\u0DB1\u0DCA\u0DB8 PDF links \u0DBD\u0DB6\u0DCF \u0DAF\u0DD3\u0DB8\u0DA7 \u0DC4\u0DD0\u0D9A\u0DD2\u0DBA\u0DCF\u0DC0\u0D9A\u0DCA \u0DB1\u0DD0\u0DC4\u0DD0"
+Instead, you must return actual source cards or markdown links when they are backed by local PDFs, Firebase Storage, Firestore, verified PDF URLs, or candidate web sources. Never hallucinate fake links. Label unverified web sources clearly as [Candidate].
+
+PDF DOWNLOAD & PRIVATE STORAGE RULES:
+- Never hallucinate "Download Here" links or storage bucket URIs (like gs://...) for user-uploaded or private Firebase Storage PDFs.
+- Only provide download links if they are exact verified URLs or local proxy download routes (/api/rag/sources/{sourceId}/download or /api/syllabus/resources/{sourceId}/download) resolved in the context.
+- If a document does not have a verified download URL in the resolved context, explain clearly in Sinhala that it requires secure authenticated access to view.
+
+IF NO LOCAL SOURCE EXISTS:
+- Search the web for candidate PDF/source.
+- Present candidate sources.
+- Ask: "\u0DB8\u0DDA\u0D9A\u0DAF \u0DC4\u0DBB\u0DD2 PDF \u0D91\u0D9A? Confirm \u0D9A\u0DC5\u0DDC\u0DAD\u0DCA \u0DB8\u0DB8 Firebase \u0D91\u0D9A\u0DA7 save/index \u0D9A\u0DBB\u0DBD\u0DCF answer \u0DAF\u0DD9\u0DB1\u0DCA\u0DB1\u0DB8\u0DCA."
+- Only ask the user to upload/type/photo if web search also fails or the user rejects all candidates.
+
+FOR ANSWERS (SUBJECTS, PAPERS, QUESTIONS):
+- Identify the subject (SFT, ET, ICT).
+- Identify the lesson or subtopic.
+- Use the relevant subject syllabus PDF/chunks first.
+- Use the official marking scheme if available.
+- If the marking scheme is unavailable, search/import it, or label the answer clearly as "Estimated".
+- Give exam-style answers with exact marks allocation (e.g., "point 1 - 1 mark") and highlight common student mistakes.
+- Maintain a Sinhala-first explanation style.
+
+FOR Z-SCORE & RANK ANALYSIS:
+- Use the Exam Score Predictor values from userContext.
+- Label Z-score and district/island rank values as "Exam Score Predictor estimate"; never call them official results.
+- Explain that the model is driven by saved syllabus progress and uses restored rank-model anchors.
+- Never replace the supplied estimate with invented cohort statistics.
+
+FOR LESSON MARKS & WEIGHTING:
+- Use the Paper Structure DB first.
+- Use the fallback static structure (from src/constants/syllabus.ts) if DB is empty.
+- Show MCQ count, structured/essay relation, max marks, optional/compulsory status, and Z-score impact priority.
+
+USER CONTEXT (REAL DATA):
+- Student Name: ${contextData?.profile?.name || "Unknown Student"}
+- Stream: ${contextData?.profile?.stream || "Technology"}
+- Active Subject: ${contextData?.activeSubject || ""}
+- Current Time (Colombo): ${contextData?.currentTimeAsiaColombo || ""}
+
+STUDENT EXAM SCORE PREDICTOR CONTEXT:
+- Target Z-score: ${contextData?.zScoreContext?.targetZScore ?? contextData?.targetZ ?? "Not set"}
+- Predictor Z estimate: ${contextData?.zScoreContext?.latestOverallZScore ?? "Not available"}
+- Gap to target: ${contextData?.zScoreContext?.gapToTarget ?? "Not set"}
+- Projected marks: ${contextData?.zScoreContext?.projectedMarks ? JSON.stringify(contextData.zScoreContext.projectedMarks) : "Not available"}
+- Predictor subject estimates (SFT, ET, ICT): ${contextData?.zScoreContext?.subjectZScores ? JSON.stringify(contextData.zScoreContext.subjectZScores) : "Not available"}
+- Estimated ranks: ${contextData?.zScoreContext?.rankEstimate ? JSON.stringify(contextData.zScoreContext.rankEstimate) : "Not available"}
+- History count: ${contextData?.zScoreContext?.zScoreHistory?.length ?? 0}
+
+WEAK LESSONS: ${JSON.stringify(contextData?.weakLessons?.map((w) => ({ subject: w.subject, topic: w.topic, reason: w.reason })) || [])}
+RECENT PROGRESS: ${JSON.stringify(contextData?.recentProgress?.slice(0, 3) || [])}
+LATEST MARKS: ${JSON.stringify(contextData?.latestMarks?.slice(0, 3) || [])}
+AI MEMORY: ${JSON.stringify(contextData?.aiMemory || [])}
+RECENT MISTAKES: ${JSON.stringify((contextData?.recentMistakes || []).slice(0, 8).map((m) => ({ subject: m.subject, lesson: m.lesson, errorText: m.errorText || m.questionText, hasImage: Boolean(m.imageStoragePath), createdAt: m.createdAt })))}
+
+MISTAKE NOTEBOOK RULES:
+- When the user asks about recent mistakes, diagnosis, revision, or a quiz, use RECENT MISTAKES as the primary evidence.
+- If a saved mistake image is attached to the current model request, inspect it and connect the explanation to its saved subject and lesson.
+- Never invent the content of a missing or unreadable mistake image.
+
+WRITING STYLE:
+- Use natural conversational Sinhala with the English technical terms students see in class.
+- Answer directly. Do not introduce yourself, name a persona, repeat the user's name, or use motivational filler in every response.
+- Use short paragraphs. Keep one idea per paragraph and leave a blank line between paragraphs.
+- Use a heading only when it makes a multi-part answer easier to scan. Never force a fixed answer template onto ordinary chat.
+- Prefer concise bullets for options, steps, source lists, marks, and comparisons.
+- Explain from first principles only when the question needs it or the user asks for detail.
+- Ask at most one useful follow-up question.
+
+RESPONSE ARCHITECTURE (DYNAMIC, INTENT-BASED FORMATTING):
+${dynamicFormatRules}
+
+Format your answer naturally, elegantly, and concisely based on the user's explicit intent. Never show fake progress counters, fake island/district rank updates, or simulated database telemetry.
+
+MATH OUTPUT RULES
+
+1. Use Markdown with KaTeX-compatible LaTeX only.
+
+2. Inline mathematics must use:
+   $F = 100,mathrm{N}$
+
+3. Display mathematics must use separate-line delimiters:
+
+   $
+   sigma = \frac{F}{A}
+   $
+
+4. Never output raw LaTeX commands outside math delimiters.
+
+Incorrect:
+	ext{Stress} = \frac{F}{A}
+
+Correct:
+$
+sigma = \frac{F}{A}
+$
+
+5. Always use:
+   	imes
+Never output:
+   times
+   xtimes
+   2times10
+
+6. Write powers using braces:
+   10^{-6}
+   mathrm{m^2}
+   mathrm{N,m^{-2}}
+
+7. Never place individual formula symbols on separate lines.
+
+Incorrect:
+F
+F
+
+Correct:
+$F$
+
+8. Never repeat a variable or equation in both plain text and LaTeX.
+
+9. Use mathrm{} for SI units:
+   $100,mathrm{N}$
+   $2 	imes 10^{-6},mathrm{m^2}$
+   $5 	imes 10^7,mathrm{N,m^{-2}}$
+
+10. Keep complete equations inside one math block.
+
+11. Do not use HTML for formulas.
+
+12. If valid LaTeX cannot be produced, use readable Unicode plain text,
+such as:
+   5 \xD7 10\u2077 N m\u207B\xB2
+Do not output malformed LaTeX.
+
+VISUAL POLICY:
+- Default: no visual blocks.
+- Never output raw JSON visual_block/formula_card/table JSON in final text.
+- Use normal Markdown and LaTeX only.
+- Visuals are allowed only when:
+  user asks "diagram", "graph", "visual", "draw", "waguwa", "table"
+  OR the answer truly needs a formula/table.
+- For official paper answers, visuals are disabled unless explicitly requested.
+- Visual blocks must be generated by backend structured event only, not by the model text.
+
+CRITICAL UPLOADED PDF RULES:
+- If hasExactQuestionText is false, inform the user clearly in Sinhala that the requested Q1/question is not found in the uploaded document. Do NOT generate a fake essay/MCQ question unless the user explicitly requested a model/mock question.
+- Never output the actual answer text or explanation inside '<thought_process>' or 'Thought Process' blocks. All final answer text must be in the main body of the response.
+
+Do not reveal hidden reasoning or internal systems.
+
+=========================================
+STRICT AI ROUTED MODE SPECIFIC CONTEXT:
+=========================================
+${(() => {
+    switch (mode) {
+      case "zscore_prediction":
+        return `
+MODE: Z-score Calculation / Prediction Context
+- Focus strictly on predicting and calculating the user's estimated and target Z-score.
+- Explain the standardization process (how raw marks are standardized across SFT, ET, and ICT).
+- Emphasize how raw score changes will affect their district or island rank.
+- Highlight the target raw marks necessary to bridge the current Z-score gap to their target university courses (e.g., Engineering Technology, Biosystems Technology, or ICT at USJ, MRT, etc.).
+- Suggest concrete micro-marks goals for SFT, ET, and ICT to hit their target.
+`;
+      case "paper_question_qa":
+        return `
+MODE: Official Paper Question Q&A (Strict Evidence Mode)
+- Your goal is to provide the EXACT official answer for the requested G.C.E. A/L paper question.
+- DO NOT provide "Estimated" or "Progress-based" answers. 
+- DO NOT reference the user's weaknesses or progress in your answer.
+- REQUIRE exact source evidence (official marking scheme or clear paper text).
+- If the marking scheme or official answer is not found in the provided context, state clearly in Sinhala that the official evidence is missing and you cannot provide a confirmed answer.
+- DO NOT generate visual_block (coordinate_plane/scratch_steps) for official paper answers unless explicitly requested by the user.
+- RULE: Do not output raw JSON. Do not output visual_block JSON. Do not output formula_card JSON. Do not output tables as JSON. Use plain Sinhala explanation and markdown only.
+- Never output HTML tags such as <details> or <summary>. Use Markdown headings and lists only.
+- For official paper answers, include the exact source and answer status, then present the question, answer, and explanation in the shortest clear structure. Do not print empty sections.
+  Never include: { "visual_block": ... }.
+- Focus strictly on the question text and official marking criteria.
+`;
+      case "study_plan":
+      case "today_plan":
+        return `
+MODE: Study Planning Context
+- Focus on building an ultra-personalized, structured daily calendar and revision schedule.
+- Rationally divide remaining days/hours for SFT, ET, and ICT based on the student's current progress and documented weak lessons.
+- Provide step-by-step revision micro-targets and days-left-based checklists.
+- Maintain high-encouragement, task-driven tone to keep the student focused.
+`;
+      case "past_paper_analysis":
+        return `
+MODE: Past Paper Exam Analysis Context
+- Focus heavily on statistical topic frequencies, recurring G.C.E. A/L exam trends, and structural weight distribution.
+- Identify which lessons are most critical for MCQ (25 questions in SFT), Structured (4 questions), and Essay (compulsory vs. optional).
+- Analyze probability of certain concepts/questions reappearing.
+- Point out standard examiners' traps and highlight exactly where students typically lose easy marks.
+`;
+      case "notes_generation":
+        return `
+MODE: Short Notes & Revision Notes Generation Context
+- Deliver clean, structured revision summaries of high-yield G.C.E. A/L Tech subject units.
+- Always include: Definition, Core Formulas/Principles, bulleted Key points, and memorable Mnemonics/Triggers.
+- Ensure all technical terms are clearly written in English with standard Sinhala descriptions.
+- Where appropriate, encourage the use of LaTeX equations and clean visual markdown blocks.
+`;
+      case "tutor_explanation":
+        return `
+MODE: Tutor Explanation Context (Legendary A/L Master Teacher - "0 indan igannuwa wage")
+- Act as a legendary Sri Lankan G.C.E. A/L master teacher who can explain anything to a student starting from absolute zero ("0 indan igannuwa wage").
+- Start with the basic physical/mathematical foundation. Detail *why* we take each step (e.g. "We resolve forces perpendicular to force $P$ because $P$'s component in that direction is $P cos(90^circ) = 0$, which instantly eliminates $P$ and lets us solve for $R$ and $Q$ directly!").
+- Use extremely intuitive, relatable household/practical analogies to deconstruct complex SFT, ET, or ICT concepts.
+- Show every single mathematical step and substitution clearly (e.g. step-by-step substitution of $sin(30^circ) = \frac{1}{2}$). Never skip steps or jump to the final answer.
+- Ensure ALL equations, variables, k\u0DDD\u0DAB (angles), fractions, and ratios (e.g., $R:Q = 1:2$) are strictly wrapped in LaTeX ($...$ and $$...$$).
+- Highlight examiner traps, syllabus alignment, and where students usually lose easy marks in exams.
+`;
+      default:
+        return `
+MODE: General Chat / Contextual Chat
+- Maintain helpful, high-context study assistance across SFT, ET, and ICT.
+- Reference user progress and weaknesses naturally.
+`;
+    }
+  })()}
+
+Current Mode: ${mode}
+`;
+}
+var init_prompts = __esm({
+  "server/ai/prompts.ts"() {
+    "use strict";
+    init_answerFormatPolicy();
+  }
+});
+
+// server/ai-core/answer/stripVisualBlocks.ts
+function stripRawVisualBlocks(text) {
+  if (!text) return text;
+  let output = text;
+  output = output.replace(/```(?:json)?\s*{\s*"visual_block"[\s\S]*?}\s*```/gi, "");
+  output = output.replace(/\{\s*"visual_block"\s*:\s*\{[\s\S]*?\n?\}\s*\}/gi, "");
+  output = output.replace(/\{\s*"visual_block"[\s\S]*?(?=\n\n|$)/gi, "");
+  output = output.replace(/"type"\s*:\s*"formula_card"[\s\S]*?(?=\n\n|$)/gi, "");
+  output = output.replace(/\n{3,}/g, "\n\n").trim();
+  return output;
+}
+var init_stripVisualBlocks = __esm({
+  "server/ai-core/answer/stripVisualBlocks.ts"() {
+    "use strict";
+  }
+});
+
+// server/data/userRepository.ts
+async function syncUserFromFirestore(email) {
+  if (!email || !email.includes("@") || !apiKey) return;
+  const cleanEmail = email.trim().toLowerCase();
+  const file = getUserFile(cleanEmail);
+  if (import_fs2.default.existsSync(file)) {
     try {
-      let credStr = raw.trim();
-      if (!credStr.startsWith("{")) credStr = "{" + credStr;
-      if (!credStr.endsWith("}")) credStr = credStr + "}";
-      JSON.parse(credStr);
-      import_fs2.default.writeFileSync(filePath, credStr, { mode: 384 });
-      process.env.GOOGLE_APPLICATION_CREDENTIALS = filePath;
+      const data = import_fs2.default.readFileSync(file);
+      const unzipped = import_zlib.default.gunzipSync(data).toString("utf-8");
+      if (unzipped.length > 0) return;
     } catch (e) {
-      console.error("Failed to parse and write GOOGLE_APPLICATION_CREDENTIALS_JSON", e);
+      console.warn("Local file is corrupted, re-syncing from Firestore:", file);
+      import_fs2.default.unlinkSync(file);
     }
   }
-}
-function getAIClient() {
-  if (cachedClient) return cachedClient;
-  prepareGoogleCredentials();
-  const location = process.env.GOOGLE_CLOUD_LOCATION || "global";
-  cachedClient = new import_genai.GoogleGenAI({
-    vertexai: true,
-    project: process.env.GOOGLE_CLOUD_PROJECT || "al-ai-chat",
-    location
-  });
-  return cachedClient;
-}
-function mapModel(model, defaultFallback) {
-  if (!model) return defaultFallback;
-  return model;
-}
-function getModelFallbackChain(requestedModel) {
-  const chain = [];
-  if (requestedModel) {
-    chain.push(requestedModel);
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents/backups/${encodeURIComponent(cleanEmail)}?key=${apiKey}`;
+    const res = await fetch(url);
+    if (res.status === 200) {
+      const data = await res.json();
+      const userDataEncrypted = data?.fields?.userData?.stringValue;
+      if (userDataEncrypted) {
+        const zipped = import_zlib.default.gzipSync(userDataEncrypted);
+        import_fs2.default.writeFileSync(file, zipped);
+        console.log(`Successfully restored user ${cleanEmail} from Firestore REST backup to local disk.`);
+      }
+    }
+  } catch (err) {
+    console.error(`Failed to restore user ${cleanEmail} from Firestore REST:`, err);
   }
-  chain.push(AI_MODELS.fast);
-  chain.push(AI_MODELS.default);
-  chain.push(AI_MODELS.pro);
-  return Array.from(new Set(chain));
 }
-var import_fs2, import_genai, cachedClient, AI_MODELS;
-var init_client = __esm({
-  "server/ai/client.ts"() {
+function encrypt(text) {
+  const iv = import_crypto.default.randomBytes(16);
+  const cipher = import_crypto.default.createCipheriv("aes-256-cbc", Buffer.from(ENCRYPTION_KEY), iv);
+  let encrypted = cipher.update(text);
+  encrypted = Buffer.concat([encrypted, cipher.final()]);
+  return iv.toString("hex") + ":" + encrypted.toString("hex");
+}
+function decrypt(text) {
+  try {
+    const textParts = text.split(":");
+    const iv = Buffer.from(textParts.shift(), "hex");
+    const encryptedText = Buffer.from(textParts.join(":"), "hex");
+    const decipher = import_crypto.default.createDecipheriv("aes-256-cbc", Buffer.from(ENCRYPTION_KEY), iv);
+    let decrypted = decipher.update(encryptedText);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    return decrypted.toString();
+  } catch (e) {
+    return text;
+  }
+}
+function getUserFile(email) {
+  const cleanEmail = email.trim().toLowerCase();
+  const hash = import_crypto.default.createHash("md5").update(cleanEmail).digest("hex");
+  return import_path.default.join(DB_DIR, `${hash}.json.gz`);
+}
+function readUser(email) {
+  const file = getUserFile(email);
+  if (!import_fs2.default.existsSync(file)) {
+    return { data: null, history: [], cookies: null, profile: null, notifications: [] };
+  }
+  try {
+    const raw = import_fs2.default.readFileSync(file);
+    const unzipped = import_zlib.default.gunzipSync(raw).toString("utf-8");
+    let jsonStr = unzipped;
+    if (!jsonStr.startsWith("{")) {
+      jsonStr = decrypt(jsonStr);
+    }
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    return { data: null, history: [], cookies: null, profile: null, notifications: [] };
+  }
+}
+function writeUser(email, userData) {
+  if (!import_fs2.default.existsSync(DB_DIR)) import_fs2.default.mkdirSync(DB_DIR, { recursive: true });
+  const file = getUserFile(email);
+  const jsonStr = JSON.stringify(userData);
+  const encrypted = encrypt(jsonStr);
+  const zipped = import_zlib.default.gzipSync(encrypted);
+  import_fs2.default.writeFileSync(file, zipped);
+  if (email && email.includes("@") && apiKey) {
+    const cleanEmail = email.trim().toLowerCase();
+    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents/backups/${encodeURIComponent(cleanEmail)}?updateMask.fieldPaths=userData&updateMask.fieldPaths=updatedAt&key=${apiKey}`;
+    const payload = {
+      fields: {
+        userData: { stringValue: encrypted },
+        updatedAt: { stringValue: (/* @__PURE__ */ new Date()).toISOString() }
+      }
+    };
+    fetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).catch((err) => {
+      console.error("Failed to backup user data to Firestore REST API:", err);
+    });
+  }
+}
+var import_fs2, import_path, import_crypto, import_zlib, isVercel, DB_DIR, rawKey, ENCRYPTION_KEY, SOURCE_DIR, projectId, databaseId, apiKey;
+var init_userRepository = __esm({
+  "server/data/userRepository.ts"() {
     "use strict";
     import_fs2 = __toESM(require("fs"), 1);
-    import_genai = require("@google/genai");
-    cachedClient = null;
-    AI_MODELS = {
-      default: mapModel(process.env.GEMINI_DEFAULT_MODEL || "", "gemini-2.5-flash"),
-      pro: mapModel(process.env.GEMINI_PRO_MODEL || "", "gemini-2.5-pro"),
-      fast: mapModel(process.env.GEMINI_FAST_MODEL || "", "gemini-2.0-flash"),
-      image: mapModel(process.env.GEMINI_IMAGE_MODEL || process.env.NANO_BANANA_MODEL || "", "imagen-3.0-generate-001"),
-      imagePro: mapModel(process.env.GEMINI_IMAGE_PRO_MODEL || process.env.NANO_BANANA_PRO_MODEL || "", "imagen-3.0-generate-001")
-    };
+    import_path = __toESM(require("path"), 1);
+    import_crypto = __toESM(require("crypto"), 1);
+    import_zlib = __toESM(require("zlib"), 1);
+    isVercel = process.env.VERCEL === "1" || process.env.VERCEL_ENV || process.env.VERCEL_URL;
+    DB_DIR = isVercel ? "/tmp/data_users" : import_path.default.join(process.cwd(), "data_users");
+    rawKey = process.env.ENCRYPTION_KEY || "default_encryption_key_32_chars!";
+    if (rawKey.length > 32) rawKey = rawKey.substring(0, 32);
+    if (rawKey.length < 32) rawKey = rawKey.padEnd(32, "0");
+    ENCRYPTION_KEY = rawKey;
+    try {
+      if (!import_fs2.default.existsSync(DB_DIR)) import_fs2.default.mkdirSync(DB_DIR, { recursive: true });
+    } catch (e) {
+      console.warn("Could not create DB_DIR, using /tmp fallback", e);
+      DB_DIR = "/tmp/data_users";
+      if (!import_fs2.default.existsSync(DB_DIR)) import_fs2.default.mkdirSync(DB_DIR, { recursive: true });
+    }
+    SOURCE_DIR = import_path.default.join(process.cwd(), "data_users");
+    if (isVercel && import_fs2.default.existsSync(SOURCE_DIR)) {
+      try {
+        const files = import_fs2.default.readdirSync(SOURCE_DIR);
+        for (const file of files) {
+          if (file.endsWith(".json.gz")) {
+            const srcPath = import_path.default.join(SOURCE_DIR, file);
+            const destPath = import_path.default.join(DB_DIR, file);
+            if (!import_fs2.default.existsSync(destPath)) {
+              import_fs2.default.copyFileSync(srcPath, destPath);
+            }
+          }
+        }
+        console.log("Successfully seeded pre-existing user data on Vercel.");
+      } catch (err) {
+        console.error("Failed to seed pre-existing user data:", err);
+      }
+    }
+    projectId = "al-ai-chat";
+    databaseId = "ai-studio-c097068e-a4a9-4ea3-9b00-0b3195093c42";
+    apiKey = "";
+    try {
+      const configPath = import_path.default.join(process.cwd(), "firebase-applet-config.json");
+      if (import_fs2.default.existsSync(configPath)) {
+        const firebaseConfig = JSON.parse(import_fs2.default.readFileSync(configPath, "utf-8"));
+        projectId = firebaseConfig.projectId || projectId;
+        databaseId = firebaseConfig.firestoreDatabaseId || databaseId;
+        apiKey = firebaseConfig.apiKey || "";
+      }
+    } catch (e) {
+      console.warn("Failed to load firebase-applet-config.json for REST client:", e);
+    }
   }
 });
 
@@ -327,131 +1293,200 @@ var init_syllabus = __esm({
   }
 });
 
-// server/data/userRepository.ts
-function encrypt(text) {
-  const iv = import_crypto.default.randomBytes(16);
-  const cipher = import_crypto.default.createCipheriv("aes-256-cbc", Buffer.from(ENCRYPTION_KEY), iv);
-  let encrypted = cipher.update(text);
-  encrypted = Buffer.concat([encrypted, cipher.final()]);
-  return iv.toString("hex") + ":" + encrypted.toString("hex");
-}
-function decrypt(text) {
-  try {
-    const textParts = text.split(":");
-    const iv = Buffer.from(textParts.shift(), "hex");
-    const encryptedText = Buffer.from(textParts.join(":"), "hex");
-    const decipher = import_crypto.default.createDecipheriv("aes-256-cbc", Buffer.from(ENCRYPTION_KEY), iv);
-    let decrypted = decipher.update(encryptedText);
-    decrypted = Buffer.concat([decrypted, decipher.final()]);
-    return decrypted.toString();
-  } catch (e) {
-    return text;
-  }
-}
-function getUserFile(email) {
-  const cleanEmail = email.trim().toLowerCase();
-  const hash = import_crypto.default.createHash("md5").update(cleanEmail).digest("hex");
-  return import_path2.default.join(DB_DIR, `${hash}.json.gz`);
-}
-function readUser(email) {
-  const file = getUserFile(email);
-  if (!import_fs3.default.existsSync(file)) {
-    return { data: null, history: [], cookies: null, profile: null, notifications: [] };
-  }
-  try {
-    const raw = import_fs3.default.readFileSync(file);
-    let jsonStr;
-    try {
-      jsonStr = import_zlib.default.gunzipSync(raw).toString("utf-8");
-    } catch {
-      jsonStr = raw.toString("utf-8");
+// src/shared/zscore.ts
+function estimateSubjectZFromMark(subject, mark) {
+  const finalMark = Math.min(95, Math.max(0, Number(mark)));
+  const points = CURVES[subject];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const upper = points[index];
+    const lower = points[index + 1];
+    if (finalMark <= upper.x && finalMark >= lower.x) {
+      const ratio = (finalMark - lower.x) / (upper.x - lower.x);
+      const computed = lower.y + ratio * (upper.y - lower.y);
+      return Number(Math.min(3, Math.max(-2.5, computed)).toFixed(4));
     }
-    if (!jsonStr.startsWith("{")) {
-      jsonStr = decrypt(jsonStr);
-    }
-    return JSON.parse(jsonStr);
-  } catch (e) {
-    return { data: null, history: [], cookies: null, profile: null, notifications: [] };
   }
+  return -2.3;
 }
-function writeUser(email, userData) {
-  if (!import_fs3.default.existsSync(DB_DIR)) import_fs3.default.mkdirSync(DB_DIR, { recursive: true });
-  const file = getUserFile(email);
-  const jsonStr = JSON.stringify(userData);
-  const encrypted = encrypt(jsonStr);
-  const zipped = import_zlib.default.gzipSync(encrypted);
-  import_fs3.default.writeFileSync(file, zipped);
-  if (email && email.includes("@") && apiKey) {
-    const cleanEmail = email.trim().toLowerCase();
-    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents/backups/${encodeURIComponent(cleanEmail)}?updateMask.fieldPaths=userData&updateMask.fieldPaths=updatedAt&key=${apiKey}`;
-    const payload = {
-      fields: {
-        userData: { stringValue: encrypted },
-        updatedAt: { stringValue: (/* @__PURE__ */ new Date()).toISOString() }
-      }
-    };
-    fetch(url, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).catch((err) => {
-      console.error("Failed to backup user data to Firestore REST API:", err);
-    });
-  }
-}
-var import_fs3, import_path2, import_crypto, import_zlib, isVercel, DB_DIR, rawKey, ENCRYPTION_KEY, SOURCE_DIR, projectId, databaseId, apiKey;
-var init_userRepository = __esm({
-  "server/data/userRepository.ts"() {
+var CURVES;
+var init_zscore = __esm({
+  "src/shared/zscore.ts"() {
     "use strict";
-    import_fs3 = __toESM(require("fs"), 1);
-    import_path2 = __toESM(require("path"), 1);
-    import_crypto = __toESM(require("crypto"), 1);
-    import_zlib = __toESM(require("zlib"), 1);
-    isVercel = process.env.VERCEL === "1" || process.env.VERCEL_ENV || process.env.VERCEL_URL;
-    DB_DIR = isVercel ? "/tmp/data_users" : import_path2.default.join(process.cwd(), "data_users");
-    rawKey = process.env.ENCRYPTION_KEY || "default_encryption_key_32_chars!";
-    if (rawKey.length > 32) rawKey = rawKey.substring(0, 32);
-    if (rawKey.length < 32) rawKey = rawKey.padEnd(32, "0");
-    ENCRYPTION_KEY = rawKey;
-    try {
-      if (!import_fs3.default.existsSync(DB_DIR)) import_fs3.default.mkdirSync(DB_DIR, { recursive: true });
-    } catch (e) {
-      console.warn("Could not create DB_DIR, using /tmp fallback", e);
-      DB_DIR = "/tmp/data_users";
-      if (!import_fs3.default.existsSync(DB_DIR)) import_fs3.default.mkdirSync(DB_DIR, { recursive: true });
+    CURVES = {
+      sft: [
+        { x: 95, y: 2.9 },
+        { x: 89, y: 2.71 },
+        { x: 80, y: 2.15 },
+        { x: 75, y: 1.8 },
+        { x: 65, y: 1.25 },
+        { x: 55, y: 0.8 },
+        { x: 35, y: 0.05 },
+        { x: 0, y: -2.3 }
+      ],
+      et: [
+        { x: 95, y: 2.9 },
+        { x: 87, y: 2.68 },
+        { x: 80, y: 2.1 },
+        { x: 75, y: 1.6 },
+        { x: 65, y: 1 },
+        { x: 55, y: 0.5 },
+        { x: 35, y: -0.05 },
+        { x: 0, y: -2.3 }
+      ],
+      ict: [
+        { x: 95, y: 2.9 },
+        { x: 89, y: 2.77 },
+        { x: 80, y: 2.2 },
+        { x: 75, y: 1.8 },
+        { x: 65, y: 1.25 },
+        { x: 55, y: 0.85 },
+        { x: 35, y: 0.25 },
+        { x: 0, y: -2.3 }
+      ]
+    };
+  }
+});
+
+// src/lib/scoreUtils.ts
+function interpolateEstimatedRank(zScore, points) {
+  const sorted = [...points].sort((a, b) => b[0] - a[0]);
+  if (zScore >= sorted[0][0]) return sorted[0][1];
+  for (let index = 0; index < sorted.length - 1; index += 1) {
+    const [upperZ, upperRank] = sorted[index];
+    const [lowerZ, lowerRank] = sorted[index + 1];
+    if (zScore <= upperZ && zScore >= lowerZ) {
+      const ratio = (upperZ - zScore) / Math.max(1e-4, upperZ - lowerZ);
+      return Math.max(1, Math.round(upperRank + ratio * (lowerRank - upperRank)));
     }
-    SOURCE_DIR = import_path2.default.join(process.cwd(), "data_users");
-    if (isVercel && import_fs3.default.existsSync(SOURCE_DIR)) {
-      try {
-        const files = import_fs3.default.readdirSync(SOURCE_DIR);
-        for (const file of files) {
-          if (file.endsWith(".json.gz")) {
-            const srcPath = import_path2.default.join(SOURCE_DIR, file);
-            const destPath = import_path2.default.join(DB_DIR, file);
-            if (!import_fs3.default.existsSync(destPath)) {
-              import_fs3.default.copyFileSync(srcPath, destPath);
-            }
-          }
-        }
-        console.log("Successfully seeded pre-existing user data on Vercel.");
-      } catch (err) {
-        console.error("Failed to seed pre-existing user data:", err);
+  }
+  const [lowestZ, lowestRank] = sorted[sorted.length - 1];
+  const [highestZ, highestRank] = sorted[0];
+  const fullSlope = (lowestRank - highestRank) / Math.max(1e-4, highestZ - lowestZ);
+  return Math.max(lowestRank, Math.round(lowestRank + (lowestZ - zScore) * fullSlope));
+}
+var calculateSubjectZ, ISLAND_RANK_MODEL, DISTRICT_RANK_MODEL, getEstimatedIslandRank, getEstimatedDistrictRank, calculateExamScoreProjection, buildExamScorePrediction;
+var init_scoreUtils = __esm({
+  "src/lib/scoreUtils.ts"() {
+    "use strict";
+    init_syllabus();
+    init_zscore();
+    calculateSubjectZ = (subject, mark) => {
+      return estimateSubjectZFromMark(subject, mark);
+    };
+    ISLAND_RANK_MODEL = [
+      [2.9999, 1],
+      [2.6557, 45],
+      [2.3537, 212],
+      [2.2295, 228],
+      [2.2003, 250],
+      [2, 511],
+      [1.6553, 1033],
+      [1.5238, 1358],
+      [1.2663, 2032],
+      [1.2293, 2170],
+      [1.1375, 2473],
+      [0.7249, 4155],
+      [0.6274, 4155]
+    ];
+    DISTRICT_RANK_MODEL = [
+      [2.9999, 1],
+      [2.6557, 2],
+      [2.3537, 3],
+      [2.2295, 5],
+      [2.2003, 6],
+      [2, 10],
+      [1.6553, 32],
+      [1.5238, 40],
+      [1.2663, 55],
+      [1.2293, 56],
+      [1.1375, 65],
+      [0.7249, 113],
+      [0.6274, 119]
+    ];
+    getEstimatedIslandRank = (zScore) => interpolateEstimatedRank(zScore, ISLAND_RANK_MODEL);
+    getEstimatedDistrictRank = (zScore) => interpolateEstimatedRank(zScore, DISTRICT_RANK_MODEL);
+    calculateExamScoreProjection = (subjectKey, data) => {
+      const def = SYLLABUS[subjectKey];
+      const subjectData = data[subjectKey];
+      if (!def || !subjectData) {
+        return { minimum: 0, maximum: 0, midpoint: 0, mcqCompleted: 0, partARaw: 0, partBcdRaw: 0 };
       }
-    }
-    projectId = "al-ai-chat";
-    databaseId = "ai-studio-c097068e-a4a9-4ea3-9b00-0b3195093c42";
-    apiKey = "";
-    try {
-      const configPath = import_path2.default.join(process.cwd(), "firebase-applet-config.json");
-      if (import_fs3.default.existsSync(configPath)) {
-        const firebaseConfig = JSON.parse(import_fs3.default.readFileSync(configPath, "utf-8"));
-        projectId = firebaseConfig.projectId || projectId;
-        databaseId = firebaseConfig.firestoreDatabaseId || databaseId;
-        apiKey = firebaseConfig.apiKey || "";
+      let mcqCheckedCount = 0;
+      def.mcqItems.forEach((item) => {
+        if (subjectData.topics[item.title]?.checked) mcqCheckedCount += item.count || 0;
+      });
+      let partAScore = 0;
+      def.partAItems.forEach((item) => {
+        const completed = item.topics?.filter((topic) => subjectData.topics[topic]?.checked).length || 0;
+        if (item.topics?.length) partAScore += completed / item.topics.length * (item.max || 0);
+      });
+      const bcdScores = [];
+      const allBcd = [...def.partBCDItems];
+      def.bcdGroups?.forEach((group) => allBcd.push(...group.items));
+      allBcd.forEach((item) => {
+        const completed = item.topics?.filter((topic) => subjectData.topics[topic]?.checked).length || 0;
+        if (item.topics?.length) bcdScores.push(completed / item.topics.length * (item.max || 0));
+      });
+      const top4BcdScore = bcdScores.sort((a, b) => b - a).slice(0, 4).reduce((sum, value) => sum + value, 0);
+      const partAMax = subjectKey === "et" ? 300 : subjectKey === "ict" ? 40 : 400;
+      const partBcdMax = subjectKey === "et" ? 400 : subjectKey === "ict" ? 60 : 600;
+      const mcqRatio = mcqCheckedCount / Math.max(1, def.mcqMax || 50);
+      const minimumMcq = Math.min(45, Math.round(mcqRatio * 40)) * def.mcqMult;
+      const maximumMcq = Math.min(50, Math.round(mcqRatio * 45)) * def.mcqMult;
+      const partARatio = partAScore / Math.max(1, partAMax);
+      const bcdRatio = top4BcdScore / Math.max(1, partBcdMax);
+      const minimumPaper2 = Math.min(0.9, partARatio * 0.85) * partAMax + Math.min(145 / 150, bcdRatio * (130 / 150)) * partBcdMax;
+      const maximumPaper2 = Math.min(1, partARatio * 0.9) * partAMax + Math.min(1, bcdRatio * (145 / 150)) * partBcdMax;
+      let minimum = 0;
+      let maximum = 0;
+      if (subjectKey === "sft") {
+        minimum = minimumPaper2 / 20 + minimumMcq;
+        maximum = maximumPaper2 / 20 + maximumMcq;
+      } else if (subjectKey === "et") {
+        minimum = minimumMcq * 0.75 + minimumPaper2 * (37.5 / 700) + 25;
+        maximum = maximumMcq * 0.75 + maximumPaper2 * (37.5 / 700) + 25;
+      } else {
+        minimum = minimumMcq + minimumPaper2 / 2;
+        maximum = maximumMcq + maximumPaper2 / 2;
       }
-    } catch (e) {
-      console.warn("Failed to load firebase-applet-config.json for REST client:", e);
-    }
+      minimum = Math.max(0, Math.min(95, Math.round(minimum)));
+      maximum = Math.max(minimum, Math.min(95, Math.round(maximum)));
+      return {
+        minimum,
+        maximum,
+        midpoint: Number(((minimum + maximum) / 2).toFixed(1)),
+        mcqCompleted: mcqCheckedCount,
+        partARaw: partAScore,
+        partBcdRaw: top4BcdScore
+      };
+    };
+    buildExamScorePrediction = (data) => {
+      const projections = {
+        sft: calculateExamScoreProjection("sft", data),
+        et: calculateExamScoreProjection("et", data),
+        ict: calculateExamScoreProjection("ict", data)
+      };
+      const subjectZScores = {
+        sft: calculateSubjectZ("sft", projections.sft.midpoint),
+        et: calculateSubjectZ("et", projections.et.midpoint),
+        ict: calculateSubjectZ("ict", projections.ict.midpoint)
+      };
+      const zScore = Number(((subjectZScores.sft + subjectZScores.et + subjectZScores.ict) / 3).toFixed(4));
+      return {
+        projections,
+        projectedMarks: {
+          sft: projections.sft.midpoint,
+          et: projections.et.midpoint,
+          ict: projections.ict.midpoint
+        },
+        subjectZScores,
+        zScore,
+        estimatedIslandRank: getEstimatedIslandRank(zScore),
+        estimatedDistrictRank: getEstimatedDistrictRank(zScore),
+        calculationBasis: "exam_score_predictor",
+        official: false
+      };
+    };
   }
 });
 
@@ -460,308 +1495,2634 @@ var userContext_exports = {};
 __export(userContext_exports, {
   loadUserAIContext: () => loadUserAIContext
 });
-function unwrapProgressDoc(value) {
-  if (!value) return null;
-  return value.data || value.appData || value;
-}
-function mergeDefined(...items) {
-  return items.reduce((acc, item) => {
-    if (item && typeof item === "object") {
-      Object.assign(acc, item);
-    }
-    return acc;
-  }, {});
-}
-function collectSyllabusTopics(subject) {
-  const def = SYLLABUS[subject];
-  const topics = /* @__PURE__ */ new Map();
-  const add = (title, count = 1, ref = "") => {
-    if (!title) return;
-    const existing = topics.get(title) || { count: 0, refs: [] };
-    existing.count += count || 1;
-    if (ref) existing.refs.push(ref);
-    topics.set(title, existing);
-  };
-  def?.mcqItems?.forEach((item) => add(item.title, item.count || 1, `MCQ ${item.q}`));
-  def?.partAItems?.forEach((item) => {
-    const weight = item.max || 1;
-    (item.topics || [item.title]).forEach((topic) => add(topic, weight, `Part A ${item.q}`));
-  });
-  def?.partBCDItems?.forEach((item) => {
-    const weight = item.max || 1;
-    (item.topics || [item.title]).forEach((topic) => add(topic, weight, item.q));
-  });
-  def?.bcdGroups?.forEach((group) => {
-    group.items?.forEach((item) => {
-      const weight = item.max || 1;
-      (item.topics || [item.title]).forEach((topic) => add(topic, weight, `${group.label} ${item.q}`));
-    });
-  });
-  return topics;
-}
-function scoreFromQuestionMark(mark) {
-  const values = [mark?.total, mark?.mcqRaw, mark?.partARaw, mark?.partBcdRaw, mark?.mcqPer, mark?.partAPer, mark?.partBcdPer].filter((value) => typeof value === "number");
-  if (typeof mark?.total === "number") return mark.total;
-  if (values.length) return values.reduce((sum, value) => sum + value, 0);
-  return 0;
-}
-function buildProgressFromAppData(appData) {
-  const weakMap = /* @__PURE__ */ new Map();
-  const recentProgress = [];
-  const latestMarks = [];
-  const paperMarks = [];
-  const questionMarks = [];
-  const lessonHistory = [];
-  for (const subject of SUBJECTS) {
-    const subjectData = appData?.[subject] || {};
-    const topics = subjectData.topics || {};
-    const syllabusTopics = collectSyllabusTopics(subject);
-    const allTopicNames = /* @__PURE__ */ new Set([...Object.keys(topics), ...syllabusTopics.keys()]);
-    const completedTopics = [...allTopicNames].filter((topic) => topics[topic]?.checked);
-    recentProgress.push({
-      subject,
-      totalTopics: allTopicNames.size,
-      completedTopics: completedTopics.length,
-      coveragePercent: allTopicNames.size > 0 ? Math.round(completedTopics.length / allTopicNames.size * 100) : 0
-    });
-    (subjectData.lessonHistory || []).forEach((item) => {
-      lessonHistory.push({ ...item, subject });
-    });
-    (subjectData.paperMarks || []).forEach((mark) => {
-      const normalized = { ...mark, subject };
-      paperMarks.push(normalized);
-      latestMarks.push(normalized);
-    });
-    Object.entries(subjectData.questionMarks || {}).forEach(([topic, marks]) => {
-      (Array.isArray(marks) ? marks : []).forEach((mark) => {
-        const normalized = { ...mark, subject, topic };
-        questionMarks.push(normalized);
-        const score = scoreFromQuestionMark(mark);
-        if (score > 0 && score < 45) {
-          const key = `${subject}:${topic}`;
-          weakMap.set(key, {
-            subject,
-            topic,
-            lesson: topic,
-            reason: `Low question score (${score})${mark?.title ? ` on ${mark.title}` : ""}`,
-            priorityWeight: Math.max(syllabusTopics.get(topic)?.count || 1, 1),
-            marksWeakness: true,
-            lastDoneStatus: topics[topic]?.checked ? "completed" : "incomplete"
-          });
-        }
-      });
-    });
-    allTopicNames.forEach((topic) => {
-      const topicInfo = topics[topic] || {};
-      const syllabus = syllabusTopics.get(topic);
-      const key = `${subject}:${topic}`;
-      const notes = String(topicInfo.notes || "");
-      const weakKeywords = [
-        "hard",
-        "difficult",
-        "fail",
-        "forget",
-        "weak",
-        "revise",
-        "doubt",
-        "wrong",
-        "problem",
-        "amaru",
-        "baha",
-        "patalila",
-        "puluwan na",
-        "mathaka na",
-        "patali"
-      ];
-      const weakNote = weakKeywords.find((kw) => notes.toLowerCase().includes(kw));
-      if (weakNote) {
-        weakMap.set(key, {
-          ...weakMap.get(key) || {},
-          subject,
-          topic,
-          lesson: topic,
-          reason: `User note indicates weakness: ${notes.slice(0, 160)}`,
-          notes,
-          priorityWeight: Math.max(syllabus?.count || 1, 1),
-          lastDoneStatus: topicInfo.checked ? "completed" : "incomplete"
-        });
-      }
-      if (!topicInfo.checked && syllabus && syllabus.count >= 2) {
-        weakMap.set(key, {
-          ...weakMap.get(key) || {},
-          subject,
-          topic,
-          lesson: topic,
-          reason: weakMap.get(key)?.reason || "Incomplete high-weight syllabus topic",
-          priorityWeight: Math.max(syllabus.count, 1),
-          lastDoneStatus: "incomplete",
-          syllabusRefs: syllabus.refs.slice(0, 5)
-        });
-      }
-    });
-  }
-  const zHistory = Array.isArray(appData?.zScoreHistory) ? appData.zScoreHistory : [];
-  const latestZEntry = zHistory[zHistory.length - 1] || null;
-  return {
-    weakLessons: [...weakMap.values()].sort((a, b) => (b.priorityWeight || 0) - (a.priorityWeight || 0)).slice(0, 25),
-    recentProgress,
-    latestMarks: latestMarks.slice(-15),
-    paperMarks,
-    questionMarks,
-    lessonHistory,
-    latestZ: latestZEntry?.zScore ?? appData?.latestZScore ?? appData?.currentZScore ?? null,
-    subjectZScores: latestZEntry?.subjectZScores || appData?.subjectZScores || null
-  };
-}
 async function loadUserAIContext(uid, email) {
-  const normalizedEmail = email?.toLowerCase();
-  const cacheKey = `${uid}_${normalizedEmail || ""}`;
+  const cacheKey = `${uid}_${email || ""}`;
   const now = Date.now();
   const cached = contextCache.get(cacheKey);
   if (cached && now - cached.timestamp < CACHE_TTL) {
     return cached.data;
   }
-  const diagnostics = {
-    uid,
-    email: normalizedEmail || null,
-    oldPathFound: false,
-    newPathFound: false,
-    localExportFound: false,
-    migratedLegacyProgress: false,
-    progressRecordsChecked: 0,
-    lessonHistoryCount: 0,
-    paperMarksCount: 0,
-    questionMarksCount: 0
-  };
   try {
     const db = getAdminDb();
-    const uidRef = db.collection("users").doc(uid);
-    const emailRef = normalizedEmail ? db.collection("users").doc(normalizedEmail) : null;
-    const [
-      uidRoot,
-      emailRoot,
-      uidProfile,
-      emailProfile,
-      uidProgress,
-      emailProgress,
-      uidSettings,
-      emailSettings
-    ] = await Promise.all([
-      uidRef.get().catch(() => null),
-      emailRef ? emailRef.get().catch(() => null) : null,
-      uidRef.collection("profile").doc("main").get().catch(() => null),
-      emailRef ? emailRef.collection("profile").doc("info").get().catch(() => null) : null,
-      uidRef.collection("progress").doc("data").get().catch(() => null),
-      emailRef ? emailRef.collection("progress").doc("data").get().catch(() => null) : null,
-      uidRef.collection("settings").doc("main").get().catch(() => null),
-      emailRef ? emailRef.collection("settings").doc("main").get().catch(() => null) : null
+    const userUidRef = db.collection("users").doc(uid);
+    const userEmailRef = email ? db.collection("users").doc(email.toLowerCase()) : null;
+    const [uidSnap, emailSnap, uidProfileSnap, emailProfileSnap, uidProg, emailProg] = await Promise.all([
+      userUidRef.get().catch(() => null),
+      userEmailRef ? userEmailRef.get().catch(() => null) : null,
+      userUidRef.collection("profile").doc("main").get().catch(() => null),
+      userEmailRef ? userEmailRef.collection("profile").doc("main").get().catch(() => null) : null,
+      userUidRef.collection("progress").doc("data").get().catch(() => null),
+      userEmailRef ? userEmailRef.collection("progress").doc("data").get().catch(() => null) : null
     ]);
-    diagnostics.newPathFound = Boolean(uidRoot?.exists || uidProfile?.exists || uidProgress?.exists);
-    diagnostics.oldPathFound = Boolean(emailRoot?.exists || emailProfile?.exists || emailProgress?.exists);
-    const uidProgressData = uidProgress?.exists ? unwrapProgressDoc(uidProgress.data()) : null;
-    const emailProgressData = emailProgress?.exists ? unwrapProgressDoc(emailProgress.data()) : null;
-    const uidRootData = uidRoot?.exists ? uidRoot.data() : null;
-    const emailRootData = emailRoot?.exists ? emailRoot.data() : null;
-    let appData = uidProgressData || emailProgressData || uidRootData?.appData || uidRootData?.data || emailRootData?.appData || emailRootData?.data;
-    if (!appData && normalizedEmail) {
-      const localUser = readUser(normalizedEmail);
-      appData = localUser?.data || localUser?.appData || null;
-      diagnostics.localExportFound = Boolean(appData);
+    let profileData = {};
+    if (emailSnap && emailSnap.exists) {
+      profileData = { ...profileData, ...emailSnap.data() };
     }
-    if (!uidProgressData && emailProgressData) {
-      await uidRef.collection("progress").doc("data").set({
-        data: emailProgressData,
-        migratedFromEmail: normalizedEmail,
-        migratedAt: (/* @__PURE__ */ new Date()).toISOString()
-      }, { merge: true }).catch(() => null);
-      diagnostics.migratedLegacyProgress = true;
+    if (uidSnap && uidSnap.exists) {
+      profileData = { ...profileData, ...uidSnap.data() };
     }
-    const profileData = mergeDefined(
-      emailRootData,
-      emailProfile?.exists ? emailProfile.data() : null,
-      uidRootData,
-      uidProfile?.exists ? uidProfile.data() : null
-    );
-    if (normalizedEmail && uidProfile && !uidProfile.exists && (emailProfile?.exists || profileData.email || profileData.username)) {
-      await uidRef.collection("profile").doc("main").set({
-        ...profileData,
-        email: normalizedEmail,
-        migratedFromEmail: normalizedEmail,
-        migratedAt: (/* @__PURE__ */ new Date()).toISOString()
-      }, { merge: true }).catch(() => null);
+    if (emailProfileSnap && emailProfileSnap.exists) {
+      profileData = { ...profileData, ...emailProfileSnap.data() };
     }
-    const parsed = buildProgressFromAppData(appData);
-    diagnostics.progressRecordsChecked = parsed.recentProgress.length;
-    diagnostics.lessonHistoryCount = parsed.lessonHistory.length;
-    diagnostics.paperMarksCount = parsed.paperMarks.length;
-    diagnostics.questionMarksCount = parsed.questionMarks.length;
-    const [memoryUid, memoryEmail, chatUid, chatEmail] = await Promise.all([
-      uidRef.collection("ai_memory").limit(20).get().catch(() => ({ docs: [] })),
-      emailRef ? emailRef.collection("ai_memory").limit(20).get().catch(() => ({ docs: [] })) : { docs: [] },
-      uidRef.collection("chat_history").orderBy("createdAt", "desc").limit(15).get().catch(() => ({ docs: [] })),
-      emailRef ? emailRef.collection("chat_history").orderBy("createdAt", "desc").limit(15).get().catch(() => ({ docs: [] })) : { docs: [] }
+    if (uidProfileSnap && uidProfileSnap.exists) {
+      profileData = { ...profileData, ...uidProfileSnap.data() };
+    }
+    let localDbData = null;
+    if (email) {
+      try {
+        await syncUserFromFirestore(email);
+        localDbData = readUser(email);
+        if (localDbData && Object.keys(localDbData).length > 0) {
+          if (localDbData.profile) profileData = { ...localDbData.profile, ...profileData };
+        }
+      } catch (e) {
+        console.warn("Failed to read local user data:", e);
+      }
+    }
+    let appData = null;
+    let loadedFrom = "none";
+    if (uidProg && uidProg.exists) {
+      const p = uidProg.data();
+      appData = p?.data || p;
+      loadedFrom = "uid_progress_data";
+    } else if (emailProg && emailProg.exists) {
+      const p = emailProg.data();
+      appData = p?.data || p;
+      loadedFrom = "email_progress_data";
+    } else if (profileData.appData) {
+      appData = profileData.appData;
+      loadedFrom = "root_appData";
+    } else if (profileData.data) {
+      appData = profileData.data;
+      loadedFrom = "root_data";
+    }
+    if (!appData && localDbData && (localDbData.data || localDbData.appData)) {
+      appData = localDbData.data || localDbData.appData;
+      loadedFrom = "local_db_fallback";
+    }
+    const [memoryUid, memoryEmail] = await Promise.all([
+      userUidRef.collection("ai_memory").limit(20).get().catch(() => ({ docs: [] })),
+      userEmailRef ? userEmailRef.collection("ai_memory").limit(20).get().catch(() => ({ docs: [] })) : { docs: [] }
     ]);
+    const [chatUid, chatEmail] = await Promise.all([
+      userUidRef.collection("chat_history").orderBy("createdAt", "desc").limit(15).get().catch(() => ({ docs: [] })),
+      userEmailRef ? userEmailRef.collection("chat_history").orderBy("createdAt", "desc").limit(15).get().catch(() => ({ docs: [] })) : { docs: [] }
+    ]);
+    const mistakeSnapshot = await userUidRef.collection("mistake_notebook").orderBy("createdAt", "desc").limit(20).get().catch(() => ({ docs: [] }));
+    const recentMistakes = mistakeSnapshot.docs.map((document) => ({ id: document.id, ...document.data() }));
     const memoryDocs = [...memoryUid.docs, ...memoryEmail.docs];
+    const aiMemory = Array.from(new Map(memoryDocs.map((d) => [d.id, d.data()])).values());
     const chatDocs = [...chatUid.docs, ...chatEmail.docs];
+    const chatHistoryLast10 = Array.from(new Map(chatDocs.map((d) => [d.id, d.data()])).values()).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).slice(-10);
+    const weakLessons = [];
+    const progressSummary = [];
+    if (appData) {
+      for (const subject of ["sft", "et", "ict"]) {
+        const subjectData = appData[subject];
+        if (!subjectData) continue;
+        const topics = subjectData.topics || {};
+        const topicKeys = Object.keys(topics);
+        const checkedKeys = topicKeys.filter((k) => topics[k]?.checked);
+        const totalCount = topicKeys.length;
+        const checkedCount = checkedKeys.length;
+        const percent = totalCount > 0 ? Math.round(checkedCount / totalCount * 100) : 0;
+        const completedLessonNames = checkedKeys;
+        const pendingLessonNames = topicKeys.filter((k) => !topics[k]?.checked);
+        progressSummary.push({
+          subject,
+          totalTopics: totalCount,
+          completedTopics: checkedCount,
+          coveragePercent: percent,
+          completedLessonNames,
+          pendingLessonNames
+        });
+        topicKeys.forEach((topicName) => {
+          const topicInfo = topics[topicName];
+          if (!topicInfo) return;
+          let isWeak = false;
+          let reason = "";
+          if (topicInfo.notes) {
+            const notesLower = topicInfo.notes.toLowerCase();
+            const weakKeywords = [
+              "hard",
+              "difficult",
+              "fail",
+              "forget",
+              "weak",
+              "revise",
+              "doubt",
+              "wrong",
+              "problem",
+              "amaru",
+              "baha",
+              "patalila",
+              "puluwan na",
+              "mathaka na",
+              "epawa",
+              "patali",
+              "vadiyen",
+              "karanna oni",
+              "amaruida"
+            ];
+            const foundKeyword = weakKeywords.find((kw) => notesLower.includes(kw));
+            if (foundKeyword) {
+              isWeak = true;
+              reason = `User noted: "${topicInfo.notes}"`;
+            }
+          }
+          const qMarks = subjectData.questionMarks?.[topicName] || [];
+          if (qMarks.length > 0) {
+            qMarks.forEach((q) => {
+              const score = q.total !== void 0 ? q.total : (q.mcqRaw || 0) + (q.partARaw || 0) + (q.partBcdRaw || 0);
+              if (score > 0 && score < 45) {
+                isWeak = true;
+                reason = `Low score (${score}) on question: "${q.title}"`;
+              }
+            });
+          }
+          if (isWeak) {
+            weakLessons.push({
+              subject,
+              topic: topicName,
+              reason,
+              notes: topicInfo.notes || ""
+            });
+          }
+        });
+      }
+    }
+    const latestMarks = appData ? [
+      ...(appData.sft?.paperMarks || []).map((m) => ({ ...m, subject: "sft" })),
+      ...(appData.et?.paperMarks || []).map((m) => ({ ...m, subject: "et" })),
+      ...(appData.ict?.paperMarks || []).map((m) => ({ ...m, subject: "ict" }))
+    ] : [];
+    const zScoreContext = {
+      hasZScoreData: false,
+      zScoreHistory: [],
+      dataSources: [loadedFrom]
+    };
+    const targetZ = profileData.targetZScore ?? profileData.targetZ ?? profileData.zTarget ?? profileData.profile?.targetZScore ?? profileData.profile?.targetZ ?? (uidProg && uidProg.exists ? uidProg.data()?.targetZScore ?? uidProg.data()?.data?.targetZ : void 0) ?? (emailProg && emailProg.exists ? emailProg.data()?.targetZScore ?? emailProg.data()?.data?.targetZ : void 0) ?? appData?.targetZScore ?? appData?.targetZ ?? appData?.zTarget ?? appData?.profile?.targetZ;
+    if (targetZ !== void 0 && targetZ !== null) {
+      zScoreContext.targetZScore = Number(targetZ);
+      zScoreContext.hasZScoreData = true;
+    }
+    let currentZ = profileData.estimatedZScore ?? profileData.currentZScore ?? profileData.zScore ?? profileData.overallZScore ?? profileData.predictedZScore ?? profileData.latestZScore ?? profileData.latestEstimate ?? profileData.latestResult ?? appData?.estimatedZScore ?? appData?.currentZScore ?? appData?.zScore ?? appData?.overallZScore ?? appData?.predictedZScore ?? appData?.latestZScore ?? appData?.latestEstimate ?? appData?.latestResult;
+    if (currentZ !== void 0 && currentZ !== null) {
+      zScoreContext.latestOverallZScore = Number(currentZ);
+      zScoreContext.hasZScoreData = true;
+    }
+    const subjZ = profileData.subjectZScores ?? appData?.subjectZScores;
+    const flatSubjZ = {
+      sft: profileData.sftZ ?? appData?.sftZ ?? subjZ?.sft,
+      et: profileData.etZ ?? appData?.etZ ?? subjZ?.et,
+      ict: profileData.ictZ ?? appData?.ictZ ?? subjZ?.ict
+    };
+    if ([flatSubjZ.sft, flatSubjZ.et, flatSubjZ.ict].some((value) => value !== void 0 && value !== null)) {
+      zScoreContext.subjectZScores = {
+        sft: flatSubjZ.sft !== void 0 && flatSubjZ.sft !== null ? Number(flatSubjZ.sft) : void 0,
+        et: flatSubjZ.et !== void 0 && flatSubjZ.et !== null ? Number(flatSubjZ.et) : void 0,
+        ict: flatSubjZ.ict !== void 0 && flatSubjZ.ict !== null ? Number(flatSubjZ.ict) : void 0
+      };
+      zScoreContext.hasZScoreData = true;
+    }
+    const ranks = profileData.rankEstimate ?? appData?.rankEstimate;
+    const flatRanks = {
+      districtRank: profileData.districtRank ?? appData?.districtRank ?? ranks?.districtRank,
+      islandRank: profileData.islandRank ?? appData?.islandRank ?? ranks?.islandRank,
+      district: profileData.district ?? appData?.district ?? ranks?.district
+    };
+    if (flatRanks.districtRank || flatRanks.islandRank) {
+      zScoreContext.rankEstimate = {
+        districtRank: flatRanks.districtRank ? Number(flatRanks.districtRank) : void 0,
+        islandRank: flatRanks.islandRank ? Number(flatRanks.islandRank) : void 0,
+        district: flatRanks.district
+      };
+      zScoreContext.hasZScoreData = true;
+    }
+    let rawHistory = profileData.zScoreHistory ?? profileData.zHistory ?? profileData.predictions ?? profileData.admissionPrediction ?? appData?.zScoreHistory ?? appData?.zHistory ?? appData?.predictions ?? appData?.admissionPrediction;
+    if (Array.isArray(rawHistory) && rawHistory.length > 0) {
+      zScoreContext.zScoreHistory = rawHistory.map((r) => ({
+        date: r.date ?? r.createdAt ?? r.timestamp,
+        overall: r.overall ?? r.zScore ?? r.overallZScore,
+        sft: r.sft ?? r.sftZ ?? r.subjectZScores?.sft,
+        et: r.et ?? r.etZ ?? r.subjectZScores?.et,
+        ict: r.ict ?? r.ictZ ?? r.subjectZScores?.ict,
+        source: r.source ?? "history_array"
+      })).filter((r) => r.overall !== void 0);
+      if (zScoreContext.zScoreHistory.length > 0) {
+        zScoreContext.hasZScoreData = true;
+        zScoreContext.zScoreHistory.sort((a, b) => {
+          if (a.date && b.date) return new Date(a.date).getTime() - new Date(b.date).getTime();
+          return 0;
+        });
+        const latestHist = zScoreContext.zScoreHistory[zScoreContext.zScoreHistory.length - 1];
+        if (zScoreContext.latestOverallZScore === void 0 || latestHist.date && new Date(latestHist.date).getTime() > 0) {
+          zScoreContext.latestOverallZScore = latestHist.overall;
+          zScoreContext.latestUpdatedAt = latestHist.date;
+          if (!zScoreContext.subjectZScores && [latestHist.sft, latestHist.et, latestHist.ict].some((value) => value !== void 0 && value !== null)) {
+            zScoreContext.subjectZScores = {
+              sft: latestHist.sft,
+              et: latestHist.et,
+              ict: latestHist.ict
+            };
+          }
+        }
+      }
+    }
+    const predictor = buildExamScorePrediction(appData || {});
+    const predictorHistory = Array.isArray(appData?.zScoreHistory) ? appData.zScoreHistory.filter((entry) => Number.isFinite(Number(entry?.zScore ?? entry?.overall))).map((entry) => ({
+      date: entry.date,
+      overall: Number(entry.zScore ?? entry.overall),
+      sft: entry.subjectZScores?.sft,
+      et: entry.subjectZScores?.et,
+      ict: entry.subjectZScores?.ict,
+      source: entry.calculationBasis || "legacy_exam_score_predictor",
+      official: false
+    })) : [];
+    zScoreContext.hasZScoreData = true;
+    zScoreContext.calculationBasis = predictor.calculationBasis;
+    zScoreContext.official = false;
+    zScoreContext.complete = true;
+    zScoreContext.reliability = "planning_estimate";
+    zScoreContext.message = "Derived from the Exam Score Predictor syllabus-completion model.";
+    zScoreContext.projectedMarks = predictor.projectedMarks;
+    zScoreContext.rawPaperAverages = predictor.projectedMarks;
+    zScoreContext.subjectZScores = predictor.subjectZScores;
+    zScoreContext.zScoreHistory = predictorHistory;
+    zScoreContext.latestOverallZScore = predictor.zScore;
+    zScoreContext.rankEstimate = {
+      districtRank: predictor.estimatedDistrictRank,
+      islandRank: predictor.estimatedIslandRank,
+      district: flatRanks.district,
+      estimated: true
+    };
+    const rawLatestPredictorDate = predictorHistory[predictorHistory.length - 1]?.date;
+    const parsedLatestPredictorDate = new Date(String(rawLatestPredictorDate || ""));
+    zScoreContext.latestUpdatedAt = Number.isFinite(parsedLatestPredictorDate.getTime()) && parsedLatestPredictorDate.getFullYear() >= 2024 && parsedLatestPredictorDate.getFullYear() <= (/* @__PURE__ */ new Date()).getFullYear() + 1 ? parsedLatestPredictorDate.toISOString() : (/* @__PURE__ */ new Date()).toISOString();
+    zScoreContext.gapToTarget = zScoreContext.targetZScore !== void 0 ? Number((zScoreContext.targetZScore - predictor.zScore).toFixed(4)) : void 0;
     const contextData = {
+      loadedFrom,
       profile: {
         uid,
-        name: profileData?.name || profileData?.username || profileData?.displayName || (normalizedEmail ? normalizedEmail.split("@")[0] : "Student"),
-        email: normalizedEmail || profileData?.email,
-        stream: profileData?.stream || "G.C.E. A/L Technology",
+        name: profileData?.name || profileData?.username || profileData?.displayName || (email ? email.split("@")[0] : "Student"),
+        email: email || profileData?.email,
+        stream: profileData?.stream || "Technology",
         district: profileData?.district || "Unknown"
       },
-      preferences: mergeDefined(emailSettings?.exists ? emailSettings.data() : null, uidSettings?.exists ? uidSettings.data() : null, profileData?.preferences),
-      appData,
-      latestMarks: parsed.latestMarks,
-      paperMarks: parsed.paperMarks,
-      questionMarks: parsed.questionMarks,
-      lessonHistory: parsed.lessonHistory.slice(-30),
-      weakLessons: parsed.weakLessons,
-      recentProgress: parsed.recentProgress,
-      latestZ: parsed.latestZ,
-      subjectZScores: parsed.subjectZScores,
-      aiMemory: Array.from(new Map(memoryDocs.map((doc) => [doc.id, doc.data()])).values()),
-      chatHistoryLast10: Array.from(new Map(chatDocs.map((doc) => [doc.id, { id: doc.id, ...doc.data() }])).values()).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).slice(-10),
+      preferences: profileData?.preferences || {},
+      latestMarks,
+      weakLessons,
+      recentProgress: progressSummary,
+      aiMemory,
+      chatHistoryLast10,
+      recentMistakes,
       examDates: profileData?.examDates || {},
-      targetZ: appData?.targetZScore ?? appData?.targetZ ?? profileData?.targetZScore ?? profileData?.targetZ ?? null,
-      currentTimeAsiaColombo: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: process.env.APP_TIME_ZONE || "Asia/Colombo" }),
-      diagnostics
+      targetZ: zScoreContext.targetZScore,
+      zScoreContext,
+      currentTimeAsiaColombo: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: process.env.APP_TIME_ZONE || "Asia/Colombo" })
     };
     contextCache.set(cacheKey, { data: contextData, timestamp: now });
     return contextData;
   } catch (e) {
     console.error("loadUserAIContext error", e);
     return {
-      profile: { uid, name: "Student", email: normalizedEmail },
+      profile: { uid, name: "Student", email },
       preferences: {},
-      appData: null,
       latestMarks: [],
-      paperMarks: [],
-      questionMarks: [],
-      lessonHistory: [],
       weakLessons: [],
       recentProgress: [],
-      latestZ: null,
-      subjectZScores: null,
       aiMemory: [],
       chatHistoryLast10: [],
+      recentMistakes: [],
       examDates: {},
-      currentTimeAsiaColombo: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "Asia/Colombo" }),
-      diagnostics
+      currentTimeAsiaColombo: (/* @__PURE__ */ new Date()).toLocaleString("en-US", { timeZone: "Asia/Colombo" })
     };
   }
 }
-var contextCache, CACHE_TTL, SUBJECTS;
+var contextCache, CACHE_TTL;
 var init_userContext = __esm({
   "server/firebase/userContext.ts"() {
     "use strict";
-    init_syllabus();
     init_userRepository();
     init_admin();
+    init_scoreUtils();
     contextCache = /* @__PURE__ */ new Map();
     CACHE_TTL = 1e4;
-    SUBJECTS = ["sft", "et", "ict"];
+  }
+});
+
+// server/ai/memoryExtractor.ts
+async function extractStableMemoryIfUseful(params) {
+  if (process.env.ENABLE_MEMORY_EXTRACTION !== "true") {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "MEMORY_EXTRACTION_DISABLED"
+    };
+  }
+  try {
+    const ai9 = getAIClient();
+    const extractionPrompt = `
+Extract only stable, useful study-related facts from the conversation.
+Return ONLY a JSON array. Do not return markdown blocks like \`\`\`json.
+If nothing useful, return [].
+Do not extract sensitive personal information.
+Do not extract temporary emotions.
+Only extract facts that help future A/L study support.
+
+Types allowed: "stable_preference" | "weakness" | "target" | "study_pattern" | "mistake"
+
+User Prompt: ${params.prompt}
+Assistant Answer: ${params.answer}
+`;
+    const response = await ai9.models.generateContent({
+      model: AI_MODELS.default,
+      contents: extractionPrompt,
+      config: {
+        temperature: 0.1,
+        responseMimeType: "application/json"
+      }
+    });
+    let text = response.text || "[]";
+    text = text.replace(/```json/g, "").replace(/```/g, "").trim();
+    const items = JSON.parse(text);
+    if (Array.isArray(items) && items.length > 0) {
+      const db = getAdminDb();
+      const batch = db.batch();
+      for (const item of items) {
+        if (item.type && item.value) {
+          const ref = db.collection("users").doc(params.uid).collection("ai_memory").doc();
+          batch.set(ref, {
+            type: item.type,
+            value: item.value,
+            confidence: item.confidence || 0.8,
+            createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+            updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+          });
+        }
+      }
+      await batch.commit();
+      return items;
+    }
+  } catch (e) {
+    if (e?.status === 429 || e?.code === 429) {
+      console.warn("MEMORY_EXTRACTION_SKIPPED_QUOTA");
+      return { ok: false, skipped: true, reason: "RESOURCE_EXHAUSTED" };
+    }
+    console.warn("MEMORY_EXTRACTION_FAILED", e?.message || e);
+    return { ok: false, skipped: true, reason: "FAILED" };
+  }
+  return [];
+}
+var init_memoryExtractor = __esm({
+  "server/ai/memoryExtractor.ts"() {
+    "use strict";
+    init_client();
+    init_admin();
+  }
+});
+
+// server/knowledge/lessonResolver.ts
+function normalizeLessonText(value) {
+  return String(value || "").normalize("NFKC").toLowerCase().replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+function meaningfulTokens(value) {
+  return normalizeLessonText(value).split(/\s+/).filter((token) => token.length > 1 && !FILLER_WORDS.has(token));
+}
+function resolveLessonReference(prompt, explicitLesson) {
+  const combined = normalizeLessonText(`${explicitLesson || ""} ${prompt || ""}`);
+  for (const entry of LESSON_ALIASES) {
+    if (entry.aliases.some((alias) => combined.includes(normalizeLessonText(alias)))) {
+      return {
+        label: entry.label,
+        aliases: [...entry.aliases],
+        tokens: [...new Set(entry.aliases.flatMap(meaningfulTokens))]
+      };
+    }
+  }
+  const tokens = meaningfulTokens(explicitLesson || prompt);
+  if (tokens.length === 0) return null;
+  const label = tokens.slice(0, 8).join(" ");
+  return { label, aliases: [label], tokens };
+}
+function sourceLessonText(source) {
+  return normalizeLessonText([
+    source?.lesson,
+    source?.title,
+    source?.fileName,
+    ...Array.isArray(source?.tags) ? source.tags : []
+  ].filter(Boolean).join(" "));
+}
+function scoreLessonSource(source, reference) {
+  const candidate = sourceLessonText(source);
+  if (!candidate) return 0;
+  let score = 0;
+  for (const alias of reference.aliases) {
+    const normalizedAlias = normalizeLessonText(alias);
+    if (normalizedAlias && candidate.includes(normalizedAlias)) score = Math.max(score, 100);
+  }
+  const candidateTokens = new Set(meaningfulTokens(candidate));
+  const matchingTokens = reference.tokens.filter((token) => candidateTokens.has(token));
+  if (reference.tokens.length > 0) {
+    score = Math.max(score, Math.round(matchingTokens.length / reference.tokens.length * 85));
+  }
+  const explicitLesson = normalizeLessonText(source?.lesson);
+  if (explicitLesson && reference.tokens.some((token) => explicitLesson.includes(token))) score += 20;
+  return Math.min(120, score);
+}
+function findLessonSources(sources, prompt, explicitLesson) {
+  const reference = resolveLessonReference(prompt, explicitLesson);
+  if (!reference) return { reference: null, sources: [] };
+  const ranked = (sources || []).map((source) => ({ source, score: scoreLessonSource(source, reference) })).filter((entry) => entry.score >= 40).sort((a, b) => b.score - a.score);
+  return {
+    reference,
+    sources: ranked.map((entry) => ({ ...entry.source, lessonMatchScore: entry.score }))
+  };
+}
+function isLessonEvidenceMode(mode) {
+  return ["lesson_pdf_search", "lesson_question_discussion", "lesson_theory_explanation", "past_paper_lesson_search"].includes(String(mode || ""));
+}
+var FILLER_WORDS, LESSON_ALIASES;
+var init_lessonResolver = __esm({
+  "server/knowledge/lessonResolver.ts"() {
+    "use strict";
+    FILLER_WORDS = /* @__PURE__ */ new Set([
+      "a",
+      "an",
+      "the",
+      "of",
+      "for",
+      "from",
+      "in",
+      "on",
+      "and",
+      "to",
+      "me",
+      "my",
+      "lesson",
+      "lessons",
+      "topic",
+      "unit",
+      "pdf",
+      "paper",
+      "past",
+      "question",
+      "questions",
+      "prashna",
+      "prasna",
+      "discuss",
+      "karamu",
+      "krmu",
+      "gamu",
+      "gmu",
+      "eka",
+      "eke",
+      "tik",
+      "tika",
+      "walin",
+      "wlin",
+      "wala",
+      "oni",
+      "need",
+      "use",
+      "all",
+      "sft",
+      "et",
+      "ict",
+      "\u0DB4\u0DCF\u0DA9\u0DB8",
+      "\u0DB4\u0DCF\u0DA9\u0DB8\u0DDA",
+      "\u0DB4\u0DCF\u0DA9\u0DB8\u0DCA",
+      "\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1",
+      "\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA",
+      "\u0DB4\u0DAD\u0DCA\u200D\u0DBB",
+      "\u0DB4\u0DAD\u0DCA\u200D\u0DBB\u0DBA",
+      "\u0D9A\u0DBB\u0DB8\u0DD4",
+      "\u0DA7\u0DD2\u0D9A"
+    ]);
+    LESSON_ALIASES = [
+      { label: "\u0DAD\u0DBB\u0DBD / Fluid mechanics", aliases: ["\u0DAD\u0DBB\u0DBD", "\u0DAF\u0DCA\u200D\u0DBB\u0DC0", "tharala", "tarala", "fluid", "fluids", "fluid mechanics"] },
+      { label: "\u0DC0\u0DD2\u0DAF\u0DCA\u200D\u0DBA\u0DD4\u0DAD\u0DBA / Electricity", aliases: ["\u0DC0\u0DD2\u0DAF\u0DCA\u200D\u0DBA\u0DD4\u0DAD", "\u0DC0\u0DD2\u0DAF\u0DD4\u0DBD\u0DD2", "vidyuth", "vidyutha", "electricity", "electrical"] },
+      { label: "\u0D89\u0DBD\u0DD9\u0D9A\u0DCA\u0DA7\u0DCA\u200D\u0DBB\u0DDC\u0DB1\u0DD2\u0D9A \u0DC0\u0DD2\u0DAF\u0DCA\u200D\u0DBA\u0DCF\u0DC0 / Electronics", aliases: ["\u0D89\u0DBD\u0DD9\u0D9A\u0DCA\u0DA7\u0DCA\u200D\u0DBB\u0DDC\u0DB1\u0DD2\u0D9A", "electronics", "electronic"] },
+      { label: "\u0D9A\u0DD8\u0DC2\u0DD2 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DBA / Agro technology", aliases: ["\u0D9A\u0DD8\u0DC2\u0DD2", "agro", "agriculture", "agro technology"] },
+      { label: "\u0D86\u0DC4\u0DCF\u0DBB \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DBA / Food technology", aliases: ["\u0D86\u0DC4\u0DCF\u0DBB", "food", "food technology"] },
+      { label: "\u0DA2\u0DDB\u0DC0 \u0DB4\u0DAF\u0DCA\u0DB0\u0DAD\u0DD2 / Bio systems", aliases: ["\u0DA2\u0DDB\u0DC0", "bio systems", "biosystems", "bio-systems"] },
+      { label: "Python", aliases: ["python", "\u0DB4\u0DBA\u0DD2\u0DAD\u0DB1\u0DCA"] },
+      { label: "Networking", aliases: ["networking", "network", "\u0DA2\u0DCF\u0DBD"] },
+      { label: "Civil engineering", aliases: ["civil", "\u0DC3\u0DD2\u0DC0\u0DD2\u0DBD\u0DCA"] },
+      { label: "Database", aliases: ["database", "databases", "\u0DAF\u0DAD\u0DCA\u0DAD \u0DC3\u0DB8\u0DD4\u0DAF\u0DCF"] }
+    ];
+  }
+});
+
+// server/knowledge/knowledgeRouter.ts
+var knowledgeRouter_exports = {};
+__export(knowledgeRouter_exports, {
+  routeKnowledgeRequest: () => routeKnowledgeRequest
+});
+function parseDeterministicIntent(prompt, activeSubject) {
+  const lower = prompt.toLowerCase();
+  const lessonReference = resolveLessonReference(prompt);
+  const isPdfInventory = lower.includes("give all pdfs") || lower.includes("all pdfs") || lower.includes("mage pdf") || lower.includes("thiyena pdf") || lower.includes("firebase eke") || lower.includes("uploaded pdfs") || lower.includes("past papers list") || lower.includes("syllabus pdf") || lower.includes("paper structure pdf") || lower.includes("pdf list") || lower.includes("\u0DB4\u0DD3\u0DA9\u0DD3\u0D91\u0DC6\u0DCA \u0DBD\u0DD2\u0DC3\u0DCA\u0DA7\u0DCA") || lower.includes("\u0DB4\u0DD3\u0DA9\u0DD3\u0D91\u0DC6\u0DCA \u0DA7\u0DD2\u0D9A") || lower.includes("tika denna") || lower.includes("tika ko");
+  if (isPdfInventory) {
+    return {
+      mode: "pdf_inventory_request",
+      entities: {
+        subject: activeSubject
+      },
+      answerHints: {
+        mustUseRag: true,
+        mustUseGoogleSearch: false,
+        mustUseUrlContext: false,
+        mustAskClarification: false
+      }
+    };
+  }
+  const pdfMatch = prompt.match(/\[Uploaded PDF:\s*([^\]]+)\]/i);
+  if (pdfMatch) {
+    const uploadedFileName = pdfMatch[1].trim();
+    let questionNo2 = void 0;
+    if (lower.includes("1st") || lower.includes("first") || lower.includes("q1") || lower.includes("question 1") || lower.includes("question 01") || lower.includes("palaweni") || lower.includes("\u0DB4\u0DC5\u0DC0\u0DD9\u0DB1\u0DD2") || lower.includes("\u0DB4\u0DC5\u0DB8\u0DD4")) {
+      questionNo2 = "Q1";
+    } else if (lower.includes("2nd") || lower.includes("second") || lower.includes("q2") || lower.includes("question 2") || lower.includes("question 02") || lower.includes("deweni") || lower.includes("\u0DAF\u0DD9\u0DC0\u0DD9\u0DB1\u0DD2") || lower.includes("\u0DAF\u0DD9\u0DC0\u0DB1")) {
+      questionNo2 = "Q2";
+    } else if (lower.includes("3rd") || lower.includes("third") || lower.includes("q3") || lower.includes("question 3") || lower.includes("question 03") || lower.includes("thunweni") || lower.includes("\u0DAD\u0DD4\u0DB1\u0DCA\u0DC0\u0DD9\u0DB1\u0DD2") || lower.includes("\u0DAD\u0DD4\u0DB1\u0DCA\u0DC0\u0DB1")) {
+      questionNo2 = "Q3";
+    }
+    let requestedAnswerType = void 0;
+    if (lower.includes("essay") || lower.includes("structured essay") || lower.includes("\u0DBB\u0DA0\u0DB1\u0DCF")) {
+      requestedAnswerType = "essay";
+    } else if (lower.includes("mcq")) {
+      requestedAnswerType = "mcq";
+    }
+    const hasQ = questionNo2 || requestedAnswerType || lower.includes("question") || lower.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA") || lower.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1") || lower.includes("hdn") || lower.includes("hadana") || lower.includes("hadanna") || lower.includes("essay");
+    if (hasQ) {
+      return {
+        mode: "uploaded_pdf_question_qa",
+        entities: {
+          uploadedFileName,
+          questionNo: questionNo2,
+          requestedAnswerType,
+          subject: activeSubject,
+          resourceType: "uploaded_pdf"
+        },
+        answerHints: {
+          mustUseRag: true,
+          mustUseGoogleSearch: false,
+          mustUseUrlContext: false,
+          mustAskClarification: false
+        }
+      };
+    }
+  }
+  if (lower.includes("zscore") || lower.includes("z score") || lower.includes("zcore") || lower.includes("rank") || lower.includes("district rank") || lower.includes("island rank") || lower.includes("z-score") || lower.includes("\u0DB8\u0D9C\u0DDA z") || lower.includes("target z")) {
+    return {
+      mode: "zscore_prediction",
+      entities: {
+        subject: void 0,
+        year: void 0
+      }
+    };
+  }
+  let subject = void 0;
+  if (lower.includes("sft") || lower.includes("science for technology") || lower.includes("\u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA \u0DC3\u0DB3\u0DC4\u0DCF \u0DC0\u0DD2\u0DAF\u0DCA\u200D\u0DBA\u0DCF\u0DC0") || lower.includes("\u0DC0\u0DD2\u0DAF\u0DCA\u200D\u0DBA\u0DCF\u0DC0")) {
+    subject = "SFT";
+  } else if (lower.includes("et") || lower.includes("engineering technology") || lower.includes("\u0D89\u0D82\u0DA2\u0DD2\u0DB1\u0DDA\u0DBB\u0DD4 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA") || lower.includes("\u0D89\u0D82\u0DA2\u0DD2\u0DB1\u0DDA\u0DBB\u0DD4")) {
+    subject = "ET";
+  } else if (lower.includes("ict") || lower.includes("information technology") || lower.includes("\u0DAD\u0DDC\u0DBB\u0DAD\u0DD4\u0DBB\u0DD4 \u0DC4\u0DCF \u0DC3\u0DB1\u0DCA\u0DB1\u0DD2\u0DC0\u0DDA\u0DAF\u0DB1") || lower.includes("\u0DAD\u0DDC\u0DBB\u0DAD\u0DD4\u0DBB\u0DD4 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DBA") || lower.includes("\u0DAD\u0DDC\u0DBB\u0DAD\u0DD4\u0DBB\u0DD4")) {
+    subject = "ICT";
+  }
+  if (!subject && activeSubject) {
+    const sUpper = activeSubject.toUpperCase();
+    if (sUpper === "SFT") subject = "SFT";
+    else if (sUpper === "ET") subject = "ET";
+    else if (sUpper === "ICT") subject = "ICT";
+  }
+  let year = void 0;
+  const yearMatch = lower.match(/\b(20\d{2})\b/);
+  if (yearMatch) {
+    year = yearMatch[1];
+  }
+  let questionNo = void 0;
+  const mcqMatch = lower.match(/\bmcq\s*[-_]?\s*(\d+)\b/);
+  const qMatch = lower.match(/\b(?:q|question)\s*[-_]?\s*(\d+)\b/);
+  const sinhalaNoMatch = lower.match(/\b(\d+)\s*(?:වෙනි|වැනි|th|st|nd|rd)\b/i);
+  if (mcqMatch) {
+    questionNo = parseInt(mcqMatch[1]).toString();
+  } else if (qMatch) {
+    questionNo = parseInt(qMatch[1]).toString();
+  } else if (sinhalaNoMatch) {
+    questionNo = parseInt(sinhalaNoMatch[1]).toString();
+  } else if (lower.includes("palaweni") || lower.includes("first") || lower.includes("1st") || lower.includes("\u0DB4\u0DC5\u0DC0\u0DD9\u0DB1\u0DD2") || lower.includes("\u0DB4\u0DC5\u0DB8\u0DD4")) {
+    questionNo = "1";
+  } else if (lower.includes("deweni") || lower.includes("second") || lower.includes("2nd") || lower.includes("\u0DAF\u0DD9\u0DC0\u0DD9\u0DB1\u0DD2") || lower.includes("\u0DAF\u0DD9\u0DC0\u0DB1")) {
+    questionNo = "2";
+  } else if (lower.includes("thunweni") || lower.includes("third") || lower.includes("3rd") || lower.includes("\u0DAD\u0DD4\u0DB1\u0DCA\u0DC0\u0DD9\u0DB1\u0DD2") || lower.includes("\u0DAD\u0DD4\u0DB1\u0DCA\u0DC0\u0DB1")) {
+    questionNo = "3";
+  } else if (lower.includes("\u0DC4\u0DAD\u0DBB\u0DC0\u0DD9\u0DB1\u0DD2") || lower.includes("fourth") || lower.includes("4th")) {
+    questionNo = "4";
+  } else if (lower.includes("\u0DB4\u0DC3\u0DCA\u0DC0\u0DD9\u0DB1\u0DD2") || lower.includes("fifth") || lower.includes("5th")) {
+    questionNo = "5";
+  }
+  if (lower === "ehem krmu" || lower === "next" || lower === "continue" || lower === "first question" || lower === "ehem karamu") {
+    return {
+      mode: "continue_grounded_discussion",
+      entities: {
+        subject
+      }
+    };
+  }
+  if (lower.includes("model question") || lower.includes("model prashna") || lower.includes("model") && lower.includes("hadanna") || lower.includes("practice question")) {
+    return {
+      mode: "model_question_generation",
+      entities: {
+        subject
+      }
+    };
+  }
+  if (lower.includes("oya mona awrudde ekd") || lower.includes("awurudda mokakda") || lower.includes("what year is this")) {
+    return {
+      mode: "continue_grounded_discussion",
+      entities: { subject }
+    };
+  }
+  const asksPastPaperLesson = (lower.includes("past paper") || lower.includes("pastpaper") || lower.includes("past papers") || lower.includes("paper prashna")) && (lower.includes("prashna") || lower.includes("prasna") || lower.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1") || lower.includes("question") || lower.includes("gmu") || lower.includes("gamu") || lower.includes("karamu") || lower.includes("\u0D9A\u0DBB\u0DB8\u0DD4"));
+  if (lower.includes("kelinama past paper prashna walata ymu") || lower.includes("kelinma past paper prashna walata ymu") || asksPastPaperLesson && lessonReference) {
+    return {
+      mode: "past_paper_lesson_search",
+      entities: { subject, lesson: lessonReference?.label }
+    };
+  }
+  if (lessonReference && (lower.includes("pdf") || lower.includes("resource") || lower.includes("note") || lower.includes("tute"))) {
+    return {
+      mode: "lesson_pdf_search",
+      entities: { subject, lesson: lessonReference.label }
+    };
+  }
+  const asksLessonQuestions = (lower.includes("prashna") || lower.includes("prasna") || lower.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1") || lower.includes("question") || lower.includes("quiz")) && (lower.includes("lesson") || lower.includes("\u0DB4\u0DCF\u0DA9\u0DB8") || lower.includes("pdf") || Boolean(lessonReference));
+  if (lower.includes("tharala prashna pdf discuss krmu") || lower.includes("prashna pdf discuss") || lower.includes("pdf") && lower.includes("discuss") || asksLessonQuestions) {
+    return {
+      mode: "lesson_question_discussion",
+      entities: { subject, lesson: lessonReference?.label }
+    };
+  }
+  const isLessonMarks = lower.includes("marks") || lower.includes("\u0DBD\u0D9A\u0DD4\u0DAB\u0DD4") || lower.includes("lkunu") || lower.includes("weighting");
+  const isSyllabusOrLesson = lower.includes("lesson") || lower.includes("\u0DB4\u0DCF\u0DA9\u0DB8") || lower.includes("\u0DC0\u0DD2\u0DAF\u0DCA\u200D\u0DBA\u0DD4\u0DAD\u0DBA") || lower.includes("electrical") || lower.includes("electronics") || lower.includes("python") || lower.includes("networking") || lower.includes("civil");
+  if (isLessonMarks && isSyllabusOrLesson && !questionNo && !year) {
+    return {
+      mode: "lesson_marks_intent",
+      entities: {
+        subject,
+        lesson: prompt
+      }
+    };
+  }
+  const isPastPaperTerm = lower.includes("past paper") || lower.includes("paper") || lower.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 \u0DB4\u0DAD\u0DCA\u200D\u0DBB");
+  const isMarkingSchemeTerm = lower.includes("marking scheme") || lower.includes("marking") || lower.includes("\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DD4 \u0DB4\u0DAD\u0DCA\u200D\u0DBB\u0DBA") || lower.includes("marking schem");
+  if (questionNo && (year || isPastPaperTerm || isMarkingSchemeTerm)) {
+    if (isMarkingSchemeTerm) {
+      return {
+        mode: "marking_scheme_request",
+        entities: {
+          subject,
+          year,
+          questionNo,
+          resourceType: "marking_scheme",
+          paperType: "marking"
+        }
+      };
+    }
+    return {
+      mode: "paper_question_qa",
+      entities: {
+        subject,
+        year,
+        questionNo,
+        resourceType: "past_paper",
+        paperType: "paper"
+      }
+    };
+  }
+  const isDownloadOrLink = lower.includes("download") || lower.includes("link") || lower.includes("pdf") || lower.includes("\u0DBD\u0DD2\u0DB1\u0DCA\u0D9A\u0DCA") || lower.includes("\u0DA9\u0DC0\u0DD4\u0DB1\u0DCA\u0DBD\u0DDD\u0DA9\u0DCA") || lower.includes("\u0DB4\u0DD3\u0DA9\u0DD3\u0D91\u0DC6\u0DCA");
+  if (isDownloadOrLink && (year || isPastPaperTerm || isMarkingSchemeTerm)) {
+    return {
+      mode: "pdf_link_request",
+      entities: {
+        subject,
+        year,
+        resourceType: isMarkingSchemeTerm ? "marking_scheme" : "past_paper",
+        paperType: isMarkingSchemeTerm ? "marking" : "paper"
+      }
+    };
+  }
+  return null;
+}
+async function routeKnowledgeRequest({
+  prompt,
+  uid,
+  email,
+  subject,
+  activeSubject,
+  files,
+  conversationHistory
+}) {
+  const deterministic = parseDeterministicIntent(prompt, activeSubject || subject);
+  if (deterministic) {
+    return {
+      mode: deterministic.mode,
+      entities: deterministic.entities,
+      contextBlocks: [],
+      answerHints: {
+        mustUseGoogleSearch: deterministic.mode === "web_search",
+        mustUseUrlContext: false,
+        mustUseRag: true,
+        mustAskClarification: false
+      }
+    };
+  }
+  if (process.env.ENABLE_LLM_ROUTER !== "true") {
+    return {
+      mode: "normal_chat",
+      entities: {},
+      contextBlocks: [],
+      answerHints: {
+        mustUseGoogleSearch: false,
+        mustUseUrlContext: false,
+        mustUseRag: false,
+        mustAskClarification: false
+      }
+    };
+  }
+  try {
+    checkAiBillingCircuit();
+  } catch (err) {
+    console.warn("Skipping LLM knowledge routing due to AI billing circuit open.");
+    return {
+      mode: "normal_chat",
+      entities: {},
+      contextBlocks: [],
+      answerHints: {
+        mustUseGoogleSearch: false,
+        mustUseUrlContext: false,
+        mustUseRag: false,
+        mustAskClarification: false
+      }
+    };
+  }
+  const ai9 = getAIClient();
+  const systemInstruction = `
+You are an intent extractor for a Sri Lankan A/L study assistant. 
+Extract the user's intent, requested year (2015-2026), subject (SFT/ET/ICT), paperType, and URLs.
+Return a valid JSON object matching the requested schema.
+
+Subject mapping:
+- SFT = Science for Technology / SFT / \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA \u0DC3\u0DB3\u0DC4\u0DCF \u0DC0\u0DD2\u0DAF\u0DCA\u200D\u0DBA\u0DCF\u0DC0
+- ET = Engineering Technology / ET / \u0D89\u0D82\u0DA2\u0DD2\u0DB1\u0DDA\u0DBB\u0DD4 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA
+- ICT = Information and Communication Technology / ICT / \u0DAD\u0DDC\u0DBB\u0DAD\u0DD4\u0DBB\u0DD4 \u0DC4\u0DCF \u0DC3\u0DB1\u0DCA\u0DB1\u0DD2\u0DC0\u0DDA\u0DAF\u0DB1 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DBA
+
+Rules:
+- If past paper intent is detected but subject is missing, set needsClarification = true and subject = undefined.
+- paperType can be: "paper", "marking", "mcq", "essay", "structured", "unknown"
+- modes: "lesson_question_discussion", "lesson_theory_explanation", "official_paper_question", "past_paper_lesson_search", "selected_resource_discussion", "attachment_question", "model_question_generation", "marking_scheme_request", "continue_grounded_discussion", "normal_chat", "web_search", "url_context", "pdf_link_request"
+- "lesson_question_discussion": asking to discuss questions from a lesson PDF (e.g., "\u0DAD\u0DBB\u0DBD \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 PDF discuss \u0D9A\u0DBB\u0DB8\u0DD4")
+- "lesson_theory_explanation": asking to explain a lesson theory without specific questions
+- "past_paper_lesson_search": asking for past paper questions for a specific lesson without a year (e.g., "\u0DAD\u0DBB\u0DBD past paper \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1")
+- "official_paper_question": asking for a specific year's past paper question
+- "model_question_generation": asking for a model question to be generated
+- "continue_grounded_discussion": follow-up to continue a previous question discussion (e.g., "ehem krmu", "next", "continue")
+- Set mode to "pdf_link_request" if the user explicitly asks for a PDF file download, file link, or download link of a paper/syllabus.
+- If a URL is in the prompt, extract it to urls array and set mode to url_context.
+- If asking about current events or general knowledge outside syllabus, mode = web_search.
+- If normal subject question, mode = normal_chat or rag_qa.
+  `;
+  const promptText = `
+User Prompt: "${prompt}"
+Active Subject Context: "${activeSubject || subject || ""}"
+
+Respond strictly in this JSON format:
+{
+  "mode": "...",
+  "entities": {
+    "year": "YYYY",
+    "subject": "SFT",
+    "paperType": "paper",
+    "urls": [],
+    "needsClarification": false,
+    "clarificationQuestion": ""
+  }
+}
+  `;
+  try {
+    const response = await ai9.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: promptText,
+      config: {
+        systemInstruction,
+        temperature: 0,
+        responseMimeType: "application/json"
+      }
+    });
+    const result = JSON.parse(response.text || "{}");
+    let { mode, entities } = result;
+    if (!entities) entities = {};
+    const lowerPrompt = prompt.toLowerCase();
+    const isSft = lowerPrompt.includes("sft") || lowerPrompt.includes("\u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA \u0DC3\u0DB3\u0DC4\u0DCF \u0DC0\u0DD2\u0DAF\u0DCA\u200D\u0DBA\u0DCF\u0DC0");
+    const isEt = lowerPrompt.includes("et") || lowerPrompt.includes("\u0D89\u0D82\u0DA2\u0DD2\u0DB1\u0DDA\u0DBB\u0DD4 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA");
+    const isIct = lowerPrompt.includes("ict") || lowerPrompt.includes("\u0DAD\u0DDC\u0DBB\u0DAD\u0DD4\u0DBB\u0DD4 \u0DC4\u0DCF \u0DC3\u0DB1\u0DCA\u0DB1\u0DD2\u0DC0\u0DDA\u0DAF\u0DB1");
+    const yearMatch = lowerPrompt.match(/\b(20\d{2})\b/);
+    const extractedYear = yearMatch ? yearMatch[1] : void 0;
+    const isDownloadRequest = lowerPrompt.includes("download") || lowerPrompt.includes("link") || lowerPrompt.includes("pdf") || lowerPrompt.includes("\u0DBD\u0DD2\u0DB1\u0DCA\u0D9A\u0DCA") || lowerPrompt.includes("\u0DA9\u0DC0\u0DD4\u0DB1\u0DCA\u0DBD\u0DDD\u0DA9\u0DCA") || lowerPrompt.includes("\u0DB4\u0DD3\u0DA9\u0DD3\u0D91\u0DC6\u0DCA") || lowerPrompt.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 \u0DB4\u0DAD\u0DCA\u200D\u0DBB");
+    if (isDownloadRequest && (mode === "past_paper_search" || mode === "normal_chat")) {
+      mode = "pdf_link_request";
+    }
+    if (mode === "pdf_link_request") {
+      if (!entities.subject && activeSubject) {
+        entities.subject = activeSubject;
+      }
+      if (isSft) entities.subject = "SFT";
+      if (isEt) entities.subject = "ET";
+      if (isIct) entities.subject = "ICT";
+      if (extractedYear) entities.year = extractedYear;
+      if (!entities.subject) {
+        entities.needsClarification = true;
+        entities.clarificationQuestion = "\u{1F50D} \u0D9A\u0DBB\u0DD4\u0DAB\u0DCF\u0D9A\u0DBB subject \u0D91\u0D9A \u0D9A\u0DD2\u0DBA\u0DB1\u0DCA\u0DB1. SFT, ET, ICT \u0D85\u0DAD\u0DBB\u0DD2\u0DB1\u0DCA \u0DB8\u0DDC\u0D9A\u0D9A\u0DCA\u0DAF?";
+      } else if (!entities.year) {
+        entities.needsClarification = true;
+        entities.clarificationQuestion = "\u0D94\u0DBA\u0DCF\u0DA7 \u0D85\u0DC0\u0DC1\u0DCA\u200D\u0DBA paper year \u0D91\u0D9A \u0DB8\u0DDC\u0D9A\u0D9A\u0DCA\u0DAF? (\u0D8B\u0DAF\u0DCF: 2025, 2023 \u0DC0\u0D9C\u0DDA)";
+      }
+    }
+    if (entities.needsClarification && !entities.clarificationQuestion) {
+      entities.clarificationQuestion = "\u{1F50D} \u0D9A\u0DBB\u0DD4\u0DAB\u0DCF\u0D9A\u0DBB \u0D94\u0DB6 \u0DC3\u0DDC\u0DBA\u0DB1 \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 \u0DB4\u0DAD\u0DCA\u200D\u0DBB\u0DBA\u0DDA \u0DC0\u0DD2\u0DC2\u0DBA \u0DC3\u0DB3\u0DC4\u0DB1\u0DCA \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1. SFT, ET, ICT \u0D85\u0DAD\u0DBB\u0DD2\u0DB1\u0DCA \u0DB8\u0DDC\u0DB1 subject \u0D91\u0D9A\u0DAF?";
+    }
+    return {
+      mode: mode || "normal_chat",
+      entities,
+      contextBlocks: [],
+      answerHints: {
+        mustUseGoogleSearch: mode === "web_search",
+        mustUseUrlContext: mode === "url_context" || entities.urls && entities.urls.length > 0,
+        mustUseRag: mode === "rag_qa",
+        mustAskClarification: !!entities.needsClarification
+      }
+    };
+  } catch (err) {
+    console.error("Knowledge router error:", err);
+    try {
+      const classification = classifyAiError(err);
+      if (classification.code === "AI_BILLING_EXHAUSTED") {
+        handleAiError(err);
+      }
+    } catch (e) {
+    }
+    return {
+      mode: "normal_chat",
+      entities: {},
+      contextBlocks: [],
+      answerHints: {
+        mustUseGoogleSearch: false,
+        mustUseUrlContext: false,
+        mustUseRag: false,
+        mustAskClarification: false
+      }
+    };
+  }
+}
+var init_knowledgeRouter = __esm({
+  "server/knowledge/knowledgeRouter.ts"() {
+    "use strict";
+    init_client();
+    init_aiCircuitBreaker();
+    init_aiErrorClassifier();
+    init_lessonResolver();
+  }
+});
+
+// server/sources/sourceInventoryService.ts
+var sourceInventoryService_exports = {};
+__export(sourceInventoryService_exports, {
+  computeIndexStatus: () => computeIndexStatus,
+  getSourceInventory: () => getSourceInventory,
+  invalidateInventoryCache: () => invalidateInventoryCache
+});
+function lessonFromStoragePath(storagePath) {
+  const path5 = String(storagePath || "").replace(/^gs:\/\/[^/]+\//, "");
+  const parts = path5.split("/").filter(Boolean);
+  const marker = parts.indexOf("paper_structure");
+  if (marker < 0 || !parts[marker + 2]) return null;
+  try {
+    return decodeURIComponent(parts[marker + 2]).replace(/_/g, " ").trim() || null;
+  } catch {
+    return parts[marker + 2].replace(/_/g, " ").trim() || null;
+  }
+}
+function invalidateInventoryCache(uid) {
+  for (const key of cache.keys()) {
+    if (key.startsWith(`${uid}:`) || key.startsWith("all:") || key.startsWith("admin:")) {
+      cache.delete(key);
+    }
+  }
+}
+function computeIndexStatus(src) {
+  const chunkCount = Number(src.chunkCount || 0);
+  const currentStatus = String(src.indexStatus || "").toLowerCase();
+  const hasLegacyTextLayer = String(src.textEncoding || "").startsWith("legacy_");
+  const needsOcr = !hasLegacyTextLayer && (src.needsOcr === true || src.indexStatus === "needs_ocr");
+  const needsLegacy = src.needsLegacyConversion === true || src.indexStatus === "needs_legacy_conversion";
+  if (["queued", "running", "processing", "indexing"].includes(currentStatus)) return currentStatus;
+  if (currentStatus === "failed") return "failed";
+  if (chunkCount > 0 && (src.needsOcr === false || src.indexStatus === "ready")) {
+    return "ready";
+  }
+  if (needsLegacy) {
+    return "needs_legacy_conversion";
+  }
+  if (needsOcr) return "needs_ocr";
+  if (chunkCount === 0) return "not_indexed";
+  return "not_indexed";
+}
+async function getSourceInventory(params) {
+  const { uid, subject, year, resourceType, isAdmin } = params;
+  const cacheKey = `${uid}:${subject || "all"}:${year || "all"}:${resourceType || "all"}:${isAdmin ? "admin" : "user"}`;
+  const now = Date.now();
+  const cached = cache.get(cacheKey);
+  if (cached && cached.expiry > now) {
+    return cached.data;
+  }
+  const db = getAdminDb();
+  let ppQuery = db.collection("past_papers");
+  const ppSnap = await ppQuery.get();
+  const ppDocs = ppSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  let ragQuery = db.collection("rag_sources");
+  const ragSnap = await ragQuery.get();
+  const ragDocs = ragSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  let syllabusDocs = [];
+  try {
+    const sylSnap = await db.collection("users").doc(uid).collection("syllabus_resources").get();
+    syllabusDocs = sylSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  } catch (e) {
+    console.warn("Failed to query syllabus_resources for inventory", e);
+  }
+  const subjectQuery = subject ? String(subject).toUpperCase() : null;
+  const yearQuery = year ? String(year) : null;
+  const typeQuery = resourceType ? String(resourceType).toLowerCase() : null;
+  const allSources = [];
+  const sourceIds = /* @__PURE__ */ new Set();
+  function addSource(src) {
+    if (!src) return;
+    const sId = src.sourceId || src.id;
+    if (!sId) return;
+    if (sourceIds.has(sId)) return;
+    sourceIds.add(sId);
+    const normSubject = String(src.subject || "").trim().toUpperCase();
+    const normYear = String(src.year || "").trim();
+    const normResourceType = String(src.resourceType || src.sourceType || "").trim().toLowerCase();
+    const normSourceScope = String(src.sourceScope || "").trim().toLowerCase();
+    if (subjectQuery && normSubject !== subjectQuery) return;
+    if (yearQuery && normYear !== yearQuery) return;
+    if (typeQuery && normResourceType !== typeQuery) return;
+    const isOwner = src.ownerUid === uid;
+    const isPublic = ["official", "shared", "public"].includes(src.visibility);
+    if (!isOwner && !isPublic && !isAdmin) return;
+    const calcStatus = computeIndexStatus({
+      chunkCount: Number(src.chunkCount || 0),
+      needsOcr: src.needsOcr === true,
+      needsLegacyConversion: src.needsLegacyConversion === true,
+      textEncoding: src.textEncoding,
+      indexStatus: src.indexStatus
+    });
+    const hasLegacyTextLayer = String(src.textEncoding || "").startsWith("legacy_");
+    const normalizedNeedsOcr = !hasLegacyTextLayer && src.needsOcr === true;
+    allSources.push({
+      id: sId,
+      sourceId: sId,
+      title: src.title || src.fileName || "Untitled PDF",
+      fileName: src.fileName || src.title || "untitled.pdf",
+      subject: normSubject || null,
+      lesson: src.lesson || src.topic || lessonFromStoragePath(src.storagePath) || null,
+      year: normYear || null,
+      resourceType: normResourceType || "uploaded_pdf",
+      sourceScope: normSourceScope || null,
+      storagePath: src.storagePath || null,
+      ownerUid: src.ownerUid || null,
+      chunkCount: Number(src.chunkCount || 0),
+      needsOcr: normalizedNeedsOcr,
+      needsLegacyConversion: src.needsLegacyConversion === true,
+      textEncoding: src.textEncoding || "unknown",
+      indexStatus: calcStatus,
+      visibility: src.visibility || "private",
+      sourceType: src.sourceType || normResourceType || null,
+      tags: Array.isArray(src.tags) ? src.tags : [],
+      textIndexed: Number(src.chunkCount || 0) > 0 && !normalizedNeedsOcr,
+      createdAt: src.createdAt || null
+    });
+  }
+  syllabusDocs.forEach((doc) => {
+    addSource({ ...doc, resourceType: "syllabus", sourceScope: "owner_syllabus" });
+  });
+  ppDocs.forEach((doc) => {
+    addSource(doc);
+  });
+  ragDocs.forEach((doc) => {
+    addSource(doc);
+  });
+  const groups = {
+    pastPapers: [],
+    markingSchemes: [],
+    syllabus: [],
+    paperStructure: [],
+    uploadedPdfs: [],
+    images: []
+  };
+  allSources.forEach((src) => {
+    const rt = src.resourceType;
+    const ss = src.sourceScope;
+    if (rt === "marking_scheme" || rt === "marking") {
+      groups.markingSchemes.push(src);
+    } else if (rt === "syllabus" || ss === "owner_syllabus") {
+      groups.syllabus.push(src);
+    } else if (rt === "paper_structure" || ss === "paper_structure") {
+      groups.paperStructure.push(src);
+    } else if (rt === "image" || rt === "image_upload") {
+      groups.images.push(src);
+    } else if (rt === "past_paper") {
+      groups.pastPapers.push(src);
+    } else {
+      groups.uploadedPdfs.push(src);
+    }
+  });
+  const result = {
+    groups,
+    total: allSources.length,
+    all: allSources
+  };
+  cache.set(cacheKey, {
+    data: result,
+    expiry: now + 5 * 60 * 1e3
+  });
+  return result;
+}
+var cache;
+var init_sourceInventoryService = __esm({
+  "server/sources/sourceInventoryService.ts"() {
+    "use strict";
+    init_admin();
+    cache = /* @__PURE__ */ new Map();
+  }
+});
+
+// server/knowledge/retrieve.ts
+var retrieve_exports = {};
+__export(retrieve_exports, {
+  checkBadTextQuality: () => checkBadTextQuality,
+  retrieveExactPaperQuestion: () => retrieveExactPaperQuestion,
+  retrieveRelevantKnowledge: () => retrieveRelevantKnowledge,
+  retrieveUploadedPdfQuestion: () => retrieveUploadedPdfQuestion
+});
+async function retrieveRelevantKnowledge({
+  query,
+  uid,
+  subject,
+  limit = 8,
+  lesson,
+  strictLesson = false,
+  allowedSourceIds = []
+}) {
+  const db = getAdminDb();
+  const chunks = [];
+  const lowerQ = query.toLowerCase();
+  if (uid && strictLesson) {
+    const inventory = await getSourceInventory({ uid, subject, isAdmin: false });
+    const lessonMatch = findLessonSources(inventory.all, query, lesson);
+    let sources = lessonMatch.sources;
+    if (lessonMatch.reference) {
+      const knownIds = new Set(sources.map((source) => String(source.sourceId || source.id)));
+      const accessibleSourceMap = new Map(
+        inventory.all.map((source) => [String(source.sourceId || source.id), source])
+      );
+      const [ownedChunks, sharedChunks] = await Promise.all([
+        db.collection("rag_chunks").where("ownerUid", "==", uid).get().catch(() => ({ docs: [] })),
+        db.collection("rag_chunks").where("visibility", "in", ["official", "shared"]).get().catch(() => ({ docs: [] }))
+      ]);
+      for (const document of [...ownedChunks.docs, ...sharedChunks.docs]) {
+        const chunk = document.data();
+        const sourceId = String(chunk.sourceId || "");
+        const source = accessibleSourceMap.get(sourceId);
+        if (!source || knownIds.has(sourceId)) continue;
+        const score = scoreLessonSource({ lesson: chunk.lesson, title: source.title }, lessonMatch.reference);
+        if (score < 40) continue;
+        sources.push({ ...source, lesson: chunk.lesson || source.lesson, lessonMatchScore: score });
+        knownIds.add(sourceId);
+      }
+      sources = sources.sort((a, b) => Number(b.lessonMatchScore || 0) - Number(a.lessonMatchScore || 0));
+    }
+    for (const source of sources.slice(0, 10)) {
+      const sourceId = source.sourceId || source.id;
+      const chunkSnapshot = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
+      chunkSnapshot.docs.sort((a, b) => Number(a.data().chunkIndex || 0) - Number(b.data().chunkIndex || 0)).slice(0, 8).forEach((document) => {
+        const data = document.data();
+        if (!data.text) return;
+        chunks.push({
+          sourceType: data.sourceType || source.sourceType || "Lesson PDF",
+          title: source.title,
+          text: data.text,
+          confidence: Math.min(1, Number(source.lessonMatchScore || 100) / 100),
+          year: data.year || source.year,
+          lesson: data.lesson || source.lesson || lessonMatch.reference?.label,
+          subject: data.subject || source.subject,
+          id: document.id,
+          sourceId,
+          storagePath: source.storagePath,
+          pageNumber: data.pageNumber
+        });
+      });
+    }
+    const bySource = /* @__PURE__ */ new Map();
+    for (const chunk of chunks) {
+      const key = String(chunk.sourceId || "unknown");
+      const list = bySource.get(key) || [];
+      list.push(chunk);
+      bySource.set(key, list);
+    }
+    const selected = [];
+    const maximum = Math.max(limit, Math.min(40, sources.length * 4));
+    for (let index = 0; selected.length < maximum; index += 1) {
+      let added = false;
+      for (const source of sources) {
+        const sourceChunks = bySource.get(String(source.sourceId || source.id)) || [];
+        if (sourceChunks[index]) {
+          selected.push(sourceChunks[index]);
+          added = true;
+          if (selected.length >= maximum) break;
+        }
+      }
+      if (!added) break;
+    }
+    return {
+      chunks: selected,
+      sources: sources.map((source) => ({
+        id: source.sourceId || source.id,
+        sourceId: source.sourceId || source.id,
+        title: source.title,
+        lesson: source.lesson || lessonMatch.reference?.label,
+        storagePath: source.storagePath,
+        confidence: Math.min(1, Number(source.lessonMatchScore || 100) / 100),
+        sourceType: source.sourceType || source.resourceType,
+        usedInAnswer: selected.some((chunk) => chunk.sourceId === (source.sourceId || source.id))
+      })),
+      lesson: lessonMatch.reference?.label || lesson || null,
+      status: selected.length > 0 ? "success" : sources.length > 0 ? "index_required" : "not_found"
+    };
+  }
+  try {
+    const isPdfQuery = query.toLowerCase().includes("pdf") || query.match(/mcq|essay|structured|prashna|q\d|ප්‍රශ්න|paper|marking|scheme|answer/i);
+    let activePdfSourceIds = [];
+    if (uid && isPdfQuery) {
+      try {
+        const chatContextDoc = await db.collection("users").doc(uid).collection("chat_context").doc("current").get();
+        if (chatContextDoc.exists) {
+          const data = chatContextDoc.data();
+          if (data && Array.isArray(data.temporaryPdfs)) {
+            activePdfSourceIds = data.temporaryPdfs.map((pdf) => pdf.sourceId);
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to retrieve temporary PDFs context:", err.message);
+      }
+    }
+    if (uid && activePdfSourceIds.length > 0) {
+      try {
+        for (const sId of activePdfSourceIds) {
+          const sourceSnap = await db.collection("rag_sources").doc(sId).get();
+          const sourceData = sourceSnap.exists ? sourceSnap.data() : null;
+          const sourceTitle = sourceData?.title || sourceData?.fileName || "Uploaded PDF";
+          const storagePath = sourceData?.storagePath || "";
+          const chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sId).get();
+          chunksSnap.docs.forEach((doc) => {
+            const data = doc.data();
+            const textLower = (data.text || "").toLowerCase();
+            const matchesSearch = textLower.includes(lowerQ) || data.tags && data.tags.some((t) => lowerQ.includes(t.toLowerCase()));
+            if (matchesSearch) {
+              chunks.push({
+                sourceType: "Uploaded PDF",
+                title: sourceTitle,
+                text: data.text,
+                confidence: 1,
+                subject: data.subject,
+                lesson: data.lesson,
+                year: data.year,
+                id: doc.id,
+                sourceId: sId,
+                storagePath
+              });
+            }
+          });
+        }
+      } catch (err) {
+        console.warn("Failed to retrieve chunks for active temporary PDFs:", err.message);
+      }
+    }
+    const uploadedPdfMatch = query.match(/\[Uploaded PDF:\s*([^\]]+)\]/i);
+    if (uploadedPdfMatch && uid) {
+      const uploadedFileName = uploadedPdfMatch[1].trim();
+      try {
+        const sourcesSnap = await db.collection("rag_sources").where("ownerUid", "==", uid).where("fileName", "==", uploadedFileName).limit(1).get();
+        let sourceId = "";
+        let sourceTitle = uploadedFileName;
+        let recentSources = null;
+        if (!sourcesSnap.empty) {
+          sourceId = sourcesSnap.docs[0].id;
+          sourceTitle = sourcesSnap.docs[0].data().title || uploadedFileName;
+        } else {
+          recentSources = await db.collection("rag_sources").where("ownerUid", "==", uid).orderBy("createdAt", "desc").limit(1).get();
+          if (!recentSources.empty) {
+            sourceId = recentSources.docs[0].id;
+            sourceTitle = recentSources.docs[0].data().title || recentSources.docs[0].data().fileName;
+          }
+        }
+        if (sourceId) {
+          const chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).limit(limit).get();
+          chunksSnap.docs.forEach((doc) => {
+            const data = doc.data();
+            chunks.push({
+              sourceType: "Uploaded PDF",
+              title: sourceTitle,
+              text: data.text,
+              confidence: 1,
+              subject: data.subject,
+              lesson: data.lesson,
+              year: data.year,
+              id: doc.id,
+              sourceId: data.sourceId || sourceId,
+              storagePath: data.storagePath || sourcesSnap?.docs[0]?.data()?.storagePath || recentSources?.docs[0]?.data()?.storagePath
+            });
+          });
+        }
+      } catch (pdfErr) {
+        console.warn("Failed to retrieve chunks for uploaded PDF:", pdfErr.message);
+      }
+    }
+    if (uid && chunks.length < limit) {
+      const roleDoc = await db.collection("user_roles").doc(uid).get();
+      const userRoles = roleDoc.exists ? roleDoc.data()?.roles || (roleDoc.data()?.role ? [roleDoc.data().role] : []) : [];
+      const isOwner = userRoles.includes("admin") || userRoles.includes("teacher") || userRoles.includes("content_editor");
+      if (isOwner) {
+        const sylSnap = await db.collection("users").doc(uid).collection("syllabus_chunks").where("subject", "==", subject || null).limit(limit).get();
+        sylSnap.docs.forEach((doc) => {
+          const data = doc.data();
+          if (data.text?.toLowerCase().includes(lowerQ) || lowerQ.includes(data.subject?.toLowerCase() || "")) {
+            chunks.push({
+              sourceType: "Syllabus Library",
+              title: data.tags?.[0] || data.subject || "Private Syllabus",
+              text: data.text,
+              confidence: 1,
+              subject: data.subject,
+              lesson: data.lesson,
+              year: data.year,
+              id: doc.id,
+              sourceId: data.sourceId,
+              storagePath: data.storagePath
+            });
+          }
+        });
+      }
+    }
+    if (uid && chunks.length < limit) {
+      try {
+        const userChunksSnap = await db.collection("rag_chunks").where("ownerUid", "==", uid).limit(limit * 2).get();
+        userChunksSnap.docs.forEach((doc) => {
+          const data = doc.data();
+          const matchesSearch = data.text?.toLowerCase().includes(lowerQ) || data.tags && data.tags.some((t) => lowerQ.includes(t.toLowerCase()));
+          if (matchesSearch) {
+            chunks.push({
+              sourceType: data.sourceScope === "owner_syllabus" ? "Syllabus Library" : "My Uploaded PDF",
+              title: data.tags?.[0] || "My Document",
+              text: data.text,
+              confidence: 0.95,
+              subject: data.subject,
+              lesson: data.lesson,
+              year: data.year,
+              id: doc.id,
+              sourceId: data.sourceId,
+              storagePath: data.storagePath
+            });
+          }
+        });
+      } catch (err) {
+        console.warn("User private chunks search failed:", err.message);
+      }
+    }
+    if (chunks.length < limit) {
+      let ragQuery = db.collection("rag_chunks").where("visibility", "in", ["official", "shared"]);
+      const ragSnap = await ragQuery.limit(limit).get();
+      ragSnap.docs.forEach((doc) => {
+        const data = doc.data();
+        if (data.text?.toLowerCase().includes(lowerQ)) {
+          chunks.push({
+            sourceType: data.sourceScope === "owner_syllabus" ? "Syllabus Library" : "RAG DB",
+            title: data.tags?.[0] || "RAG Resource",
+            text: data.text,
+            confidence: 0.9,
+            subject: data.subject,
+            lesson: data.lesson,
+            year: data.year,
+            id: doc.id,
+            sourceId: data.sourceId,
+            storagePath: data.storagePath
+          });
+        }
+      });
+    }
+    chunks.sort((a, b) => b.confidence - a.confidence);
+    return {
+      chunks: chunks.slice(0, limit),
+      sources: chunks.slice(0, limit).map((c) => ({
+        id: c.sourceId || c.id,
+        sourceId: c.sourceId || c.id,
+        title: c.title,
+        storagePath: c.storagePath,
+        url: c.url,
+        confidence: c.confidence,
+        sourceType: c.sourceType,
+        usedInAnswer: true,
+        pageNumber: c.pageNumber
+      })),
+      status: "success"
+    };
+  } catch (e) {
+    console.warn("Firestore retrieve failed:", e.message);
+    return {
+      chunks: [],
+      sources: [],
+      status: "firestore_unavailable",
+      errorCode: e.code || "PERMISSION_DENIED",
+      usedFallback: true
+    };
+  }
+}
+async function retrieveUploadedPdfQuestion({
+  uid,
+  uploadedFileName,
+  sourceId,
+  questionNo,
+  query,
+  limit = 8
+}) {
+  const db = getAdminDb();
+  let activeSourceId = sourceId;
+  let sourceData = null;
+  if (!activeSourceId) {
+    try {
+      const chatCtxDoc = await db.collection("users").doc(uid).collection("chat_context").doc("current").get();
+      if (chatCtxDoc.exists) {
+        const data = chatCtxDoc.data();
+        if (data && data.activePdf && data.activePdf.sourceId) {
+          activeSourceId = data.activePdf.sourceId;
+          sourceData = data.activePdf;
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to read activePdf from chat_context/current:", err.message);
+    }
+  }
+  if (!activeSourceId && uploadedFileName) {
+    try {
+      const chatCtxDoc = await db.collection("users").doc(uid).collection("chat_context").doc("current").get();
+      if (chatCtxDoc.exists) {
+        const data = chatCtxDoc.data();
+        if (data && Array.isArray(data.temporaryPdfs)) {
+          const matchedPdf = data.temporaryPdfs.find(
+            (pdf) => pdf.fileName && pdf.fileName.toLowerCase() === uploadedFileName.toLowerCase() || pdf.title && pdf.title.toLowerCase() === uploadedFileName.toLowerCase()
+          );
+          if (matchedPdf) {
+            activeSourceId = matchedPdf.sourceId;
+            sourceData = matchedPdf;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to check temporaryPdfs:", err.message);
+    }
+  }
+  if (!activeSourceId && uploadedFileName) {
+    try {
+      const sourcesSnap = await db.collection("rag_sources").where("ownerUid", "==", uid).where("fileName", "==", uploadedFileName).limit(1).get();
+      let recentSources = null;
+      if (!sourcesSnap.empty) {
+        activeSourceId = sourcesSnap.docs[0].id;
+        sourceData = sourcesSnap.docs[0].data();
+      }
+    } catch (err) {
+      console.warn("Failed to query rag_sources by fileName:", err.message);
+    }
+  }
+  if (!activeSourceId) {
+    try {
+      const recentSources = await db.collection("rag_sources").where("ownerUid", "==", uid).orderBy("createdAt", "desc").limit(1).get();
+      if (!recentSources.empty) {
+        activeSourceId = recentSources.docs[0].id;
+        sourceData = recentSources.docs[0].data();
+      }
+    } catch (err) {
+      console.warn("Failed fallback to recent rag_sources:", err.message);
+    }
+  }
+  if (activeSourceId && !sourceData) {
+    try {
+      const srcSnap = await db.collection("rag_sources").doc(activeSourceId).get();
+      if (srcSnap.exists) {
+        sourceData = srcSnap.data();
+      }
+    } catch (err) {
+      console.warn("Failed to retrieve rag_source doc:", err);
+    }
+  }
+  if (!activeSourceId) {
+    return {
+      chunks: [],
+      source: null,
+      hasExactQuestionText: false,
+      needsOcr: false
+    };
+  }
+  const needsOcr = !!sourceData?.needsOcr;
+  let chunks = [];
+  try {
+    const chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", activeSourceId).get();
+    chunks = chunksSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  } catch (err) {
+    console.warn("Failed to retrieve rag_chunks:", err);
+  }
+  let hasExactQuestionText = false;
+  const scoredChunks = chunks.map((c) => {
+    let score = 0;
+    const lowerText = (c.text || "").toLowerCase();
+    if (questionNo && c.questionNo === questionNo) {
+      score += 1e3;
+      hasExactQuestionText = true;
+    } else if (questionNo) {
+      const isQ1 = questionNo === "Q1" && (lowerText.includes("q1") || lowerText.includes("question 1") || lowerText.includes("question 01") || lowerText.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 1") || lowerText.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 01") || lowerText.includes("\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 1") || lowerText.includes("\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 01") || lowerText.includes("\u0DB4\u0DC5\u0DB8\u0DD4") || lowerText.includes("\u0DB4\u0DC5\u0DC0\u0DD9\u0DB1\u0DD2") || /(?:^|\s|\n)0?1\.\s/.test(lowerText));
+      const isQ2 = questionNo === "Q2" && (lowerText.includes("q2") || lowerText.includes("question 2") || lowerText.includes("question 02") || lowerText.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 2") || lowerText.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 02") || lowerText.includes("\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 2") || lowerText.includes("\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 02") || lowerText.includes("\u0DAF\u0DD9\u0DC0\u0DB1") || lowerText.includes("\u0DAF\u0DD9\u0DC0\u0DD9\u0DB1\u0DD2") || /(?:^|\s|\n)0?2\.\s/.test(lowerText));
+      const isQ3 = questionNo === "Q3" && (lowerText.includes("q3") || lowerText.includes("question 3") || lowerText.includes("question 03") || lowerText.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 3") || lowerText.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 03") || lowerText.includes("\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 3") || lowerText.includes("\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 03") || lowerText.includes("\u0DAD\u0DD4\u0DB1\u0DCA\u0DC0\u0DB1") || lowerText.includes("\u0DAD\u0DD4\u0DB1\u0DCA\u0DC0\u0DD9\u0DB1\u0DD2") || /(?:^|\s|\n)0?3\.\s/.test(lowerText));
+      if (isQ1 || isQ2 || isQ3) {
+        score += 500;
+        hasExactQuestionText = true;
+      }
+    }
+    if (c.pageNumber) {
+      if (c.pageNumber === 1) score += 100;
+      else if (c.pageNumber === 2) score += 50;
+      else if (c.pageNumber === 3) score += 20;
+    } else {
+      if (c.chunkIndex === 0) score += 80;
+      else if (c.chunkIndex === 1) score += 40;
+    }
+    if (query) {
+      const queryWords = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+      queryWords.forEach((w) => {
+        if (lowerText.includes(w)) {
+          score += 10;
+        }
+      });
+    }
+    return { chunk: c, score };
+  });
+  scoredChunks.sort((a, b) => b.score - a.score);
+  const finalChunks = scoredChunks.slice(0, limit).map((sc) => ({
+    sourceType: "Uploaded PDF",
+    title: sourceData?.title || sourceData?.fileName || "Uploaded PDF",
+    text: sc.chunk.text,
+    confidence: sc.score > 0 ? 1 : 0.8,
+    pageNumber: sc.chunk.pageNumber || null,
+    questionNo: sc.chunk.questionNo || null,
+    id: sc.chunk.id
+  }));
+  return {
+    chunks: finalChunks,
+    source: {
+      id: activeSourceId,
+      title: sourceData?.title || sourceData?.fileName || "Uploaded PDF",
+      fileName: sourceData?.fileName || "uploaded_source.pdf",
+      storagePath: sourceData?.storagePath || "",
+      ownerUid: sourceData?.ownerUid || uid
+    },
+    hasExactQuestionText,
+    needsOcr
+  };
+}
+function checkBadTextQuality(text) {
+  if (!text) return true;
+  const replacementCharCount = (text.match(/\uFFFD/g) || []).length;
+  if (replacementCharCount > 3) {
+    const ratio = replacementCharCount / text.length;
+    if (ratio > 0.015 || replacementCharCount > 10) return true;
+  }
+  const hasSinhalaChars = /[\u0D80-\u0DFF]/.test(text);
+  if (hasSinhalaChars) {
+    const sinhalaCount = (text.match(/[\u0D80-\u0DFF]/g) || []).length;
+    if (sinhalaCount < 15 && replacementCharCount > 2) {
+      return true;
+    }
+  }
+  const garbageSymbolsCount = (text.match(/[^a-zA-Z0-9\s\.,\?\!\"'\(\)\u0D80-\u0DFF\-\+\=\/\*]/g) || []).length;
+  if (text.length > 50 && garbageSymbolsCount / text.length > 0.25) {
+    return true;
+  }
+  return false;
+}
+async function retrieveExactPaperQuestion({
+  uid,
+  sourceId,
+  subject,
+  year,
+  questionNo,
+  questionType
+}) {
+  const db = getAdminDb();
+  let sourceDoc = null;
+  let sourceData = null;
+  try {
+    const ragSnap = await db.collection("rag_sources").doc(sourceId).get();
+    if (ragSnap.exists) {
+      sourceDoc = ragSnap;
+      sourceData = ragSnap.data();
+    } else {
+      const ppSnap = await db.collection("past_papers").doc(sourceId).get();
+      if (ppSnap.exists) {
+        sourceDoc = ppSnap;
+        sourceData = ppSnap.data();
+      }
+    }
+  } catch (err) {
+    console.warn("retrieveExactPaperQuestion: failed to fetch source document:", err);
+  }
+  if (!sourceData) {
+    return {
+      source: null,
+      chunks: [],
+      hasExactQuestionText: false,
+      badTextQuality: false,
+      needsOcr: false,
+      needsLegacyConversion: false,
+      reason: "Source details not found in library."
+    };
+  }
+  const chunkCount = Number(sourceData.chunkCount || 0);
+  const hasLegacyTextLayer = String(sourceData.textEncoding || "").startsWith("legacy_");
+  const needsOcr = !hasLegacyTextLayer && (sourceData.needsOcr === true || sourceData.indexStatus === "needs_ocr");
+  const needsLegacyConversion = sourceData.needsLegacyConversion === true || sourceData.indexStatus === "needs_legacy_conversion";
+  if (needsOcr || chunkCount === 0) {
+    return {
+      source: sourceData,
+      chunks: [],
+      hasExactQuestionText: false,
+      badTextQuality: false,
+      needsOcr,
+      needsLegacyConversion,
+      reason: needsOcr ? "This source has no searchable text layer." : "No searchable chunks are indexed; use direct PDF reading."
+    };
+  }
+  let chunks = [];
+  try {
+    const chunkSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
+    chunks = chunkSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  } catch (err) {
+    console.warn("retrieveExactPaperQuestion: failed to fetch rag_chunks:", err);
+  }
+  let matchedChunks = [];
+  let hasExactQuestionText = false;
+  let badTextQuality = false;
+  const numOnly = questionNo ? questionNo.replace(/\D/g, "") : "";
+  if (numOnly) {
+    const patterns = [
+      new RegExp(`\\b${numOnly}\\.\\s`),
+      new RegExp(`\\b${numOnly}\\)`),
+      new RegExp(`\\(${numOnly}\\)`),
+      new RegExp(`mcq\\s*${numOnly}\\b`, "i"),
+      new RegExp(`(?:\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA|\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA)\\s*${numOnly}\\b`),
+      new RegExp(`${numOnly}\\s*\u0DC0\u0DB1`),
+      new RegExp(`${numOnly}\\s*\u0DC0\u0DD9\u0DB1\u0DD2`)
+    ];
+    matchedChunks = chunks.filter((c) => {
+      const text = c.text || "";
+      const lower = text.toLowerCase();
+      if (c.questionNo && String(c.questionNo).replace(/\D/g, "") === numOnly) {
+        return true;
+      }
+      const matchedText = patterns.some((p) => p.test(text) || p.test(lower));
+      return matchedText;
+    });
+    if (matchedChunks.length > 0) {
+      hasExactQuestionText = true;
+      const allGarbage = matchedChunks.every((c) => checkBadTextQuality(c.text));
+      if (allGarbage) {
+        badTextQuality = true;
+      }
+    }
+  } else {
+    matchedChunks = chunks.slice(0, 5);
+    if (matchedChunks.length > 0) {
+      const allGarbage = matchedChunks.every((c) => checkBadTextQuality(c.text));
+      if (allGarbage) {
+        badTextQuality = true;
+      }
+    }
+  }
+  return {
+    source: {
+      id: sourceId,
+      ...sourceData
+    },
+    chunks: matchedChunks,
+    hasExactQuestionText,
+    badTextQuality,
+    needsOcr,
+    needsLegacyConversion,
+    reason: matchedChunks.length > 0 ? "Exact matching chunks successfully retrieved." : "Exact question chunks missing from index."
+  };
+}
+var init_retrieve = __esm({
+  "server/knowledge/retrieve.ts"() {
+    "use strict";
+    init_admin();
+    init_sourceInventoryService();
+    init_lessonResolver();
+  }
+});
+
+// server/ai/tools/urlContext.ts
+async function readUrlsWithGemini(params) {
+  const { urls, question, subject } = params;
+  if (!urls || urls.length === 0) {
+    return { answer: "No URLs provided.", sources: [] };
+  }
+  const ai9 = getAIClient();
+  const model = process.env.GEMINI_URL_CONTEXT_MODEL || "gemini-2.5-flash";
+  let fetchedContext = "";
+  const sources = [];
+  for (const url of urls.slice(0, 20)) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5e3);
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const text = await res.text();
+        fetchedContext += `
+--- Content from ${url} ---
+${text.substring(0, 1e4)}
+`;
+        sources.push({ title: "Fetched URL", url, status: "success" });
+      } else {
+        sources.push({ url, status: "failed" });
+      }
+    } catch (e) {
+      sources.push({ url, status: "failed" });
+    }
+  }
+  const promptText = `
+Subject Context: ${subject || "General"}
+User Question: ${question}
+
+Context from URLs:
+${fetchedContext}
+
+Please answer the user's question based on the provided URL context. If the text is raw HTML or noisy, extract the relevant information. Answer in Sinhala if the question implies it.
+  `;
+  try {
+    const response = await ai9.models.generateContent({
+      model,
+      contents: promptText,
+      config: {
+        temperature: 0.3
+      }
+    });
+    return {
+      answer: response.text || "Failed to generate answer.",
+      sources
+    };
+  } catch (error) {
+    console.error("URL Context error:", error);
+    return {
+      answer: "Could not read the provided URLs or generate an answer.",
+      sources
+    };
+  }
+}
+var init_urlContext = __esm({
+  "server/ai/tools/urlContext.ts"() {
+    "use strict";
+    init_client();
+  }
+});
+
+// server/ai/tools/googleSearchGrounding.ts
+async function groundedSearch(query, options) {
+  try {
+    const ai9 = getAIClient();
+    const model = process.env.GEMINI_SEARCH_MODEL || process.env.GEMINI_DEFAULT_MODEL || "gemini-2.5-flash";
+    let enhancedQuery = query;
+    if (options?.language === "si") {
+      enhancedQuery += " (Please provide answer in Sinhala if possible)";
+    }
+    const response = await ai9.models.generateContent({
+      model,
+      contents: enhancedQuery,
+      config: {
+        tools: [{ googleSearch: {} }],
+        temperature: 0.2
+      }
+    });
+    const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
+    const searchChunks = groundingMetadata?.groundingChunks || [];
+    const sources = searchChunks.map((chunk) => {
+      const web = chunk.web || chunk.webSource;
+      return {
+        title: web?.title || "Web Search Result",
+        url: web?.uri || web?.url || "",
+        snippet: web?.snippet || "",
+        confidence: 0.9
+      };
+    }).filter((s) => s.url);
+    return {
+      summary: response.text || "No summary provided.",
+      sources,
+      rawGroundingMetadata: groundingMetadata
+    };
+  } catch (error) {
+    console.error("Grounded search error:", error);
+    return {
+      summary: "Search tool temporarily unavailable.",
+      sources: []
+    };
+  }
+}
+var init_googleSearchGrounding = __esm({
+  "server/ai/tools/googleSearchGrounding.ts"() {
+    "use strict";
+    init_client();
+  }
+});
+
+// server/knowledge/conversationState.ts
+async function getConversationState(uid) {
+  const db = getAdminDb();
+  const ref = db.collection("users").doc(uid).collection("state").doc("conversation");
+  const doc = await ref.get();
+  if (doc.exists) {
+    return doc.data();
+  }
+  const defaultState = {
+    uid,
+    conversationId: "conv_" + Date.now(),
+    activeLessonIds: [],
+    activeSourceIds: [],
+    selectedSourceId: null,
+    selectedQuestionId: null,
+    currentQuestionIndex: null,
+    requestedResourceType: null,
+    evidenceMode: "strict",
+    allowGeneratedContent: false,
+    lastIntent: null,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await ref.set(defaultState);
+  return defaultState;
+}
+async function updateConversationState(uid, updates) {
+  const db = getAdminDb();
+  const ref = db.collection("users").doc(uid).collection("state").doc("conversation");
+  const currentState = await getConversationState(uid);
+  const newState = {
+    ...currentState,
+    ...updates,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await ref.set(newState);
+  return newState;
+}
+var init_conversationState = __esm({
+  "server/knowledge/conversationState.ts"() {
+    "use strict";
+    init_admin();
+  }
+});
+
+// server/ai-core/intent/paperQuestionParser.ts
+var paperQuestionParser_exports = {};
+__export(paperQuestionParser_exports, {
+  detectOfficialPaperCandidate: () => detectOfficialPaperCandidate,
+  normalizeSubject: () => normalizeSubject,
+  parsePaperQuestionIntent: () => parsePaperQuestionIntent
+});
+function normalizeSubject(input) {
+  const s = String(input || "").trim().toUpperCase();
+  if (!s) return null;
+  const isSft = /\b(SFT|SCIENCE FOR TECHNOLOGY|තාක්ෂණවේදය සඳහා විද්‍යාව|තාක්ෂණවේදය සඳහා විද්යාව|තාක්ෂණවේදය|S\.F\.T)\b/i.test(s);
+  const isEt = /\b(ET|ENGINEERING TECHNOLOGY|ඉංජිනේරු තාක්ෂණවේදය|ඉංජිනේරු තාක්ෂණය|E\.T)\b/i.test(s);
+  const isIct = /\b(ICT|INFORMATION AND COMMUNICATION TECHNOLOGY|තොරතුරු හා සන්නිවේදන තාක්ෂණය|තොරතුරු සන්නිවේදන තාක්ෂණය|තොරතුරු හා සන්නිවේදන|I\.C\.T)\b/i.test(s);
+  if (isSft) return "SFT";
+  if (isEt) return "ET";
+  if (isIct) return "ICT";
+  return null;
+}
+function detectOfficialPaperCandidate(prompt, activeSubject) {
+  const promptLower = prompt.toLowerCase();
+  const yearMatch = prompt.match(/\b(20\d{2})\b/);
+  let year = yearMatch ? yearMatch[1] : null;
+  let questionType = null;
+  if (promptLower.includes("mcq") || promptLower.includes("\u0DB6\u0DC4\u0DD4\u0DC0\u0DBB\u0DAB")) questionType = "MCQ";
+  else if (promptLower.includes("structured essay") || promptLower.includes("structured") || promptLower.includes("\u0DC0\u0DCA\u200D\u0DBA\u0DD4\u0DC4\u0D9C\u0DAD")) questionType = "Structured";
+  else if (promptLower.includes("essay") || promptLower.includes("\u0DBB\u0DA0\u0DB1\u0DCF")) questionType = "Essay";
+  let questionNo = null;
+  const mcqNoMatch = prompt.match(/\bmcq\s*[-_]?\s*(\d+)\b/i);
+  const qNoMatch = prompt.match(/(?:question|q|ප්‍රශ්න|ප්‍රශ්නය|අංක|no)\s*(\d+)/i) || prompt.match(/\b(\d+)\s*(?:වෙනි|වැනි|th|st|nd|rd)\b/i) || prompt.match(/\b(?:පළවෙනි|පළමු|දෙවෙනි|දෙවන|තුන්වෙනි|හතරවෙනි|පස්වෙනි|හයවෙනි|හත්වෙනි|අටවෙනි|නවවෙනි|දහවෙනි|first|second|third)\b/i);
+  if (mcqNoMatch) {
+    questionNo = mcqNoMatch[1];
+  } else if (qNoMatch) {
+    let val = qNoMatch[1] || qNoMatch[0].toLowerCase();
+    if (val.includes("\u0DB4\u0DC5\u0DC0\u0DD9\u0DB1\u0DD2") || val.includes("\u0DB4\u0DC5\u0DB8\u0DD4") || val.includes("first")) questionNo = "1";
+    else if (val.includes("\u0DAF\u0DD9\u0DC0\u0DD9\u0DB1\u0DD2") || val.includes("\u0DAF\u0DD9\u0DC0\u0DB1") || val.includes("second")) questionNo = "2";
+    else if (val.includes("\u0DAD\u0DD4\u0DB1\u0DCA\u0DC0\u0DD9\u0DB1\u0DD2") || val.includes("third")) questionNo = "3";
+    else if (val.includes("\u0DC4\u0DAD\u0DBB\u0DC0\u0DD9\u0DB1\u0DD2") || val.includes("fourth")) questionNo = "4";
+    else if (val.includes("\u0DB4\u0DC3\u0DCA\u0DC0\u0DD9\u0DB1\u0DD2") || val.includes("fifth")) questionNo = "5";
+    else if (!isNaN(parseInt(val))) questionNo = val;
+    else questionNo = "1";
+  } else {
+    const allNumbers = prompt.match(/\b([1-9]|10)\b/g);
+    if (allNumbers && allNumbers.length === 1 && allNumbers[0] !== year) {
+      questionNo = allNumbers[0];
+    }
+  }
+  const hasAnswerIntent = /\b(answers?|uththara|පිළිතුරු|hdn heti|explain)\b/i.test(promptLower);
+  let parsedSubject = normalizeSubject(prompt);
+  let subject = parsedSubject || normalizeSubject(activeSubject || "") || null;
+  const isOfficialPaperCandidate = !!(year && (parseInt(year) >= 2015 && parseInt(year) <= 2026) && questionNo && (questionType || hasAnswerIntent || promptLower.includes("paper")));
+  const needsSubjectClarification = isOfficialPaperCandidate && !subject;
+  return {
+    isOfficialPaperCandidate,
+    year,
+    subject,
+    questionNo,
+    questionType: questionType || "MCQ",
+    // default if unknown
+    needsSubjectClarification
+  };
+}
+function parsePaperQuestionIntent(prompt) {
+  const candidate = detectOfficialPaperCandidate(prompt);
+  let confidence = 0;
+  if (candidate.isOfficialPaperCandidate) confidence += 0.5;
+  if (candidate.questionType) confidence += 0.3;
+  if (prompt.toLowerCase().includes("paper") || prompt.toLowerCase().includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 \u0DB4\u0DAD\u0DCA\u200D\u0DBB\u0DBA")) confidence += 0.2;
+  return {
+    isPaperQuestion: candidate.isOfficialPaperCandidate && !!candidate.subject,
+    year: candidate.year,
+    subject: candidate.subject,
+    questionType: candidate.questionType,
+    questionNo: candidate.questionNo,
+    strictOfficialPaper: candidate.isOfficialPaperCandidate && !!candidate.subject && confidence > 0.7,
+    confidence
+  };
+}
+var init_paperQuestionParser = __esm({
+  "server/ai-core/intent/paperQuestionParser.ts"() {
+    "use strict";
+  }
+});
+
+// server/ai-core/sources/sourceNormalizer.ts
+var normalizeSubject2;
+var init_sourceNormalizer = __esm({
+  "server/ai-core/sources/sourceNormalizer.ts"() {
+    "use strict";
+    init_paperQuestionParser();
+    normalizeSubject2 = normalizeSubject;
+  }
+});
+
+// server/ai-core/sources/sourceResolver.ts
+var sourceResolver_exports = {};
+__export(sourceResolver_exports, {
+  getSourceScore: () => getSourceScore,
+  resolveStrictSource: () => resolveStrictSource
+});
+function getSourceScore(src, params) {
+  const { year, subject, activeSourceId, prompt } = params;
+  const promptLower = prompt.toLowerCase();
+  let score = 0;
+  const srcId = src.sourceId || src.id;
+  const textToScan = ((src.title || "") + " " + (src.fileName || "")).toLowerCase();
+  const srcNormSub = normalizeSubject2(src.subject || src.title);
+  const srcYearStr = src.year ? String(src.year) : src.title.match(/\b(20\d{2})\b/)?.[1] || null;
+  if (activeSourceId && srcId === activeSourceId) score += 100;
+  if (src.storagePath) score += 50;
+  if (subject) {
+    if (srcNormSub === subject) {
+      score += 100;
+    } else if (srcNormSub) {
+      score -= 1e3;
+    }
+  }
+  if (year) {
+    if (srcYearStr === year) {
+      score += 100;
+    } else if (srcYearStr) {
+      score -= 1e3;
+    }
+  }
+  const isPastPaper = src.resourceType === "past_paper" || textToScan.includes("past paper") || textToScan.includes("\u0DC0\u0DD2\u0DB7\u0DCF\u0D9C");
+  if (isPastPaper) score += 80;
+  const isMarking = src.resourceType === "marking_scheme" || textToScan.includes("marking") || textToScan.includes("\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DD4");
+  if (isMarking) score += 60;
+  const isPaperQuestion = promptLower.includes("paper") || promptLower.includes("mcq") || year && !promptLower.includes("lesson");
+  if (isPaperQuestion) {
+    const isTute = textToScan.includes("tute") || textToScan.includes("lesson") || textToScan.includes("revision") || textToScan.includes("\u0DB4\u0DCF\u0DA9\u0DB8");
+    if (isTute) score -= 500;
+  }
+  return score;
+}
+function resolveStrictSource(sources, params) {
+  const allScored = sources.map((s) => ({
+    source: s,
+    score: getSourceScore(s, params)
+  }));
+  const scored = allScored.filter((s) => s.score > 50);
+  const rejected = allScored.filter((s) => s.score <= 50).map((s) => ({
+    sourceId: s.source.sourceId || s.source.id,
+    title: s.source.title,
+    score: s.score,
+    reason: s.score < -400 ? "Mismatch (Year/Subject/Type)" : "Low relevance score"
+  }));
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  const sourceLocked = !!(best && best.score >= 180);
+  const selectedSourceId = best?.source ? best.source.sourceId || best.source.id : null;
+  return {
+    sourceFound: !!best,
+    selectedSource: best?.source || null,
+    selectedSourceId,
+    confidence: best ? Math.min(best.score / 300, 1) : 0,
+    sourceLocked,
+    allowedSourceIds: sourceLocked ? [selectedSourceId] : scored.map((s) => s.source.sourceId || s.source.id),
+    rejectedSources: rejected
+  };
+}
+var init_sourceResolver = __esm({
+  "server/ai-core/sources/sourceResolver.ts"() {
+    "use strict";
+    init_sourceNormalizer();
+  }
+});
+
+// server/knowledge/evidenceRetrieval.ts
+async function retrieveEvidence(uid, prompt, route, policy, activeConversationState) {
+  const lower = prompt.toLowerCase();
+  let intent = policy.intent || route.mode;
+  let subject = route.entities?.subject || activeConversationState?.activeSubject || "SFT";
+  let lessonIds = activeConversationState?.activeLessonIds || [];
+  let selectedSource = null;
+  let selectedQuestion = null;
+  let candidates = [];
+  let evidenceStatus = "not_found";
+  let exactTextBlocks = [];
+  let allowedSourceIds = activeConversationState?.activeSourceIds || [];
+  let allowAnswerGeneration = !policy.requireEvidence;
+  let allowModelQuestionGeneration = intent === "model_question_generation";
+  if (policy.requireEvidence) {
+    const inventory = await getSourceInventory({ uid, subject, isAdmin: false });
+    const allAvailableSources = [...inventory.groups.pastPapers, ...inventory.groups.markingSchemes, ...inventory.groups.syllabus, ...inventory.groups.uploadedPdfs, ...inventory.groups.paperStructure];
+    if (isLessonEvidenceMode(intent)) {
+      const lessonMatch = findLessonSources(allAvailableSources, prompt, route.entities?.lesson || activeConversationState?.activeLessonIds?.[0]);
+      lessonIds = lessonMatch.reference ? [lessonMatch.reference.label] : [];
+      candidates = lessonMatch.sources;
+      const indexedMatches = lessonMatch.sources.filter((source) => source.textIndexed || Number(source.chunkCount || 0) > 0);
+      if (indexedMatches.length > 0) {
+        selectedSource = indexedMatches[0];
+        allowedSourceIds = indexedMatches.map((source) => source.sourceId || source.id).filter(Boolean);
+        evidenceStatus = "verified";
+        allowAnswerGeneration = true;
+      } else if (lessonMatch.sources.length > 0) {
+        selectedSource = lessonMatch.sources[0];
+        allowedSourceIds = lessonMatch.sources.map((source) => source.sourceId || source.id).filter(Boolean);
+        evidenceStatus = lessonMatch.sources.some((source) => source.needsOcr) ? "ocr_required" : "index_required";
+        allowAnswerGeneration = false;
+      }
+    }
+    const requestedYear = route.entities?.year;
+    const strictRes = isLessonEvidenceMode(intent) ? { selectedSource: null } : resolveStrictSource(allAvailableSources, {
+      year: requestedYear,
+      subject,
+      activeSourceId: activeConversationState?.selectedSourceId || null,
+      prompt
+    });
+    if (intent === "continue_grounded_discussion" && activeConversationState?.selectedSourceId) {
+      selectedSource = allAvailableSources.find((s) => s.id === activeConversationState.selectedSourceId || s.sourceId === activeConversationState.selectedSourceId);
+      if (selectedSource) {
+        evidenceStatus = "verified";
+        allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
+        allowAnswerGeneration = true;
+      }
+    }
+    if (strictRes.selectedSource) {
+      selectedSource = strictRes.selectedSource;
+      evidenceStatus = "verified";
+      allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
+      allowAnswerGeneration = true;
+    } else if (!isLessonEvidenceMode(intent)) {
+      if (allAvailableSources.length > 0) {
+        const matches = allAvailableSources.filter((s) => {
+          if (requestedYear && s.year !== requestedYear) return false;
+          if (subject && s.subject !== subject) return false;
+          return true;
+        });
+        if (matches.length > 0) {
+          selectedSource = matches[0];
+          evidenceStatus = "verified";
+          allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
+          allowAnswerGeneration = true;
+        }
+      }
+    }
+  }
+  return {
+    intent,
+    subject,
+    lessonIds,
+    selectedSource,
+    selectedQuestion,
+    candidates,
+    evidenceStatus,
+    exactTextBlocks,
+    allowedSourceIds,
+    allowAnswerGeneration,
+    allowModelQuestionGeneration
+  };
+}
+var init_evidenceRetrieval = __esm({
+  "server/knowledge/evidenceRetrieval.ts"() {
+    "use strict";
+    init_sourceResolver();
+    init_sourceInventoryService();
+    init_lessonResolver();
+  }
+});
+
+// server/ai/modelRouter.ts
+function setLastOk(ok, err = null) {
+  lastOk = ok;
+  lastError = err;
+}
+function getModelForTask(task) {
+  switch (task) {
+    case "direct_pdf_extract":
+      return {
+        primary: process.env.GEMINI_PDF_QA_MODEL || "gemini-3.5-flash",
+        fallback: process.env.GEMINI_PDF_QA_FALLBACK || "gemini-3.5-flash"
+      };
+    case "direct_pdf_solve":
+      return {
+        primary: process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
+        fallback: "gemini-3.5-flash"
+      };
+    case "final_answer":
+      return {
+        primary: process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview",
+        fallback: process.env.GEMINI_FINAL_FALLBACK || "gemini-3.1-pro-preview"
+      };
+    case "normal_chat":
+      return {
+        primary: process.env.GEMINI_DEFAULT_MODEL || process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
+        fallback: "gemini-3.5-flash"
+      };
+    case "fast_background":
+      return {
+        primary: process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
+        fallback: process.env.GEMINI_LITE_MODEL || "gemini-3.5-flash"
+      };
+    case "embeddings":
+      return {
+        primary: process.env.GEMINI_EMBEDDING_MODEL || "text-embedding-004",
+        fallback: "text-embedding-004"
+      };
+    case "image_understanding":
+      return {
+        primary: process.env.GEMINI_VISION_MODEL || "gemini-3.5-flash",
+        fallback: "gemini-3.5-flash"
+      };
+    case "ocr":
+      return {
+        primary: process.env.GEMINI_VISION_MODEL || "gemini-3.5-flash",
+        fallback: "gemini-3.5-flash"
+      };
+    case "tts":
+      return {
+        primary: process.env.GEMINI_TTS_MODEL || "gemini-3.1-flash-tts-preview"
+      };
+    case "image_generation":
+      return {
+        primary: process.env.GEMINI_IMAGE_MODEL || "imagen-3.0-generate-002"
+      };
+    default:
+      return {
+        primary: process.env.GEMINI_DEFAULT_MODEL || "gemini-2.5-flash"
+      };
+  }
+}
+async function callGeminiWithFallback(task, payload, aiClient) {
+  assertAiAvailable();
+  const models = getModelForTask(task);
+  const client2 = aiClient || getAIClient();
+  try {
+    console.log(`[modelRouter] Attempting primary model ${models.primary} for task ${task}`);
+    payload.model = models.primary;
+    const result = await client2.models.generateContent(payload);
+    if (task === "normal_chat") {
+      lastOk = true;
+      lastError = null;
+    }
+    return { result, modelUsed: models.primary };
+  } catch (err) {
+    if (task === "normal_chat") {
+      lastOk = false;
+      lastError = err.message || String(err);
+    }
+    console.warn(`[modelRouter] Primary model ${models.primary} failed for task ${task}: ${err.message}`);
+    const classification = classifyAiError(err);
+    if (classification.code === "AI_BILLING_EXHAUSTED") {
+      openAiBillingCircuit(err);
+      const e = new Error(classification.userMessage);
+      e.code = "AI_BILLING_EXHAUSTED";
+      e.status = 429;
+      e.retryable = false;
+      throw e;
+    }
+    const isRetryable = classification.retryable && (err.status === 404 || err.status >= 500);
+    if (isRetryable && models.fallback) {
+      console.log(`[modelRouter] Falling back to model ${models.fallback} for task ${task}`);
+      try {
+        payload.model = models.fallback;
+        const result = await client2.models.generateContent(payload);
+        return { result, modelUsed: models.fallback, warning: `Primary model unavailable, used fallback ${models.fallback}` };
+      } catch (fallbackErr) {
+        console.error(`[modelRouter] Fallback model ${models.fallback} also failed: ${fallbackErr.message}`);
+        const fallbackClassification = classifyAiError(fallbackErr);
+        if (fallbackClassification.code === "AI_BILLING_EXHAUSTED") {
+          openAiBillingCircuit(fallbackErr);
+          const e = new Error(fallbackClassification.userMessage);
+          e.code = "AI_BILLING_EXHAUSTED";
+          e.status = 429;
+          e.retryable = false;
+          throw e;
+        }
+        throw fallbackErr;
+      }
+    }
+    throw err;
+  }
+}
+async function generateContentStreamWithFallback(task, payload, aiClient, signal) {
+  assertAiAvailable();
+  const models = getModelForTask(task);
+  const client2 = aiClient || getAIClient();
+  try {
+    console.log(`[modelRouter] Attempting stream with primary model ${models.primary} for task ${task}`);
+    payload.model = models.primary;
+    if (signal) {
+      payload.config = payload.config || {};
+      payload.abortSignal = signal;
+    }
+    const stream = await client2.models.generateContentStream(payload);
+    if (task === "normal_chat") {
+      lastOk = true;
+      lastError = null;
+    }
+    return { stream, modelUsed: models.primary };
+  } catch (err) {
+    if (task === "normal_chat") {
+      lastOk = false;
+      lastError = err.message || String(err);
+    }
+    console.warn(`[modelRouter] Primary model ${models.primary} stream failed for task ${task}: ${err.message}`);
+    const classification = classifyAiError(err);
+    if (classification.code === "AI_BILLING_EXHAUSTED") {
+      openAiBillingCircuit(err);
+      const e = new Error(classification.userMessage);
+      e.code = "AI_BILLING_EXHAUSTED";
+      e.status = 429;
+      e.retryable = false;
+      throw e;
+    }
+    const isRetryable = classification.retryable && (err.status === 404 || err.status >= 500);
+    if (isRetryable && models.fallback) {
+      console.log(`[modelRouter] Falling back stream to model ${models.fallback} for task ${task}`);
+      try {
+        payload.model = models.fallback;
+        if (signal) {
+          payload.config = payload.config || {};
+          payload.abortSignal = signal;
+        }
+        const stream = await client2.models.generateContentStream(payload);
+        return { stream, modelUsed: models.fallback, warning: `Primary model unavailable, used fallback ${models.fallback}` };
+      } catch (fallbackErr) {
+        console.error(`[modelRouter] Fallback stream model ${models.fallback} also failed: ${fallbackErr.message}`);
+        const fallbackClassification = classifyAiError(fallbackErr);
+        if (fallbackClassification.code === "AI_BILLING_EXHAUSTED") {
+          openAiBillingCircuit(fallbackErr);
+          const e = new Error(fallbackClassification.userMessage);
+          e.code = "AI_BILLING_EXHAUSTED";
+          e.status = 429;
+          e.retryable = false;
+          throw e;
+        }
+        throw fallbackErr;
+      }
+    }
+    throw err;
+  }
+}
+var lastOk, lastError;
+var init_modelRouter = __esm({
+  "server/ai/modelRouter.ts"() {
+    "use strict";
+    init_client();
+    init_aiCircuitBreaker();
+    init_aiErrorClassifier();
+    lastOk = false;
+    lastError = null;
+    if (process.env.GEMINI_DEFAULT_MODEL && (process.env.GEMINI_DEFAULT_MODEL.includes("pro") || process.env.GEMINI_DEFAULT_MODEL.includes("preview"))) {
+      process.env.GEMINI_DEFAULT_MODEL = "gemini-3.5-flash";
+    }
+    if (!process.env.GEMINI_DEFAULT_MODEL) {
+      process.env.GEMINI_DEFAULT_MODEL = "gemini-3.5-flash";
+    }
+    if (!process.env.GEMINI_FAST_MODEL) {
+      process.env.GEMINI_FAST_MODEL = "gemini-3.5-flash";
+    }
+    if (!process.env.GEMINI_PDF_QA_MODEL) {
+      process.env.GEMINI_PDF_QA_MODEL = "gemini-3.5-flash";
+    }
+    if (!process.env.GEMINI_PDF_QA_FALLBACK) {
+      process.env.GEMINI_PDF_QA_FALLBACK = "gemini-2.5-flash";
+    }
+    if (!process.env.GEMINI_FINAL_MODEL) {
+      process.env.GEMINI_FINAL_MODEL = "gemini-3.1-pro-preview";
+    }
+    if (!process.env.GEMINI_FINAL_FALLBACK) {
+      process.env.GEMINI_FINAL_FALLBACK = "gemini-2.5-pro";
+    }
+    if (!process.env.GEMINI_LITE_MODEL) {
+      process.env.GEMINI_LITE_MODEL = "gemini-3.1-flash-lite";
+    }
+  }
+});
+
+// server/ai/answerPolicy.ts
+function resolveAnswerPolicy(prompt, route, activeSubject, attachments) {
+  const p = prompt.toLowerCase();
+  if (p.includes("suicide") || p.includes("kill") || p.includes("hack") || p.includes("illegal")) {
+    return {
+      intent: "blocked_or_unsafe",
+      allowSources: false,
+      allowedSourceTypes: [],
+      requireEvidence: false,
+      allowVisuals: false,
+      maxAnswerStyle: "concise",
+      shouldUseStudentContext: false,
+      shouldUseSyllabus: false,
+      blockingMessage: "I cannot assist with that request. Please seek professional help if you are in distress."
+    };
+  }
+  if (p.includes("debug") && p.includes("developer")) {
+    return {
+      intent: "developer_debug",
+      allowSources: false,
+      allowedSourceTypes: [],
+      requireEvidence: false,
+      allowVisuals: false,
+      maxAnswerStyle: "detailed",
+      shouldUseStudentContext: false,
+      shouldUseSyllabus: false
+    };
+  }
+  if (["lesson_pdf_search", "lesson_question_discussion", "lesson_theory_explanation", "past_paper_lesson_search"].includes(route?.mode)) {
+    return {
+      intent: route.mode,
+      allowSources: true,
+      allowedSourceTypes: route.mode === "past_paper_lesson_search" ? ["past_paper", "marking_scheme", "paper_structure"] : ["uploaded_pdf", "paper_structure", "notes", "past_paper", "marking_scheme"],
+      requireEvidence: true,
+      allowVisuals: true,
+      maxAnswerStyle: "exam_style",
+      shouldUseStudentContext: true,
+      shouldUseSyllabus: false
+    };
+  }
+  const isOfficialPaper = (p.includes("mcq") || p.includes("essay") || p.includes("structured") || p.includes("q") || p.includes("prashna") || p.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1") || p.includes("marking scheme") || p.includes("answer") || p.includes("\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DD4")) && p.match(/\b(201\d|202\d)\b/) || route?.mode === "paper_question_qa";
+  if (isOfficialPaper) {
+    return {
+      intent: "official_paper_question",
+      allowSources: true,
+      allowedSourceTypes: ["past_paper", "marking_scheme"],
+      requireEvidence: true,
+      allowVisuals: p.includes("diagram") || p.includes("graph") || p.includes("waguwa") || p.includes("\u0DBB\u0DD6\u0DB4"),
+      maxAnswerStyle: "exam_style",
+      shouldUseStudentContext: false,
+      shouldUseSyllabus: false
+    };
+  }
+  if (route?.mode === "direct_pdf_solve" || attachments && attachments.length > 0 || p.includes("paper eke") || p.includes("meke") || p.includes("upload") || p.includes("\u0DB8\u0DD9\u0DB8 pdf")) {
+    return {
+      intent: "uploaded_pdf_question",
+      allowSources: true,
+      allowedSourceTypes: ["uploaded_pdf", "chat_upload"],
+      requireEvidence: true,
+      allowVisuals: true,
+      maxAnswerStyle: "detailed",
+      shouldUseStudentContext: true,
+      shouldUseSyllabus: false
+    };
+  }
+  if (p.includes("tired") || p.includes("focus") || p.includes("motivate") || p.includes("fear") || p.includes("kammali") || p.includes("epa wela") || p.includes("baya") || p.includes("ba wage") || p.includes("mahansi") || p.includes("padam karanna")) {
+    return {
+      intent: "student_support",
+      allowSources: false,
+      allowedSourceTypes: [],
+      requireEvidence: false,
+      allowVisuals: false,
+      maxAnswerStyle: "concise",
+      shouldUseStudentContext: true,
+      shouldUseSyllabus: false
+    };
+  }
+  if (p.includes("facebook") || p.includes("youtube") || p.includes("pc ") || p.includes("money") || p.includes("girlfriend") || p.includes("boyfriend")) {
+    return {
+      intent: "general_non_syllabus",
+      allowSources: false,
+      allowedSourceTypes: [],
+      requireEvidence: false,
+      allowVisuals: false,
+      maxAnswerStyle: "concise",
+      shouldUseStudentContext: false,
+      shouldUseSyllabus: false
+    };
+  }
+  return {
+    intent: "syllabus_lesson_explanation",
+    allowSources: true,
+    allowedSourceTypes: ["syllabus", "textbook", "notes", "past_paper"],
+    requireEvidence: false,
+    allowVisuals: true,
+    maxAnswerStyle: "detailed",
+    shouldUseStudentContext: true,
+    shouldUseSyllabus: true
+  };
+}
+var init_answerPolicy = __esm({
+  "server/ai/answerPolicy.ts"() {
+    "use strict";
+  }
+});
+
+// server/sources/sourceScoring.ts
+function scoreSource(source, request) {
+  let score = 0;
+  if (request.subject && source.subject === request.subject) score += 40;
+  else if (request.subject && source.subject !== request.subject) score -= 50;
+  if (request.year && source.year === request.year) score += 30;
+  else if (request.year && source.year && source.year !== request.year) score -= 40;
+  if (request.resourceType && source.resourceType === request.resourceType) score += 25;
+  else if (request.resourceType && source.resourceType && source.resourceType !== request.resourceType) score -= 40;
+  if (request.paperType && source.paperType === request.paperType) score += 20;
+  if (request.keywords && request.keywords.length > 0 && source.title) {
+    const titleLower = source.title.toLowerCase();
+    for (const kw of request.keywords) {
+      if (titleLower.includes(kw.toLowerCase())) {
+        score += 15;
+      }
+    }
+  }
+  if (request.ownerUid && source.ownerUid === request.ownerUid) score += 10;
+  if (!source.storagePath && !source.url) score -= 30;
+  if (source.sourceScope === "irrelevant") score -= 30;
+  return score;
+}
+var init_sourceScoring = __esm({
+  "server/sources/sourceScoring.ts"() {
+    "use strict";
+  }
+});
+
+// server/ai/cancellation.ts
+function registerRequest(requestId) {
+  const controller = new AbortController();
+  cancellationRegistry.set(requestId, controller);
+  return controller;
+}
+function cancelRequest(requestId) {
+  const controller = cancellationRegistry.get(requestId);
+  if (controller) {
+    controller.abort(new Error("USER_CANCELLED"));
+    cancellationRegistry.delete(requestId);
+  }
+}
+function unregisterRequest(requestId) {
+  cancellationRegistry.delete(requestId);
+}
+var cancellationRegistry;
+var init_cancellation = __esm({
+  "server/ai/cancellation.ts"() {
+    "use strict";
+    cancellationRegistry = /* @__PURE__ */ new Map();
+  }
+});
+
+// server/ai-core/memory/chatSanitizer.ts
+var chatSanitizer_exports = {};
+__export(chatSanitizer_exports, {
+  removeUndefinedDeep: () => removeUndefinedDeep,
+  sanitizeSource: () => sanitizeSource
+});
+function removeUndefinedDeep(obj) {
+  if (obj === null || typeof obj !== "object") {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(removeUndefinedDeep);
+  }
+  const result = {};
+  for (const key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      const value = obj[key];
+      if (value !== void 0) {
+        result[key] = removeUndefinedDeep(value);
+      }
+    }
+  }
+  return result;
+}
+function sanitizeSource(source) {
+  if (!source) return null;
+  const sanitized = { ...source };
+  if (sanitized.url === void 0) {
+    sanitized.url = null;
+  }
+  return removeUndefinedDeep(sanitized);
+}
+var init_chatSanitizer = __esm({
+  "server/ai-core/memory/chatSanitizer.ts"() {
+    "use strict";
+  }
+});
+
+// server/cost/usageTracker.ts
+var usageTracker_exports = {};
+__export(usageTracker_exports, {
+  calculateGeminiCost: () => calculateGeminiCost,
+  checkSpecificLimit: () => checkSpecificLimit,
+  isDailyLimitExceeded: () => isDailyLimitExceeded,
+  trackAIUsage: () => trackAIUsage
+});
+function getTodayString() {
+  return (/* @__PURE__ */ new Date()).toISOString().split("T")[0].replace(/-/g, "");
+}
+function calculateGeminiCost(model, inputTokens, outputTokens) {
+  const m = model.toLowerCase();
+  if (m.includes("pro")) {
+    return (inputTokens * 1.25 + outputTokens * 5) / 1e6;
+  }
+  if (m.includes("flash") && !m.includes("lite")) {
+    return (inputTokens * 0.075 + outputTokens * 0.3) / 1e6;
+  }
+  if (m.includes("lite")) {
+    return (inputTokens * 0.0375 + outputTokens * 0.15) / 1e6;
+  }
+  if (m.includes("embed")) {
+    return (inputTokens + outputTokens) * 0.025 / 1e6;
+  }
+  return (inputTokens + outputTokens) * 0.1 / 1e6;
+}
+async function loadDailyUsage(uid, date) {
+  const cacheKey = `${uid}_${date}`;
+  const cached = usageCache[cacheKey];
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.usage;
+  }
+  const db = getAdminDb();
+  const usageDocRef = db.collection("usage_daily").doc(cacheKey);
+  let usage = {
+    date,
+    normalMessages: 0,
+    directPdfQaCalls: 0,
+    solverCalls: 0,
+    proCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    estimatedCostUsd: 0
+  };
+  try {
+    const snap = await usageDocRef.get();
+    if (snap.exists) {
+      const data = snap.data();
+      usage = {
+        date,
+        normalMessages: Number(data?.normalMessages || 0),
+        directPdfQaCalls: Number(data?.directPdfQaCalls || 0),
+        solverCalls: Number(data?.solverCalls || 0),
+        proCalls: Number(data?.proCalls || 0),
+        inputTokens: Number(data?.inputTokens || 0),
+        outputTokens: Number(data?.outputTokens || 0),
+        estimatedCostUsd: Number(data?.estimatedCostUsd || 0)
+      };
+    }
+  } catch (err) {
+    console.warn(`[usageTracker] Failed to read usage limits from Firestore for user ${uid}:`, err);
+  }
+  usageCache[cacheKey] = {
+    usage,
+    expiresAt: Date.now() + CACHE_TTL_MS
+  };
+  return usage;
+}
+async function isDailyLimitExceeded(uid) {
+  return { exceeded: false };
+}
+async function checkSpecificLimit(uid, type) {
+  return { exceeded: false };
+}
+async function trackAIUsage(uid, model, inputTokens, outputTokens, type) {
+  const todayStr = getTodayString();
+  const cost = calculateGeminiCost(model, inputTokens, outputTokens);
+  const usage = await loadDailyUsage(uid, todayStr);
+  if (typeof usage[type] === "number") {
+    usage[type] += 1;
+  }
+  usage.estimatedCostUsd += cost;
+  usage.inputTokens += inputTokens;
+  usage.outputTokens += outputTokens;
+  const cacheKey = `${uid}_${todayStr}`;
+  usageCache[cacheKey] = {
+    usage,
+    expiresAt: Date.now() + CACHE_TTL_MS
+  };
+  const db = getAdminDb();
+  const usageDocRef = db.collection("usage_daily").doc(cacheKey);
+  usageDocRef.set({
+    ...usage,
+    uid,
+    lastUpdated: (/* @__PURE__ */ new Date()).toISOString(),
+    lastModelUsed: model
+  }, { merge: true }).catch((err) => {
+    console.error(`[usageTracker] Failed to save usage tracking for user ${uid}:`, err);
+  });
+}
+var usageCache, CACHE_TTL_MS;
+var init_usageTracker = __esm({
+  "server/cost/usageTracker.ts"() {
+    "use strict";
+    init_admin();
+    usageCache = {};
+    CACHE_TTL_MS = 60 * 1e3;
+  }
+});
+
+// server/ai-core/feedback/wrongAnswerHandler.ts
+var wrongAnswerHandler_exports = {};
+__export(wrongAnswerHandler_exports, {
+  handleWrongAnswerFeedback: () => handleWrongAnswerFeedback
+});
+async function handleWrongAnswerFeedback(params) {
+  const { uid, sourceId, questionType, questionNo, reason, originalPrompt, badAnswer, mode, year, subject } = params;
+  const db = getAdminDb();
+  const cacheId = `${sourceId}_${questionType || "MCQ"}_${questionNo}`.replace(/\//g, "_");
+  const cacheRef = db.collection("pdf_question_cache").doc(cacheId);
+  const cacheDoc = await cacheRef.get();
+  const currentFeedbackCount = cacheDoc.data()?.feedbackCount || 0;
+  await cacheRef.set({
+    rejected: true,
+    validationStatus: "rejected",
+    lastFeedback: reason || "User marked as wrong",
+    feedbackCount: currentFeedbackCount + 1,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  }, { merge: true });
+  const feedbackId = `FB_${Date.now()}_${uid}`;
+  await db.collection("ai_feedback").doc(feedbackId).set({
+    uid,
+    originalPrompt: originalPrompt || "",
+    badAnswer: badAnswer || "",
+    reason: reason || "User marked as wrong",
+    mode: mode || "paper_question_qa",
+    sourceId,
+    year: year || "",
+    subject: subject || "",
+    questionNo,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    status: "needs_review"
+  });
+  console.info(`[WrongAnswerHandler] Quarantined ${cacheId} and added to ai_feedback queue.`);
+  return { ok: true, message: "Feedback recorded. Question quarantined for admin review." };
+}
+var init_wrongAnswerHandler = __esm({
+  "server/ai-core/feedback/wrongAnswerHandler.ts"() {
+    "use strict";
+    init_admin();
   }
 });
 
@@ -1318,6 +4679,2398 @@ var init_pastPapersData = __esm({
   }
 });
 
+// server/ai/examResourceResolver.ts
+var examResourceResolver_exports = {};
+__export(examResourceResolver_exports, {
+  isMarkingSchemeLike: () => isMarkingSchemeLike,
+  isPaperLike: () => isPaperLike,
+  normalizeSubject: () => normalizeSubject3,
+  normalizeTitleText: () => normalizeTitleText,
+  resolveExamResources: () => resolveExamResources,
+  scoreSourceMatch: () => scoreSourceMatch,
+  subjectAliases: () => subjectAliases
+});
+function normalizeSubject3(input) {
+  const s = String(input || "").trim().toUpperCase();
+  if (!s) return "";
+  const isSft = /\b(SFT|SCIENCE FOR TECHNOLOGY|තාක්ෂණවේදය සඳහා විද්‍යාව|තාක්ෂණවේදය සඳහා විද්යාව|තාක්ෂණවේදය|S\.F\.T)\b/i.test(s);
+  const isEt = /\b(ET|ENGINEERING TECHNOLOGY|ඉංජිනේරු තාක්ෂණවේදය|ඉංජිනේරු තාක්ෂණය|E\.T)\b/i.test(s);
+  const isIct = /\b(ICT|INFORMATION AND COMMUNICATION TECHNOLOGY|තොරතුරු හා සන්නිවේදන තාක්ෂණය|තොරතුරු සන්නිවේදන තාක්ෂණය|තොරතුරු හා සන්නිවේදන|I\.C\.T)\b/i.test(s);
+  if (isSft) return "SFT";
+  if (isEt) return "ET";
+  if (isIct) return "ICT";
+  return s;
+}
+function subjectAliases(subject) {
+  const norm = normalizeSubject3(subject);
+  if (norm === "SFT") return ["sft", "science for technology", "\u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA \u0DC3\u0DB3\u0DC4\u0DCF \u0DC0\u0DD2\u0DAF\u0DCA\u200D\u0DBA\u0DCF\u0DC0", "\u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA \u0DC3\u0DB3\u0DC4\u0DCF \u0DC0\u0DD2\u0DAF\u0DCA\u0DBA\u0DCF\u0DC0", "science for tech", "\u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA", "sft"];
+  if (norm === "ET") return ["et", "engineering technology", "\u0D89\u0D82\u0DA2\u0DD2\u0DB1\u0DDA\u0DBB\u0DD4 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA", "\u0D89\u0D82\u0DA2\u0DD2\u0DB1\u0DDA\u0DBB\u0DD4 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DBA", "engineering", "et paper", "engineering tech"];
+  if (norm === "ICT") return ["ict", "information and communication technology", "\u0DAD\u0DDC\u0DBB\u0DAD\u0DD4\u0DBB\u0DD4 \u0DC4\u0DCF \u0DC3\u0DB1\u0DCA\u0DB1\u0DD2\u0DC0\u0DDA\u0DAF\u0DB1 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DBA", "\u0DAD\u0DDC\u0DBB\u0DAD\u0DD4\u0DBB\u0DD4 \u0DC4\u0DCF \u0DC3\u0DB1\u0DCA\u0DB1\u0DD2\u0DC0\u0DDA\u0DAF\u0DB1", "information", "communication", "\u0DAD\u0DDC\u0DBB\u0DAD\u0DD4\u0DBB\u0DD4"];
+  return [];
+}
+function normalizeTitleText(src) {
+  return [
+    src.title,
+    src.fileName,
+    src.subject,
+    src.year,
+    src.resourceType,
+    src.sourceType,
+    src.sourceScope
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+function isPaperLike(src) {
+  const rt = String(src.resourceType || "").toLowerCase();
+  const st = String(src.sourceType || "").toLowerCase();
+  const ss = String(src.sourceScope || "").toLowerCase();
+  const title = normalizeTitleText(src);
+  return rt.includes("past_paper") || rt.includes("model_paper") || st.includes("past_paper") || ss.includes("past_paper") || title.includes("past paper") || title.includes("paper") || title.includes("full");
+}
+function isMarkingSchemeLike(src) {
+  const txt = normalizeTitleText(src);
+  const rt = String(src.resourceType || "").toLowerCase();
+  return rt.includes("marking") || txt.includes("marking") || txt.includes("scheme") || txt.includes("answers") || txt.includes(" sm ") || txt.includes("marking_scheme");
+}
+function scoreSourceMatch(src, params) {
+  const { subject, year, resourceType, prompt, uid, isAdmin, activeSourceId } = params;
+  let score = 0;
+  const textToScan = normalizeTitleText(src);
+  const promptLower = prompt.toLowerCase();
+  const normTargetSub = normalizeSubject3(subject || prompt);
+  const srcNormSub = normalizeSubject3(src.subject || textToScan);
+  let targetYear = year;
+  if (!targetYear) {
+    const foundYear = prompt.match(/\b(201\d|202\d)\b/);
+    if (foundYear) targetYear = foundYear[0];
+  }
+  const targetYearStr = targetYear ? String(targetYear) : "";
+  const srcYearStr = src.year ? String(src.year) : "";
+  const srcId = src.sourceId || src.id;
+  if (activeSourceId && srcId === activeSourceId) score += 60;
+  if (src.storagePath) score += 50;
+  if (normTargetSub) {
+    if (srcNormSub === normTargetSub) {
+      score += 40;
+    } else {
+      const otherSubs = ["SFT", "ET", "ICT"].filter((s) => s !== normTargetSub);
+      const hasWrongSub = otherSubs.includes(srcNormSub) || otherSubs.some((os) => {
+        const osAliases = subjectAliases(os);
+        return osAliases.some((alias) => textToScan.includes(alias));
+      });
+      if (hasWrongSub) {
+        score -= 100;
+      }
+    }
+  }
+  if (targetYearStr) {
+    if (srcYearStr === targetYearStr) {
+      score += 40;
+    } else if (textToScan.includes(targetYearStr)) {
+      score += 30;
+    } else if (srcYearStr && srcYearStr !== targetYearStr) {
+      score -= 100;
+    } else {
+      const otherYears = ["2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026"].filter((y) => y !== targetYearStr);
+      if (otherYears.some((oy) => textToScan.includes(oy))) {
+        score -= 100;
+      }
+    }
+  }
+  if (normTargetSub) {
+    const aliases = subjectAliases(normTargetSub);
+    if (aliases.some((a) => textToScan.includes(a))) {
+      score += 30;
+    }
+  }
+  if (normTargetSub && targetYearStr && textToScan.includes(normTargetSub.toLowerCase()) && textToScan.includes(targetYearStr)) {
+    score += 50;
+  }
+  if (resourceType) {
+    const srcRt = String(src.resourceType || "").toLowerCase();
+    if (srcRt.includes(resourceType.toLowerCase())) {
+      score += 25;
+    }
+  }
+  const isMS = isMarkingSchemeLike(src);
+  const promptWantsMS = promptLower.includes("marking") || promptLower.includes("scheme") || promptLower.includes("\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DD4") || promptLower.includes("\u0D85\u0DB1\u0DCA\u0DC3\u0DBB\u0DCA");
+  if (promptWantsMS && isMS) score += 50;
+  if (!promptWantsMS && isMS) score -= 30;
+  const isFullPaperPrompt = promptLower.includes("paper") || promptLower.includes("past paper") || promptLower.includes("mcq") || targetYearStr && !promptLower.includes("lesson");
+  if (isFullPaperPrompt) {
+    const isTute = textToScan.includes("tute") || textToScan.includes("lesson") || textToScan.includes("\u0DB4\u0DCF\u0DA9\u0DB8") || textToScan.includes("revision");
+    if (isTute) score -= 100;
+  }
+  const isOwner = src.ownerUid === uid;
+  if (isOwner) {
+    score += 20;
+  } else {
+    const isPrivate = src.visibility === "private" || src.sourceScope === "owner_syllabus";
+    if (isPrivate && !isAdmin) {
+      score -= 500;
+    }
+  }
+  return score;
+}
+async function resolveExamResources(params) {
+  const {
+    prompt,
+    uid,
+    email,
+    subject,
+    year,
+    resourceType,
+    questionNo,
+    lesson
+  } = params;
+  const db = getAdminDb();
+  const sources = [];
+  const bestTextBlocks = [];
+  let activeSourceId = void 0;
+  if (uid) {
+    try {
+      const chatCtxDoc = await db.collection("users").doc(uid).collection("chat_context").doc("current").get();
+      if (chatCtxDoc.exists) {
+        const data = chatCtxDoc.data();
+        if (data && data.activePdf && data.activePdf.sourceId) {
+          activeSourceId = data.activePdf.sourceId;
+        } else if (data && Array.isArray(data.temporaryPdfs) && data.temporaryPdfs.length > 0) {
+          activeSourceId = data.temporaryPdfs[0].sourceId;
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to retrieve current chat_context activeSourceId in resolver:", err.message);
+    }
+  }
+  const normSubject = normalizeSubject3(subject || prompt);
+  const normYear = year ? String(year) : void 0;
+  const normQuestion = questionNo ? String(questionNo).toUpperCase() : void 0;
+  const isAdmin = params.isAdmin === true;
+  try {
+    if (pastPapersData && pastPapersData.papers) {
+      const matchedPaper = pastPapersData.papers.find((p) => {
+        const pSub = normalizeSubject3(p.metadata?.subjectKey || "");
+        const pExam = p.metadata?.exam || "";
+        const matchesSub = pSub === normSubject;
+        const matchesYear = !year || pExam.includes(String(year));
+        return matchesSub && matchesYear;
+      });
+      if (matchedPaper && normQuestion) {
+        const ansObj = matchedPaper.answers.find((a) => String(a.question) === normQuestion.replace("Q", ""));
+        if (ansObj) {
+          sources.push({
+            id: `local_ans_${normSubject}_${normYear || "all"}_${normQuestion}`,
+            title: `${matchedPaper.metadata.exam} SFT MCQ Answer key - ${normQuestion}`,
+            subject: normSubject,
+            year: normYear,
+            resourceType: "marking_scheme",
+            questionNo: normQuestion,
+            text: `Question ${normQuestion} Answer: Option ${ansObj.answer}`,
+            confidence: 0.95,
+            verified: true,
+            candidate: false,
+            badge: "Local Key"
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Local pastPapersData resolve failed:", err);
+  }
+  try {
+    if (SYLLABUS && normSubject) {
+      const sKey = normSubject.toLowerCase();
+      const sDef = SYLLABUS[sKey];
+      if (sDef) {
+        let textStr = `Static Syllabus fallback for ${normSubject}:
+`;
+        if (sDef.mcqItems) {
+          textStr += `MCQ Weights:
+` + sDef.mcqItems.map((i) => `- ${i.q}: ${i.title} (${i.count} questions)`).join("\n") + "\n";
+        }
+        if (sDef.partAItems) {
+          textStr += `Part A Structural Weights:
+` + sDef.partAItems.map((i) => `- ${i.q}: ${i.title} (${i.subTitle || i.topics?.join(", ") || ""}) max marks ${i.max}`).join("\n") + "\n";
+        }
+        if (sDef.bcdGroups) {
+          textStr += `Part B/C/D Weights:
+` + sDef.bcdGroups.map((g) => `Group ${g.title} (${g.label}):
+` + g.items.map((i) => `  - ${i.q}: max marks ${i.max}, topics: ${i.topics?.join(", ") || ""}`).join("\n")).join("\n") + "\n";
+        }
+        sources.push({
+          id: `static_syllabus_${normSubject}`,
+          title: `Fallback static structure for ${normSubject}`,
+          subject: normSubject,
+          confidence: 0.7,
+          verified: true,
+          candidate: false,
+          badge: "Static Syllabus",
+          text: textStr
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("Static syllabus resolve failed:", err);
+  }
+  const rawCandidates = [];
+  try {
+    const ppSnap = await db.collection("past_papers").limit(100).get();
+    ppSnap.forEach((doc) => {
+      rawCandidates.push({ id: doc.id, ...doc.data(), _sourceCol: "past_papers" });
+    });
+  } catch (err) {
+    console.warn("Broad past_papers query failed:", err);
+  }
+  try {
+    const ragPublicSnap = await db.collection("rag_sources").where("visibility", "in", ["public", "official", "shared"]).limit(100).get();
+    ragPublicSnap.forEach((doc) => {
+      rawCandidates.push({ id: doc.id, ...doc.data(), _sourceCol: "rag_sources" });
+    });
+    const ragOwnedSnap = await db.collection("rag_sources").where("ownerUid", "==", uid).limit(100).get();
+    ragOwnedSnap.forEach((doc) => {
+      rawCandidates.push({ id: doc.id, ...doc.data(), _sourceCol: "rag_sources" });
+    });
+  } catch (err) {
+    console.warn("Broad rag_sources query failed:", err);
+  }
+  try {
+    const userSyllSnap = await db.collection("users").doc(uid).collection("syllabus_resources").limit(100).get();
+    userSyllSnap.forEach((doc) => {
+      rawCandidates.push({ id: doc.id, ...doc.data(), _sourceCol: "syllabus_resources" });
+    });
+  } catch (err) {
+    console.warn("Broad user syllabus_resources query failed:", err);
+  }
+  const seenIds = /* @__PURE__ */ new Set();
+  const uniqueCandidates = [];
+  for (const c of rawCandidates) {
+    const cid = c.sourceId || c.id;
+    if (cid && !seenIds.has(cid)) {
+      seenIds.add(cid);
+      uniqueCandidates.push(c);
+    }
+  }
+  const scoredCandidates = uniqueCandidates.map((c) => {
+    const score = scoreSourceMatch(c, {
+      subject: subject || normSubject,
+      year: year || normYear,
+      resourceType,
+      prompt,
+      uid,
+      isAdmin,
+      activeSourceId
+    });
+    return { doc: c, score };
+  });
+  const validMatched = scoredCandidates.filter((sc) => {
+    if (sc.score < 35) return false;
+    const doc = sc.doc;
+    const isOwner = doc.ownerUid === uid;
+    const isPublic = ["official", "shared", "public"].includes(doc.visibility);
+    if (!isOwner && !isPublic && !isAdmin) return false;
+    return true;
+  }).sort((a, b) => b.score - a.score);
+  const metadataSources = validMatched.map((m) => {
+    const doc = m.doc;
+    const cid = doc.sourceId || doc.id;
+    let badge = "Library File";
+    if (doc._sourceCol === "past_papers" || doc.resourceType === "past_paper") {
+      badge = isMarkingSchemeLike(doc) ? "Marking Scheme" : "Past Paper";
+    } else if (doc._sourceCol === "syllabus_resources" || doc.sourceScope === "owner_syllabus") {
+      badge = "My Library";
+    } else if (doc.sourceScope === "paper_structure") {
+      badge = "Paper Structure";
+    }
+    return {
+      id: cid,
+      sourceId: cid,
+      title: doc.title || doc.fileName || "RAG Source",
+      fileName: doc.fileName || doc.title || "document.pdf",
+      subject: normalizeSubject3(doc.subject),
+      year: doc.year ? String(doc.year) : void 0,
+      resourceType: doc.resourceType || doc.sourceType || "past_paper",
+      sourceType: doc.sourceType || doc.resourceType || "past_paper",
+      sourceScope: doc.sourceScope || "personal",
+      storagePath: doc.storagePath,
+      ownerUid: doc.ownerUid,
+      visibility: doc.visibility || "private",
+      chunkCount: Number(doc.chunkCount || 0),
+      textIndexed: Number(doc.chunkCount || 0) > 0 && doc.needsOcr !== true,
+      needsOcr: doc.needsOcr === true,
+      needsLegacyConversion: doc.needsLegacyConversion === true,
+      textEncoding: doc.textEncoding || "unknown",
+      indexStatus: doc.indexStatus || "ready",
+      confidence: m.score / 150,
+      // normalize confidence roughly
+      badge,
+      url: doc.url || `/api/rag/sources/${cid}/download`
+    };
+  });
+  sources.push(...metadataSources);
+  try {
+    const matchedSourceIds = metadataSources.map((s) => s.id);
+    if (matchedSourceIds.length > 0) {
+      const chunkRef = db.collection("rag_chunks");
+      const bestChunks = [];
+      const targetSourceIds = [metadataSources[0].id];
+      for (const srcId of targetSourceIds) {
+        const chunkSnap = await chunkRef.where("sourceId", "==", srcId).limit(20).get();
+        chunkSnap.forEach((doc) => {
+          const data = doc.data();
+          const textContent = data.text || "";
+          const numOnly = normQuestion ? normQuestion.replace(/\D/g, "") : "";
+          let matchesQuestion = false;
+          if (numOnly) {
+            const patterns = [
+              new RegExp(`\\b${numOnly}\\.\\s`),
+              new RegExp(`\\b${numOnly}\\)`),
+              new RegExp(`\\(${numOnly}\\)`),
+              new RegExp(`mcq\\s*${numOnly}\\b`, "i"),
+              new RegExp(`(?:\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA|\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA)\\s*${numOnly}\\b`),
+              new RegExp(`${numOnly}\\s*\u0DC0\u0DB1`),
+              new RegExp(`${numOnly}\\s*\u0DC0\u0DD9\u0DB1\u0DD2`),
+              new RegExp(`\\bQ${numOnly}\\b`, "i"),
+              new RegExp(`\\bQuestion\\s*${numOnly}\\b`, "i")
+            ];
+            matchesQuestion = patterns.some((p) => p.test(textContent) || p.test(textContent.toLowerCase()));
+          }
+          if (normQuestion && !matchesQuestion) {
+            return;
+          }
+          bestChunks.push({
+            id: doc.id,
+            title: `Excerpt from: ${data.title || data.sourceId}`,
+            subject: normalizeSubject3(data.subject),
+            year: data.year,
+            resourceType: data.resourceType,
+            questionNo: data.questionNo || (matchesQuestion ? normQuestion : void 0),
+            text: textContent,
+            pageNumber: data.pageNumber,
+            confidence: matchesQuestion ? 0.95 : 0.8,
+            verified: true,
+            candidate: false,
+            badge: "Text Chunk"
+          });
+        });
+      }
+      sources.push(...bestChunks);
+      bestChunks.forEach((c) => {
+        if (c.text) bestTextBlocks.push(c.text);
+      });
+    }
+  } catch (err) {
+    console.warn("rag_chunks query resolve failed:", err);
+  }
+  const paperSource = sources.find((s) => isPaperLike(s) && !!s.storagePath);
+  const markingSchemeSource = sources.find((s) => isMarkingSchemeLike(s) && (!!s.storagePath || s.badge === "Local Key"));
+  const syllabusSource = sources.find((s) => s.badge === "My Library" || s.badge === "Static Syllabus" || s.resourceType === "syllabus");
+  const paperStructureSource = sources.find((s) => s.badge === "Paper Structure" || s.resourceType === "paper_structure");
+  let hasExactQuestionText = sources.some((s) => s.badge === "Local Key");
+  if (!hasExactQuestionText && normQuestion) {
+    const numOnly = normQuestion.replace(/\D/g, "");
+    if (numOnly) {
+      const patterns = [
+        new RegExp(`\\b${numOnly}\\.\\s`),
+        new RegExp(`\\b${numOnly}\\)`),
+        new RegExp(`\\(${numOnly}\\)`),
+        new RegExp(`mcq\\s*${numOnly}\\b`, "i"),
+        new RegExp(`(?:\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA|\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA)\\s*${numOnly}\\b`),
+        new RegExp(`${numOnly}\\s*\u0DC0\u0DB1`),
+        new RegExp(`${numOnly}\\s*\u0DC0\u0DD9\u0DB1\u0DD2`),
+        new RegExp(`\\bQ${numOnly}\\b`, "i"),
+        new RegExp(`\\bQuestion\\s*${numOnly}\\b`, "i")
+      ];
+      hasExactQuestionText = bestTextBlocks.some((t) => patterns.some((p) => p.test(t) || p.test(t.toLowerCase())));
+    }
+  }
+  const hasPdfSource = !!(paperSource?.storagePath || paperSource?.url);
+  const hasMarkingScheme = !!(markingSchemeSource?.storagePath || markingSchemeSource?.url || markingSchemeSource?.text);
+  const hasSyllabus = !!syllabusSource;
+  const hasPaperStructure = !!paperStructureSource || !!sources.find((s) => s.badge === "Static Syllabus");
+  const userRequestedWeb = prompt.toLowerCase().includes("web") || prompt.toLowerCase().includes("search") || prompt.toLowerCase().includes("google") || prompt.toLowerCase().includes("latest") || prompt.toLowerCase().includes("internet");
+  const localFailed = sources.length === 0;
+  const needsWebSearch = userRequestedWeb || localFailed && !hasPdfSource && !hasMarkingScheme && !!normSubject && !!normYear;
+  return {
+    ok: sources.length > 0,
+    sources,
+    bestTextBlocks,
+    paperSource,
+    markingSchemeSource,
+    syllabusSource,
+    paperStructureSource,
+    hasExactQuestionText,
+    hasPdfSource,
+    hasMarkingScheme,
+    hasSyllabus,
+    hasPaperStructure,
+    needsWebSearch: hasPdfSource ? false : needsWebSearch,
+    notFoundReason: sources.length === 0 ? "No matched database or syllabus documents found." : void 0
+  };
+}
+var init_examResourceResolver = __esm({
+  "server/ai/examResourceResolver.ts"() {
+    "use strict";
+    init_admin();
+    init_pastPapersData();
+    init_syllabus();
+  }
+});
+
+// server/ai-core/evidence/evidenceGate.ts
+function validateQuestionEvidence(evidence, request) {
+  if (!evidence) return { ok: false, reason: "NO_EVIDENCE" };
+  if (request.year && evidence.year !== request.year) return { ok: false, reason: "YEAR_MISMATCH" };
+  if (request.subject && evidence.subject !== request.subject) return { ok: false, reason: "SUBJECT_MISMATCH" };
+  if (request.questionNo && String(evidence.questionNo) !== String(request.questionNo)) return { ok: false, reason: "QUESTION_NUMBER_MISMATCH" };
+  if (request.questionType && evidence.questionType !== request.questionType) return { ok: false, reason: "QUESTION_TYPE_MISMATCH" };
+  if (request.questionType === "MCQ" && (!evidence.options || evidence.options.length < 4)) {
+    return { ok: false, reason: "MCQ_MISSING_OPTIONS" };
+  }
+  if (!evidence.questionText || evidence.questionText.length < 20) return { ok: false, reason: "INSUFFICIENT_QUESTION_TEXT" };
+  if (evidence.confidence < 0.7) return { ok: false, reason: "LOW_CONFIDENCE" };
+  if (evidence.validationStatus === "rejected") return { ok: false, reason: "EVIDENCE_REJECTED" };
+  const combined = (evidence.questionText + " " + (evidence.officialAnswer || "") + " " + (evidence.estimatedAnswer || "")).toLowerCase();
+  if (combined.includes("estimated") || combined.includes("likely") || combined.includes("probably") || combined.includes("\u0D86\u0DAF\u0DBB\u0DCA\u0DC1") || combined.includes("model question")) {
+    return { ok: false, reason: "ESTIMATED_OR_MODEL_ANSWER_REJECTED" };
+  }
+  return { ok: true, evidence };
+}
+var init_evidenceGate = __esm({
+  "server/ai-core/evidence/evidenceGate.ts"() {
+    "use strict";
+  }
+});
+
+// server/ai-core/evidence/evidenceRetriever.ts
+var evidenceRetriever_exports = {};
+__export(evidenceRetriever_exports, {
+  retrieveEvidenceForPaperQuestion: () => retrieveEvidenceForPaperQuestion
+});
+async function retrieveEvidenceForPaperQuestion(params) {
+  const { sourceId, questionType, questionNo, year, subject } = params;
+  const db = getAdminDb();
+  const verifiedId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
+  const verifiedSnap = await db.collection("verified_answers").doc(verifiedId).get();
+  if (verifiedSnap.exists) {
+    const data = verifiedSnap.data();
+    const evidence = {
+      ...data,
+      extractionMethod: "manual_verified",
+      verified: true,
+      validationStatus: "valid",
+      confidence: 1
+    };
+    return { ok: true, evidence };
+  }
+  const cacheSnap = await db.collection("pdf_question_cache").doc(verifiedId).get();
+  if (cacheSnap.exists) {
+    const data = cacheSnap.data();
+    const gate = validateQuestionEvidence(data, { year, subject, questionNo, questionType });
+    if (gate.ok) {
+      return { ok: true, evidence: data };
+    }
+  }
+  return { ok: false, reason: "NO_VALID_EVIDENCE_FOUND" };
+}
+var init_evidenceRetriever = __esm({
+  "server/ai-core/evidence/evidenceRetriever.ts"() {
+    "use strict";
+    init_admin();
+    init_evidenceGate();
+  }
+});
+
+// server/ai/markingSchemeResolver.ts
+var markingSchemeResolver_exports = {};
+__export(markingSchemeResolver_exports, {
+  composeMarkingSchemeAnswer: () => composeMarkingSchemeAnswer
+});
+function composeMarkingSchemeAnswer(params) {
+  const {
+    subject,
+    year,
+    questionNo,
+    paperSource,
+    markingSchemeSource,
+    syllabusSource,
+    paperStructureSource,
+    questionText,
+    officialAnswer,
+    markSplit,
+    examTips,
+    isEstimated
+  } = params;
+  let composed = `### \u{1F4DD} ${year} ${subject.toUpperCase()} - ${questionNo.toUpperCase()}
+
+`;
+  composed += `\u{1F50D} **Source Status:**
+`;
+  composed += `- **Paper:** ${paperSource ? `Found/Imported (${paperSource.badge}) \u2705` : "Missing \u274C"}
+`;
+  composed += `- **Marking Scheme:** ${markingSchemeSource ? `Found/Imported (${markingSchemeSource.badge}) \u2705` : "Missing \u274C"}
+`;
+  composed += `- **Syllabus:** ${syllabusSource ? `Found (${syllabusSource.badge}) \u2705` : "Fallback static structure \u26A0\uFE0F"}
+`;
+  composed += `- **Paper Structure:** ${paperStructureSource ? `Found (${paperStructureSource.badge}) \u2705` : "Fallback static structure \u26A0\uFE0F"}
+
+`;
+  if (questionText) {
+    composed += `\u2753 **\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA (Question):**
+> ${questionText}
+
+`;
+  }
+  if (isEstimated) {
+    composed += `\u26A0\uFE0F *\u0DC3\u0DA7\u0DC4\u0DB1: \u0DB1\u0DD2\u0DBD Marking Scheme \u0D91\u0D9A\u0D9A\u0DCA \u0DB8\u0DD9\u0DB8 \u0DB4\u0DAF\u0DCA\u0DB0\u0DAD\u0DD2\u0DBA\u0DDA \u0DAF\u0DD0\u0DB1\u0DA7 \u0DB1\u0DDC\u0DB8\u0DD0\u0DAD\u0DD2 \u0DB1\u0DD2\u0DC3\u0DCF, \u0DB4\u0DC4\u0DAD \u0DAF\u0D9A\u0DCA\u0DC0\u0DCF \u0D87\u0DAD\u0DCA\u0DAD\u0DDA \u0DC0\u0DD2\u0DC2\u0DBA \u0DB1\u0DD2\u0DBB\u0DCA\u0DAF\u0DDA\u0DC1\u0DBA\u0DA7 \u0D85\u0DB1\u0DD4\u0DC0 \u0D85\u0DB4\u0DDA\u0D9A\u0DCA\u0DC2\u0DD2\u0DAD \u0D86\u0DAF\u0DBB\u0DCA\u0DC1 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0D9A\u0DD2 (Estimated Answer).*
+
+`;
+  }
+  composed += `\u{1F3AF} **\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB (Answer):**
+${officialAnswer || "\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB \u0DC3\u0D9A\u0DC3\u0DB8\u0DD2\u0DB1\u0DCA \u0DB4\u0DC0\u0DAD\u0DD3..."}
+
+`;
+  if (markSplit && markSplit.length > 0) {
+    composed += `\u{1F4CA} **\u0DBD\u0D9A\u0DD4\u0DAB\u0DD4 \u0DB6\u0DD9\u0DAF\u0DD3 \u0DBA\u0DB1 \u0D86\u0D9A\u0DCF\u0DBB\u0DBA (Mark Split):**
+`;
+    markSplit.forEach((item) => {
+      composed += `- **${item.part}**: ${item.marks}
+`;
+    });
+    composed += `
+`;
+  } else {
+    composed += `\u{1F4CA} **\u0DBD\u0D9A\u0DD4\u0DAB\u0DD4 \u0DB6\u0DD9\u0DAF\u0DD3 \u0DBA\u0DB1 \u0D86\u0D9A\u0DCF\u0DBB\u0DBA (Mark Split):**
+- (a) \u2014 **Estimated marks allocation**
+
+`;
+  }
+  if (examTips && examTips.length > 0) {
+    composed += `\u{1F4A1} **\u0DC0\u0DD2\u0DB7\u0DCF\u0D9C \u0D8B\u0DB4\u0DAF\u0DD9\u0DC3\u0DCA (Exam Tips):**
+`;
+    examTips.forEach((tip) => {
+      composed += `- ${tip}
+`;
+    });
+    composed += `
+`;
+  }
+  return composed;
+}
+var init_markingSchemeResolver = __esm({
+  "server/ai/markingSchemeResolver.ts"() {
+    "use strict";
+  }
+});
+
+// server/ai/webPdfSearch.ts
+var webPdfSearch_exports = {};
+__export(webPdfSearch_exports, {
+  searchWebPdfCandidates: () => searchWebPdfCandidates
+});
+async function searchWebPdfCandidates(params) {
+  const { subject, year, resourceType, questionNo, medium } = params;
+  const subjectFullName = subject.toUpperCase() === "SFT" ? "Science for Technology" : subject.toUpperCase() === "ET" ? "Engineering Technology" : subject.toUpperCase() === "ICT" ? "Information and Communication Technology" : subject;
+  const sinhalaSubjectName = subject.toUpperCase() === "SFT" ? "\u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA \u0DC3\u0DB3\u0DC4\u0DCF \u0DC0\u0DD2\u0DAF\u0DCA\u200D\u0DBA\u0DCF\u0DC0" : subject.toUpperCase() === "ET" ? "\u0D89\u0D82\u0DA2\u0DD2\u0DB1\u0DDA\u0DBB\u0DD4 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA" : subject.toUpperCase() === "ICT" ? "\u0DAD\u0DDC\u0DBB\u0DAD\u0DD4\u0DBB\u0DD4 \u0DC4\u0DCF \u0DC3\u0DB1\u0DCA\u0DB1\u0DD2\u0DC0\u0DDA\u0DAF\u0DB1 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DBA" : subject;
+  const queries = [];
+  const typeLabel = resourceType === "marking_scheme" ? "marking scheme" : "past paper";
+  const sinhalaTypeLabel = resourceType === "marking_scheme" ? "\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DD4 \u0DB4\u0DAD\u0DCA\u200D\u0DBB\u0DBA" : "\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 \u0DB4\u0DAD\u0DCA\u200D\u0DBB\u0DBA";
+  queries.push(`${year} GCE A/L ${subjectFullName} ${typeLabel} PDF Sri Lanka`);
+  queries.push(`${year} A/L ${subject} ${typeLabel} Sinhala PDF`);
+  queries.push(`${year} G.C.E. A/L ${sinhalaSubjectName} ${sinhalaTypeLabel} PDF`);
+  const candidates = [];
+  const seenUrls = /* @__PURE__ */ new Set();
+  for (const q of queries) {
+    try {
+      const searchRes = await groundedSearch(q, { language: "si" });
+      for (const src of searchRes.sources) {
+        if (seenUrls.has(src.url)) continue;
+        const titleLower = src.title.toLowerCase();
+        const urlLower = src.url.toLowerCase();
+        const snippetLower = (src.snippet || "").toLowerCase();
+        const matchesYear = titleLower.includes(String(year)) || urlLower.includes(String(year)) || snippetLower.includes(String(year));
+        const matchesSubject = titleLower.includes(subject.toLowerCase()) || urlLower.includes(subject.toLowerCase()) || titleLower.includes(subjectFullName.toLowerCase()) || titleLower.includes(sinhalaSubjectName.toLowerCase()) || snippetLower.includes(sinhalaSubjectName.toLowerCase());
+        let confidence = 0.45;
+        if (matchesYear) confidence += 0.15;
+        if (matchesSubject) confidence += 0.15;
+        if (urlLower.endsWith(".pdf")) confidence += 0.15;
+        if (urlLower.includes("google.com") || urlLower.includes("google.lk")) {
+          continue;
+        }
+        seenUrls.add(src.url);
+        candidates.push({
+          id: `web_cand_${Date.now()}_${Math.random().toString(36).substring(4, 8)}`,
+          title: src.title || `${year} ${subject} ${resourceType} PDF Candidate`,
+          url: src.url,
+          snippet: src.snippet,
+          subject,
+          year,
+          resourceType,
+          confidence: Math.min(confidence, 0.9),
+          verified: false,
+          candidate: true,
+          badge: "Candidate Web PDF",
+          reason: `Matches ${year} ${subject} based on search relevance.`
+        });
+      }
+    } catch (e) {
+      console.warn(`Web candidate search query failed: "${q}"`, e);
+    }
+  }
+  candidates.sort((a, b) => b.confidence - a.confidence);
+  return candidates.slice(0, 5);
+}
+var init_webPdfSearch = __esm({
+  "server/ai/webPdfSearch.ts"() {
+    "use strict";
+    init_googleSearchGrounding();
+  }
+});
+
+// server/ai/respondStream.ts
+var respondStream_exports = {};
+__export(respondStream_exports, {
+  addStreamTrace: () => addStreamTrace,
+  aiContinueStream: () => aiContinueStream,
+  aiRespondStream: () => aiRespondStream,
+  lastStreamTraces: () => lastStreamTraces,
+  saveFinalChat: () => saveFinalChat
+});
+function addStreamTrace(trace) {
+  lastStreamTraces.unshift(trace);
+  if (lastStreamTraces.length > 20) {
+    lastStreamTraces.pop();
+  }
+}
+function emitSse(res, event, data) {
+  try {
+    res.write(`event: ${event}
+`);
+    const json = JSON.stringify(data ?? {});
+    for (const line of json.split("\n")) {
+      res.write(`data: ${line}
+`);
+    }
+    res.write("\n");
+    if (typeof res.flush === "function") res.flush();
+  } catch (e) {
+  }
+}
+async function safeCall(name, fn, fallback, res) {
+  try {
+    return await fn();
+  } catch (err) {
+    console.error(`[STREAM_SAFE_CALL_FAILED] name=${name}`, err);
+    try {
+      emitSse(res, "status", {
+        step: "warning",
+        message: `${name} warning: continuing with available data`
+      });
+    } catch (e) {
+    }
+    return fallback;
+  }
+}
+function getTemperature(mode) {
+  switch (mode) {
+    case "today_plan":
+      return 0.25;
+    case "study_plan":
+      return 0.25;
+    case "tutor_explanation":
+      return 0.35;
+    case "notes_generation":
+      return 0.3;
+    case "quiz_generation":
+      return 0.35;
+    case "past_paper_search":
+      return 0.2;
+    default:
+      return 0.4;
+  }
+}
+function getMaxTokens(mode) {
+  if (mode === "uploaded_pdf_question_qa" || mode === "uploaded_pdf_qa" || mode === "rag_qa" || mode === "paper_question_qa") {
+    return 8192;
+  }
+  return 2e3;
+}
+async function saveFinalChat(params) {
+  params.assistantText = stripRawVisualBlocks(params.assistantText);
+  try {
+    const db = getAdminDb();
+    const batch = db.batch();
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+    const requestId = Date.now().toString() + Math.random().toString(36).substring(7);
+    const { removeUndefinedDeep: removeUndefinedDeep2 } = await Promise.resolve().then(() => (init_chatSanitizer(), chatSanitizer_exports));
+    const chatData = removeUndefinedDeep2({
+      requestId,
+      userPrompt: params.userText,
+      assistantAnswer: params.assistantText,
+      mode: params.mode,
+      subject: params.subject || null,
+      sources: (params.sources || []).map((s) => ({
+        id: s.id || s.sourceId,
+        title: s.title,
+        url: s.url || null,
+        storagePath: s.storagePath || null,
+        badge: s.badge || null
+      })).filter((s) => s.id || s.title),
+      createdAt: timestamp,
+      chatSaved: true
+    });
+    const historyRef = db.collection("users").doc(params.uid).collection("chat_history").doc(requestId);
+    batch.set(historyRef, chatData);
+    if (params.email) {
+      const emailRef = db.collection("users").doc(params.email.toLowerCase()).collection("chat_history").doc(requestId);
+      batch.set(emailRef, chatData);
+    }
+    await batch.commit();
+    return { chatSaved: true, messageId: requestId };
+  } catch (e) {
+    console.warn("CHAT_SAVE_SKIPPED", e.message || e);
+    return { chatSaved: false, errorCode: "SAVE_FAILED", errorMessage: e.message || String(e) };
+  }
+}
+async function aiRespondStream(req, res) {
+  const startedAt = Date.now();
+  const requestId = req.body?.clientRequestId || "req_" + Date.now() + "_" + Math.random().toString(36).substring(7);
+  const trace = {
+    requestId,
+    startedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    completed: false,
+    doneSent: false,
+    clientClosed: false,
+    tokenCount: 0,
+    totalChars: 0,
+    chatSaved: false
+  };
+  addStreamTrace(trace);
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+  const abortController = registerRequest(requestId);
+  const signal = abortController.signal;
+  const heartbeatInterval = setInterval(() => {
+    try {
+      emitSse(res, "heartbeat", { ok: true, requestId, ts: Date.now() });
+      trace.lastEvent = "heartbeat";
+    } catch (e) {
+    }
+  }, 1e4);
+  req.on("close", () => {
+    cancelRequest(requestId);
+    console.log(`[STREAM] STREAM_CLIENT_CLOSED requestId=${requestId}`);
+    trace.clientClosed = true;
+    trace.endedAt = (/* @__PURE__ */ new Date()).toISOString();
+  });
+  try {
+    const { prompt, activeSubject, mode: requestedMode = "auto", history = [], image, attachments } = req.body;
+    const user = req.user;
+    const { trackAIUsage: trackAIUsage2 } = await Promise.resolve().then(() => (init_usageTracker(), usageTracker_exports));
+    let allSources = [];
+    emitSse(res, "status", { step: "started", message: "Starting stream..." });
+    emitSse(res, "status", { label: "Thinking" });
+    const { detectOfficialPaperCandidate: detectOfficialPaperCandidate2 } = await Promise.resolve().then(() => (init_paperQuestionParser(), paperQuestionParser_exports));
+    const paperIntent = detectOfficialPaperCandidate2(prompt, activeSubject);
+    if (paperIntent.isOfficialPaperCandidate && paperIntent.needsSubjectClarification) {
+      const msg = `\u0DB8\u0DDA ${paperIntent.year} paper \u0D91\u0D9A\u0DDA subject \u0D91\u0D9A \u0DB8\u0DDC\u0D9A\u0D9A\u0DCA\u0DAF? (SFT / ET / ICT)`;
+      emitSse(res, "token", { text: msg });
+      trace.lastEvent = "token";
+      let chatRes2 = await saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: msg,
+        mode: "paper_question_qa",
+        subject: activeSubject
+      });
+      if (chatRes2 && chatRes2.chatSaved) {
+        trace.chatSaved = true;
+        trace.messageId = chatRes2.messageId;
+      }
+      trace.completed = true;
+      emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes2?.messageId || null, chatSaved: trace.chatSaved, sources: [] });
+      trace.doneSent = true;
+      return;
+    }
+    const route = await safeCall("routeKnowledgeRequest", () => routeKnowledgeRequest({
+      prompt,
+      uid: user.uid,
+      email: user.email,
+      activeSubject: paperIntent.subject || activeSubject,
+      conversationHistory: history
+    }), {
+      mode: paperIntent.isOfficialPaperCandidate ? "paper_question_qa" : "normal_chat",
+      answerHints: { mustUseRag: true, mustUseGoogleSearch: false, mustUseUrlContext: false, mustAskClarification: false },
+      entities: {
+        year: paperIntent.year,
+        subject: paperIntent.subject,
+        questionNo: paperIntent.questionNo,
+        questionType: paperIntent.questionType
+      }
+    }, res);
+    if (paperIntent.isOfficialPaperCandidate) {
+      console.log(`[OFFICIAL_PAPER_GATE] year=${paperIntent.year} subject=${paperIntent.subject} questionNo=${paperIntent.questionNo} type=${paperIntent.questionType}`);
+      console.log(`[AI_RESPOND_STREAM] Forcing paper_question_qa mode`);
+      route.mode = "paper_question_qa";
+      route.entities.year = paperIntent.year || route.entities.year;
+      route.entities.subject = paperIntent.subject || route.entities.subject;
+      route.entities.questionNo = paperIntent.questionNo || route.entities.questionNo;
+      route.entities.questionType = paperIntent.questionType || route.entities.questionType;
+      route.answerHints.mustUseRag = true;
+    }
+    if (paperIntent.isOfficialPaperCandidate && route.mode === "normal_chat") {
+      console.log(`[OFFICIAL_PAPER_GATE] Converted normal_chat -> paper_question_qa`);
+      route.mode = "paper_question_qa";
+    }
+    const policy = resolveAnswerPolicy(prompt, route, activeSubject, attachments);
+    const activeConversationState = await getConversationState(user.uid);
+    const evidence = await retrieveEvidence(user.uid, prompt, route, policy, activeConversationState);
+    if (evidence.selectedSource) {
+      route.entities.activeSourceId = evidence.selectedSource.id;
+      route.entities.year = evidence.selectedSource.year || route.entities.year;
+    }
+    await updateConversationState(user.uid, {
+      activeSubject: evidence.subject || activeConversationState.activeSubject,
+      activeLessonIds: evidence.lessonIds.length > 0 ? evidence.lessonIds : activeConversationState.activeLessonIds,
+      activeSourceIds: evidence.allowedSourceIds.length > 0 ? evidence.allowedSourceIds : activeConversationState.activeSourceIds,
+      lastIntent: evidence.intent
+    });
+    if (policy.intent === "blocked_or_unsafe") {
+      emitSse(res, "token", { text: policy.blockingMessage });
+      trace.completed = true;
+      emitSse(res, "done", { ok: true, completed: true, requestId, messageId: null, chatSaved: false, sources: [] });
+      return;
+    }
+    if (!policy.allowSources) {
+      route.answerHints.mustUseRag = false;
+      route.answerHints.mustUseGoogleSearch = false;
+      route.answerHints.mustUseUrlContext = false;
+    }
+    const lowerPrompt = prompt.toLowerCase();
+    const correctionPhrases = ["oka fake", "werdi", "weradi", "oka newe", "\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2\u0DBA\u0DD2", "\u0D95\u0D9A \u0DB6\u0DDC\u0DBB\u0DD4", "oka boru", "not correct", "fake", "wrong", "boru", "boru kiynn epa", "boru dewal", "\u0DB6\u0DDC\u0DBB\u0DD4", "\u0DB8\u0DDA\u0D9A \u0DB6\u0DDC\u0DBB\u0DD4", "\u0DB1\u0DD1", "not this"];
+    const isCorrection = correctionPhrases.some((p) => lowerPrompt.includes(p));
+    const lastMsg = history && history.length > 0 ? history[history.length - 1] : null;
+    const lastPaperInfo = lastMsg?.metadata?.paperInfo || lastMsg?.paperInfo;
+    if (isCorrection && lastPaperInfo?.sourceId && lastPaperInfo?.questionNo) {
+      console.log(`[AI_RESPOND_STREAM] Correction phrase detected for ${lastPaperInfo.sourceId} Q${lastPaperInfo.questionNo}`);
+      emitSse(res, "status", { step: "correction", message: "Processing correction feedback..." });
+      const { handleWrongAnswerFeedback: handleWrongAnswerFeedback2 } = await Promise.resolve().then(() => (init_wrongAnswerHandler(), wrongAnswerHandler_exports));
+      await handleWrongAnswerFeedback2({
+        uid: user.uid,
+        sourceId: lastPaperInfo.sourceId,
+        questionType: lastPaperInfo.questionType || "MCQ",
+        questionNo: lastPaperInfo.questionNo,
+        reason: prompt,
+        originalPrompt: prompt,
+        badAnswer: lastMsg?.content || lastMsg?.text || "",
+        mode: "paper_question_qa",
+        year: lastPaperInfo.year,
+        subject: lastPaperInfo.subject
+      });
+      const correctionMsg = "\u26A0\uFE0F **Feedback Received:** \u0DC3\u0DCA\u0DAD\u0DD6\u0DAD\u0DD2\u0DBA\u0DD2! \u0DB8\u0DB8 \u0D91\u0DB8 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB \u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 \u0DBD\u0DD9\u0DC3 \u0DC3\u0DBD\u0D9A\u0DD4\u0DAB\u0DD4 \u0D9A\u0DBB Admin review \u0D91\u0D9A\u0DA7 \u0DBA\u0DDC\u0DB8\u0DD4 \u0D9A\u0DC5\u0DCF. \u0DB8\u0DB8 \u0DB1\u0DD0\u0DC0\u0DAD \u0DC0\u0DAD\u0DCF\u0DC0\u0D9A\u0DCA Direct PDF QA \u0DC4\u0DBB\u0DC4\u0DCF source \u0D91\u0D9A \u0DB4\u0DBB\u0DD3\u0D9A\u0DCA\u0DC2\u0DCF \u0D9A\u0DBB \u0DC3\u0DAD\u0DCA\u200D\u0DBA\u0DCF\u0DB4\u0DB1\u0DBA \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1\u0DB8\u0DCA.";
+      emitSse(res, "token", { text: correctionMsg });
+      route.mode = "paper_question_qa";
+      route.entities.year = lastPaperInfo.year;
+      route.entities.subject = lastPaperInfo.subject;
+      route.entities.questionNo = lastPaperInfo.questionNo;
+      route.entities.questionType = lastPaperInfo.questionType || "MCQ";
+    }
+    if (route.answerHints.mustAskClarification && route.entities.clarificationQuestion) {
+      emitSse(res, "token", { text: route.entities.clarificationQuestion });
+      trace.lastEvent = "token";
+      let chatRes2 = { chatSaved: false };
+      try {
+        chatRes2 = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: route.entities.clarificationQuestion,
+          mode: route.mode,
+          subject: activeSubject
+        });
+      } catch (err) {
+        console.warn("CHAT_SAVE_SKIPPED", err);
+        chatRes2 = { chatSaved: false, errorCode: "SAVE_THROWN", errorMessage: err?.message || "Chat save failed" };
+      }
+      if (chatRes2 && chatRes2.chatSaved) {
+        trace.chatSaved = true;
+        trace.messageId = chatRes2.messageId;
+      }
+      trace.completed = true;
+      emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes2?.messageId || null, chatSaved: trace.chatSaved, sources: [] });
+      trace.doneSent = true;
+      trace.lastEvent = "done";
+      return;
+    }
+    if (route.mode === "lesson_pdf_search") {
+      const lessonName = route.entities.lesson || evidence.lessonIds[0] || "requested lesson";
+      const lessonSources = (evidence.candidates || []).map((source) => {
+        const id = source.sourceId || source.id;
+        return {
+          ...source,
+          id,
+          sourceId: id,
+          url: source.url || `/api/rag/sources/${id}/download`,
+          badge: "Lesson PDF",
+          usedInAnswer: true
+        };
+      });
+      const answer = lessonSources.length > 0 ? [
+        `**${lessonName}** lesson \u0D91\u0D9A\u0DA7 match \u0DC0\u0DD9\u0DB1 saved PDF resource${lessonSources.length === 1 ? " \u0D91\u0D9A" : "s"}:`,
+        "",
+        ...lessonSources.map((source, index) => {
+          return `${index + 1}. [${source.title}](${source.url})`;
+        }),
+        "",
+        "\u0DB8\u0DD9\u0DBA saved lesson resources \u0DC0\u0DBD exact result \u0D91\u0D9A\u0DBA\u0DD2. Web candidate PDFs \u0DC4\u0DDD source \u0D91\u0D9A\u0DDA \u0DB1\u0DD0\u0DAD\u0DD2 exam details add \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0."
+      ].join("\n") : `**${lessonName}** lesson \u0D91\u0D9A\u0DA7 match \u0DC0\u0DD9\u0DB1 saved PDF resource \u0D91\u0D9A\u0D9A\u0DCA \u0DC4\u0DB8\u0DD4 \u0DC0\u0DD4\u0DAB\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0. Lesson resource \u0D91\u0D9A \u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 lesson name \u0D91\u0D9A \u0DBA\u0DA7\u0DAD\u0DDA upload \u0D9A\u0DBB index \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.`;
+      if (lessonSources.length > 0) emitSse(res, "sources", { sources: lessonSources });
+      emitSse(res, "token", { text: answer });
+      const chatRes2 = await saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: answer,
+        mode: route.mode,
+        subject: route.entities.subject || activeSubject,
+        sources: lessonSources
+      });
+      if (chatRes2?.chatSaved) {
+        trace.chatSaved = true;
+        trace.messageId = chatRes2.messageId;
+      }
+      trace.completed = true;
+      emitSse(res, "done", {
+        ok: lessonSources.length > 0,
+        completed: true,
+        requestId,
+        messageId: chatRes2?.messageId || null,
+        chatSaved: trace.chatSaved,
+        sources: lessonSources,
+        finishReason: lessonSources.length > 0 ? "lesson_sources_found" : "lesson_sources_missing"
+      });
+      trace.doneSent = true;
+      return;
+    }
+    emitSse(res, "status", { step: "profile", status: "reading" });
+    const userContext = await safeCall("loadUserAIContext", () => loadUserAIContext(user.uid, user.email), { activeSubject }, res);
+    userContext.activeSubject = activeSubject;
+    if (route.mode === "zscore_prediction") {
+      const zctx = userContext?.zScoreContext || {};
+      emitSse(res, "status", { step: "zscore_db", status: "reading" });
+      const formatMetric = (value, digits = 4) => typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "N/A";
+      let fastAns = `### Exam Score Predictor Z estimate
+
+\u0D94\u0DBA\u0DCF\u0D9C\u0DDA syllabus progress \u0D91\u0D9A\u0DD9\u0DB1\u0DCA Exam Score Predictor \u0D9C\u0DAB\u0DB1\u0DBA \u0D9A\u0DC5 planning estimate \u0D91\u0D9A: **${formatMetric(zctx.latestOverallZScore)}**.
+`;
+      fastAns += zctx.targetZScore !== void 0 ? `Target Z-score \u0D91\u0D9A: **${zctx.targetZScore}**.
+` : `Target Z-score \u0D91\u0D9A \u0DAD\u0DC0\u0DB8 Profile \u0D91\u0D9A\u0DDA set \u0D9A\u0DBB\u0DBD\u0DCF \u0DB1\u0DD0\u0DC4\u0DD0.
+`;
+      if (zctx.gapToTarget !== void 0) fastAns += `Target gap \u0D91\u0D9A: **${formatMetric(zctx.gapToTarget)}**.
+`;
+      if (zctx.rankEstimate?.districtRank) fastAns += `Estimated district rank: **\u2248 ${Number(zctx.rankEstimate.districtRank).toLocaleString()}**.
+`;
+      if (zctx.rankEstimate?.islandRank) fastAns += `Estimated island rank: **\u2248 ${Number(zctx.rankEstimate.islandRank).toLocaleString()}**.
+
+`;
+      fastAns += `**Projected marks / subject estimates:**
+`;
+      for (const subject of ["sft", "et", "ict"]) {
+        const label = subject.toUpperCase();
+        const mark = zctx.rawPaperAverages?.[subject];
+        const estimate = zctx.subjectZScores?.[subject];
+        fastAns += `- ${label}: ${typeof mark === "number" ? `${mark.toFixed(1)}%` : "N/A"} \xB7 Z ${formatMetric(estimate)}
+`;
+      }
+      fastAns += `
+`;
+      if (zctx.latestUpdatedAt) fastAns += `*Last updated: ${new Date(zctx.latestUpdatedAt).toLocaleString("en-LK", { timeZone: "Asia/Colombo" })}*
+
+`;
+      fastAns += `> \u0DB8\u0DDA\u0DC0\u0DCF Exam Score Predictor planning estimates. Official exam Z-score \u0DC4\u0DDD official district/island rank \u0DB1\u0DDC\u0DC0\u0DDA.`;
+      emitSse(res, "token", { text: fastAns });
+      trace.lastEvent = "token";
+      let chatRes2 = await saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: fastAns,
+        mode: "zscore_prediction",
+        subject: activeSubject
+      });
+      if (chatRes2 && chatRes2.chatSaved) {
+        trace.chatSaved = true;
+        trace.messageId = chatRes2.messageId;
+      }
+      trace.completed = true;
+      emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes2?.messageId || null, chatSaved: trace.chatSaved, sources: [] });
+      trace.doneSent = true;
+      trace.lastEvent = "done";
+      return;
+    }
+    if (route.mode === "lesson_marks_intent") {
+      emitSse(res, "status", { step: "syllabus_db", status: "searching" });
+      const requestedSubject = route.entities.subject || activeSubject || "SFT";
+      const lessonQuery = route.entities.lesson || prompt;
+      const { resolveExamResources: resolveExamResources2 } = await Promise.resolve().then(() => (init_examResourceResolver(), examResourceResolver_exports));
+      const resData = await safeCall("resolveExamResources", () => resolveExamResources2({
+        prompt: lessonQuery,
+        uid: user.uid,
+        subject: requestedSubject
+      }), {
+        ok: false,
+        sources: [],
+        bestTextBlocks: [],
+        needsWebSearch: true,
+        hasExactQuestionText: false,
+        hasPdfSource: false,
+        hasMarkingScheme: false,
+        hasSyllabus: false,
+        hasPaperStructure: false
+      }, res);
+      const staticSyllabus = resData.sources.find((s) => s.badge === "Static Syllabus");
+      let ansText = `### \u{1F4CA} ${requestedSubject} Lesson Weights (Paper Structure DB & fallback)
+
+`;
+      if (staticSyllabus) {
+        ansText += `**Syllabus Weighting Fallback \u0D85\u0DB1\u0DD4\u0DC0:**
+
+`;
+        ansText += `${staticSyllabus.text}
+
+`;
+      } else {
+        ansText += `\u0DC0\u0DD2\u0DC2\u0DBA \u0DB1\u0DD2\u0DBB\u0DCA\u0DAF\u0DDA\u0DC1\u0DBA\u0DA7 \u0D85\u0DB1\u0DD4\u0DC0 MCQ, structured, \u0DC3\u0DC4 essay \u0D9A\u0DDC\u0DA7\u0DC3\u0DCA\u0DC0\u0DBD \u0DBD\u0D9A\u0DD4\u0DAB\u0DD4 \u0DB6\u0DD9\u0DAF\u0DD3\u0DB8 \u0DC4\u0DB3\u0DD4\u0DB1\u0DCF\u0D9C\u0DAD \u0DB1\u0DDC\u0DC4\u0DD0\u0D9A\u0DD2 \u0DC0\u0DD2\u0DBA.`;
+      }
+      ansText += `
+*Z-score impact priority:* High priority.`;
+      emitSse(res, "token", { text: stripRawVisualBlocks(ansText) });
+      trace.lastEvent = "token";
+      let chatRes2 = await saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: ansText,
+        mode: "lesson_marks_intent",
+        subject: requestedSubject
+      });
+      if (chatRes2 && chatRes2.chatSaved) {
+        trace.chatSaved = true;
+        trace.messageId = chatRes2.messageId;
+      }
+      trace.completed = true;
+      emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes2?.messageId || null, chatSaved: trace.chatSaved, sources: [] });
+      trace.doneSent = true;
+      trace.lastEvent = "done";
+      return;
+    }
+    if (route.mode === "pdf_inventory_request") {
+      emitSse(res, "status", { step: "sources_db", status: "searching" });
+      const requestedSubject = route.entities.subject || activeSubject || void 0;
+      const uid = user.uid;
+      const userEmail = (user.email || "").toLowerCase();
+      const isAdmin = user.roles?.includes("admin") || user.admin === true;
+      const { getSourceInventory: getSourceInventory2 } = await Promise.resolve().then(() => (init_sourceInventoryService(), sourceInventoryService_exports));
+      const inventory = await getSourceInventory2({
+        uid,
+        subject: requestedSubject,
+        isAdmin
+      });
+      const allSources2 = [];
+      const groups = inventory.groups;
+      allSources2.push(
+        ...groups.pastPapers,
+        ...groups.markingSchemes,
+        ...groups.syllabus,
+        ...groups.paperStructure,
+        ...groups.uploadedPdfs,
+        ...groups.images
+      );
+      const pastPapers = groups.pastPapers;
+      const markingSchemes = groups.markingSchemes;
+      const syllabusList = groups.syllabus;
+      const paperStructureList = groups.paperStructure;
+      const imagesList = groups.images;
+      const uploadedList = groups.uploadedPdfs;
+      const sseSources = allSources2.map((s) => ({
+        id: s.id,
+        title: s.title,
+        url: s.url || `/api/rag/sources/${s.id}/download`,
+        storagePath: s.storagePath,
+        badge: s.resourceType === "past_paper" ? "Past Paper" : s.resourceType === "marking_scheme" ? "Marking Scheme" : "PDF Store",
+        confidence: 1,
+        sourceType: s.resourceType,
+        sourceScope: s.sourceScope
+      }));
+      emitSse(res, "sources", { sources: sseSources });
+      let answer = `\u{1F4DA} **\u0DB8\u0DB8 \u0DC3\u0DDC\u0DBA\u0DCF\u0D9C\u0DAD\u0DCA PDF \u0DC3\u0DC4 \u0DB4\u0DCA\u200D\u0DBB\u0DB7\u0DC0\u0DBA\u0DB1\u0DCA (Sources) \u0DB8\u0DD9\u0DB1\u0DCA\u0DB1:**
+
+`;
+      let count = 1;
+      if (pastPapers.length > 0) {
+        answer += `\u{1F3DB}\uFE0F **Past Papers**
+`;
+        pastPapers.forEach((p) => {
+          answer += `${count++}. **${p.title}** (${p.year || "Year N/A"}) - [Open](${p.url || `/api/rag/sources/${p.id}/download`})
+`;
+        });
+        answer += `
+`;
+      }
+      if (markingSchemes.length > 0) {
+        answer += `\u{1F4DD} **Marking Schemes**
+`;
+        markingSchemes.forEach((p) => {
+          answer += `${count++}. **${p.title}** (${p.year || "Year N/A"}) - [Open](${p.url || `/api/rag/sources/${p.id}/download`})
+`;
+        });
+        answer += `
+`;
+      }
+      if (syllabusList.length > 0) {
+        answer += `\u{1F4D6} **Syllabus Library**
+`;
+        syllabusList.forEach((p) => {
+          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})
+`;
+        });
+        answer += `
+`;
+      }
+      if (paperStructureList.length > 0) {
+        answer += `\u{1F4D0} **Paper Structure**
+`;
+        paperStructureList.forEach((p) => {
+          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})
+`;
+        });
+        answer += `
+`;
+      }
+      if (uploadedList.length > 0) {
+        answer += `\u{1F4E4} **Uploaded PDFs**
+`;
+        uploadedList.forEach((p) => {
+          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})
+`;
+        });
+        answer += `
+`;
+      }
+      if (imagesList.length > 0) {
+        answer += `\u{1F5BC}\uFE0F **Images**
+`;
+        imagesList.forEach((p) => {
+          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})
+`;
+        });
+        answer += `
+`;
+      }
+      if (allSources2.length === 0) {
+        answer = `\u274C Firebase \u0D91\u0D9A\u0DDA PDFs \u0DAD\u0DC0\u0DB8 \u0DC4\u0DB8\u0DCA\u0DB6\u0DD4\u0DAB\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0. Upload \u0D9A\u0DC5\u0DCF \u0DB1\u0DB8\u0DCA index/reload \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.`;
+      } else {
+        answer += `\u{1F4A1} \u0DB8\u0DD9\u0DB8 \u0D95\u0DB1\u0DD1\u0DB8 PDF \u0D91\u0D9A\u0D9A\u0DCA \u0DB8\u0DAD \u0D9A\u0DCA\u0DBD\u0DD2\u0D9A\u0DCA \u0D9A\u0DBB \u0D91\u0DBA \u0D9A\u0DD2\u0DBA\u0DC0\u0DD2\u0DBA \u0DC4\u0DD0\u0D9A. \u0D91\u0DB8\u0DD9\u0DB1\u0DCA\u0DB8 \u0D91\u0DB8 \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 \u0DB4\u0DAD\u0DCA\u200D\u0DBB\u0DC0\u0DBD\u0DD2\u0DB1\u0DCA \u0D95\u0DB1\u0DD1\u0DB8 \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA\u0D9A\u0DCA \u0DB8\u0D9C\u0DD9\u0DB1\u0DCA \u0DC0\u0DD2\u0DB8\u0DC3\u0DB1\u0DCA\u0DB1!`;
+      }
+      emitSse(res, "token", { text: stripRawVisualBlocks(answer) });
+      trace.lastEvent = "token";
+      let chatRes2 = await saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: answer,
+        mode: "pdf_inventory_request",
+        subject: requestedSubject,
+        sources: sseSources
+      });
+      if (chatRes2 && chatRes2.chatSaved) {
+        trace.chatSaved = true;
+        trace.messageId = chatRes2.messageId;
+      }
+      trace.completed = true;
+      emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes2?.messageId || null, chatSaved: trace.chatSaved, sources: sseSources });
+      trace.doneSent = true;
+      trace.lastEvent = "done";
+      return;
+    }
+    const hasUploadedPdf = prompt.includes("[Uploaded PDF:");
+    const isPaperQa = !hasUploadedPdf && (route.mode === "paper_question_qa" || route.mode === "marking_scheme_request" || route.mode === "pdf_link_request");
+    if (isPaperQa) {
+      const requestedSubject = route.entities.subject || activeSubject || "SFT";
+      const requestedYear = route.entities.year;
+      const requestedQuestionNo = route.entities.questionNo;
+      if (requestedSubject && requestedYear) {
+        emitSse(res, "status", { step: "exam_db", status: "searching" });
+        let paperSource = null;
+        let resolution = { sources: [], paperSource: null };
+        const { resolveStrictSource: resolveStrictSource2 } = await Promise.resolve().then(() => (init_sourceResolver(), sourceResolver_exports));
+        const { getSourceInventory: getSourceInventory2 } = await Promise.resolve().then(() => (init_sourceInventoryService(), sourceInventoryService_exports));
+        const isAdminUser = user.roles?.includes("admin") || user.admin === true;
+        const inventory = await getSourceInventory2({ uid: user.uid, subject: requestedSubject, isAdmin: isAdminUser });
+        const allAvailableSources = [...inventory.groups.pastPapers, ...inventory.groups.markingSchemes, ...inventory.groups.syllabus, ...inventory.groups.uploadedPdfs];
+        const strictRes = resolveStrictSource2(allAvailableSources, {
+          year: requestedYear,
+          subject: requestedSubject,
+          activeSourceId: null,
+          prompt
+        });
+        if (strictRes.sourceLocked && strictRes.selectedSource) {
+          console.log(`[AI_CORE] Source Locked: ${strictRes.selectedSource.title}`);
+          paperSource = strictRes.selectedSource;
+          allSources = [{
+            sourceId: paperSource.id || paperSource.sourceId,
+            title: paperSource.title,
+            url: paperSource.url || null,
+            storagePath: paperSource.storagePath || null,
+            badge: "Official Source",
+            year: paperSource.year,
+            subject: paperSource.subject,
+            resourceType: paperSource.resourceType
+          }];
+        } else {
+          if (paperIntent.isOfficialPaperCandidate || route.mode === "paper_question_qa") {
+            const msg = `${requestedYear || ""} ${requestedSubject || ""} ${paperIntent.questionType || "MCQ"} ${requestedQuestionNo || ""} \u0DC3\u0DB3\u0DC4\u0DCF exact official paper source lock \u0DC0\u0DD9\u0DBD\u0DCF \u0DB1\u0DD0\u0DC4\u0DD0. \u0D92 \u0DB1\u0DD2\u0DC3\u0DCF answer guess \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0DB6\u0DD0\u0DC4\u0DD0.`;
+            emitSse(res, "evidence_missing", {
+              reason: "STRICT_SOURCE_LOCK_FAILED",
+              message: msg
+            });
+            emitSse(res, "token", { text: msg });
+            emitSse(res, "done", {
+              ok: false,
+              completed: true,
+              requestId,
+              finishReason: "blocked_no_source_lock"
+            });
+            trace.doneSent = true;
+            return;
+          }
+          const { resolveExamResources: resolveExamResources2 } = await Promise.resolve().then(() => (init_examResourceResolver(), examResourceResolver_exports));
+          const resolution2 = await safeCall("resolveExamResources", () => resolveExamResources2({
+            prompt,
+            uid: user.uid,
+            subject: requestedSubject,
+            year: requestedYear,
+            resourceType: route.mode === "marking_scheme_request" ? "marking_scheme" : "past_paper",
+            questionNo: requestedQuestionNo
+          }), { sources: [] }, res);
+          paperSource = resolution2.paperSource;
+          resolution2.sources.forEach((s) => {
+            allSources.push({ id: s.id, title: s.title, url: s.url, storagePath: s.storagePath, badge: s.badge || "Verified" });
+          });
+        }
+        if (paperSource) {
+          if (!allSources.find((s) => s.id === paperSource.id)) {
+            allSources.push({ sourceId: paperSource.id, title: paperSource.title, url: paperSource.url, storagePath: paperSource.storagePath, badge: "Locked Source" });
+          }
+          emitSse(res, "sources", { sources: allSources });
+        }
+        const hasPaperSource = !!paperSource;
+        const questionId = paperSource?.id && requestedQuestionNo ? `${paperSource.id}_${paperIntent.questionType || "MCQ"}_${requestedQuestionNo}`.replace(/\//g, "_") : null;
+        if (hasPaperSource && route.mode !== "pdf_link_request") {
+          const db = getAdminDb();
+          const { retrieveEvidenceForPaperQuestion: retrieveEvidenceForPaperQuestion2 } = await Promise.resolve().then(() => (init_evidenceRetriever(), evidenceRetriever_exports));
+          if (questionId) {
+            emitSse(res, "status", { step: "evidence_check", message: "Searching for verified evidence..." });
+            const evidenceResult = await retrieveEvidenceForPaperQuestion2({
+              sourceId: paperSource.id,
+              questionType: paperIntent.questionType || "MCQ",
+              questionNo: requestedQuestionNo,
+              year: requestedYear,
+              subject: requestedSubject
+            });
+            if (evidenceResult.ok && evidenceResult.evidence?.answer) {
+              const evidence2 = evidenceResult.evidence;
+              console.log(`[AI_RESPOND_STREAM] Evidence Found for ${questionId}`);
+              const methodLabel = evidence2.extractionMethod === "manual_verified" ? "Verified by Teacher" : "Found in PDF";
+              emitSse(res, "status", { step: "evidence", message: `${methodLabel}...` });
+              let finalAnswer = String(evidence2.answer || evidence2.officialAnswer || evidence2.estimatedAnswer || "Answer extracted from PDF.");
+              if (evidence2.explanationSinhala) {
+                finalAnswer += `
+
+\u{1F9E0} **Explanation:**
+${evidence2.explanationSinhala}`;
+              }
+              emitSse(res, "token", { text: stripRawVisualBlocks(finalAnswer) });
+              trace.lastEvent = "token";
+              const chatRes3 = await saveFinalChat({
+                uid: user.uid,
+                email: user.email,
+                userText: prompt,
+                assistantText: finalAnswer,
+                mode: route.mode,
+                subject: requestedSubject,
+                sources: allSources
+              });
+              emitSse(res, "done", {
+                ok: true,
+                completed: true,
+                requestId,
+                messageId: chatRes3?.messageId || null,
+                chatSaved: chatRes3.chatSaved,
+                sources: allSources,
+                paperInfo: {
+                  sourceId: paperSource.id,
+                  questionNo: requestedQuestionNo,
+                  year: requestedYear,
+                  subject: requestedSubject,
+                  questionType: paperIntent.questionType || "MCQ",
+                  prompt,
+                  extractionMethod: evidence2.extractionMethod
+                }
+              });
+              trace.doneSent = true;
+              return;
+            }
+          }
+          let needsOcr2 = paperSource?.needsOcr === true || paperSource?.indexStatus === "needs_ocr";
+          let noChunks = Number(paperSource?.chunkCount || 0) === 0;
+          let badTextQuality = false;
+          let healthyChunks = [];
+          if (paperSource.id && !noChunks) {
+            try {
+              const { retrieveExactPaperQuestion: retrieveExactPaperQuestion2 } = await Promise.resolve().then(() => (init_retrieve(), retrieve_exports));
+              const exactResult = await retrieveExactPaperQuestion2({
+                uid: user.uid,
+                sourceId: paperSource.id,
+                subject: requestedSubject,
+                year: requestedYear,
+                questionNo: requestedQuestionNo
+              });
+              if (exactResult) {
+                if (exactResult.needsOcr || exactResult.chunks.length === 0) {
+                  noChunks = true;
+                }
+                if (exactResult.badTextQuality) {
+                  badTextQuality = true;
+                }
+                healthyChunks = exactResult.chunks;
+                if (requestedQuestionNo && paperIntent.isOfficialPaperCandidate) {
+                  const chunkText = (healthyChunks || []).map((c) => c.text).join("\n");
+                  const qNoMarker = new RegExp(`\\b${requestedQuestionNo}\\b`);
+                  const hasQuestionMarker = qNoMarker.test(chunkText);
+                  const hasOptions = /1\)|2\)|3\)|4\)|5\)/.test(chunkText) || /\(1\)|\(2\)|\(3\)|\(4\)|\(5\)/.test(chunkText);
+                  const isHealthy = hasQuestionMarker && (paperIntent.questionType === "MCQ" ? hasOptions : true);
+                  if (!isHealthy || chunkText.length < 50) {
+                    console.log(`[AI_CORE] Evidence Gate Failed for Chunks: ${paperSource.id} Q${requestedQuestionNo}`);
+                    badTextQuality = true;
+                  }
+                }
+              }
+            } catch (err) {
+              console.warn("Failed to retrieve exact paper question for quality checks:", err);
+            }
+          }
+          if (noChunks || badTextQuality || needsOcr2) {
+            console.log(`[AI_RESPOND_STREAM] Direct PDF QA required for ${paperSource.id}. Emitting event...`);
+            emitSse(res, "direct_pdf_handoff_required", {
+              sourceId: paperSource.id || paperSource.sourceId,
+              storagePath: paperSource.storagePath,
+              title: paperSource.title,
+              subject: requestedSubject,
+              year: requestedYear,
+              questionNo: requestedQuestionNo,
+              questionType: paperIntent.questionType || "MCQ",
+              prompt,
+              reason: "DIRECT_PDF_QA_SERVER_SCAN_REQUIRED",
+              message: "PDF source \u0D91\u0D9A secure server scan \u0D91\u0D9A\u0D9A\u0DA7 \u0DBA\u0DDC\u0DB8\u0DD4 \u0D9A\u0DBB\u0DB1\u0DC0\u0DCF."
+            });
+            emitSse(res, "done", {
+              ok: true,
+              completed: false,
+              pending: true,
+              requestId,
+              finishReason: "pending_direct_pdf_qa",
+              reason: "DIRECT_PDF_SERVER_SCAN_REQUIRED",
+              canContinue: true,
+              needsClientFile: false,
+              sources: allSources.length > 0 ? allSources : [paperSource],
+              paperInfo: {
+                sourceId: paperSource.id || paperSource.sourceId,
+                questionNo: requestedQuestionNo,
+                year: requestedYear,
+                subject: requestedSubject,
+                questionType: paperIntent.questionType || "MCQ",
+                prompt,
+                extractionMethod: "pending_direct_pdf_qa"
+              }
+            });
+            trace.doneSent = true;
+            trace.completed = false;
+            return;
+          } else if (strictRes && strictRes.sourceLocked) {
+            resolution.hasExactQuestionText = true;
+            resolution.bestTextBlocks = healthyChunks.map((c) => c.text);
+            resolution.paperSource = paperSource;
+          }
+        }
+        if (resolution.hasExactQuestionText || route.mode === "pdf_link_request" && resolution.hasPdfSource) {
+          emitSse(res, "status", { step: "standard_answer", message: "Composing Standard Exam Answer..." });
+          let composedAnswer = "";
+          if (route.mode === "pdf_link_request") {
+            const pSrc = resolution.paperSource;
+            composedAnswer = `\u2705 **\u0D94\u0DBA\u0DCF \u0DC4\u0DD9\u0DC0\u0DCA\u0DC0 PDF \u0D91\u0D9A \u0DC4\u0DB8\u0DD4 \u0DC0\u0DD4\u0DAB\u0DCF!**
+
+\u{1F4CC} **${pSrc?.title}**
+- **Subject:** ${requestedSubject}
+- **Year:** ${requestedYear}
+- **Source:** Local Verified Store \u{1F3DB}\uFE0F
+
+\u{1F4E5} **Download Link:** [\u0DB8\u0DAD \u0D9A\u0DCA\u0DBD\u0DD2\u0D9A\u0DCA \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1](${pSrc?.url || `/api/rag/sources/${pSrc?.id}/download`})
+
+\u0DB8\u0DD9\u0DB8 \u0DBD\u0DD2\u0DB1\u0DCA\u0D9A\u0DCA \u0D91\u0D9A \u0DB4\u0DD0\u0DBA 24 \u0DB4\u0DD4\u0DBB\u0DCF\u0DB8 \u0DC3\u0D9A\u0DCA\u200D\u0DBB\u0DD3\u0DBA\u0DC0 \u0DB4\u0DC0\u0DAD\u0DD2\u0DB1\u0DC0\u0DCF.`;
+          } else {
+            const { composeMarkingSchemeAnswer: composeMarkingSchemeAnswer2 } = await Promise.resolve().then(() => (init_markingSchemeResolver(), markingSchemeResolver_exports));
+            composedAnswer = composeMarkingSchemeAnswer2({
+              subject: requestedSubject,
+              year: requestedYear,
+              questionNo: requestedQuestionNo || "Q1",
+              paperSource: resolution.paperSource,
+              markingSchemeSource: resolution.markingSchemeSource,
+              syllabusSource: resolution.syllabusSource,
+              paperStructureSource: resolution.paperStructureSource,
+              questionText: `G.C.E. A/L ${requestedYear} ${requestedSubject} \u0DC0\u0DD2\u0DB7\u0DCF\u0D9C\u0DBA\u0DDA ${requestedQuestionNo || "Q1"} \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA\u0DA7 \u0D85\u0DAF\u0DCF\u0DC5 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB \u0DB8\u0DD9\u0DC3\u0DDA\u0DBA.`,
+              officialAnswer: resolution.bestTextBlocks.join("\n\n") || "\u0DB1\u0DD2\u0DBD \u0DBD\u0D9A\u0DD4\u0DAB\u0DD4 \u0DAF\u0DD3\u0DB8\u0DDA \u0DB4\u0DA7\u0DD2\u0DB4\u0DCF\u0DA7\u0DD2\u0DBA\u0DA7 \u0D85\u0DB1\u0DD4\u0D9A\u0DD6\u0DBD \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB.",
+              isEstimated: !resolution.markingSchemeSource
+            });
+          }
+          if (resolution.paperSource && resolution.paperSource.ocrTextPdfStoragePath) {
+            composedAnswer = `\u{1F4A1} *Sinhala text PDF \u0D91\u0D9A\u0DAD\u0DCA generate \u0DC0\u0DD9\u0DBD\u0DCF \u0DAD\u0DD2\u0DBA\u0DD9\u0DB1\u0DC0\u0DCF. \u0D91\u0DAD\u0DB1\u0DD2\u0DB1\u0DCA indexed text \u0DB7\u0DCF\u0DC0\u0DD2\u0DAD\u0DCF \u0D9A\u0DBB\u0DB1\u0DC0\u0DCF.*
+
+` + composedAnswer;
+          }
+          emitSse(res, "token", { text: stripRawVisualBlocks(composedAnswer) });
+          trace.lastEvent = "token";
+          let chatRes3 = await saveFinalChat({
+            uid: user.uid,
+            email: user.email,
+            userText: prompt,
+            assistantText: composedAnswer,
+            mode: route.mode,
+            subject: requestedSubject,
+            sources: allSources
+          });
+          if (chatRes3 && chatRes3.chatSaved) {
+            trace.chatSaved = true;
+            trace.messageId = chatRes3.messageId;
+          }
+          trace.completed = true;
+          emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes3?.messageId || null, chatSaved: trace.chatSaved, sources: allSources });
+          trace.doneSent = true;
+          trace.lastEvent = "done";
+          return;
+        }
+        if (resolution.needsWebSearch) {
+          emitSse(res, "status", { step: "web_search", message: "Searching web..." });
+          const { searchWebPdfCandidates: searchWebPdfCandidates2 } = await Promise.resolve().then(() => (init_webPdfSearch(), webPdfSearch_exports));
+          const candidates = await safeCall("searchWebPdfCandidates", () => searchWebPdfCandidates2({
+            subject: requestedSubject,
+            year: requestedYear,
+            resourceType: route.mode === "marking_scheme_request" ? "marking_scheme" : "past_paper",
+            questionNo: requestedQuestionNo
+          }), [], res);
+          if (candidates.length > 0) {
+            emitSse(res, "web_candidates", { candidates });
+            emitSse(res, "pending_import", {
+              candidates,
+              subject: requestedSubject,
+              year: requestedYear,
+              resourceType: route.mode === "marking_scheme_request" ? "marking_scheme" : "past_paper",
+              questionNo: requestedQuestionNo,
+              originalPrompt: prompt
+            });
+            const candidatePromptText = `\u{1F50D} **${requestedYear} ${requestedSubject}** \u0DC3\u0DB3\u0DC4\u0DCF confirmed local source \u0D91\u0D9A\u0D9A\u0DCA \u0DC4\u0DB8\u0DCA\u0DB6\u0DD4\u0DAB\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0.
+
+\u0DB1\u0DB8\u0DD4\u0DAD\u0DCA Web search \u0D91\u0D9A \u0DC4\u0DBB\u0DC4\u0DCF \u0DB8\u0DD9\u0DB8 candidate \u0DB4\u0DCA\u200D\u0DBB\u0DB7\u0DC0\u0DBA\u0DB1\u0DCA \u0DC4\u0DB8\u0DD4 \u0DC0\u0DD4\u0DAB\u0DCF. \u0D9A\u0DBB\u0DD4\u0DAB\u0DCF\u0D9A\u0DBB \u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 PDF \u0D91\u0D9A \u0DAD\u0DC4\u0DC0\u0DD4\u0DBB\u0DD4 \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1:
+
+` + candidates.map((cand, idx) => `${idx + 1}. **${cand.title}**
+   \u{1F517} [Open PDF](${cand.url})`).join("\n\n") + `
+
+**\u0D9A\u0DCA\u200D\u0DBB\u0DD2\u0DBA\u0DCF\u0DB8\u0DCF\u0DBB\u0DCA\u0D9C\u0DBA:**
+\u0D89\u0DC4\u0DAD \u0DC3\u0DB3\u0DC4\u0DB1\u0DCA candidate \u0DBD\u0DD0\u0DBA\u0DD2\u0DC3\u0DCA\u0DAD\u0DD4\u0DC0\u0DD9\u0DB1\u0DCA \u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 \u0D91\u0D9A \u0DAD\u0DC4\u0DC0\u0DD4\u0DBB\u0DD4 \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8\u0DA7 \u0D85\u0DAF\u0DCF\u0DC5 **Confirm & Save** \u0DB6\u0DDC\u0DAD\u0DCA\u0DAD\u0DB8 \u0D9A\u0DCA\u0DBD\u0DD2\u0D9A\u0DCA \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1. \u0D91\u0DC0\u0DD2\u0DA7 \u0D91\u0DBA auto-import \u0DC0\u0DD3 text index \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8\u0DD9\u0DB1\u0DCA \u0D85\u0DB1\u0DAD\u0DD4\u0DBB\u0DD4\u0DC0 \u0D94\u0DB6\u0DA7 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB \u0DBD\u0DB6\u0DCF \u0DAF\u0DD9\u0DB1\u0DD4 \u0D87\u0DAD.`;
+            emitSse(res, "token", { text: candidatePromptText });
+            trace.lastEvent = "token";
+            let chatRes3 = await saveFinalChat({
+              uid: user.uid,
+              email: user.email,
+              userText: prompt,
+              assistantText: candidatePromptText,
+              mode: route.mode,
+              subject: requestedSubject,
+              sources: candidates
+            });
+            if (chatRes3 && chatRes3.chatSaved) {
+              trace.chatSaved = true;
+              trace.messageId = chatRes3.messageId;
+            }
+            trace.completed = true;
+            emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes3?.messageId || null, chatSaved: trace.chatSaved, sources: candidates });
+            trace.doneSent = true;
+            trace.lastEvent = "done";
+            return;
+          }
+        }
+        const failMsg = `\u26A0\uFE0F \u0DB8\u0DA7 **${requestedYear} ${requestedSubject}** \u0DC3\u0DB3\u0DC4\u0DCF confirmed PDF \u0D91\u0D9A\u0D9A\u0DCA \u0DC4\u0DDD candidate \u0D91\u0D9A\u0D9A\u0DCA \u0DC3\u0DDC\u0DBA\u0DCF \u0D9C\u0DD0\u0DB1\u0DD3\u0DB8\u0DA7 \u0DC4\u0DD0\u0D9A\u0DD2 \u0DC0\u0DD4\u0DAB\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0. \u0D9A\u0DBB\u0DD4\u0DAB\u0DCF\u0D9A\u0DBB \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA \u0DA7\u0DBA\u0DD2\u0DB4\u0DCA \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1, \u0DB1\u0DD0\u0DAD\u0DC4\u0DDC\u0DAD\u0DCA PDF \u0D91\u0D9A\u0D9A\u0DCA \u0D85\u0DB4\u0DCA\u0DBD\u0DDD\u0DA9\u0DCA \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.`;
+        emitSse(res, "token", { text: failMsg });
+        trace.lastEvent = "token";
+        let chatRes2 = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: failMsg,
+          mode: route.mode,
+          subject: requestedSubject
+        });
+        if (chatRes2 && chatRes2.chatSaved) {
+          trace.chatSaved = true;
+          trace.messageId = chatRes2.messageId;
+        }
+        trace.completed = true;
+        emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes2?.messageId || null, chatSaved: trace.chatSaved, sources: allSources });
+        trace.doneSent = true;
+        trace.lastEvent = "done";
+        return;
+      }
+    }
+    let contextBlocksText = "";
+    let hasExactQuestionText = false;
+    let needsOcr = false;
+    if (route.mode === "uploaded_pdf_question_qa") {
+      emitSse(res, "status", { step: "rag", status: "searching" });
+      const retrieveResult = await safeCall("retrieveUploadedPdfQuestion", () => retrieveUploadedPdfQuestion({
+        uid: user.uid,
+        uploadedFileName: route.entities.uploadedFileName,
+        questionNo: route.entities.questionNo,
+        query: prompt,
+        limit: 8
+      }), { chunks: [], source: null, hasExactQuestionText: false, needsOcr: false }, res);
+      hasExactQuestionText = retrieveResult.hasExactQuestionText;
+      needsOcr = retrieveResult.needsOcr;
+      if (retrieveResult.source) {
+        allSources.push({
+          sourceId: retrieveResult.source.id,
+          title: retrieveResult.source.title,
+          fileName: retrieveResult.source.fileName,
+          storagePath: retrieveResult.source.storagePath,
+          badge: "Uploaded",
+          confidence: 1
+        });
+        emitSse(res, "sources", { sources: allSources });
+        trace.lastEvent = "sources";
+      }
+      if (needsOcr) {
+        const ocrWarning = "PDF \u0D91\u0D9A save \u0DC0\u0DD9\u0DBD\u0DCF \u0DAD\u0DD2\u0DBA\u0DD9\u0DB1\u0DC0\u0DCF, \u0DB1\u0DB8\u0DD4\u0DAD\u0DCA \u0D91\u0DC4\u0DD2 searchable lesson text \u0DAD\u0DC0\u0DB8 \u0DC3\u0DD6\u0DAF\u0DCF\u0DB1\u0DB8\u0DCA \u0DB1\u0DD0\u0DC4\u0DD0. \u0DA7\u0DD2\u0D9A \u0DC0\u0DDA\u0DBD\u0DCF\u0DC0\u0D9A\u0DD2\u0DB1\u0DCA \u0DB1\u0DD0\u0DC0\u0DAD \u0D8B\u0DAD\u0DCA\u0DC3\u0DCF\u0DC4 \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.";
+        emitSse(res, "token", { text: ocrWarning });
+        trace.lastEvent = "token";
+        let chatRes2 = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: ocrWarning,
+          mode: route.mode,
+          subject: activeSubject,
+          sources: allSources
+        });
+        if (chatRes2 && chatRes2.chatSaved) {
+          trace.chatSaved = true;
+          trace.messageId = chatRes2.messageId;
+        }
+        trace.completed = true;
+        emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes2?.messageId || null, chatSaved: trace.chatSaved, sources: allSources });
+        trace.doneSent = true;
+        trace.lastEvent = "done";
+        return;
+      }
+      if (retrieveResult.chunks.length > 0) {
+        retrieveResult.chunks.forEach((c, i) => {
+          contextBlocksText += `
+[Uploaded PDF Chunk ${i + 1}] Page ${c.pageNumber || "N/A"}:
+${c.text}
+`;
+        });
+      }
+    }
+    if (requestedMode === "deep_search" || route.mode !== "uploaded_pdf_question_qa" && (route.answerHints.mustUseRag || route.mode === "normal_chat" || hasUploadedPdf)) {
+      emitSse(res, "status", { step: "rag", status: "searching" });
+      const retrieveResult = await safeCall("retrieveRelevantKnowledge", () => retrieveRelevantKnowledge({
+        query: prompt,
+        uid: user.uid,
+        subject: route.entities.subject || activeSubject,
+        limit: isLessonEvidenceMode(route.mode) ? 24 : 5,
+        lesson: route.entities.lesson || evidence.lessonIds[0],
+        strictLesson: isLessonEvidenceMode(route.mode),
+        allowedSourceIds: evidence.allowedSourceIds
+      }), { chunks: [] }, res);
+      const chunksList = Array.isArray(retrieveResult) ? retrieveResult : retrieveResult?.chunks || [];
+      if (isLessonEvidenceMode(route.mode) && Array.isArray(retrieveResult?.sources)) {
+        for (const source of retrieveResult.sources) {
+          if (source.usedInAnswer === false) continue;
+          if (!allSources.some((existing) => (existing.sourceId || existing.id) === (source.sourceId || source.id))) {
+            allSources.push({ ...source, badge: "Lesson PDF" });
+          }
+        }
+      }
+      if (chunksList.length > 0) {
+        chunksList.forEach((c, i) => {
+          const score = scoreSource(c, {
+            subject: route.entities.subject || activeSubject,
+            year: route.entities.year,
+            resourceType: route.entities.resourceType || route.entities.paperType ? "past_paper" : void 0,
+            paperType: route.entities.questionType,
+            keywords: prompt.split(" ")
+          });
+          if (policy.intent === "official_paper_question" && score < 75) return;
+          if (policy.intent === "syllabus_lesson_explanation" && score < 55) return;
+          if (!isLessonEvidenceMode(route.mode)) {
+            allSources.push({ title: c.title, sourceId: c.sourceId || c.id, pageNumber: c.metadata?.pageNumber || c.page, sourceType: c.sourceType || "rag", sourceScope: c.sourceScope || "personal", confidence: c.confidence, badge: "RAG" });
+          }
+          contextBlocksText += `
+[RAG SOURCE ${i + 1}] ${c.title}:
+${c.text.substring(0, 1e3)}
+`;
+        });
+      }
+    }
+    if (isLessonEvidenceMode(route.mode) && contextBlocksText.trim().length === 0) {
+      const lessonName = route.entities.lesson || evidence.lessonIds[0] || "requested lesson";
+      const statusMessage = evidence.evidenceStatus === "ocr_required" ? `**${lessonName}** lesson PDF \u0D91\u0D9A save \u0DC0\u0DD9\u0DBD\u0DCF \u0DAD\u0DD2\u0DBA\u0DD9\u0DB1\u0DC0\u0DCF. Searchable lesson text \u0DC3\u0DD6\u0DAF\u0DCF\u0DB1\u0DB8\u0DCA \u0DC0\u0DD6 \u0DC0\u0DD2\u0D9C\u0DC3 \u0D92 PDF evidence \u0D91\u0D9A\u0DD9\u0DB1\u0DCA \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 \u0DC3\u0DC4 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DD4 \u0DAF\u0DD9\u0DB1\u0DCA\u0DB1\u0DB8\u0DCA.` : `**${lessonName}** lesson \u0D91\u0D9A\u0DA7 searchable PDF evidence \u0D91\u0D9A\u0D9A\u0DCA \u0DAD\u0DC0\u0DB8 \u0DC4\u0DB8\u0DD4 \u0DC0\u0DD4\u0DAB\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0. PDF \u0D91\u0D9A lesson \u0D91\u0D9A \u0DBA\u0DA7\u0DAD\u0DDA upload \u0D9A\u0DC5 \u0DB4\u0DC3\u0DD4 \u0D91\u0DC4\u0DD2 content \u0D91\u0D9A\u0DD9\u0DB1\u0DCA \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DD4 \u0DAF\u0DD9\u0DB1\u0DCA\u0DB1\u0DB8\u0DCA.`;
+      emitSse(res, "evidence_missing", {
+        reason: evidence.evidenceStatus,
+        lesson: lessonName,
+        message: statusMessage
+      });
+      emitSse(res, "token", { text: statusMessage });
+      emitSse(res, "done", {
+        ok: false,
+        completed: true,
+        requestId,
+        finishReason: "blocked_no_lesson_evidence",
+        sources: evidence.candidates
+      });
+      trace.doneSent = true;
+      trace.completed = true;
+      return;
+    }
+    if (requestedMode === "web_search" || requestedMode === "deep_search" || route.mode !== "uploaded_pdf_question_qa" && !isLessonEvidenceMode(route.mode) && route.answerHints.mustUseGoogleSearch) {
+      emitSse(res, "status", { step: "web_search", status: "searching", query: prompt });
+      const web = await safeCall("groundedSearch", () => groundedSearch(prompt, { language: "si" }), { sources: [], summary: "" }, res);
+      if (web.sources.length > 0) {
+        web.sources.forEach((s, i) => {
+          allSources.push({ title: s.title, url: s.url, confidence: s.confidence, badge: requestedMode === "web_search" || requestedMode === "deep_search" ? "Web Search" : "Candidate" });
+          contextBlocksText += `
+[WEB SOURCE ${i + 1}] ${s.title} (${s.url}):
+${s.snippet}
+`;
+        });
+      }
+    }
+    if (route.mode !== "uploaded_pdf_question_qa" && route.answerHints.mustUseUrlContext && route.entities.urls && route.entities.urls.length > 0) {
+      emitSse(res, "status", { step: "url_context", status: "reading", urlCount: route.entities.urls.length });
+      const uRes = await safeCall("readUrlsWithGemini", () => readUrlsWithGemini({
+        urls: route.entities.urls,
+        question: prompt,
+        subject: route.entities.subject || activeSubject
+      }), { sources: [], answer: "" }, res);
+      uRes.sources.forEach((s) => {
+        allSources.push({ title: s.title || s.url, url: s.url, confidence: 1, badge: "Uploaded" });
+      });
+      contextBlocksText += `
+[URL CONTEXT]:
+${uRes.answer}
+`;
+    }
+    if (allSources.length > 0) {
+      emitSse(res, "sources", { sources: allSources });
+      trace.lastEvent = "sources";
+    }
+    emitSse(res, "status", { step: "assistant", status: "Writing answer" });
+    const modifiedUserContext = {
+      ...userContext,
+      hasExactQuestionText,
+      needsOcr
+    };
+    const ai9 = getAIClient();
+    let aiTask = "normal_chat";
+    if (["paper_question_qa", "marking_scheme_request", "lesson_marks_intent", "zscore_prediction", "uploaded_pdf_question_qa", "tutor_explanation"].includes(route.mode) || image) {
+      aiTask = image ? "image_understanding" : "final_answer";
+    }
+    if (paperIntent.isOfficialPaperCandidate && route.mode === "paper_question_qa" && !hasExactQuestionText) {
+      let msg = "\u0DC3\u0DB8\u0DCF\u0DC0\u0DD9\u0DB1\u0DCA\u0DB1, \u0DB8\u0DA7 \u0DB8\u0DDA \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA\u0DA7 \u0D85\u0DAF\u0DCF\u0DC5 \u0DB1\u0DD2\u0DBD \u0DB8\u0DD6\u0DBD\u0DCF\u0DC1\u0DCA\u200D\u0DBB\u0DBA\u0D9A\u0DCA (past paper/scheme/PDF) \u0DC3\u0DDC\u0DBA\u0DCF\u0D9C\u0DB1\u0DCA\u0DB1 \u0DB6\u0DD0\u0DBB\u0DD2 \u0DC0\u0DD4\u0DAB\u0DCF.";
+      if (route.mode === "paper_question_qa") {
+        msg = "\u0DB8\u0DD9\u0DB8 \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA \u0DC3\u0DB3\u0DC4\u0DCF \u0DB1\u0DD2\u0DBD Past Paper \u0D91\u0D9A \u0DC4\u0DDD Marking Scheme \u0D91\u0D9A \u0DC3\u0DDC\u0DBA\u0DCF\u0D9C\u0DD0\u0DB1\u0DD3\u0DB8\u0DA7 \u0DB1\u0DDC\u0DC4\u0DD0\u0D9A\u0DD2 \u0DC0\u0DD2\u0DBA.";
+      }
+      console.log("[AI_RESPOND_STREAM] Answer blocked: Missing evidence for official paper question.");
+      emitSse(res, "evidence_missing", {
+        reason: "NO_VALID_EVIDENCE_FOUND",
+        message: msg
+      });
+      emitSse(res, "token", { text: msg });
+      emitSse(res, "done", {
+        ok: false,
+        completed: true,
+        requestId,
+        finishReason: "blocked_no_evidence"
+      });
+      trace.doneSent = true;
+      return;
+    }
+    const sysInstruction = getCloraSystemPrompt(modifiedUserContext, route.mode);
+    let finalSysInstruction = sysInstruction;
+    if (evidence.allowModelQuestionGeneration) {
+      finalSysInstruction += "\n\n[STRICT INSTRUCTION]: The user has explicitly requested a MODEL/PRACTICE question. You MUST prefix your question exactly with: '\u26A0\uFE0F AI-generated model question \u2014 official past-paper question \u0DB1\u0DDC\u0DC0\u0DDA' and NEVER claim it is from a real past paper.";
+    } else if (policy.requireEvidence) {
+      finalSysInstruction += "\n\n[STRICT INSTRUCTION]: The user is asking for a real paper question or syllabus discussion. You MUST base your answer strictly on the provided evidence. DO NOT invent or hallucinate any questions, equations, or past-paper details. If the evidence lacks the specific question, reply that you cannot find it.";
+    }
+    const mistakeImageSources = [];
+    const contentsParts = [
+      {
+        text: `Context Blocks:
+${contextBlocksText}
+
+Previous Chat History:
+${history?.length ? JSON.stringify(history) : "None"}
+
+Current User Request:
+${prompt}
+Answer in Sinhala-first style if appropriate.`
+      }
+    ];
+    const asksAboutMistakes = /mistake|error log|wrong answer|වැරදි|වරද|quiz me on my recent/i.test(prompt);
+    if (asksAboutMistakes && Array.isArray(modifiedUserContext.recentMistakes)) {
+      const recentMistakes = modifiedUserContext.recentMistakes.slice(0, 8);
+      contentsParts[0].text += `
+
+Recent Mistake Notebook records (real saved data):
+${JSON.stringify(recentMistakes.map((mistake) => ({
+        subject: mistake.subject,
+        lesson: mistake.lesson,
+        errorText: mistake.errorText || mistake.questionText,
+        createdAt: mistake.createdAt,
+        hasImage: Boolean(mistake.imageStoragePath)
+      })))}
+Use these records for diagnosis, revision, or a grounded quiz. If a saved image is attached below, inspect that actual image. Do not ask the user to upload it again. Never replace unreadable or missing details with generic likely mistakes; say exactly what cannot be read.`;
+      const bucket = getAdminBucket();
+      const bucketName = bucket.name;
+      for (const mistake of recentMistakes.slice(0, 3)) {
+        if (!mistake.imageStoragePath || !mistake.imageMimeType) continue;
+        contentsParts.push({
+          fileData: {
+            fileUri: `gs://${bucketName}/${mistake.imageStoragePath}`,
+            mimeType: mistake.imageMimeType
+          }
+        });
+        contentsParts.push({ text: `Mistake Notebook image for ${mistake.subject || "subject"} / ${mistake.lesson || "lesson"}. Analyze only when relevant.` });
+        try {
+          const [imageUrl] = await bucket.file(mistake.imageStoragePath).getSignedUrl({
+            action: "read",
+            expires: Date.now() + 7 * 24 * 60 * 60 * 1e3
+          });
+          const source = {
+            id: mistake.id,
+            sourceId: mistake.id,
+            title: mistake.imageFileName || `${mistake.subject || "Subject"} - ${mistake.lesson || "lesson"}`,
+            url: imageUrl,
+            sourceType: "mistake_image",
+            badge: "Saved error image",
+            mimeType: mistake.imageMimeType,
+            lesson: mistake.lesson
+          };
+          mistakeImageSources.push(source);
+          allSources.push(source);
+        } catch (error) {
+          console.warn("[MistakeNotebook] Could not sign saved image", { mistakeId: mistake.id, error: String(error) });
+        }
+        aiTask = "image_understanding";
+      }
+      if (mistakeImageSources.length > 0) emitSse(res, "sources", { sources: allSources });
+    }
+    if (image && image.data && image.mimeType) {
+      contentsParts.push({
+        inlineData: {
+          mimeType: image.mimeType,
+          data: image.data
+        }
+      });
+      contentsParts.push({
+        text: `
+
+[Vision Triggered] OCR/Diagram Analysis requested. Image mimeType is ${image.mimeType}. Scan the image details carefully and run custom vision-based prompt contexts (such as OCR, formula extraction, or diagram understanding) to give precise, contextual, step-by-step guidance.`
+      });
+    }
+    if (attachments && attachments.length > 0) {
+      const bucketName = getAdminBucket().name;
+      for (const att of attachments) {
+        if (att.storagePath && att.mimeType) {
+          contentsParts.push({
+            fileData: {
+              fileUri: `gs://${bucketName}/${att.storagePath}`,
+              mimeType: att.mimeType
+            }
+          });
+          contentsParts.push({
+            text: `
+
+[Attachment: ${att.fileName || "unknown file"}] Please analyze the attached file.`
+          });
+        }
+      }
+      aiTask = "image_understanding";
+    }
+    let stream = null;
+    let modelUsed = "";
+    try {
+      const result = await generateContentStreamWithFallback(
+        aiTask,
+        {
+          model: "ignored",
+          // will be overridden by router
+          contents: [{ role: "user", parts: contentsParts }],
+          config: {
+            systemInstruction: finalSysInstruction,
+            temperature: getTemperature(route.mode),
+            maxOutputTokens: getMaxTokens(route.mode)
+          }
+        },
+        ai9,
+        signal
+      );
+      stream = result.stream;
+      modelUsed = result.modelUsed;
+      if (result.warning) {
+        emitSse(res, "token", { text: `
+
+\u26A0\uFE0F *${result.warning}*
+
+` });
+      }
+    } catch (err) {
+      throw new Error(`All model streaming options failed. ${err.message}`);
+    }
+    let isInterrupted = false;
+    let fullText = "";
+    let chunkBuffer = "";
+    try {
+      for await (const chunk of stream) {
+        const text = chunk.text || "";
+        if (text) {
+          fullText += text;
+          chunkBuffer += text;
+          trace.totalChars += text.length;
+          trace.tokenCount++;
+          if (chunkBuffer.length >= 50 || /[\n\r\.\?!,;]/.test(chunkBuffer)) {
+            emitSse(res, "token", { text: chunkBuffer });
+            trace.lastEvent = "token";
+            chunkBuffer = "";
+          }
+        }
+      }
+      if (chunkBuffer.length > 0) {
+        emitSse(res, "token", { text: chunkBuffer });
+      }
+      if (!isInterrupted && mistakeImageSources.length > 0) {
+        const gallery = `
+
+### Saved error image${mistakeImageSources.length === 1 ? "" : "s"}
+
+${mistakeImageSources.map((source) => {
+          const alt = String(source.title || "Saved mistake image").replace(/[\[\]]/g, "");
+          return `![${alt}](${source.url})`;
+        }).join("\n\n")}`;
+        fullText += gallery;
+        emitSse(res, "token", { text: gallery });
+      }
+    } catch (e) {
+      console.warn("Stream interrupted:", e);
+      isInterrupted = true;
+      emitSse(res, "error", { ok: false, error: "Stream interrupted", recoverable: true, code: "STREAM_INTERRUPTED", completed: false, incomplete: true });
+    }
+    try {
+      const { trackAIUsage: trackAIUsage3 } = await Promise.resolve().then(() => (init_usageTracker(), usageTracker_exports));
+      const inputTokens = Math.round((contextBlocksText.length + prompt.length + sysInstruction.length) / 3.8) + 100;
+      const outputTokens = Math.round(fullText.length / 3.5);
+      await trackAIUsage3(user.uid, modelUsed || "gemini-2.0-flash", inputTokens, outputTokens, "normalMessages");
+    } catch (trackErr) {
+      console.warn("[usageTracker] Error tracking usage:", trackErr);
+    }
+    emitSse(res, "status", { step: "assistant", status: "Saving chat" });
+    let chatRes = { chatSaved: false };
+    try {
+      try {
+        await updateConversationState(user.uid, {
+          activeSourceIds: allSources.map((s) => s.id || s.sourceId).filter(Boolean),
+          selectedSourceId: route.entities?.activeSourceId || null,
+          selectedQuestionId: route.entities?.questionNo || null
+        });
+      } catch (e) {
+      }
+      chatRes = await safeCall("saveFinalChat", () => saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: fullText,
+        mode: route.mode,
+        subject: activeSubject,
+        sources: allSources
+      }), { chatSaved: false }, res);
+      if (chatRes && chatRes.chatSaved) {
+        trace.chatSaved = true;
+        trace.messageId = chatRes.messageId;
+      }
+    } catch (err) {
+      console.warn("CHAT_SAVE_SKIPPED", err);
+    }
+    if (process.env.ENABLE_MEMORY_EXTRACTION === "true") {
+      safeCall("extractStableMemoryIfUseful", () => extractStableMemoryIfUseful({ uid: user.uid, email: user.email, prompt, answer: fullText, userContext: modifiedUserContext }), null, res).catch(() => null);
+    }
+    if (!isInterrupted && fullText.length > 0) {
+      try {
+        let getDeterministicSuggestions2 = function(mode) {
+          if (mode === "paper_question_qa") {
+            return [
+              "\u0DB8\u0DDA\u0D9A PDF \u0D91\u0D9A\u0DD9\u0DB1\u0DCA \u0D86\u0DBA\u0DD9\u0DAD\u0DCA verify \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1",
+              "\u0DB8\u0DDA \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA\u0DDA marking points \u0DAF\u0DD9\u0DB1\u0DCA\u0DB1",
+              "\u0DB8\u0DDA \u0DC0\u0D9C\u0DDA \u0DAD\u0DC0 MCQ 5\u0D9A\u0DCA \u0DAF\u0DD9\u0DB1\u0DCA\u0DB1"
+            ];
+          }
+          if (mode === "tutor_explanation" || mode === "normal_chat") {
+            return [
+              "\u0DB8\u0DDA\u0D9A \u0DC3\u0DBB\u0DBD\u0DC0 \u0DB1\u0DD0\u0DC0\u0DAD \u0DB4\u0DD0\u0DC4\u0DD0\u0DAF\u0DD2\u0DBD\u0DD2 \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1",
+              "\u0DB8\u0DDA lesson \u0D91\u0D9A\u0DD9\u0DB1\u0DCA MCQ 5\u0D9A\u0DCA \u0DAF\u0DD9\u0DB1\u0DCA\u0DB1",
+              "\u0DB8\u0D9C\u0DDA \u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 points \u0DA7\u0DD2\u0D9A \u0D9A\u0DD2\u0DBA\u0DB1\u0DCA\u0DB1"
+            ];
+          }
+          return [
+            "\u0DAD\u0DC0 \u0D9A\u0DD9\u0DA7\u0DD2\u0DBA\u0DD9\u0DB1\u0DCA \u0D9A\u0DD2\u0DBA\u0DB1\u0DCA\u0DB1",
+            "exam answer \u0D91\u0D9A\u0D9A\u0DCA \u0DBD\u0DD9\u0DC3 \u0DBD\u0DD2\u0DBA\u0DB1\u0DCA\u0DB1",
+            "\u0DB8\u0DAD\u0D9A \u0DAD\u0DB6\u0DCF\u0D9C\u0DB1\u0DCA\u0DB1 tips \u0DAF\u0DD9\u0DB1\u0DCA\u0DB1"
+          ];
+        };
+        var getDeterministicSuggestions = getDeterministicSuggestions2;
+        let finalSuggestions = [];
+        if (process.env.ENABLE_AI_SUGGESTIONS === "true") {
+          const suggPrompt = `Based on the user's message: "${prompt}" and the assistant's answer: "${fullText.substring(0, 1e3)}...", generate 3 short, contextual follow-up suggestions in Sinhala.
+Important: Output ONLY a valid JSON array of 3 strings.
+Example suggestions for Clora X:
+- "\u0DB8\u0DDA \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA PDF \u0D91\u0D9A\u0DD9\u0DB1\u0DCA \u0D86\u0DBA\u0DD9\u0DAD\u0DCA \u0DB4\u0DBB\u0DD3\u0D9A\u0DCA\u0DC2\u0DCF \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1" (Recheck from PDF)
+- "\u0DB8\u0DDA \u0D85\u0DC0\u0DD4\u0DBB\u0DD4\u0DAF\u0DCA\u0DAF\u0DDA marking scheme \u0D91\u0D9A \u0DAF\u0DD9\u0DB1\u0DCA\u0DB1" (Get marking scheme)
+- "\u0DB8\u0DDA lesson \u0D91\u0D9A\u0DD9\u0DB1\u0DCA \u0DAD\u0DC0 mcq \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 \u0DAF\u0DD9\u0DB1\u0DCA\u0DB1" (More MCQs from this lesson)
+- "\u0DB8\u0DDA\u0D9A \u0DC0\u0DD0\u0DBB\u0DAF\u0DD2\u0DBA\u0DD2, \u0DB1\u0DD0\u0DC0\u0DAD \u0DB4\u0DBB\u0DD3\u0D9A\u0DCA\u0DC2\u0DCF \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1" (This is wrong, recheck)
+Do not include any other text or markdown formatting.`;
+          try {
+            const { result: sugResult } = await callGeminiWithFallback("fast_background", {
+              model: "ignored",
+              contents: suggPrompt,
+              config: {
+                temperature: 0.7,
+                maxOutputTokens: 200,
+                responseMimeType: "application/json"
+              }
+            }, getAIClient());
+            const sugText = sugResult.text || "";
+            let cleaned = sugText.replace(/```json/gi, "").replace(/```/g, "").trim();
+            let parsed = null;
+            try {
+              parsed = JSON.parse(cleaned);
+            } catch (e) {
+              const start = cleaned.indexOf("[");
+              const end = cleaned.lastIndexOf("]");
+              if (start >= 0 && end > start) {
+                try {
+                  parsed = JSON.parse(cleaned.slice(start, end + 1));
+                } catch (e2) {
+                }
+              }
+            }
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              finalSuggestions = parsed.filter((x) => typeof x === "string").slice(0, 3);
+            }
+          } catch (e) {
+            console.warn("Failed to generate AI suggestions, falling back to deterministic", e);
+          }
+        }
+        if (finalSuggestions.length === 0) {
+          finalSuggestions = getDeterministicSuggestions2(route.mode);
+        }
+        emitSse(res, "suggestions", { suggestions: finalSuggestions });
+      } catch (err) {
+        console.warn("Failed to generate suggestions", err);
+      }
+    }
+    const elapsedSeconds = Math.round((Date.now() - startedAt) / 1e3);
+    let summaryItems = [];
+    if (route.mode === "normal_chat") {
+      summaryItems.push(`Thought for ${elapsedSeconds}s`);
+    } else if (paperIntent.isOfficialPaperCandidate) {
+      summaryItems.push(`\u2713 Official paper request detected`);
+      summaryItems.push(`\u2713 Subject/year/question parsed (${paperIntent.subject || ""} ${paperIntent.year || ""} Q${paperIntent.questionNo || ""})`);
+      summaryItems.push(`\u2713 Past Papers DB checked`);
+      if (hasExactQuestionText) {
+        summaryItems.push(`\u2713 Source lock checked`);
+        summaryItems.push(`\u2713 Evidence checked`);
+      } else {
+        summaryItems.push(`\u2713 Source checked`);
+        summaryItems.push(`\u26A0 Exact question evidence missing`);
+      }
+    } else {
+      summaryItems.push(`Thought for ${elapsedSeconds}s`);
+      if (allSources && allSources.length > 0) summaryItems.push(`\u2713 Context sources checked`);
+    }
+    emitSse(res, "safe_summary", { items: summaryItems });
+    trace.completed = !isInterrupted;
+    emitSse(res, "done", { ok: !isInterrupted, completed: !isInterrupted, incomplete: isInterrupted, requestId, messageId: chatRes?.messageId || null, chatSaved: trace.chatSaved, sources: allSources || [], finishReason: isInterrupted ? "interrupted" : "complete" });
+    trace.doneSent = true;
+    trace.lastEvent = "done";
+  } catch (error) {
+    console.error("Stream Error", error);
+    trace.errorCode = error.code || "UNKNOWN_ERROR";
+    trace.errorMessage = error.message || String(error);
+    const classified = error.code === "AI_BILLING_EXHAUSTED" ? error : classifyAiError(error);
+    if (classified.code === "AI_BILLING_EXHAUSTED") {
+      emitSse(res, "error", {
+        code: "AI_BILLING_EXHAUSTED",
+        message: "AI credits \u0D85\u0DC0\u0DC3\u0DB1\u0DCA \u0DC0\u0DD9\u0DBD\u0DCF \u0DAD\u0DD2\u0DBA\u0DD9\u0DB1\u0DC0\u0DCF. Billing update \u0D9A\u0DC5\u0DCF\u0DB8 \u0DB1\u0DD0\u0DC0\u0DAD AI answer \u0DAF\u0DD9\u0DB1\u0DCA\u0DB1\u0DB8\u0DCA.",
+        canRetry: false,
+        localOnlyAvailable: true
+      });
+      emitSse(res, "suggestions", {
+        suggestions: [
+          "Firebase PDFs list \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1",
+          "Indexed PDF chunks \u0DB6\u0DBD\u0DB1\u0DCA\u0DB1",
+          "Billing fix \u0D9A\u0DC5\u0DCF\u0DA7 \u0DB4\u0DC3\u0DCA\u0DC3\u0DDA answer continue \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1"
+        ]
+      });
+      emitSse(res, "done", {
+        completed: false,
+        reason: "AI_BILLING_EXHAUSTED",
+        canContinue: false
+      });
+    } else {
+      emitSse(res, "error", { ok: false, error: classified.userMessage || classified.errorMessage || String(error), code: classified.code, recoverable: true });
+      if (!res.headersSent) {
+        emitSse(res, "token", { text: "\n\n\u26A0\uFE0F \u0DC3\u0DB8\u0DCF\u0DC0\u0DB1\u0DCA\u0DB1, \u0DB4\u0DAF\u0DCA\u0DB0\u0DAD\u0DD2\u0DBA\u0DDA \u0DAF\u0DDD\u0DC2\u0DBA\u0D9A\u0DCA \u0D87\u0DAD\u0DD2 \u0DC0\u0DD2\u0DBA." });
+      }
+      emitSse(res, "done", { ok: false, completed: false, requestId, chatSaved: false, finishReason: "error_recovered" });
+    }
+    trace.doneSent = true;
+    trace.lastEvent = "done";
+  } finally {
+    clearInterval(heartbeatInterval);
+    unregisterRequest(requestId);
+    unregisterRequest(requestId);
+    if (!trace.doneSent) {
+      try {
+        emitSse(res, "done", {
+          ok: trace.completed,
+          completed: trace.completed,
+          requestId,
+          chatSaved: trace.chatSaved,
+          reason: trace.completed ? "STREAM_FINISHED" : "STREAM_FINISHED_WITH_RECOVERABLE_ERROR"
+        });
+        trace.doneSent = true;
+        trace.lastEvent = "done";
+      } catch (e) {
+        console.error("Failed to send done in finally", e);
+      }
+    }
+    trace.endedAt = (/* @__PURE__ */ new Date()).toISOString();
+    res.end();
+  }
+}
+async function aiContinueStream(req, res) {
+  const startedAt = Date.now();
+  const requestId = req.body?.clientRequestId || "req_cont_" + Date.now() + "_" + Math.random().toString(36).substring(7);
+  const trace = {
+    requestId,
+    startedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    completed: false,
+    doneSent: false,
+    clientClosed: false,
+    tokenCount: 0,
+    totalChars: 0,
+    chatSaved: false
+  };
+  addStreamTrace(trace);
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+  const abortController = registerRequest(requestId);
+  const signal = abortController.signal;
+  const heartbeatInterval = setInterval(() => {
+    try {
+      emitSse(res, "heartbeat", { ok: true, requestId, ts: Date.now() });
+      trace.lastEvent = "heartbeat";
+    } catch (e) {
+    }
+  }, 1e4);
+  req.on("close", () => {
+    cancelRequest(requestId);
+    console.log(`[STREAM] STREAM_CLIENT_CLOSED requestId=${requestId}`);
+    trace.clientClosed = true;
+    trace.endedAt = (/* @__PURE__ */ new Date()).toISOString();
+  });
+  try {
+    const { originalPrompt, previousAssistantText, sources = [], chatId, reason } = req.body;
+    const user = req.user;
+    const { trackAIUsage: trackAIUsage2 } = await Promise.resolve().then(() => (init_usageTracker(), usageTracker_exports));
+    emitSse(res, "status", { step: "started", message: "Continuing answer..." });
+    const trimmedPrevText = (previousAssistantText || "").slice(-1500);
+    const promptText = `
+User original prompt: "${originalPrompt}"
+The previous answer stopped halfway due to: "${reason || "unknown"}"
+Here is the last part of the previous answer:
+"...${trimmedPrevText}"
+
+Instruction:
+Continue the previous Sinhala answer from exactly where it stopped. Do not repeat completed sections. Finish the remaining explanation.
+Keep the same tone and language (Sinhala-first style).
+`;
+    const ai9 = getAIClient();
+    let stream = null;
+    let modelUsed = "";
+    try {
+      const result = await generateContentStreamWithFallback("final_answer", {
+        model: "ignored",
+        // will be overridden by router
+        contents: promptText,
+        config: {
+          maxOutputTokens: 2e3
+        }
+      }, ai9, signal);
+      stream = result.stream;
+      modelUsed = result.modelUsed;
+      if (result.warning) {
+        emitSse(res, "token", { text: `
+
+\u26A0\uFE0F *${result.warning}*
+
+` });
+      }
+    } catch (err) {
+      throw new Error(`Continue stream failed: ${err.message}`);
+    }
+    let fullText = "";
+    let chunkBuffer = "";
+    for await (const chunk of stream) {
+      const text = chunk.text || "";
+      if (text) {
+        fullText += text;
+        chunkBuffer += text;
+        trace.totalChars += text.length;
+        trace.tokenCount++;
+        if (chunkBuffer.length >= 50 || /[\n\r\.\?!,;]/.test(chunkBuffer)) {
+          emitSse(res, "token", { text: chunkBuffer });
+          trace.lastEvent = "token";
+          chunkBuffer = "";
+        }
+      }
+    }
+    if (chunkBuffer.length > 0) {
+      emitSse(res, "token", { text: chunkBuffer });
+    }
+    trace.completed = true;
+    try {
+      const { trackAIUsage: trackAIUsage3 } = await Promise.resolve().then(() => (init_usageTracker(), usageTracker_exports));
+      const inputTokens = Math.round(promptText.length / 3.8) + 100;
+      const outputTokens = Math.round(fullText.length / 3.5);
+      await trackAIUsage3(user.uid, modelUsed || "gemini-3.1-pro-preview", inputTokens, outputTokens, "proCalls");
+    } catch (trackErr) {
+      console.warn("[usageTracker] Error tracking continuation usage:", trackErr);
+    }
+    if (chatId) {
+      await safeCall("saveContinuationChat", async () => {
+        const db = getAdminDb();
+        const chatRef = db.collection("users").doc(user.uid).collection("chat_history").doc(chatId);
+        const docSnap = await chatRef.get();
+        if (docSnap.exists) {
+          const prevData = docSnap.data();
+          const updatedAnswer = (prevData?.assistantAnswer || "") + "\n" + fullText;
+          await chatRef.update({
+            assistantAnswer: updatedAnswer,
+            updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+          });
+          trace.chatSaved = true;
+        }
+      }, null, res);
+    }
+    emitSse(res, "done", {
+      ok: true,
+      completed: true,
+      requestId,
+      chatSaved: trace.chatSaved
+    });
+    trace.doneSent = true;
+    trace.lastEvent = "done";
+  } catch (err) {
+    console.error("Continue Stream Error", err);
+    trace.errorCode = err.code || "CONTINUE_FAILED";
+    trace.errorMessage = err.message || String(err);
+    emitSse(res, "error", { ok: false, error: err.message, recoverable: true, code: "CONTINUE_FAILED" });
+    emitSse(res, "done", { ok: false, completed: false, requestId, chatSaved: false });
+    trace.doneSent = true;
+    trace.lastEvent = "done";
+  } finally {
+    clearInterval(heartbeatInterval);
+    unregisterRequest(requestId);
+    unregisterRequest(requestId);
+    if (!trace.doneSent) {
+      try {
+        emitSse(res, "done", {
+          ok: trace.completed,
+          completed: trace.completed,
+          requestId,
+          chatSaved: trace.chatSaved
+        });
+        trace.doneSent = true;
+        trace.lastEvent = "done";
+      } catch (e) {
+      }
+    }
+    trace.endedAt = (/* @__PURE__ */ new Date()).toISOString();
+    res.end();
+  }
+}
+var lastStreamTraces;
+var init_respondStream = __esm({
+  "server/ai/respondStream.ts"() {
+    "use strict";
+    init_client();
+    init_aiErrorClassifier();
+    init_prompts();
+    init_stripVisualBlocks();
+    init_userContext();
+    init_admin();
+    init_memoryExtractor();
+    init_knowledgeRouter();
+    init_retrieve();
+    init_urlContext();
+    init_googleSearchGrounding();
+    init_conversationState();
+    init_evidenceRetrieval();
+    init_modelRouter();
+    init_answerPolicy();
+    init_sourceScoring();
+    init_lessonResolver();
+    init_cancellation();
+    lastStreamTraces = [];
+  }
+});
+
+// server/utils/retry.ts
+var retry_exports = {};
+__export(retry_exports, {
+  retryGoogleAuthOperation: () => retryGoogleAuthOperation
+});
+async function retryGoogleAuthOperation(name, fn) {
+  const delays = [500, 1500, 3e3];
+  let lastErr;
+  for (let i = 0; i <= delays.length; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const msg = String(err?.message || err);
+      const retryable = msg.includes("Premature close") || msg.includes("ECONNRESET") || msg.includes("ETIMEDOUT") || msg.includes("oauth2") || msg.includes("fetch") || msg.includes("fetch failed");
+      if (msg.includes("Premature close") || msg.includes("Invalid response body while trying to fetch oauth2 token") || msg.includes("GOOGLE_AUTH_TOKEN_FETCH_FAILED") || msg.includes("UPLOAD_STORAGE_FAILED")) {
+        console.warn(`[Retry helper] Fast-failing ${name} due to known Admin Storage degradation: `, msg);
+        throw Object.assign(new Error("Admin Storage degraded"), {
+          ok: false,
+          code: "ADMIN_STORAGE_DEGRADED_USE_CLIENT_HANDOFF",
+          recommendedMode: "client_firebase_storage",
+          message: "Use client Firebase Storage handoff instead of backend Admin Storage download."
+        });
+      }
+      if (!retryable || i === delays.length) break;
+      console.warn(`[Retry helper] Attempt ${i + 1} for ${name} failed. Retrying in ${delays[i]}ms... Error:`, msg);
+      await new Promise((r) => setTimeout(r, delays[i]));
+    }
+  }
+  throw lastErr;
+}
+var init_retry = __esm({
+  "server/utils/retry.ts"() {
+    "use strict";
+  }
+});
+
+// server/realtime/config.ts
+var config_exports = {};
+__export(config_exports, {
+  getRealtimeConfig: () => getRealtimeConfig
+});
+function getRealtimeConfig() {
+  const enabled = String(process.env.ENABLE_REALTIME_VOICE || "").toLowerCase() === "true";
+  const provider = process.env.REALTIME_PROVIDER || "gemini_live";
+  const missing = [];
+  if (!enabled) {
+    return {
+      enabled,
+      provider,
+      available: false,
+      missing: [],
+      reason: "REALTIME_DISABLED",
+      model: null,
+      project: null,
+      location: "global",
+      authMode: "none"
+    };
+  }
+  if (provider === "gemini_live") {
+    if (!process.env.GEMINI_LIVE_MODEL) missing.push("GEMINI_LIVE_MODEL");
+    const vertexMode = String(process.env.GEMINI_USE_VERTEX || "").toLowerCase() === "true";
+    if (vertexMode) {
+      if (!process.env.GOOGLE_CLOUD_PROJECT) missing.push("GOOGLE_CLOUD_PROJECT");
+      if (!process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+        missing.push("GOOGLE_APPLICATION_CREDENTIALS_JSON");
+      }
+    } else {
+      if (!process.env.GEMINI_API_KEY) missing.push("GEMINI_API_KEY_OR_VERTEX");
+    }
+    return {
+      enabled,
+      provider: "gemini_live",
+      available: missing.length === 0,
+      missing,
+      model: process.env.GEMINI_LIVE_MODEL || "gemini-3.1-flash-live-preview",
+      project: process.env.GOOGLE_CLOUD_PROJECT || null,
+      location: process.env.GOOGLE_CLOUD_LOCATION || "global",
+      authMode: vertexMode ? "vertex_service_account" : "gemini_api_key"
+    };
+  }
+  if (provider === "openai") {
+    if (!process.env.OPENAI_API_KEY) missing.push("OPENAI_API_KEY");
+    return {
+      enabled,
+      provider: "openai",
+      available: missing.length === 0,
+      missing,
+      model: process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview-2024-12-17",
+      project: null,
+      location: "global",
+      authMode: "none"
+    };
+  }
+  return {
+    enabled,
+    provider,
+    available: false,
+    missing: ["REALTIME_PROVIDER_INVALID"],
+    model: null,
+    project: null,
+    location: "global",
+    authMode: "none"
+  };
+}
+var init_config = __esm({
+  "server/realtime/config.ts"() {
+    "use strict";
+  }
+});
+
 // server/image/generate.ts
 var generate_exports = {};
 __export(generate_exports, {
@@ -1325,60 +7078,51 @@ __export(generate_exports, {
 });
 async function generateEducationalImage(req) {
   try {
-    const { prompt, subject, lesson, style, mode } = req.body;
+    const { prompt, subject, lesson, style, mode, aspectRatio = "1:1", quality } = req.body;
     const uid = req.user.uid;
     if (!prompt) throw new Error("Prompt is required");
+    if (process.env.ENABLE_IMAGE_GENERATION === "false") {
+      return { ok: false, code: "IMAGE_GENERATION_DISABLED", error: "Image generation is disabled." };
+    }
     const finalPrompt = `Create a clean Sinhala G.C.E. A/L Technology exam-focused diagram. Clear labels. Minimal clutter. Accurate educational layout. No watermark. Sinhala labels where useful. Subject: ${subject || "Technology"}. Lesson: ${lesson || "General"}. User request: ${prompt}`;
-    const configuredModel = process.env.GEMINI_IMAGE_MODEL || process.env.NANO_BANANA_MODEL || "imagen-3.0-generate-001";
-    const fallbackModel = process.env.GEMINI_IMAGE_PRO_MODEL || process.env.NANO_BANANA_PRO_MODEL || "imagen-3.0-generate-001";
-    const modelsToTry = [configuredModel, fallbackModel, "imagen-3.0-generate-001"];
+    let configuredModel = AI_MODELS.image;
+    if (mode === "studio" || mode === "pro" || quality === "high" || quality === "4K") {
+      configuredModel = AI_MODELS.imagePro;
+    }
+    const fallbackModel = "imagen-3.0-generate-001";
+    const modelsToTry = [configuredModel, fallbackModel, "gemini-3.1-flash-image", "gemini-3-pro-image", "imagen-3.0-generate-001"];
     const uniqueModels = Array.from(new Set(modelsToTry));
     let imageBase64;
     let modelUsed = "";
-    let lastError = null;
-    const ai = getAIClient();
+    let lastError3 = null;
+    const ai9 = getAIClient();
     for (const modelName of uniqueModels) {
       try {
         modelUsed = modelName;
-        if (modelName.toLowerCase().startsWith("imagen")) {
-          const response = await ai.models.generateImages({
+        if (modelName.toLowerCase().startsWith("imagen") || modelName.toLowerCase().includes("image")) {
+          const response = await ai9.models.generateImages({
             model: modelName,
             prompt: finalPrompt,
             config: {
               numberOfImages: 1,
               outputMimeType: "image/jpeg",
-              aspectRatio: "1:1"
+              aspectRatio
             }
           });
           if (response && response.generatedImages && response.generatedImages.length > 0) {
             imageBase64 = response.generatedImages[0].image?.imageBytes;
-          }
-        } else if (modelName.toLowerCase().includes("gemini") && modelName.toLowerCase().includes("image")) {
-          const response = await ai.models.generateContent({
-            model: modelName,
-            contents: finalPrompt,
-            config: {
-              responseModalities: ["TEXT", "IMAGE"]
-            }
-          });
-          const parts = response.candidates?.[0]?.content?.parts || [];
-          for (const part of parts) {
-            if (part.inlineData && part.inlineData.data) {
-              imageBase64 = part.inlineData.data;
-              break;
-            }
           }
         }
         if (imageBase64) {
           break;
         }
       } catch (err) {
-        lastError = err;
+        lastError3 = err;
         console.warn(`Image generation with model ${modelName} failed, trying fallback:`, err.message || err);
       }
     }
     if (!imageBase64) {
-      console.error("All image generation models failed. Last error:", lastError);
+      console.error("All image generation models failed. Last error:", lastError3);
       return {
         ok: false,
         code: "IMAGE_MODEL_UNAVAILABLE",
@@ -1390,26 +7134,26 @@ async function generateEducationalImage(req) {
     let imageUrl = `data:image/jpeg;base64,${imageBase64}`;
     let storagePath = null;
     try {
-      const bucket = (0, import_storage.getStorage)().bucket();
-      const path4 = `generated_images/${uid}/${imageId}.jpg`;
-      const file = bucket.file(path4);
+      const bucket = (0, import_storage2.getStorage)().bucket("al-ai-chat.firebasestorage.app");
+      const path5 = `generated_images/${uid}/${imageId}.jpg`;
+      const file = bucket.file(path5);
       await file.save(Buffer.from(imageBase64, "base64"), {
         metadata: {
           contentType: "image/jpeg"
         }
       });
       try {
-        await file.makePublic();
+        const [url] = await file.getSignedUrl({ action: "read", expires: Date.now() + 1e3 * 60 * 60 * 24 });
+        imageUrl = url;
       } catch (e) {
       }
-      imageUrl = `https://storage.googleapis.com/${bucket.name}/${path4}`;
-      storagePath = path4;
+      storagePath = path5;
     } catch (storageErr) {
       console.warn("Firebase Storage upload failed, falling back to data URL:", storageErr);
     }
     try {
       const db = getAdminDb();
-      const imageRef = db.collection("users").doc(uid).collection("generated_images").doc(imageId);
+      const imageRef = db.collection("generated_images").doc(uid).collection("items").doc(imageId);
       await imageRef.set({
         uid,
         subject: subject || null,
@@ -1427,6 +7171,7 @@ async function generateEducationalImage(req) {
     return {
       ok: true,
       imageUrl,
+      storagePath,
       model: modelUsed,
       promptUsed: prompt,
       imageId
@@ -1440,13 +7185,13 @@ async function generateEducationalImage(req) {
     };
   }
 }
-var import_storage;
+var import_storage2;
 var init_generate = __esm({
   "server/image/generate.ts"() {
     "use strict";
     init_client();
     init_admin();
-    import_storage = require("firebase-admin/storage");
+    import_storage2 = require("firebase-admin/storage");
   }
 });
 
@@ -1471,18 +7216,17 @@ async function searchPastPapers(req, res) {
       const matchSubject = !subjectMatch || pSubject.toLowerCase() === subjectMatch.toLowerCase() || pSubjectFull.toLowerCase().includes(subjectMatch.toLowerCase());
       const matchYear = !yearMatch || pExam.includes(yearMatch.toString());
       if (matchSubject && matchYear) {
-        const paperYear = pExam.match(/\b(20\d{2}|19\d{2})\b/)?.[1] || yearMatch || "unknown";
         sourceCards.push({
           source: "Local Database",
           title: `${pExam} - ${pSubjectFull} MCQ Answer Key`,
-          url: `/api/past-papers/local/${pSubject.toLowerCase()}/${paperYear}`,
+          url: `/api/past-papers/local/${pSubject.toLowerCase()}/${yearMatch || "2024"}`,
           type: "Answer Sheet",
           snippet: `Official MCQ answer sheet keys for ${pExam} ${pSubjectFull} (${p.metadata.medium || "Sinhala"} medium). Contains ${p.answers.length} verified MCQ answers.`
         });
       }
     });
     try {
-      let fRef = db.collection("past_papers");
+      let fRef = db.collection("rag_sources");
       if (subjectMatch) {
         fRef = fRef.where("subject", "==", subjectMatch.toLowerCase());
       }
@@ -1509,9 +7253,9 @@ async function searchPastPapers(req, res) {
     const yearStr = yearMatch || "";
     const subjectStr = subjectMatch || "";
     const googleQuery = `GCE A/L ${yearStr} ${subjectStr} past paper marking scheme Sinhala Medium PDF ${searchQuery}`;
-    if (process.env.ENABLE_GOOGLE_SEARCH_GROUNDING === "true") try {
-      const ai = getAIClient();
-      const response = await ai.models.generateContent({
+    try {
+      const ai9 = getAIClient();
+      const response = await ai9.models.generateContent({
         model: process.env.GEMINI_DEFAULT_MODEL || "gemini-2.5-flash",
         contents: `Find official, verified download links or PDFs for G.C.E. A/L past papers or marking schemes. Query: ${googleQuery}. Target year: ${yearStr}, Subject: ${subjectStr}. Return only actual sources.`,
         config: {
@@ -1570,8 +7314,7 @@ async function searchPastPapers(req, res) {
       query: searchQuery,
       yearMatch: yearMatch || null,
       subjectMatch: subjectMatch || null,
-      sourceCards: uniqueSourceCards,
-      message: uniqueSourceCards.length ? "Verified source cards found." : "No verified PDF or local paper was found. Upload a paper/source file to index it."
+      sourceCards: uniqueSourceCards
     });
   } catch (error) {
     console.error("Past Paper Search failed:", error);
@@ -1587,24 +7330,655 @@ var init_search = __esm({
   }
 });
 
+// server/ai-core/pdf/solveExtractedQuestion.ts
+var solveExtractedQuestion_exports = {};
+__export(solveExtractedQuestion_exports, {
+  solveExtractedMcqQuestion: () => solveExtractedMcqQuestion
+});
+async function solveExtractedMcqQuestion(params) {
+  const { questionText, options, subject, year, questionNo } = params;
+  const ai9 = getAIClient();
+  const modelName = AI_MODELS.pdf;
+  const systemInstruction = `
+You are solving an already verified Sri Lankan A/L ${subject} MCQ.
+The question and options below were extracted from the official ${year} PDF.
+Choose the best answer.
+
+RULES:
+- Do not change the question text.
+- Do not create a new question.
+- Choose exactly one option (1, 2, 3, 4, or 5).
+- Explain the logic clearly in Sinhala.
+- Return JSON only.
+`;
+  const userPrompt = `
+Question Number: ${questionNo}
+Question Text: ${questionText}
+
+Options:
+${options.map((opt, i) => `(${i + 1}) ${opt}`).join("\n")}
+
+Return JSON:
+{
+  "optionNo": "1|2|3|4|5",
+  "optionText": "text of the selected option",
+  "formulaOrRule": "any formula or rule used",
+  "explanationSinhala": "clear explanation in Sinhala",
+  "whyOthersWrong": ["reason 1", "reason 2"],
+  "confidence": 0.0-1.0,
+  "answerStatus": "ai_solved_from_extracted_question"
+}
+`;
+  try {
+    const response = await ai9.models.generateContent({
+      model: modelName,
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: userPrompt }]
+        }
+      ],
+      config: {
+        systemInstruction,
+        temperature: 0,
+        responseMimeType: "application/json"
+      }
+    });
+    if (!response.text) return null;
+    const result = JSON.parse(response.text.trim());
+    return result;
+  } catch (err) {
+    console.error("[AI_CORE] MCQ Solver failed:", err);
+    return null;
+  }
+}
+var init_solveExtractedQuestion = __esm({
+  "server/ai-core/pdf/solveExtractedQuestion.ts"() {
+    "use strict";
+    init_client();
+  }
+});
+
+// server/ai-core/pdf/directPdfQa.ts
+var directPdfQa_exports = {};
+__export(directPdfQa_exports, {
+  askGeminiDirectPdfStructured: () => askGeminiDirectPdfStructured
+});
+async function askGeminiDirectPdfStructured(params) {
+  const { sourceId, pdfBuffer, year, subject, questionType, questionNo, allowOfficialAnswer = false } = params;
+  const modelName = AI_MODELS.pdf;
+  const systemInstruction = `You are an evidence-first Sri Lankan A/L exam PDF extractor.
+You are reading the exact locked PDF source.
+
+Requested:
+Year: ${year}
+Subject: ${subject}
+Question Type: ${questionType}
+Question Number: ${questionNo}
+
+STRICT RULES:
+1. First find the exact requested question in the PDF.
+2. Extract exact question text as written in the PDF.
+3. If MCQ, extract all options exactly.
+4. Only if exact questionText is extracted, solve/explain.
+5. If exact question is not visible, return found:false.
+6. Do NOT guess the question or the answer.
+7. ${allowOfficialAnswer ? "Only copy officialAnswer when it is explicitly printed in this marking-scheme source." : "This source is not a verified marking scheme. Always return officialAnswer:null; any solution must be generated later as clearly labelled reasoning."}
+8. Do NOT create a similar or model question.
+9. Do NOT answer from syllabus or general memory.
+10. Do NOT fill answer.estimatedAnswer unless questionText exists.
+
+Return JSON only:
+{
+  "found": boolean,
+  "sourceEvidence": {
+    "sourceId": "${sourceId}",
+    "pageNumber": number|null,
+    "questionNo": "${questionNo}",
+    "questionText": string|null,
+    "options": string[]|null
+  },
+  "answer": {
+    "officialAnswer": string|null,
+    "estimatedAnswer": null,
+    "explanationSinhala": string|null,
+    "lesson": string|null
+  },
+  "confidence": number,
+  "reason": string
+}`;
+  const pdfPart = {
+    inlineData: {
+      mimeType: "application/pdf",
+      data: pdfBuffer.toString("base64")
+    }
+  };
+  const userPrompt = `
+Requested:
+Year: ${year}
+Subject: ${subject}
+Question Type: ${questionType}
+Question Number: ${questionNo}
+Source ID: ${sourceId}
+
+Return JSON with exact evidence. If not found, set found:false.
+`;
+  const uid = params.uid || "anonymous";
+  try {
+    const { result: response } = await callGeminiWithFallback("direct_pdf_extract", {
+      model: modelName,
+      contents: [
+        {
+          role: "user",
+          parts: [pdfPart, { text: userPrompt }]
+        }
+      ],
+      config: {
+        systemInstruction,
+        temperature: 0,
+        responseMimeType: "application/json"
+      }
+    });
+    if (!response.text) {
+      throw new Error("Empty response from Gemini API");
+    }
+    let result = JSON.parse(response.text.trim());
+    if (!allowOfficialAnswer && result?.answer) {
+      result.answer.officialAnswer = null;
+    }
+    if (result.answer?.explanationSinhala) {
+      result.answer.explanationSinhala = stripRawVisualBlocks(result.answer.explanationSinhala);
+    }
+    const qText = result?.sourceEvidence?.questionText;
+    const opts = result?.sourceEvidence?.options;
+    if (!result.found || !qText || qText.length < 20) {
+      console.log(`[DirectPDFQA] Extraction failed validation: found=${result.found}, textLength=${qText?.length || 0}`);
+      result = {
+        ...result,
+        found: false,
+        reason: result.reason || "EXACT_QUESTION_TEXT_MISSING",
+        answer: {
+          officialAnswer: null,
+          estimatedAnswer: null,
+          explanationSinhala: null,
+          lesson: null
+        },
+        confidence: 0
+      };
+    }
+    if (questionType === "MCQ" && (!Array.isArray(opts) || opts.length < 4)) {
+      console.log(`[DirectPDFQA] MCQ validation failed: optionsCount=${opts?.length || 0}`);
+      result = {
+        ...result,
+        found: false,
+        reason: "MCQ_OPTIONS_MISSING"
+      };
+    }
+    if (result.found === true && result.sourceEvidence?.questionText && Array.isArray(result.sourceEvidence.options) && result.sourceEvidence.options.length >= 4 && !result.answer?.solvedAnswer && !result.answer?.officialAnswer) {
+      console.log(`[DirectPDFQA] Triggering solver pass for ${questionType} ${questionNo}`);
+      try {
+        const solved = await solveExtractedMcqQuestion({
+          questionText: result.sourceEvidence.questionText,
+          options: result.sourceEvidence.options,
+          subject,
+          year,
+          questionNo
+        });
+        if (solved) {
+          await trackAIUsage(uid, AI_MODELS.pdf, 500, 500, "solverCalls");
+          result.answer = {
+            ...result.answer,
+            solvedAnswer: solved
+          };
+          if (!result.answer.explanationSinhala && solved.explanationSinhala) {
+            result.answer.explanationSinhala = solved.explanationSinhala;
+          }
+        }
+      } catch (solveErr) {
+        console.error("[DirectPDFQA] Solver pass failed:", solveErr);
+      }
+    }
+    if (result.found && result.sourceEvidence?.questionText) {
+      const db = getAdminDb();
+      const cacheId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
+      const cacheData = {
+        sourceId,
+        subject,
+        year,
+        questionType,
+        questionNo,
+        ...result.sourceEvidence,
+        ...result.answer,
+        confidence: result.confidence,
+        extractionMethod: "gemini_direct_pdf_qa",
+        validationStatus: result.confidence > 0.8 ? "valid" : "needs_review",
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      try {
+        const { removeUndefinedDeep: removeUndefinedDeep2 } = await Promise.resolve().then(() => (init_chatSanitizer(), chatSanitizer_exports));
+        await db.collection("pdf_question_cache").doc(cacheId).set(removeUndefinedDeep2(cacheData), { merge: true });
+        console.log(`[AI_CORE] Saved structured cache for ${cacheId}`);
+      } catch (cacheErr) {
+        console.error("[AI_CORE] Failed to save PDF question cache:", cacheErr);
+      }
+    }
+    return { ok: true, ...result };
+  } catch (err) {
+    console.error("[AI_CORE] Direct PDF QA JSON extraction failed:", err);
+    const classified = err?.code === "AI_BILLING_EXHAUSTED" ? { code: "AI_BILLING_EXHAUSTED" } : classifyAiError(err);
+    if (classified.code === "AI_BILLING_EXHAUSTED") {
+      return {
+        ok: false,
+        found: false,
+        errorCode: "AI_BILLING_EXHAUSTED",
+        stage: "MODEL_CALL",
+        reason: "AI billing exhausted. PDF was not fully analyzed by Gemini.",
+        message: "AI credits \u0D85\u0DC0\u0DC3\u0DB1\u0DCA \u0DB1\u0DD2\u0DC3\u0DCF PDF scan/answer generation complete \u0DC0\u0DD4\u0DAB\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0.",
+        canRetry: false
+      };
+    }
+    const isRequireErr = String(err?.message || err).includes("require is not defined");
+    return {
+      ok: false,
+      found: false,
+      errorCode: isRequireErr ? "AI_CLIENT_RUNTIME_ERROR" : "GEMINI_DIRECT_PDF_QA_FAILED",
+      stage: "MODEL_CALL",
+      reason: isRequireErr ? "AI client runtime error" : "Gemini Direct PDF QA failed before verified extraction.",
+      error: String(err?.message || err).slice(0, 500)
+    };
+  } finally {
+    await trackAIUsage(uid, modelName, 1e3, 500, "directPdfQaCalls");
+  }
+}
+var init_directPdfQa = __esm({
+  "server/ai-core/pdf/directPdfQa.ts"() {
+    "use strict";
+    init_client();
+    init_modelRouter();
+    init_stripVisualBlocks();
+    init_admin();
+    init_solveExtractedQuestion();
+    init_usageTracker();
+    init_aiErrorClassifier();
+  }
+});
+
+// server/tts/googleTts.ts
+var googleTts_exports = {};
+__export(googleTts_exports, {
+  generateGoogleTts: () => generateGoogleTts
+});
+async function generateGoogleTts(input) {
+  let resolvedVoiceName = input.voice;
+  if (!resolvedVoiceName || resolvedVoiceName === "auto") {
+    try {
+      const [result] = await client.listVoices({ languageCode: input.languageCode });
+      const voices = result.voices || [];
+      if (voices.length > 0) {
+        const preferred = voices.find((v) => v.name?.includes("Neural2") || v.name?.includes("Wavenet") || v.name?.includes("Studio"));
+        if (preferred && preferred.name) {
+          resolvedVoiceName = preferred.name;
+        } else if (voices[0].name) {
+          resolvedVoiceName = voices[0].name;
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to list voices, falling back to default", e);
+    }
+  }
+  if (!resolvedVoiceName || resolvedVoiceName === "auto") {
+    resolvedVoiceName = input.languageCode.startsWith("si") ? "si-LK-Standard-A" : "en-US-Standard-D";
+  }
+  const request = {
+    input: { text: input.text },
+    voice: { languageCode: input.languageCode, name: resolvedVoiceName },
+    audioConfig: { audioEncoding: "MP3" }
+  };
+  try {
+    const [response] = await client.synthesizeSpeech(request);
+    if (!response.audioContent) {
+      throw new Error("Google TTS returned no audioContent");
+    }
+    return {
+      buffer: Buffer.from(response.audioContent),
+      contentType: "audio/mpeg",
+      provider: "google_cloud",
+      voiceName: resolvedVoiceName
+    };
+  } catch (error) {
+    const err = new Error("Google TTS failed");
+    err.code = "TTS_PROVIDER_ERROR";
+    err.providerError = error.message;
+    throw err;
+  }
+}
+var import_text_to_speech, client;
+var init_googleTts = __esm({
+  "server/tts/googleTts.ts"() {
+    "use strict";
+    import_text_to_speech = __toESM(require("@google-cloud/text-to-speech"), 1);
+    client = new import_text_to_speech.default.TextToSpeechClient();
+  }
+});
+
+// server/ai/pdfAnswerService.ts
+var pdfAnswerService_exports = {};
+__export(pdfAnswerService_exports, {
+  answerFromPdfEvidence: () => answerFromPdfEvidence
+});
+async function answerFromPdfEvidence({
+  uid,
+  chatId,
+  transcriptOrPrompt,
+  activeSubject,
+  activeSourceId,
+  recentAttachmentIds,
+  questionNo,
+  questionType,
+  year,
+  mode = "live_voice"
+}) {
+  try {
+    const db = getAdminDb();
+    const ai9 = getAIClient();
+    let chunks = [];
+    let sourceIdsToSearch = [activeSourceId, ...recentAttachmentIds || []].filter(Boolean);
+    if (sourceIdsToSearch.length > 0) {
+      for (const srcId of sourceIdsToSearch) {
+        const snap = await db.collection("rag_chunks").where("sourceId", "==", srcId).get();
+        chunks.push(...snap.docs.map((d) => d.data()));
+      }
+    } else {
+      let query = db.collection("rag_chunks").where("ownerUid", "==", uid);
+      if (activeSubject) {
+        query = query.where("subject", "==", activeSubject);
+      }
+      const snap = await query.limit(50).get();
+      chunks.push(...snap.docs.map((d) => d.data()));
+    }
+    if (chunks.length === 0) {
+      return {
+        ok: false,
+        code: "PDF_SOURCE_REQUIRED",
+        message: "\u0DB8\u0DDC\u0DB1 PDF \u0D91\u0D9A\u0DD9\u0DB1\u0DCA\u0DAF answer \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0D95\u0DB1\u0DDA? PDF \u0D91\u0D9A select \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.",
+        answer: "\u0DB8\u0DDC\u0DB1 PDF \u0D91\u0D9A\u0DD9\u0DB1\u0DCA\u0DAF answer \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0D95\u0DB1\u0DDA? \u0D9A\u0DBB\u0DD4\u0DAB\u0DCF\u0D9A\u0DBB PDF \u0D91\u0D9A\u0D9A\u0DCA select \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.",
+        sources: [],
+        evidenceLevel: "blocked"
+      };
+    }
+    const contextLines = chunks.slice(0, 15).map((c) => `[Source: ${c.title || c.fileName} | Page: ${c.pageNumber || "?"}] ${c.text}`);
+    const contextStr = contextLines.join("\n\n");
+    const systemInstruction = `You are a Sinhala-first A/L Technology tutor. 
+You must answer the user's question USING ONLY the provided PDF context. 
+If the evidence is not in the context, say 'PDF \u0D91\u0D9A\u0DD9\u0DB1\u0DCA verify \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0DB6\u0DD0\u0DBB\u0DD2 \u0DB1\u0DD2\u0DC3\u0DCF answer guess \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1\u0DD9 \u0DB1\u0DD0\u0DC4\u0DD0. \u0DC0\u0DD9\u0DB1 PDF \u0D91\u0D9A\u0D9A\u0DCA select \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.'
+Do not guess. Do not bring in outside knowledge if the context doesn't support it.
+Output valid JSON.`;
+    const prompt = `Context:
+${contextStr}
+
+Question: ${transcriptOrPrompt}
+
+Return JSON: { "answer": "Sinhala answer text", "evidenceLevel": "high|medium|blocked", "sourceTitles": ["..."] }`;
+    const response = await ai9.models.generateContent({
+      model: AI_MODELS.pdf || "gemini-3.5-flash",
+      contents: prompt,
+      config: {
+        systemInstruction,
+        temperature: 0.2,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: import_genai12.Type.OBJECT,
+          properties: {
+            answer: { type: import_genai12.Type.STRING },
+            evidenceLevel: { type: import_genai12.Type.STRING },
+            sourceTitles: { type: import_genai12.Type.ARRAY, items: { type: import_genai12.Type.STRING } }
+          },
+          required: ["answer", "evidenceLevel", "sourceTitles"]
+        }
+      }
+    });
+    const parsed = JSON.parse(response.text || "{}");
+    let finalSources = [];
+    if (parsed.sourceTitles && parsed.sourceTitles.length > 0) {
+      for (const title of parsed.sourceTitles) {
+        const match = chunks.find((c) => (c.title || c.fileName) === title);
+        if (match) {
+          finalSources.push({
+            sourceId: match.sourceId,
+            title: match.title || match.fileName,
+            pageNumber: match.pageNumber,
+            usedInAnswer: true,
+            storagePath: match.storagePath
+            // assuming it exists
+          });
+        }
+      }
+    }
+    finalSources = Array.from(new Map(finalSources.map((s) => [s.sourceId, s])).values());
+    if (parsed.evidenceLevel === "blocked") {
+      return {
+        ok: false,
+        code: "PDF_SOURCE_REQUIRED",
+        message: parsed.answer,
+        answer: parsed.answer,
+        sources: finalSources,
+        evidenceLevel: "blocked"
+      };
+    }
+    return {
+      ok: true,
+      answer: parsed.answer,
+      sources: finalSources,
+      evidenceLevel: parsed.evidenceLevel || "high"
+    };
+  } catch (err) {
+    console.error("PDF Answer error:", err);
+    return {
+      ok: false,
+      code: "ERROR",
+      message: err.message,
+      answer: "\u0DC3\u0DB8\u0DCF\u0DC0\u0DD9\u0DB1\u0DCA\u0DB1, PDF \u0D91\u0D9A \u0DB4\u0DBB\u0DD3\u0D9A\u0DCA\u0DC2\u0DCF \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8\u0DDA\u0DAF\u0DD3 \u0DAF\u0DDD\u0DC2\u0DBA\u0D9A\u0DCA \u0D87\u0DAD\u0DD2 \u0DC0\u0DD2\u0DBA.",
+      sources: [],
+      evidenceLevel: "blocked"
+    };
+  }
+}
+var import_genai12;
+var init_pdfAnswerService = __esm({
+  "server/ai/pdfAnswerService.ts"() {
+    "use strict";
+    init_admin();
+    import_genai12 = require("@google/genai");
+    init_client();
+  }
+});
+
 // server.ts
 var server_exports = {};
 __export(server_exports, {
-  app: () => app,
-  default: () => server_default,
-  startServer: () => startServer
+  default: () => server_default
 });
 module.exports = __toCommonJS(server_exports);
-var import_config = require("dotenv/config");
-var import_express3 = __toESM(require("express"), 1);
-var import_fs4 = __toESM(require("fs"), 1);
-var import_path3 = __toESM(require("path"), 1);
-var import_app = require("firebase-admin/app");
-var import_storage2 = require("firebase-admin/storage");
+var import_config2 = require("dotenv/config");
+
+// server/utils/env.ts
+var import_dotenv = __toESM(require("dotenv"), 1);
+import_dotenv.default.config();
+var errors = [];
+function validateBoolean(key, defaultValue) {
+  const value = process.env[key];
+  if (value === void 0) {
+    return defaultValue;
+  }
+  const clean = value.trim().toLowerCase();
+  if (clean === "true" || clean === "yes" || clean === "1" || clean === "t" || clean === "y") return true;
+  if (clean === "false" || clean === "no" || clean === "0" || clean === "f" || clean === "n") return false;
+  errors.push(`Invalid boolean value for ${key}: "${value}". Expected "true" or "false".`);
+  return defaultValue;
+}
+function validateEnum(key, allowedValues, defaultValue) {
+  const value = process.env[key];
+  if (value === void 0) {
+    return defaultValue;
+  }
+  const clean = value.trim();
+  if (allowedValues.includes(clean)) {
+    return clean;
+  }
+  errors.push(`Invalid value for ${key}: "${value}". Expected one of: ${allowedValues.join(", ")}`);
+  return defaultValue;
+}
+function validateNumber(key, defaultValue, min, max) {
+  const value = process.env[key];
+  if (value === void 0) {
+    return defaultValue;
+  }
+  const num = Number(value.trim());
+  if (isNaN(num)) {
+    errors.push(`Invalid number value for ${key}: "${value}".`);
+    return defaultValue;
+  }
+  if (min !== void 0 && num < min) {
+    errors.push(`Value for ${key} (${num}) is below minimum limit (${min}).`);
+  }
+  if (max !== void 0 && num > max) {
+    errors.push(`Value for ${key} (${num}) exceeds maximum limit (${max}).`);
+  }
+  return num;
+}
+function validateOptional(key, defaultValue = "") {
+  const value = process.env[key];
+  return value !== void 0 ? value.trim() : defaultValue;
+}
+var NODE_ENV = validateEnum("NODE_ENV", ["development", "production", "test"], "development");
+var PORT = validateNumber("PORT", 3e3, 1, 65535);
+var rawOrigins = validateOptional("ALLOWED_ORIGINS", "");
+var ALLOWED_ORIGINS = [];
+if (rawOrigins) {
+  ALLOWED_ORIGINS = rawOrigins.split(",").map((o) => o.trim()).filter(Boolean);
+} else {
+  ALLOWED_ORIGINS = NODE_ENV === "production" ? [] : ["http://localhost:5173", "http://localhost:3000"];
+}
+var GOOGLE_CLOUD_PROJECT = validateOptional("GOOGLE_CLOUD_PROJECT", "al-ai-chat");
+var FIREBASE_PROJECT_ID = validateOptional("FIREBASE_PROJECT_ID", "al-ai-chat");
+var FIREBASE_STORAGE_BUCKET = validateOptional("FIREBASE_STORAGE_BUCKET", "al-ai-chat.firebasestorage.app");
+var FIRESTORE_DATABASE_ID = validateOptional("FIRESTORE_DATABASE_ID", "");
+var GEMINI_API_KEY = validateOptional("GEMINI_API_KEY", "");
+var GEMINI_DEFAULT_MODEL = validateOptional("GEMINI_DEFAULT_MODEL", "gemini-3.5-flash");
+var DEV_BYPASS_AUTH = validateBoolean("DEV_BYPASS_AUTH", false);
+var ENABLE_MOCK_ROUTES = validateBoolean("ENABLE_MOCK_ROUTES", false);
+var ENABLE_MODEL_TEST_ROUTE = validateBoolean("ENABLE_MODEL_TEST_ROUTE", false);
+var ENABLE_IMAGE_GENERATION = validateBoolean("ENABLE_IMAGE_GENERATION", false);
+var OCR_ENABLED = validateBoolean("OCR_ENABLED", false);
+var MAX_BODY_LIMIT_MB = validateNumber("MAX_BODY_LIMIT_MB", 2, 0.1, 100);
+var RATE_LIMIT_IP_WINDOW_MS = validateNumber("RATE_LIMIT_IP_WINDOW_MS", 6e4, 1e3);
+var RATE_LIMIT_IP_MAX = validateNumber("RATE_LIMIT_IP_MAX", 100, 1);
+var RATE_LIMIT_UID_WINDOW_MS = validateNumber("RATE_LIMIT_UID_WINDOW_MS", 6e4, 1e3);
+var RATE_LIMIT_UID_MAX = validateNumber("RATE_LIMIT_UID_MAX", 100, 1);
+var ENABLE_VIDEO = validateBoolean("ENABLE_VIDEO", true);
+var ENABLE_VIDEO_TRANSCODING = validateBoolean("ENABLE_VIDEO_TRANSCODING", false);
+var VIDEO_REQUIRE_APP_CHECK = validateBoolean("VIDEO_REQUIRE_APP_CHECK", false);
+var VIDEO_INPUT_BUCKET = validateOptional("VIDEO_INPUT_BUCKET", FIREBASE_STORAGE_BUCKET);
+var VIDEO_OUTPUT_BUCKET = validateOptional("VIDEO_OUTPUT_BUCKET", "");
+var VIDEO_ARCHIVE_BUCKET = validateOptional("VIDEO_ARCHIVE_BUCKET", "");
+var VIDEO_TRANSCODER_LOCATION = validateOptional("VIDEO_TRANSCODER_LOCATION", "us-central1");
+var VIDEO_CDN_BASE_URL = validateOptional("VIDEO_CDN_BASE_URL", "").replace(/\/$/, "");
+var VIDEO_CDN_KEY_NAME = validateOptional("VIDEO_CDN_KEY_NAME", "");
+var VIDEO_CDN_SIGNING_KEY = validateOptional("VIDEO_CDN_SIGNING_KEY", "");
+var VIDEO_COOKIE_DOMAIN = validateOptional("VIDEO_COOKIE_DOMAIN", "");
+var VIDEO_UPLOAD_MAX_MB = validateNumber("VIDEO_UPLOAD_MAX_MB", 10240, 1, 51200);
+var VIDEO_COOKIE_TTL_SECONDS = validateNumber("VIDEO_COOKIE_TTL_SECONDS", 300, 60, 600);
+var VIDEO_SESSION_TTL_SECONDS = validateNumber("VIDEO_SESSION_TTL_SECONDS", 600, 120, 3600);
+var ENABLE_4K = validateBoolean("ENABLE_4K", false);
+if (NODE_ENV === "production") {
+  if (ALLOWED_ORIGINS.includes("*")) {
+    errors.push("CORS Wildcard origin is not permitted in production.");
+  }
+  if (DEV_BYPASS_AUTH) {
+    errors.push("Development authentication bypass (DEV_BYPASS_AUTH) is not allowed in production.");
+  }
+  if (ENABLE_MOCK_ROUTES) {
+    errors.push("Mock routes (ENABLE_MOCK_ROUTES) are not allowed in production.");
+  }
+  if (ENABLE_MODEL_TEST_ROUTE) {
+    errors.push("Model-test routes (ENABLE_MODEL_TEST_ROUTE) must be disabled in production.");
+  }
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    errors.push("GOOGLE_APPLICATION_CREDENTIALS file mode is not allowed in production. Use Workload Identity / ADC.");
+  }
+}
+if (ENABLE_VIDEO_TRANSCODING && !VIDEO_OUTPUT_BUCKET) {
+  errors.push("VIDEO_OUTPUT_BUCKET is required when ENABLE_VIDEO_TRANSCODING=true.");
+}
+if (VIDEO_CDN_BASE_URL && (!VIDEO_CDN_KEY_NAME || !VIDEO_CDN_SIGNING_KEY)) {
+  errors.push("VIDEO_CDN_KEY_NAME and VIDEO_CDN_SIGNING_KEY are required when VIDEO_CDN_BASE_URL is configured.");
+}
+if (errors.length > 0) {
+  console.error("\u274C Environment configuration validation failed:");
+  errors.forEach((err) => console.error(`  - ${err}`));
+  process.exit(1);
+}
+var env = {
+  NODE_ENV,
+  PORT,
+  ALLOWED_ORIGINS,
+  GOOGLE_CLOUD_PROJECT,
+  FIREBASE_PROJECT_ID,
+  FIREBASE_STORAGE_BUCKET,
+  FIRESTORE_DATABASE_ID,
+  GEMINI_API_KEY,
+  GEMINI_DEFAULT_MODEL,
+  DEV_BYPASS_AUTH,
+  ENABLE_MOCK_ROUTES,
+  ENABLE_MODEL_TEST_ROUTE,
+  ENABLE_IMAGE_GENERATION,
+  OCR_ENABLED,
+  MAX_BODY_LIMIT_MB,
+  RATE_LIMIT_IP_WINDOW_MS,
+  RATE_LIMIT_IP_MAX,
+  RATE_LIMIT_UID_WINDOW_MS,
+  RATE_LIMIT_UID_MAX,
+  ENABLE_VIDEO,
+  ENABLE_VIDEO_TRANSCODING,
+  VIDEO_REQUIRE_APP_CHECK,
+  VIDEO_INPUT_BUCKET,
+  VIDEO_OUTPUT_BUCKET,
+  VIDEO_ARCHIVE_BUCKET,
+  VIDEO_TRANSCODER_LOCATION,
+  VIDEO_CDN_BASE_URL,
+  VIDEO_CDN_KEY_NAME,
+  VIDEO_CDN_SIGNING_KEY,
+  VIDEO_COOKIE_DOMAIN,
+  VIDEO_UPLOAD_MAX_MB,
+  VIDEO_COOKIE_TTL_SECONDS,
+  VIDEO_SESSION_TTL_SECONDS,
+  ENABLE_4K
+};
+function logEnvConfig() {
+  console.log("\u{1F512} Safe Environment Config Loaded:");
+  Object.keys(env).forEach((key) => {
+    const value = env[key];
+    const isSecret = key.includes("KEY") || key.includes("SECRET") || key.includes("TOKEN") || key.includes("PASSWORD");
+    if (isSecret) {
+      console.log(`  - ${key}: [REDACTED] (${value ? "Configured" : "Not Configured"})`);
+    } else {
+      console.log(`  - ${key}: ${JSON.stringify(value)}`);
+    }
+  });
+}
+
+// server.ts
+init_client();
+init_admin();
+var import_express14 = __toESM(require("express"), 1);
+var import_cors = __toESM(require("cors"), 1);
+var import_path2 = __toESM(require("path"), 1);
+var import_fs3 = __toESM(require("fs"), 1);
 
 // server/ai/routes.ts
-var import_express = __toESM(require("express"), 1);
+var import_express = require("express");
 init_admin();
+init_respondStream();
 
 // server/ai/respond.ts
 init_client();
@@ -1675,315 +8049,148 @@ function requiresGoogleSearch(mode, prompt) {
   return triggers.some((t) => lower.includes(t));
 }
 
-// server/ai/prompts.ts
-function getCloraSystemPrompt(contextData, mode) {
-  const weakLessons = (contextData?.weakLessons || []).map((w) => ({
-    subject: w.subject,
-    topic: w.topic || w.lesson,
-    reason: w.reason,
-    priorityWeight: w.priorityWeight,
-    lastDoneStatus: w.lastDoneStatus
-  }));
-  const diagnostics = contextData?.diagnostics || {};
-  return `
-You are Clora X, a Sinhala-first personal AI tutor for Sri Lankan G.C.E. A/L Engineering Technology stream.
-
-You are not a generic assistant. You are the user's personal study partner.
-
-You must answer using:
-1. logged-in user's Firebase profile,
-2. actual user progress,
-3. actual marks,
-4. actual weak lessons,
-5. actual wrong questions,
-6. AI memory,
-7. recent chat history,
-8. retrieved syllabus / NotebookLM mirrored source chunks,
-9. verified Google Search results only when search is enabled.
-
-User Context:
-Name: ${contextData?.profile?.name || "Unknown"}
-Stream: ${contextData?.profile?.stream || "Unknown"}
-Current Time (Colombo): ${contextData?.currentTimeAsiaColombo || ""}
-Target Z-Score: ${contextData?.targetZ || "Not set"}
-Latest Z-Score: ${contextData?.latestZ ?? "Not available"}
-Subject Z-Scores: ${JSON.stringify(contextData?.subjectZScores || null)}
-Progress Records Checked: ${diagnostics.progressRecordsChecked || 0}
-Lesson History Count: ${diagnostics.lessonHistoryCount || 0}
-Paper Marks Count: ${diagnostics.paperMarksCount || 0}
-Question Marks Count: ${diagnostics.questionMarksCount || 0}
-Weak Lessons: ${JSON.stringify(weakLessons)}
-Recent Progress: ${JSON.stringify(contextData?.recentProgress || [])}
-Recent Lesson History: ${JSON.stringify(contextData?.lessonHistory?.slice(-10) || [])}
-Latest Marks: ${JSON.stringify(contextData?.latestMarks?.slice(-8) || [])}
-AI Memory: ${JSON.stringify(contextData?.aiMemory || [])}
-
-Never invent:
-- user marks
-- progress
-- Z-score
-- district rank
-- island rank
-- past-paper links
-- NotebookLM content
-- syllabus facts
-- sources
-
-If data is missing, say it is missing and continue with a safe answer.
-
-PERSONAL CONNECTION RULES:
-- Make the user feel understood from previous data.
-- Use the user's name naturally, not every message.
-- Refer to actual goal, weak lessons, recent progress, and marks only when available.
-- Keep continuity across conversations.
-- Remember stable preferences only.
-- Do not sound robotic.
-- Do not overdo emotional language.
-- Be direct, calm, and exam-focused.
-- The user prefers Sinhala, fast answers, exact schedules, target marks, and weak-area repair.
-- The user studies A/L Technology: SFT, ET, ICT.
-- If user says "\u0D85\u0DAF \u0DB8\u0DDC\u0DB1\u0DC0\u0DAF?", use current Sri Lanka time and show only remaining hours.
-- If user asks for two subjects per day, output exactly two subjects.
-- If user asks short, answer short.
-- If user asks deep, explain deeply.
-
-STYLE:
-Sinhala first. English only for technical terms. Clean markdown. Minimal emojis. No fake motivation paragraphs. No long intro. Answer directly first.
-
-FOR STUDY PLANS:
-- exactly two subjects per day unless user overrides
-- weak lessons first
-- high Z-impact topics first
-- lesson-wise past papers
-- active recall
-- wrong-answer repair
-- spaced repetition
-- target after the session
-
-FOR EXPLANATIONS:
-- direct answer first
-- step-by-step explanation
-- formula only when relevant
-- exam tip
-- 1-3 practice questions max
-
-FOR PAST PAPER / PREDICTION:
-- never claim exact paper prediction
-- use evidence, frequency, recency, syllabus weighting, mark distribution
-- show confidence level
-
-FOR WEB/LINKS:
-- never fabricate links
-- use Google Search only when needed
-
-Do not reveal hidden reasoning.
-You may show only a safe reasoning summary.
-Current Mode: ${mode}
-`;
-}
-
 // server/ai/respond.ts
+init_prompts();
 init_userContext();
 
-// server/knowledge/retrieve.ts
-init_syllabus();
-init_pastPapersData();
+// server/rag/retrieve.ts
 init_admin();
-function tokens(value) {
-  return new Set(
-    String(value || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((token) => token.length >= 2)
-  );
+
+// server/rag/chunker.ts
+function extractKeywords(text) {
+  const words = text.toLowerCase().split(/[\\s\\.,\\-\\?!\\(\\)"']+/);
+  const stops = /* @__PURE__ */ new Set(["the", "is", "in", "at", "of", "on", "and", "a", "to", "it", "for", "as", "with", "this", "that", "by", "an", "be", "from", "or", "are", "was", "will", "can", "not", "have", "has", "but", "all", "if", "we", "you", "they", "what", "which", "who", "when", "where", "how"]);
+  const kw = /* @__PURE__ */ new Set();
+  words.forEach((w) => {
+    if (w.length > 3 && !stops.has(w)) kw.add(w);
+  });
+  return Array.from(kw);
 }
-function scoreText(promptTokens, text, subject, activeSubject) {
-  const lower = String(text || "").toLowerCase();
-  let score = 0;
-  promptTokens.forEach((token) => {
-    if (lower.includes(token)) score += token.length > 3 ? 2 : 1;
-  });
-  if (activeSubject && subject && subject.toLowerCase() === activeSubject.toLowerCase()) score += 4;
-  return score;
-}
-function addLocalSyllabusChunks(chunks, promptTokens, activeSubject) {
-  Object.entries(SYLLABUS).forEach(([subject, def]) => {
-    if (activeSubject && subject !== activeSubject) return;
-    def.mcqItems?.forEach((item) => {
-      const text = `Subject ${subject.toUpperCase()} MCQ syllabus ${item.q}: ${item.title}. Expected MCQ count: ${item.count || 1}.`;
-      chunks.push({
-        title: `${subject.toUpperCase()} ${item.q} ${item.title}`,
-        subject,
-        topic: item.title,
-        type: "syllabus",
-        text,
-        score: scoreText(promptTokens, text, subject, activeSubject)
-      });
-    });
-    const essayItems = [
-      ...(def.partAItems || []).map((item) => ({ ...item, section: "Part A" })),
-      ...(def.partBCDItems || []).map((item) => ({ ...item, section: "Essay" })),
-      ...(def.bcdGroups || []).flatMap((group) => (group.items || []).map((item) => ({ ...item, section: group.label })))
-    ];
-    essayItems.forEach((item) => {
-      const topics = (item.topics || [item.title]).join(", ");
-      const text = `Subject ${subject.toUpperCase()} ${item.section} ${item.q}: ${item.subTitle || item.title}. Topics: ${topics}. Max marks: ${item.max || "not set"}.`;
-      chunks.push({
-        title: `${subject.toUpperCase()} ${item.section} ${item.q}`,
-        subject,
-        topic: topics,
-        type: "syllabus",
-        text,
-        score: scoreText(promptTokens, text, subject, activeSubject)
-      });
-    });
-  });
-}
-function addUserContextChunks(chunks, promptTokens, context, activeSubject) {
-  context?.recentProgress?.forEach((item) => {
-    const text = `${item.subject?.toUpperCase()} progress: ${item.completedTopics}/${item.totalTopics} lessons completed (${item.coveragePercent}%).`;
-    chunks.push({
-      title: `${item.subject?.toUpperCase()} progress summary`,
-      subject: item.subject,
-      type: "firebase_progress",
-      text,
-      score: scoreText(promptTokens, text, item.subject, activeSubject) + 3
-    });
-  });
-  context?.weakLessons?.slice(0, 20).forEach((lesson) => {
-    const text = `${lesson.subject?.toUpperCase()} weak/incomplete lesson: ${lesson.topic || lesson.lesson}. Reason: ${lesson.reason || "not recorded"}. Priority weight: ${lesson.priorityWeight || 1}. Last status: ${lesson.lastDoneStatus || "unknown"}.`;
-    chunks.push({
-      title: `${lesson.subject?.toUpperCase()} weak lesson ${lesson.topic || lesson.lesson}`,
-      subject: lesson.subject,
-      topic: lesson.topic || lesson.lesson,
-      type: "firebase_progress",
-      text,
-      score: scoreText(promptTokens, text, lesson.subject, activeSubject) + (lesson.priorityWeight || 1)
-    });
-  });
-  context?.paperMarks?.slice(-20).forEach((mark) => {
-    const text = `${mark.subject?.toUpperCase()} paper mark: ${mark.title || "untitled"} total ${mark.total ?? "unknown"}, MCQ ${mark.mcq ?? mark.mcqRaw ?? "unknown"}, essay ${mark.essay ?? "unknown"}, grade ${mark.grade || "unknown"}.`;
-    chunks.push({
-      title: `${mark.subject?.toUpperCase()} mark ${mark.title || ""}`.trim(),
-      subject: mark.subject,
-      type: "firebase_progress",
-      text,
-      score: scoreText(promptTokens, text, mark.subject, activeSubject) + 2
-    });
-  });
-  const appData = context?.appData;
-  if (!appData) return;
-  ["sft", "et", "ict"].forEach((subject) => {
-    if (activeSubject && activeSubject !== subject) return;
-    const topics = appData[subject]?.topics || {};
-    Object.entries(topics).forEach(([topic, data]) => {
-      const notes = String(data?.notes || "").trim();
-      if (!notes) return;
-      const text = `${subject.toUpperCase()} user note for ${topic}: ${notes.slice(0, 1200)}`;
-      chunks.push({
-        title: `${subject.toUpperCase()} note ${topic}`,
-        subject,
-        topic,
-        type: "note",
-        text,
-        score: scoreText(promptTokens, text, subject, activeSubject) + 5
-      });
-    });
-  });
-}
-function addPastPaperChunks(chunks, promptTokens, activeSubject) {
-  (pastPapersData.papers || []).forEach((paper) => {
-    const subject = paper.metadata?.subjectKey || "";
-    if (activeSubject && subject !== activeSubject) return;
-    const answers = (paper.answers || []).slice(0, 50).map((item) => `Q${item.question}:${item.answer}`).join(", ");
-    const text = `${paper.metadata?.exam} ${paper.metadata?.subject} ${paper.metadata?.medium || ""} MCQ answer key. Answers: ${answers}`;
-    chunks.push({
-      title: `${paper.metadata?.exam} ${paper.metadata?.subject} answer key`,
-      subject,
-      type: "past_paper",
-      url: `/api/past-papers/local/${subject}/${String(paper.metadata?.exam || "").match(/\b(20\d{2}|19\d{2})\b/)?.[1] || "unknown"}`,
-      text,
-      score: scoreText(promptTokens, text, subject, activeSubject)
-    });
-  });
-}
-async function addFirestoreChunks(chunks, params, promptTokens) {
+
+// server/rag/retrieve.ts
+init_syllabus();
+async function retrieveRelevantKnowledge2(params) {
+  const { prompt, activeSubject, mode, limit = 6, uid } = params;
   const db = getAdminDb();
-  const activeSubject = params.activeSubject;
+  const chunksResult = [];
+  const lowerPrompt = prompt.toLowerCase();
+  let detectedSubject = activeSubject;
+  if (lowerPrompt.includes("sft") || lowerPrompt.includes("science for technology") || lowerPrompt.includes("\u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA \u0DC3\u0DB3\u0DC4\u0DCF \u0DC0\u0DD2\u0DAF\u0DCA\u200D\u0DBA\u0DCF\u0DC0")) detectedSubject = "sft";
+  else if (lowerPrompt.includes("et") || lowerPrompt.includes("engineering technology") || lowerPrompt.includes("\u0D89\u0D82\u0DA2\u0DD2\u0DB1\u0DDA\u0DBB\u0DD4 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA")) detectedSubject = "et";
+  else if (lowerPrompt.includes("ict") || lowerPrompt.includes("information technology") || lowerPrompt.includes("\u0DAD\u0DDC\u0DBB\u0DAD\u0DD4\u0DBB\u0DD4 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DBA")) detectedSubject = "ict";
+  let yearMatch = prompt.match(/\b(201[0-9]|202[0-9]|203[0-9])\b/);
+  const detectedYear = yearMatch ? parseInt(yearMatch[1], 10) : null;
+  let queryKeywords = extractKeywords(prompt).slice(0, 10);
   try {
-    let query = db.collection("knowledge_chunks");
-    if (activeSubject) query = query.where("subject", "==", activeSubject);
-    const snap = await query.limit(60).get();
-    snap.docs.forEach((doc) => {
-      const data = doc.data();
-      const text = String(data.text || data.content || data.summary || "");
-      if (!text) return;
-      chunks.push({
-        title: data.title || data.sourceTitle || `Knowledge ${doc.id}`,
-        subject: data.subject,
-        topic: data.topic,
-        type: data.type || "syllabus",
-        url: data.url || data.sourceUrl,
-        text: text.slice(0, 1800),
-        score: scoreText(promptTokens, `${data.title || ""} ${data.topic || ""} ${text}`, data.subject, activeSubject) + (data.score || 0)
+    let query = db.collection("rag_chunks");
+    if (detectedSubject && detectedSubject !== "general") {
+      query = query.where("subject", "==", detectedSubject);
+    }
+    if (detectedYear) {
+      const exactYearQuery = query.where("year", "==", detectedYear).limit(limit * 3);
+      const yearSnap = await exactYearQuery.get();
+      yearSnap.forEach((doc) => chunksResult.push(doc.data()));
+    }
+    if (chunksResult.length < limit && queryKeywords.length > 0) {
+      const keywordQuery = query.where("keywords", "array-contains-any", queryKeywords).limit(limit * 3);
+      const kwSnap = await keywordQuery.get();
+      kwSnap.forEach((doc) => {
+        const chunk = doc.data();
+        if (!chunksResult.find((c) => c.id === chunk.id)) {
+          chunksResult.push(chunk);
+        }
       });
+    }
+  } catch (error) {
+    console.warn("RAG Firestore query failed", error);
+  }
+  if (chunksResult.length === 0 && detectedSubject && detectedSubject !== "general") {
+    console.warn("RAG_FIRESTORE_EMPTY_USING_SYLLABUS_FALLBACK");
+    const syllabus = SYLLABUS[detectedSubject.toLowerCase()];
+    if (syllabus) {
+      const searchItems = [
+        ...syllabus.mcqItems || [],
+        ...syllabus.partAItems || [],
+        ...syllabus.partBCDItems || []
+      ];
+      searchItems.forEach((item) => {
+        const lessonTitle = item.title.toLowerCase();
+        let confidence = 0;
+        if (lowerPrompt.includes(lessonTitle)) confidence += 0.8;
+        else {
+          const words = lessonTitle.split(" ");
+          let matchCount = 0;
+          words.forEach((w) => {
+            if (w.length > 2 && lowerPrompt.includes(w)) matchCount++;
+          });
+          if (matchCount > 0) confidence += matchCount / words.length * 0.5;
+        }
+        if (confidence > 0) {
+          chunksResult.push({
+            id: "fallback_" + Math.random(),
+            sourceId: "fallback_syllabus",
+            subject: detectedSubject,
+            lesson: item.title,
+            sourceType: "syllabus",
+            text: `Lesson: ${item.title}. Question weight: ${item.count} questions. Type: ${item.q.includes("Q") ? "MCQ" : "Structured/Essay"}.`,
+            normalizedText: "",
+            keywords: [],
+            tokenEstimate: 20,
+            createdAt: (/* @__PURE__ */ new Date()).toISOString()
+          });
+        }
+      });
+    }
+  }
+  const scoredChunks = chunksResult.map((c) => {
+    let score = 0.5;
+    const chunkLower = c.normalizedText || c.text.toLowerCase();
+    if (detectedSubject && c.subject === detectedSubject) score += 0.2;
+    if (detectedYear && c.year === detectedYear) score += 0.4;
+    let kwMatch = 0;
+    queryKeywords.forEach((kw) => {
+      if (c.keywords?.includes(kw)) kwMatch++;
+      else if (chunkLower.includes(kw)) kwMatch += 0.5;
     });
-  } catch (e) {
-    console.warn("knowledge_chunks retrieval failed:", e);
-  }
-  if (!params.uid) return;
-  const refs = [
-    db.collection("users").doc(params.uid),
-    params.email ? db.collection("users").doc(params.email.toLowerCase()) : null
-  ].filter(Boolean);
-  for (const ref of refs) {
-    try {
-      const notesSnap = await ref.collection("notes").limit(30).get();
-      notesSnap.docs.forEach((doc) => {
-        const data = doc.data();
-        const text = String(data.text || data.content || data.notes || "");
-        if (!text) return;
-        chunks.push({
-          title: data.title || `Saved note ${doc.id}`,
-          subject: data.subject,
-          topic: data.topic,
-          type: "note",
-          url: data.url,
-          text: text.slice(0, 1200),
-          score: scoreText(promptTokens, `${data.title || ""} ${data.topic || ""} ${text}`, data.subject, activeSubject) + 4
-        });
-      });
-    } catch (e) {
-      console.warn("user notes retrieval failed:", e);
+    if (queryKeywords.length > 0) {
+      score += kwMatch / queryKeywords.length * 0.4;
     }
-    try {
-      const filesSnap = await ref.collection("files").limit(30).get();
-      filesSnap.docs.forEach((doc) => {
-        const data = doc.data();
-        const text = String(data.extractedText || data.summary || data.title || "");
-        if (!text && !data.url) return;
-        chunks.push({
-          title: data.title || data.name || `Uploaded source ${doc.id}`,
-          subject: data.subject,
-          topic: data.topic,
-          type: data.notebookLmUrl ? "notebooklm" : "web",
-          url: data.notebookLmUrl || data.url || data.downloadURL,
-          text: (text || "Uploaded file metadata; text was not extracted yet.").slice(0, 1200),
-          score: scoreText(promptTokens, `${data.title || ""} ${data.topic || ""} ${text}`, data.subject, activeSubject) + 2
-        });
-      });
-    } catch (e) {
-      console.warn("user files retrieval failed:", e);
+    return { ...c, __score: score };
+  });
+  scoredChunks.sort((a, b) => b.__score - a.__score);
+  const uniqueSources = /* @__PURE__ */ new Map();
+  const finalChunks = [];
+  for (const c of scoredChunks.slice(0, limit)) {
+    let sourceMeta = { title: "Knowledge Base", sourceType: c.sourceType };
+    if (!c.id.startsWith("fallback_")) {
+      if (!uniqueSources.has(c.sourceId)) {
+        let sourceDoc = { exists: false };
+        try {
+          sourceDoc = await db.collection("rag_sources").doc(c.sourceId).get();
+        } catch (e) {
+          console.warn("Failed to get sourceDoc", e);
+        }
+        if (sourceDoc.exists) {
+          uniqueSources.set(c.sourceId, sourceDoc.data());
+        }
+      }
+      sourceMeta = uniqueSources.get(c.sourceId) || sourceMeta;
+    } else {
+      sourceMeta = { title: "A/L Syllabus Details", sourceType: "syllabus" };
     }
+    finalChunks.push({
+      id: c.id,
+      subject: c.subject,
+      lesson: c.lesson,
+      sourceType: c.sourceType,
+      title: sourceMeta.title,
+      text: c.text,
+      year: c.year,
+      confidence: Math.min(1, c.__score),
+      citationLabel: `[${sourceMeta.title}${c.year ? ` ${c.year}` : ""}]`
+    });
   }
-}
-async function retrieveRelevantKnowledge(params) {
-  const limit = Math.max(1, Math.min(params.limit || 8, 20));
-  const promptTokens = tokens(`${params.prompt || ""} ${params.activeSubject || ""} ${params.mode || ""}`);
-  const chunks = [];
-  addLocalSyllabusChunks(chunks, promptTokens, params.activeSubject);
-  addPastPaperChunks(chunks, promptTokens, params.activeSubject);
-  addUserContextChunks(chunks, promptTokens, params.userContext, params.activeSubject);
-  await addFirestoreChunks(chunks, params, promptTokens);
-  const deduped = Array.from(new Map(chunks.map((chunk) => [`${chunk.type}:${chunk.title}:${chunk.url || ""}:${chunk.text.slice(0, 80)}`, chunk])).values());
-  return deduped.map((chunk) => ({ ...chunk, score: chunk.score || 0 })).sort((a, b) => b.score - a.score).slice(0, limit);
+  return finalChunks;
 }
 
 // server/ai/respond.ts
@@ -1995,14 +8202,7 @@ async function processAIRequest(req) {
     if (!prompt) throw new Error("Prompt is required");
     const contextData = await loadUserAIContext(uid, req.user?.email);
     const mode = classifyMode(prompt, explicitMode);
-    const knowledgeChunks = await retrieveRelevantKnowledge({
-      prompt,
-      activeSubject,
-      mode,
-      uid,
-      email: req.user?.email,
-      userContext: contextData
-    });
+    const knowledgeChunks = await retrieveRelevantKnowledge2({ prompt, activeSubject, mode });
     const useSearch = requiresGoogleSearch(mode, prompt);
     const systemInstruction = getCloraSystemPrompt(contextData, mode);
     let finalPrompt = prompt;
@@ -2025,10 +8225,10 @@ ${JSON.stringify(knowledgeChunks)}`;
       preferredModel = requestedModel;
     }
     const modelChain = getModelFallbackChain(preferredModel);
-    const ai = getAIClient();
+    const ai9 = getAIClient();
     let response = null;
     let modelUsed = "";
-    let lastError = null;
+    let lastError3 = null;
     let promptWithHistory = finalPrompt;
     if (history && history.length > 0) {
       promptWithHistory = `Previous Chat History:
@@ -2040,7 +8240,7 @@ ${finalPrompt}`;
     for (const m of modelChain) {
       try {
         modelUsed = m;
-        const chat = ai.chats.create({
+        const chat = ai9.chats.create({
           model: m,
           config: {
             systemInstruction,
@@ -2051,13 +8251,13 @@ ${finalPrompt}`;
         response = await chat.sendMessage({ message: promptWithHistory });
         break;
       } catch (err) {
-        lastError = err;
+        lastError3 = err;
         console.warn(`Model ${m} failed/unavailable, trying fallback if possible. Error:`, err.message || err);
         continue;
       }
     }
     if (!response) {
-      throw lastError || new Error("All model options in the fallback chain failed.");
+      throw lastError3 || new Error("All model options in the fallback chain failed.");
     }
     saveChatToHistory(uid, prompt, response.text || "", mode, activeSubject);
     return {
@@ -2084,7 +8284,6 @@ async function saveChatToHistory(uid, prompt, response, mode, subject) {
     batch.set(userMsgRef, {
       role: "user",
       text: prompt,
-      content: prompt,
       mode,
       subject: subject || null,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -2093,7 +8292,6 @@ async function saveChatToHistory(uid, prompt, response, mode, subject) {
     batch.set(aiMsgRef, {
       role: "assistant",
       text: response,
-      content: response,
       mode,
       subject: subject || null,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -2106,449 +8304,422 @@ async function saveChatToHistory(uid, prompt, response, mode, subject) {
 
 // server/ai/routes.ts
 init_client();
-init_pastPapersData();
-
-// server/ai/respondStream.ts
-init_client();
-init_userContext();
-init_admin();
-
-// server/ai/workflow.ts
-var AI_WORKFLOW_STAGES = {
-  thinking: "Thinking",
-  auth: "Verifying account",
-  profile: "Reading your profile",
-  progress: "Checking your progress",
-  memory: "Loading study memory",
-  sources: "Checking lesson sources",
-  search: "Searching web",
-  planning: "Planning answer",
-  generating: "Writing answer",
-  saving: "Saving memory",
-  done: "Thought",
-  error: "Stopped"
-};
-function sendSSE(res, event, data) {
-  try {
-    res.write(`event: ${event}
-`);
-    res.write(`data: ${JSON.stringify(data)}
-
-`);
-    if (res.flush) res.flush();
-  } catch (e) {
-  }
-}
-
-// server/ai/memoryExtractor.ts
-init_client();
-init_admin();
-async function extractStableMemoryIfUseful(params) {
-  try {
-    const ai = getAIClient();
-    const extractionPrompt = `
-Extract only stable, useful study-related facts from the conversation.
-Return ONLY a JSON array. Do not return markdown blocks like \`\`\`json.
-If nothing useful, return [].
-Do not extract sensitive personal information.
-Do not extract temporary emotions.
-Only extract facts that help future A/L study support.
-
-Types allowed: "stable_preference" | "weakness" | "target" | "study_pattern" | "mistake"
-
-User Prompt: ${params.prompt}
-Assistant Answer: ${params.answer}
-`;
-    const response = await ai.models.generateContent({
-      model: AI_MODELS.default,
-      contents: extractionPrompt,
-      config: { temperature: 0.1 }
-    });
-    let text = response.text || "[]";
-    text = text.replace(/```json/g, "").replace(/```/g, "").trim();
-    const items = JSON.parse(text);
-    if (Array.isArray(items) && items.length > 0) {
-      const db = getAdminDb();
-      const batch = db.batch();
-      for (const item of items) {
-        if (item.type && item.value) {
-          const ref = db.collection("users").doc(params.uid).collection("ai_memory").doc();
-          batch.set(ref, {
-            type: item.type,
-            value: item.value,
-            confidence: item.confidence || 0.8,
-            createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-            updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-          });
-        }
-      }
-      await batch.commit();
-      return items;
-    }
-  } catch (e) {
-    console.warn("Memory extraction failed", e);
-  }
-  return [];
-}
-
-// server/ai/respondStream.ts
-function getTemperature(mode) {
-  switch (mode) {
-    case "today_plan":
-      return 0.25;
-    case "study_plan":
-      return 0.25;
-    case "tutor_explanation":
-      return 0.35;
-    case "notes_generation":
-      return 0.3;
-    case "quiz_generation":
-      return 0.35;
-    case "past_paper_analysis":
-      return 0.25;
-    case "zscore_prediction":
-      return 0.2;
-    default:
-      return 0.4;
-  }
-}
-function getMaxTokens(mode) {
-  switch (mode) {
-    case "tutor_explanation":
-      return 2500;
-    case "study_plan":
-      return 3500;
-    case "past_paper_analysis":
-    case "zscore_prediction":
-    case "mark_analysis":
-      return 4500;
-    default:
-      return 1200;
-  }
-}
-function chooseModel(mode) {
-  switch (mode) {
-    case "study_plan":
-      return AI_MODELS.default;
-    // or pro for deep
-    case "past_paper_analysis":
-    case "zscore_prediction":
-    case "mark_analysis":
-      return AI_MODELS.pro;
-    case "image_generation":
-      return AI_MODELS.image;
-    default:
-      return AI_MODELS.default;
-  }
-}
-async function saveFinalChat(params) {
-  try {
-    const db = getAdminDb();
-    const batch = db.batch();
-    const historyRef = db.collection("users").doc(params.uid).collection("chat_history");
-    batch.set(historyRef.doc(), {
-      role: "user",
-      text: params.userText,
-      content: params.userText,
-      mode: params.mode,
-      subject: params.subject || null,
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
-    });
-    batch.set(historyRef.doc(), {
-      role: "assistant",
-      text: params.assistantText,
-      content: params.assistantText,
-      mode: params.mode,
-      subject: params.subject || null,
-      sources: params.sources || [],
-      model: params.model || null,
-      safeSummary: params.safeSummary || [],
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
-    });
-    await batch.commit();
-  } catch (e) {
-    console.warn("saveFinalChat error", e);
-  }
-}
-async function aiRespondStream(req, res) {
-  const startedAt = Date.now();
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream; charset=utf-8",
-    "Cache-Control": "no-cache, no-transform",
-    "Connection": "keep-alive",
-    "X-Accel-Buffering": "no"
-  });
-  try {
-    const { prompt, activeSubject, mode = "auto", history = [] } = req.body;
-    const user = req.user;
-    sendSSE(res, "status", { stage: "thinking", label: AI_WORKFLOW_STAGES.thinking, startedAt, timestamp: Date.now() });
-    sendSSE(res, "status", { stage: "profile", label: AI_WORKFLOW_STAGES.profile, startedAt, timestamp: Date.now() });
-    const userContext = await loadUserAIContext(user.uid, user.email);
-    sendSSE(res, "status", { stage: "progress", label: AI_WORKFLOW_STAGES.progress, startedAt, timestamp: Date.now() });
-    const selectedMode = classifyMode(prompt, mode);
-    if (selectedMode === "image_generation") {
-      sendSSE(res, "status", { stage: "generating", label: "Generating Educational Diagram...", startedAt, timestamp: Date.now() });
-      const { generateEducationalImage: generateEducationalImage2 } = await Promise.resolve().then(() => (init_generate(), generate_exports));
-      const imgResult = await generateEducationalImage2(req);
-      if (imgResult.ok && imgResult.imageUrl) {
-        const imageMarkdown = `
-
-![Generated Educational Diagram](${imgResult.imageUrl})
-
-*(Model used: ${imgResult.model})*
-
-`;
-        sendSSE(res, "chunk", { text: imageMarkdown });
-        await saveFinalChat({ uid: user.uid, userText: prompt, assistantText: imageMarkdown, mode: selectedMode, subject: activeSubject, model: imgResult.model });
-        sendSSE(res, "done", {
-          ok: true,
-          totalSeconds: Math.round((Date.now() - startedAt) / 1e3),
-          totalMs: Date.now() - startedAt
-        });
-        return;
-      } else {
-        throw new Error(imgResult.error || "Failed to generate diagram.");
-      }
-    }
-    if (selectedMode === "past_paper_search") {
-      sendSSE(res, "status", { stage: "search", label: "Searching past papers database...", startedAt, timestamp: Date.now() });
-      const { searchPastPapers: searchPastPapers2 } = await Promise.resolve().then(() => (init_search(), search_exports));
-      let searchResult = null;
-      const mockRes = {
-        status: () => mockRes,
-        json: (val) => {
-          searchResult = val;
-        }
-      };
-      let yearMatch = "";
-      const yearMatches = prompt.match(/\b(201\d|202\d)\b/);
-      if (yearMatches) yearMatch = yearMatches[1];
-      let subjectMatch = activeSubject || "";
-      const lowerPrompt = prompt.toLowerCase();
-      if (lowerPrompt.includes("sft") || lowerPrompt.includes("technology")) subjectMatch = "sft";
-      else if (lowerPrompt.includes("et") || lowerPrompt.includes("engineering")) subjectMatch = "et";
-      else if (lowerPrompt.includes("ict")) subjectMatch = "ict";
-      await searchPastPapers2({
-        body: { query: prompt, yearMatch, subjectMatch }
-      }, mockRes);
-      if (searchResult && searchResult.ok && searchResult.sourceCards && searchResult.sourceCards.length > 0) {
-        let responseMarkdown = `### \u{1F4DA} Found Verified Past Papers & Resources
-
-`;
-        responseMarkdown += `\u0DB8\u0DD9\u0DB1\u0DCA\u0DB1 \u0D94\u0DB6 \u0DC3\u0DD9\u0DC0\u0DD6 \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 \u0DB4\u0DAD\u0DCA\u200D\u0DBB \u0DC3\u0DC4 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DD4 \u0DB4\u0DAD\u0DCA\u200D\u0DBB \u0DC3\u0DB6\u0DD0\u0DB3\u0DD2 (Direct Download Links):
-
-`;
-        searchResult.sourceCards.forEach((card) => {
-          responseMarkdown += `#### \u{1F4CE} **${card.title}**
-`;
-          responseMarkdown += `- **\u0DB4\u0DCA\u200D\u0DBB\u0DB7\u0DC0\u0DBA (Source):** ${card.source} | **\u0DC0\u0DBB\u0DCA\u0D9C\u0DBA (Type):** ${card.type}
-`;
-          if (card.snippet) {
-            responseMarkdown += `- **\u0DC0\u0DD2\u0DC3\u0DCA\u0DAD\u0DBB\u0DBA (Description):** *${card.snippet}*
-`;
-          }
-          responseMarkdown += `- \u{1F4E5} **Download Link:** [\u0DB8\u0DAD \u0D9A\u0DCA\u0DBD\u0DD2\u0D9A\u0DCA \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 (${card.type})](${card.url})
-
-`;
-        });
-        sendSSE(res, "chunk", { text: responseMarkdown });
-        await saveFinalChat({ uid: user.uid, userText: prompt, assistantText: responseMarkdown, mode: selectedMode, subject: activeSubject, sources: searchResult.sourceCards || [] });
-        sendSSE(res, "done", {
-          ok: true,
-          totalSeconds: Math.round((Date.now() - startedAt) / 1e3),
-          totalMs: Date.now() - startedAt
-        });
-        return;
-      } else {
-        const fallbackMsg = `\u26A0\uFE0F \u0DC3\u0DB8\u0DCF\u0DC0\u0DB1\u0DCA\u0DB1, \u0D94\u0DB6 \u0DC3\u0DD9\u0DC0\u0DD6 **"${prompt}"** \u0DC3\u0DB3\u0DC4\u0DCF \u0DC3\u0DD8\u0DA2\u0DD4 \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 \u0DB4\u0DAD\u0DCA\u200D\u0DBB \u0DC3\u0DB6\u0DD0\u0DB3\u0DD2\u0DBA\u0D9A\u0DCA \u0D85\u0DB4\u0D9C\u0DDA \u0DB4\u0DAF\u0DCA\u0DB0\u0DAD\u0DD2\u0DBA\u0DD9\u0DB1\u0DCA \u0DC3\u0DDC\u0DBA\u0DCF\u0D9C\u0DAD \u0DB1\u0DDC\u0DC4\u0DD0\u0D9A\u0DD2 \u0DC0\u0DD2\u0DBA.
-
-\u0D9A\u0DBB\u0DD4\u0DAB\u0DCF\u0D9A\u0DBB \u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 \u0DC0\u0DBB\u0DCA\u0DC2\u0DBA \u0DC3\u0DC4 \u0DC0\u0DD2\u0DC2\u0DBA (\u0D8B\u0DAF\u0DCF: SFT 2024 past paper) \u0D87\u0DAD\u0DD4\u0DC5\u0DAD\u0DCA \u0D9A\u0DBB \u0DB1\u0DD0\u0DC0\u0DAD \u0D8B\u0DAD\u0DCA\u0DC3\u0DCF\u0DC4 \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.`;
-        sendSSE(res, "chunk", { text: fallbackMsg });
-        await saveFinalChat({ uid: user.uid, userText: prompt, assistantText: fallbackMsg, mode: selectedMode, subject: activeSubject });
-        sendSSE(res, "done", {
-          ok: true,
-          totalSeconds: Math.round((Date.now() - startedAt) / 1e3),
-          totalMs: Date.now() - startedAt
-        });
-        return;
-      }
-    }
-    sendSSE(res, "status", { stage: "sources", label: AI_WORKFLOW_STAGES.sources, startedAt, timestamp: Date.now() });
-    const chunks = await retrieveRelevantKnowledge({
-      prompt,
-      activeSubject,
-      mode: selectedMode,
-      limit: 8,
-      uid: user.uid,
-      email: user.email,
-      userContext
-    });
-    const searchEnabled = requiresGoogleSearch(selectedMode, prompt);
-    if (searchEnabled) {
-      sendSSE(res, "status", { stage: "search", label: AI_WORKFLOW_STAGES.search, startedAt, timestamp: Date.now() });
-    }
-    const modelChain = getModelFallbackChain(chooseModel(selectedMode));
-    sendSSE(res, "status", { stage: "planning", label: AI_WORKFLOW_STAGES.planning, startedAt, timestamp: Date.now() });
-    const finalPrompt = getCloraSystemPrompt(userContext, selectedMode) + (chunks?.length ? `
-
-Reference Sources:
-${JSON.stringify(chunks)}` : "") + (history?.length ? `
-
-Previous Chat History:
-${JSON.stringify(history)}` : "") + `
-
-Current User Request:
-${prompt}`;
-    sendSSE(res, "status", { stage: "generating", label: AI_WORKFLOW_STAGES.generating, startedAt, timestamp: Date.now() });
-    const ai = getAIClient();
-    let stream = null;
-    let modelUsed = "";
-    let lastError = null;
-    for (const m of modelChain) {
-      try {
-        modelUsed = m;
-        stream = await ai.models.generateContentStream({
-          model: m,
-          contents: finalPrompt,
-          config: {
-            temperature: getTemperature(selectedMode),
-            maxOutputTokens: getMaxTokens(selectedMode),
-            tools: searchEnabled ? [{ googleSearch: {} }] : void 0
-          }
-        });
-        break;
-      } catch (err) {
-        lastError = err;
-        console.warn(`Streaming with model ${m} failed/unavailable, trying fallback. Error:`, err.message || err);
-        continue;
-      }
-    }
-    if (!stream) {
-      throw lastError || new Error("All model streaming options failed.");
-    }
-    let fullText = "";
-    for await (const chunk of stream) {
-      const text = chunk.text || "";
-      if (text) {
-        fullText += text;
-        sendSSE(res, "chunk", { text });
-      }
-    }
-    sendSSE(res, "status", { stage: "saving", label: AI_WORKFLOW_STAGES.saving, startedAt, timestamp: Date.now() });
-    const safeSummary = [
-      "Profile loaded",
-      `${userContext?.recentProgress?.length || 0} progress records checked`,
-      `${chunks?.length || 0} lesson source chunks retrieved`,
-      `Google Search used: ${searchEnabled ? "yes" : "no"}`,
-      `Model: ${modelUsed}`
-    ];
-    await saveFinalChat({ uid: user.uid, userText: prompt, assistantText: fullText, mode: selectedMode, subject: activeSubject, sources: chunks, model: modelUsed, safeSummary });
-    await extractStableMemoryIfUseful({ uid: user.uid, prompt, answer: fullText, userContext });
-    sendSSE(res, "safe_summary", { items: safeSummary });
-    sendSSE(res, "done", { ok: true, totalMs: Date.now() - startedAt, totalSeconds: Math.round((Date.now() - startedAt) / 1e3) });
-    res.end();
-  } catch (error) {
-    console.error("Stream Error", error);
-    const classified = classifyAIError(error);
-    sendSSE(res, "error", { ok: false, error: classified.error, hint: classified.hint, code: classified.code });
-    sendSSE(res, "done", { ok: false, totalMs: Date.now() - startedAt, totalSeconds: Math.round((Date.now() - startedAt) / 1e3) });
-    res.end();
-  }
-}
-
-// server/ai/routes.ts
-var aiRoutes = import_express.default.Router();
-aiRoutes.get("/self-test", async (req, res) => {
-  const result = {
-    ok: true,
-    authPath: "vertex-ai-adc",
-    project: process.env.GOOGLE_CLOUD_PROJECT,
-    location: process.env.GOOGLE_CLOUD_LOCATION || "global",
+var import_node_fs2 = __toESM(require("node:fs"), 1);
+var import_node_path2 = __toESM(require("node:path"), 1);
+init_modelRouter();
+init_cancellation();
+var aiRoutes = (0, import_express.Router)();
+aiRoutes.get("/client-diagnostics", (req, res) => {
+  const deployTarget = process.env.APP_DEPLOY_TARGET || "cloud_run";
+  const useVertex = String(process.env.GEMINI_USE_VERTEX || "").toLowerCase() === "true";
+  const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "al-ai-chat";
+  const location = process.env.GOOGLE_CLOUD_LOCATION || "global";
+  const hasServiceAccountJson = !!process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const hasGeminiApiKey = !!process.env.GEMINI_API_KEY;
+  res.json({
+    mode: useVertex ? "vertex" : "api_key",
+    deployTarget,
+    project,
+    location,
+    geminiUseVertex: useVertex,
+    hasServiceAccountJson,
+    hasGeminiApiKey,
+    apiKeyIgnored: useVertex,
     models: {
-      fast: AI_MODELS.fast,
-      default: AI_MODELS.default,
-      pro: AI_MODELS.pro,
-      image: AI_MODELS.image
-    },
-    searchGroundingEnabled: process.env.ENABLE_GOOGLE_SEARCH_GROUNDING === "true",
-    textModelOk: false,
-    imageModelConfigured: Boolean(AI_MODELS.image),
-    firestoreContextOk: false,
-    knowledgeRetrievalOk: false
-  };
+      normalChat: process.env.GEMINI_DEFAULT_MODEL || "gemini-3.5-flash",
+      pdfQa: process.env.GEMINI_PDF_QA_MODEL || "gemini-3.5-flash",
+      final: process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview"
+    }
+  });
+});
+aiRoutes.get("/debug-knowledge", async (req, res) => {
+  try {
+    const { routeKnowledgeRequest: routeKnowledgeRequest2 } = await Promise.resolve().then(() => (init_knowledgeRouter(), knowledgeRouter_exports));
+    const route = await routeKnowledgeRequest2({
+      prompt: req.query.q || "2025 sft paper"
+    });
+    res.json({
+      ok: true,
+      query: req.query.q,
+      parsedIntent: route.mode,
+      entities: route.entities,
+      hints: route.answerHints
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+aiRoutes.get("/self-test", async (req, res) => {
   try {
     prepareGoogleCredentials();
-    const ai = getAIClient();
-    let text = "";
-    for (const model of getModelFallbackChain(AI_MODELS.fast)) {
+    const ai9 = getAIClient();
+    const model = process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash";
+    const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "al-ai-chat";
+    const location = process.env.GOOGLE_CLOUD_LOCATION || "global";
+    const response = await ai9.models.generateContent({
+      model,
+      contents: "Reply only OK"
+    });
+    setLastOk(true, null);
+    res.json({
+      ok: true,
+      authPath: "vertex-ai-adc",
+      project,
+      location,
+      model,
+      text: response.text ? response.text.trim() : "OK"
+    });
+  } catch (error) {
+    const errorMsg = String(error.message || error);
+    setLastOk(false, errorMsg);
+    if (errorMsg.toLowerCase().includes("prepayment credits are depleted") || errorMsg.toLowerCase().includes("prepayment")) {
+      return res.json({
+        ok: false,
+        authPath: "api-key-prepay-path-detected",
+        code: "WRONG_AI_AUTH_PATH",
+        message: "This request is still using Gemini Developer API / AI Studio Prepay path, not Vertex AI."
+      });
+    }
+    res.status(500).json({ ok: false, error: errorMsg });
+  }
+});
+var cachedHealthResponse = null;
+var cachedHealthTime = 0;
+var CACHE_TTL_MS2 = 45e3;
+aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async (req, res) => {
+  const now = Date.now();
+  if (cachedHealthResponse && now - cachedHealthTime < CACHE_TTL_MS2) {
+    return res.json(cachedHealthResponse);
+  }
+  const errors2 = [];
+  let dbInfo = {};
+  const tests = {
+    adminInitialized: false,
+    canWriteHealthDoc: false,
+    canReadHealthDoc: false,
+    canQueryRagSources: false,
+    canQueryPastPapers: false,
+    canSaveChat: false,
+    canUploadStorage: false,
+    canGenerateSignedUrl: false
+  };
+  const { getAdminDbInfo: getAdminDbInfo3, getAdminDb: getAdminDb2, getAdminBucket: getAdminBucket2 } = await Promise.resolve().then(() => (init_admin(), admin_exports));
+  const { retryGoogleAuthOperation: retryGoogleAuthOperation2 } = await Promise.resolve().then(() => (init_retry(), retry_exports));
+  try {
+    dbInfo = getAdminDbInfo3();
+    tests.adminInitialized = true;
+  } catch (err) {
+    errors2.push({
+      test: "adminInitialized",
+      code: err.code || "ADMIN_INIT_FAILED",
+      message: err.message,
+      hint: "Check environment variables and credentials JSON."
+    });
+  }
+  let db = null;
+  if (tests.adminInitialized) {
+    try {
+      db = getAdminDb2();
+    } catch (err) {
+      errors2.push({
+        test: "getAdminDb",
+        code: "FIRESTORE_GET_DB_FAILED",
+        message: err.message,
+        hint: err.message.includes("CONFIG_ERROR_FIRESTORE_DATABASE_ID_MISSING") ? "FIRESTORE_DATABASE_ID environment variable is missing." : "Firestore database retrieval failed."
+      });
+    }
+  }
+  if (db) {
+    try {
+      await db.collection("_health").doc("admin").set({ serverTime: (/* @__PURE__ */ new Date()).toISOString() });
+      tests.canWriteHealthDoc = true;
+    } catch (err) {
+      const msg = String(err.message || err);
+      const isPermission = msg.includes("PERMISSION_DENIED") || err.code === 7;
+      errors2.push({
+        test: "canWriteHealthDoc",
+        code: isPermission ? "IAM_PERMISSION_DENIED" : "WRITE_HEALTH_DOC_FAILED",
+        message: err.message,
+        hint: isPermission ? `Grant Cloud Datastore User or Cloud Datastore Owner to ${dbInfo.credentialsEmail || "your service account"} in project ${dbInfo.projectId || "al-ai-chat"}.` : "Unknown error writing to _health collection."
+      });
+    }
+  }
+  if (db && tests.canWriteHealthDoc) {
+    try {
+      const snap = await db.collection("_health").doc("admin").get();
+      tests.canReadHealthDoc = snap.exists;
+    } catch (err) {
+      errors2.push({
+        test: "canReadHealthDoc",
+        code: "READ_HEALTH_DOC_FAILED",
+        message: err.message
+      });
+    }
+  }
+  if (db) {
+    try {
+      await db.collection("rag_sources").limit(1).get();
+      tests.canQueryRagSources = true;
+    } catch (err) {
+      const msg = String(err.message || err);
+      const isPermission = msg.includes("PERMISSION_DENIED") || err.code === 7;
+      errors2.push({
+        test: "canQueryRagSources",
+        code: isPermission ? "IAM_PERMISSION_DENIED" : "QUERY_RAG_SOURCES_FAILED",
+        message: err.message,
+        hint: isPermission ? `Grant Cloud Datastore User or Cloud Datastore Owner to ${dbInfo.credentialsEmail || "your service account"} in project ${dbInfo.projectId || "al-ai-chat"}.` : "Unknown error querying rag_sources."
+      });
+    }
+  }
+  if (db) {
+    try {
+      await db.collection("past_papers").limit(1).get();
+      tests.canQueryPastPapers = true;
+    } catch (err) {
+      const msg = String(err.message || err);
+      const isPermission = msg.includes("PERMISSION_DENIED") || err.code === 7;
+      errors2.push({
+        test: "canQueryPastPapers",
+        code: isPermission ? "IAM_PERMISSION_DENIED" : "QUERY_PAST_PAPERS_FAILED",
+        message: err.message,
+        hint: isPermission ? `Grant Cloud Datastore User or Cloud Datastore Owner to ${dbInfo.credentialsEmail || "your service account"} in project ${dbInfo.projectId || "al-ai-chat"}.` : "Unknown error querying past_papers."
+      });
+    }
+  }
+  if (db) {
+    try {
+      await db.collection("_health_chat").doc("test_chat").set({
+        message: "Health check save",
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      tests.canSaveChat = true;
+    } catch (err) {
+      errors2.push({
+        test: "canSaveChat",
+        code: "SAVE_CHAT_FAILED",
+        message: err.message
+      });
+    }
+  }
+  const FORCE_CLIENT_STORAGE = true;
+  if (FORCE_CLIENT_STORAGE) {
+    tests.canUploadStorage = false;
+    tests.canGenerateSignedUrl = false;
+  } else {
+    let bucket = null;
+    if (tests.adminInitialized) {
       try {
-        const response = await ai.models.generateContent({ model, contents: "Reply only: OK" });
-        text = response.text || "";
-        result.textModelOk = true;
-        result.textModelUsed = model;
-        result.text = text;
-        break;
-      } catch (error) {
-        result.lastTextModelError = error.message;
+        bucket = getAdminBucket2();
+      } catch (err) {
+        errors2.push({
+          test: "getAdminBucket",
+          code: "STORAGE_BUCKET_GET_FAILED",
+          message: err.message,
+          hint: "Check if storageBucket config or FIREBASE_STORAGE_BUCKET is correct."
+        });
       }
     }
-    try {
-      await getAdminDb().listCollections();
-      result.firestoreContextOk = true;
-    } catch (error) {
-      result.firestoreError = error.message;
+    if (bucket) {
+      const fileRef = bucket.file("_health/admin-health.txt");
+      try {
+        await retryGoogleAuthOperation2("canUploadStorage", async () => {
+          await fileRef.save("Health check content", {
+            resumable: false,
+            contentType: "text/plain",
+            metadata: {
+              cacheControl: "private, max-age=0"
+            }
+          });
+        });
+        tests.canUploadStorage = true;
+      } catch (err) {
+        const msg = String(err.message || err);
+        const isPermission = msg.includes("permission") || err.code === 403;
+        errors2.push({
+          test: "canUploadStorage",
+          code: isPermission ? "STORAGE_PERMISSION_DENIED" : "UPLOAD_STORAGE_FAILED",
+          message: err.message,
+          hint: isPermission ? `Grant Storage Object Admin to ${dbInfo.credentialsEmail || "your service account"} in project ${dbInfo.projectId || "al-ai-chat"}.` : "Google auth token premature close or generic upload failure. Check credentials and retry."
+        });
+      }
+      if (tests.canUploadStorage) {
+        try {
+          await retryGoogleAuthOperation2("canGenerateSignedUrl", async () => {
+            await fileRef.getSignedUrl({
+              action: "read",
+              expires: Date.now() + 15 * 60 * 1e3
+              // 15 mins
+            });
+          });
+          tests.canGenerateSignedUrl = true;
+        } catch (err) {
+          errors2.push({
+            test: "canGenerateSignedUrl",
+            code: "GENERATE_SIGNED_URL_FAILED",
+            message: err.message,
+            hint: "Ensure the Service Account has the Service Account Token Creator role on itself or project."
+          });
+        }
+        try {
+          await fileRef.delete();
+        } catch (e) {
+        }
+      }
     }
-    const chunks = await retrieveRelevantKnowledge({
-      prompt: "SFT ET ICT syllabus progress",
-      activeSubject: "sft",
-      mode: "self-test",
-      limit: 3
-    });
-    result.knowledgeRetrievalOk = chunks.length > 0;
-    result.knowledgeChunksRetrieved = chunks.length;
-    if (!result.textModelOk) result.ok = false;
-    res.status(result.ok ? 200 : 500).json(result);
-  } catch (error) {
-    result.ok = false;
-    result.error = error.message;
-    res.status(500).json(result);
   }
+  const firestoreOk = tests.adminInitialized && tests.canWriteHealthDoc && tests.canReadHealthDoc && tests.canQueryRagSources && tests.canQueryPastPapers && tests.canSaveChat;
+  const storageOk = tests.canUploadStorage && tests.canGenerateSignedUrl;
+  const ok = firestoreOk;
+  let ocrAvailable = false;
+  let ocrLastError = null;
+  const isOcrEnabled = process.env.ENABLE_CLOUD_VISION_OCR === "true";
+  const ocrInputBucket = process.env.VISION_OCR_INPUT_BUCKET || "al-ai-chat-ocr-input";
+  const ocrOutputBucket = process.env.VISION_OCR_OUTPUT_BUCKET || "al-ai-chat-ocr-output";
+  if (isOcrEnabled) {
+    try {
+      const { ImageAnnotatorClient: ImageAnnotatorClient2 } = await import("@google-cloud/vision");
+      const client2 = new ImageAnnotatorClient2();
+      const storage = getAdminStorage();
+      const inBucket = storage.bucket(ocrInputBucket);
+      const outBucket = storage.bucket(ocrOutputBucket);
+      const [inExists] = await inBucket.exists();
+      const [outExists] = await outBucket.exists();
+      if (inExists && outExists) {
+        ocrAvailable = true;
+      } else {
+        ocrLastError = `Bucket existence check: inputBucket(${ocrInputBucket}): ${inExists}, outputBucket(${ocrOutputBucket}): ${outExists}`;
+      }
+    } catch (err) {
+      ocrLastError = err.message;
+    }
+  }
+  const responsePayload = {
+    ok,
+    projectId: dbInfo.projectId || "al-ai-chat",
+    firestoreDatabaseId: dbInfo.databaseId || "(default)",
+    storageBucket: dbInfo.storageBucket || "al-ai-chat.firebasestorage.app",
+    credentialMode: dbInfo.credentialMode || "not_initialized",
+    credentialsEmail: dbInfo.credentialsEmail || "unknown",
+    hasPrivateKey: dbInfo.hasPrivateKey === true,
+    tests,
+    errors: errors2,
+    ocr: {
+      enabled: isOcrEnabled,
+      provider: "cloud_vision",
+      inputBucket: ocrInputBucket,
+      outputBucket: ocrOutputBucket,
+      available: ocrAvailable,
+      lastError: ocrLastError
+    },
+    recommendedUploadMode: FORCE_CLIENT_STORAGE ? "client_firebase_storage" : storageOk ? "backend_multer" : "client_firebase_storage",
+    requiredIamRoles: [
+      "Cloud Datastore User",
+      "Cloud Datastore Owner",
+      "Storage Object Admin",
+      "Vertex AI User"
+    ],
+    aiCore: {
+      version: "evidence-first-v1",
+      parser: true,
+      sourceLock: true,
+      evidenceGate: true,
+      answerVerifier: true,
+      verifiedAnswers: true,
+      wrongFeedback: true
+    },
+    directPdfQa: {
+      enabled: process.env.ENABLE_DIRECT_PDF_QA !== "false",
+      mode: "frontend_blob_to_gemini",
+      requiresGcs: false,
+      available: !!process.env.GEMINI_API_KEY || !!process.env.GOOGLE_APPLICATION_CREDENTIALS,
+      model: process.env.GEMINI_PDF_QA_MODEL || "gemini-3.5-flash"
+    }
+  };
+  if (FORCE_CLIENT_STORAGE) {
+    responsePayload.storageMode = {
+      recommendedUploadMode: "client_firebase_storage",
+      tests: {
+        canUploadStorage: false,
+        canGenerateSignedUrl: false,
+        skippedAdminStorageTests: true,
+        reason: "client_firebase_storage_forced"
+      }
+    };
+  } else if (firestoreOk && !storageOk) {
+    responsePayload.degraded = true;
+    responsePayload.storageMode = {
+      adminStorageAvailable: false,
+      clientStorageFallbackEnabled: true,
+      recommendedUploadMode: "client_firebase_storage"
+    };
+  }
+  const { getRealtimeConfig: getRealtimeConfig2 } = await Promise.resolve().then(() => (init_config(), config_exports));
+  const realtimeCfg = getRealtimeConfig2();
+  responsePayload.directPdfQa = { mode: "frontend_blob_to_gemini", requiresGcs: false, available: true };
+  responsePayload.tts = {
+    enabled: process.env.ENABLE_TTS === "true",
+    available: process.env.ENABLE_TTS === "true" && !!dbInfo.projectId,
+    provider: process.env.TTS_PROVIDER || "google_cloud",
+    lastError: null
+  };
+  responsePayload.realtime = {
+    enabled: realtimeCfg.enabled,
+    provider: realtimeCfg.provider,
+    available: realtimeCfg.available,
+    model: realtimeCfg.model,
+    missing: realtimeCfg.missing,
+    authMode: realtimeCfg.authMode
+  };
+  responsePayload.models = {
+    final: { configured: process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview", lastOk: true, lastError: null },
+    fast: { configured: process.env.GEMINI_DEFAULT_MODEL || "gemini-3-flash-preview", lastOk: true, lastError: null },
+    lite: { configured: process.env.GEMINI_LITE_MODEL || "gemini-3.1-flash-lite", lastOk: true, lastError: null },
+    embeddings: { configured: process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001", lastOk: true, lastError: null },
+    image: { enabled: process.env.ENABLE_IMAGE_GENERATION === "true", available: !!process.env.GEMINI_IMAGE_MODEL, lastError: null }
+  };
+  cachedHealthResponse = responsePayload;
+  cachedHealthTime = now;
+  res.json(responsePayload);
 });
 aiRoutes.post("/debug-context", async (req, res) => {
   try {
     const user = await requireUser(req);
     const { loadUserAIContext: loadUserAIContext2 } = await Promise.resolve().then(() => (init_userContext(), userContext_exports));
     const context = await loadUserAIContext2(user.uid, user.email);
-    const knowledgeChunks = await retrieveRelevantKnowledge({
-      prompt: req.body?.prompt || "progress weak lessons syllabus",
-      activeSubject: req.body?.activeSubject,
-      mode: req.body?.mode || "debug",
-      uid: user.uid,
-      email: user.email,
-      userContext: context,
-      limit: 8
-    });
+    let databaseId2 = process.env.FIRESTORE_DATABASE_ID;
+    if (!databaseId2) {
+      try {
+        const configPath = import_node_path2.default.join(process.cwd(), "firebase-applet-config.json");
+        const config = JSON.parse(import_node_fs2.default.readFileSync(configPath, "utf-8"));
+        databaseId2 = config.firestoreDatabaseId;
+      } catch (e) {
+      }
+    }
     res.json({
       ok: true,
       uid: user.uid,
-      email: user.email || null,
       emailMasked: (user.email || "").replace(/(.{2})(.*)(@.*)/, "$1***$3"),
-      oldPathFound: context.diagnostics?.oldPathFound || false,
-      newPathFound: context.diagnostics?.newPathFound || false,
-      migratedLegacyProgress: context.diagnostics?.migratedLegacyProgress || false,
       loadedProfileFields: Object.keys(context.profile || {}),
-      progressRecordsChecked: context.diagnostics?.progressRecordsChecked || 0,
-      lessonHistoryCount: context.diagnostics?.lessonHistoryCount || 0,
-      paperMarksCount: context.diagnostics?.paperMarksCount || 0,
-      questionMarksCount: context.diagnostics?.questionMarksCount || 0,
-      knowledgeChunksRetrieved: knowledgeChunks.length,
-      weakLessons: context.weakLessons || [],
-      latestZ: context.latestZ,
-      subjectZScores: context.subjectZScores,
-      selectedMode: req.body.mode || "auto"
+      progressCount: context.recentProgress?.length || 0,
+      weakLessonsCount: context.weakLessons?.length || 0,
+      latestMarksCount: context.latestMarks?.length || 0,
+      subjectCompletion: context.recentProgress?.map((p) => ({ subject: p.subject, percent: p.coveragePercent, completed: p.completedTopics, total: p.totalTopics })) || [],
+      selectedMode: req.body.mode || "auto",
+      dbProject: process.env.GOOGLE_CLOUD_PROJECT || process.env.VITE_FIREBASE_PROJECT_ID || "al-ai-chat",
+      firestoreDatabaseId: databaseId2 || "(default)",
+      loadedFrom: context.loadedFrom || "unknown"
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
+  }
+});
+aiRoutes.post("/requests/:requestId/cancel", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    cancelRequest(req.params.requestId);
+    res.json({ ok: true, cancelled: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 aiRoutes.post("/respond-stream", async (req, res) => {
@@ -2556,6 +8727,28 @@ aiRoutes.post("/respond-stream", async (req, res) => {
     const user = await requireUser(req);
     req.user = user;
     await aiRespondStream(req, res);
+  } catch (error) {
+    const unauthorized = String(error?.message || "").startsWith("Unauthorized:");
+    res.status(unauthorized ? 401 : 500).json({
+      ok: false,
+      error: unauthorized ? "AUTH_REQUIRED" : error.message,
+      message: error.message
+    });
+  }
+});
+aiRoutes.post("/continue", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    req.user = user;
+    await aiContinueStream(req, res);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+aiRoutes.get("/stream-debug-last", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    res.json(lastStreamTraces);
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
   }
@@ -2633,7 +8826,12 @@ aiRoutes.get("/chat-history", async (req, res) => {
     const chatHistory = Array.from(new Map(docs.map((d) => [d.id, { id: d.id, ...d.data() }])).values()).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     res.json({ ok: true, chatHistory });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    console.error("[CHAT_HISTORY_FAILED]", error);
+    return res.status(200).json({
+      ok: false,
+      chatHistory: [],
+      errorCode: "CHAT_HISTORY_FAILED"
+    });
   }
 });
 aiRoutes.post("/chat-history", async (req, res) => {
@@ -2649,7 +8847,6 @@ aiRoutes.post("/chat-history", async (req, res) => {
     const messageData = {
       role,
       text,
-      content: text,
       mode: mode || "auto",
       subject: subject || null,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
@@ -2668,14 +8865,24 @@ aiRoutes.post("/chat-history/clear", async (req, res) => {
     const user = await requireUser(req);
     const db = getAdminDb();
     const batch = db.batch();
+    let opCount = 0;
     const uidSnap = await db.collection("users").doc(user.uid).collection("chat_history").get().catch(() => ({ docs: [] }));
-    uidSnap.docs.forEach((doc) => batch.delete(doc.ref));
+    uidSnap.docs.forEach((doc) => {
+      batch.delete(doc.ref);
+      opCount++;
+    });
     if (user.email) {
       const emailSnap = await db.collection("users").doc(user.email.toLowerCase()).collection("chat_history").get().catch(() => ({ docs: [] }));
-      emailSnap.docs.forEach((doc) => batch.delete(doc.ref));
+      emailSnap.docs.forEach((doc) => {
+        batch.delete(doc.ref);
+        opCount++;
+      });
     }
+    const chatCtxRef = db.collection("users").doc(user.uid).collection("chat_context").doc("current");
+    batch.delete(chatCtxRef);
+    opCount++;
     await batch.commit();
-    res.json({ ok: true });
+    res.json({ ok: true, clearedCount: opCount });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
   }
@@ -2710,6 +8917,53 @@ aiRoutes.post("/ai/image", async (req, res) => {
     res.status(500).json({ ok: false, error: error.message });
   }
 });
+aiRoutes.post("/answer-from-direct-pdf-result", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { answer, source, prompt, mode, subject } = req.body;
+    if (!answer || !prompt) {
+      return res.status(400).json({ ok: false, error: "Missing answer or prompt." });
+    }
+    const { saveFinalChat: saveFinalChat2 } = await Promise.resolve().then(() => (init_respondStream(), respondStream_exports));
+    const chatRes = await saveFinalChat2({
+      uid: user.uid,
+      email: user.email,
+      userText: prompt,
+      assistantText: answer,
+      mode: mode || "auto",
+      subject: subject || null,
+      sources: source ? [source] : []
+    });
+    res.json({
+      ok: true,
+      chatSaved: chatRes.chatSaved,
+      messageId: chatRes.messageId
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+aiRoutes.post("/feedback/wrong-answer", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { sourceId, questionType, questionNo, reason } = req.body;
+    if (!sourceId || !questionNo) {
+      return res.status(400).json({ ok: false, error: "Missing sourceId or questionNo." });
+    }
+    const { handleWrongAnswerFeedback: handleWrongAnswerFeedback2 } = await Promise.resolve().then(() => (init_wrongAnswerHandler(), wrongAnswerHandler_exports));
+    const result = await handleWrongAnswerFeedback2({
+      uid: user.uid,
+      sourceId,
+      questionType,
+      questionNo,
+      reason
+    });
+    res.json(result);
+  } catch (error) {
+    console.error("[AI_ROUTES] feedback/wrong-answer error:", error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
 aiRoutes.post("/past-papers/search", async (req, res) => {
   try {
     const user = await requireUser(req);
@@ -2720,276 +8974,1622 @@ aiRoutes.post("/past-papers/search", async (req, res) => {
     res.status(500).json({ ok: false, error: error.message });
   }
 });
-function extractJsonObject(text) {
-  const trimmed = String(text || "").trim();
+aiRoutes.post("/web/pdf-proxy", async (req, res) => {
   try {
-    return JSON.parse(trimmed);
-  } catch {
-  }
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
-  if (fenced) {
-    try {
-      return JSON.parse(fenced.trim());
-    } catch {
+    const user = await requireUser(req);
+    const { url } = req.body;
+    if (!url) {
+      return res.status(400).json({ ok: false, error: "URL is required" });
     }
-  }
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
     try {
-      return JSON.parse(trimmed.slice(start, end + 1));
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:") {
+        return res.status(400).json({ ok: false, error: "Only secure HTTPS URLs are allowed" });
+      }
+      const host = parsed.hostname.toLowerCase();
+      const isPrivate = host === "localhost" || host === "127.0.0.1" || host === "::1" || host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.") || host.startsWith("172.16.") || host.startsWith("172.17.") || host.startsWith("172.18.") || host.startsWith("172.19.") || host.startsWith("172.20.") || host.startsWith("172.21.") || host.startsWith("172.22.") || host.startsWith("172.23.") || host.startsWith("172.24.") || host.startsWith("172.25.") || host.startsWith("172.26.") || host.startsWith("172.27.") || host.startsWith("172.28.") || host.startsWith("172.29.") || host.startsWith("172.30.") || host.startsWith("172.31.");
+      if (isPrivate) {
+        return res.status(400).json({ ok: false, error: "Access to private resources is forbidden" });
+      }
     } catch {
+      return res.status(400).json({ ok: false, error: "Invalid URL format" });
     }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25e3);
+    const fetchResponse = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      }
+    });
+    clearTimeout(timeoutId);
+    if (!fetchResponse.ok) {
+      return res.status(502).json({ ok: false, error: `Failed to fetch target URL. Status: ${fetchResponse.status}` });
+    }
+    const contentType = fetchResponse.headers.get("content-type") || "";
+    if (!contentType.toLowerCase().includes("pdf") && !contentType.toLowerCase().includes("octet-stream") && !contentType.toLowerCase().includes("application/")) {
+      return res.status(400).json({ ok: false, error: "Target URL does not appear to point to a valid document file" });
+    }
+    const arrayBuffer = await fetchResponse.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    if (buffer.length > 50 * 1024 * 1024) {
+      return res.status(400).json({ ok: false, error: "File exceeds safe size limit of 50MB" });
+    }
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="proxied_document.pdf"`);
+    res.send(buffer);
+  } catch (error) {
+    console.error("PDF proxy failed:", error);
+    res.status(500).json({ ok: false, error: error.message || "Fetch timeout or network issue" });
+  }
+});
+
+// server/rag/routes.ts
+init_client();
+var import_express2 = require("express");
+var import_genai3 = require("@google/genai");
+
+// server/firebase/authMiddleware.ts
+init_admin();
+init_configuredRoles();
+async function verifyAndExtractUser(req) {
+  if (req.query && (req.query.token || req.query.auth || req.query.access_token)) {
+    const err = new Error("Authentication tokens must be sent in the Authorization header.");
+    err.code = "QUERY_TOKEN_NOT_ALLOWED";
+    throw err;
+  }
+  const authHeader = req.headers.authorization;
+  if (process.env.DEV_BYPASS_AUTH === "true" && process.env.NODE_ENV !== "production") {
+    const devUser = {
+      uid: "dev-user-id",
+      email: "dev@example.com",
+      emailVerified: true,
+      isAnonymous: false,
+      name: "Dev User",
+      admin: true,
+      roles: ["admin"]
+    };
+    const authContext = {
+      uid: devUser.uid,
+      email: devUser.email,
+      roles: ["admin"],
+      isAnonymous: false
+    };
+    return { ...devUser, authContext };
+  }
+  let token = "";
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.split("Bearer ")[1];
+  }
+  if (!token) {
+    return null;
+  }
+  try {
+    const decodedToken = await getAdminAuth().verifyIdToken(token);
+    const isAnonymous = decodedToken.firebase?.sign_in_provider === "anonymous";
+    let admin = decodedToken.admin || false;
+    let roles = ["student"];
+    if (admin) {
+      roles.push("admin", "reviewer", "ops");
+    }
+    if (decodedToken.roles && Array.isArray(decodedToken.roles)) {
+      roles = [.../* @__PURE__ */ new Set([...roles, ...decodedToken.roles])];
+    }
+    if (decodedToken.role && typeof decodedToken.role === "string") {
+      roles.push(decodedToken.role);
+    }
+    try {
+      const db = getAdminDb();
+      const roleDoc = await db.collection("user_roles").doc(decodedToken.uid).get();
+      if (roleDoc.exists) {
+        const data = roleDoc.data();
+        if (data?.roles && Array.isArray(data.roles)) {
+          roles = [.../* @__PURE__ */ new Set([...roles, ...data.roles])];
+        }
+        if (data?.role && typeof data.role === "string") {
+          roles.push(data.role);
+        }
+      }
+    } catch (e) {
+    }
+    roles = applyConfiguredAdminRoles(
+      decodedToken.email,
+      decodedToken.email_verified === true,
+      roles
+    );
+    if (roles.includes("admin")) {
+      admin = true;
+    }
+    const rolesTyped = roles.filter((r) => ["student", "teacher", "content_editor", "reviewer", "ops", "admin"].includes(r));
+    const authContext = {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      roles: rolesTyped.length > 0 ? rolesTyped : ["student"],
+      isAnonymous,
+      tokenIssuedAt: decodedToken.iat,
+      authTime: decodedToken.auth_time
+    };
+    return {
+      uid: decodedToken.uid,
+      email: decodedToken.email,
+      emailVerified: decodedToken.email_verified || false,
+      isAnonymous,
+      name: decodedToken.name || decodedToken.email?.split("@")[0] || "User",
+      admin,
+      roles: [...new Set(roles)],
+      authContext
+    };
+  } catch (error) {
+    console.error("Token verification failed:", error);
+    return null;
+  }
+}
+async function requireFirebaseUser(req, res, next) {
+  try {
+    const user = await verifyAndExtractUser(req);
+    if (!user) {
+      return res.status(401).json({
+        ok: false,
+        code: "LOGIN_REQUIRED",
+        message: "This operation requires a logged-in session."
+      });
+    }
+    req.user = user;
+    req.authContext = user.authContext;
+    next();
+  } catch (err) {
+    if (err.code === "QUERY_TOKEN_NOT_ALLOWED") {
+      return res.status(400).json({
+        ok: false,
+        code: "QUERY_TOKEN_NOT_ALLOWED",
+        message: err.message
+      });
+    }
+    res.status(401).json({ ok: false, error: err.message });
+  }
+}
+async function requireNonAnonymousUser(req, res, next) {
+  try {
+    const user = await verifyAndExtractUser(req);
+    if (!user || user.isAnonymous) {
+      return res.status(401).json({
+        ok: false,
+        code: "AUTHENTICATED_USER_REQUIRED",
+        message: "\u0DB8\u0DD9\u0DB8 \u0D9A\u0DCA\u200D\u0DBB\u0DD2\u0DBA\u0DCF\u0DC0 \u0DC3\u0DD2\u0DAF\u0DD4 \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8 \u0DC3\u0DB3\u0DC4\u0DCF \u0D9A\u0DBB\u0DD4\u0DAB\u0DCF\u0D9A\u0DBB \u0D94\u0DB6\u0D9C\u0DDA \u0D9C\u0DD2\u0DAB\u0DD4\u0DB8\u0DA7 \u0DBD\u0DDC\u0D9C\u0DCA \u0DC0\u0DB1\u0DCA\u0DB1. (Sign-in required)"
+      });
+    }
+    req.user = user;
+    req.authContext = user.authContext;
+    next();
+  } catch (err) {
+    if (err.code === "QUERY_TOKEN_NOT_ALLOWED") {
+      return res.status(400).json({
+        ok: false,
+        code: "QUERY_TOKEN_NOT_ALLOWED",
+        message: err.message
+      });
+    }
+    res.status(401).json({ ok: false, error: err.message });
+  }
+}
+
+// server/rag/routes.ts
+init_admin();
+
+// server/pdf/legacySinhala.ts
+function detectSinhalaTextEncoding(text) {
+  if (!text) {
+    return { encoding: "unknown", confidence: 0, reason: "Empty text" };
+  }
+  const unicodeMatches = text.match(/[\u0D80-\u0DFF]/g);
+  const unicodeCount = unicodeMatches ? unicodeMatches.length : 0;
+  const legacyPatterns = [
+    "LKavdxl",
+    "cHd",
+    "\xF1",
+    "\xFA",
+    "Y%",
+    "m%",
+    "fuu",
+    "fyd",
+    "iS",
+    "wxl",
+    "m%Yak",
+    "ms<s;=re",
+    "fnda",
+    ";dlaIK"
+  ];
+  let legacyHits = 0;
+  legacyPatterns.forEach((pat) => {
+    const regex = new RegExp(pat.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+    const matches = text.match(regex);
+    if (matches) {
+      legacyHits += matches.length;
+    }
+  });
+  const totalChars = text.length || 1;
+  const unicodeRatio = unicodeCount / totalChars;
+  if (unicodeCount > 50 && unicodeRatio > 0.1) {
+    return {
+      encoding: "unicode_sinhala",
+      confidence: 0.95,
+      reason: `Found ${unicodeCount} Unicode Sinhala characters (Ratio: ${(unicodeRatio * 100).toFixed(1)}%).`
+    };
+  }
+  if (legacyHits > 5) {
+    return {
+      encoding: "legacy_fm_abhaya",
+      confidence: Math.min(0.9, 0.4 + legacyHits / 20),
+      reason: `Found ${legacyHits} common FM-Abhaya legacy font garbage patterns (Unicode count: ${unicodeCount}).`
+    };
+  }
+  if (unicodeCount === 0 && text.match(/[A-Za-z]/)) {
+    if (legacyHits > 2 || text.includes("LKavdxl") || text.includes("cHd\xF1;sh") || text.includes(";dlaIK")) {
+      return {
+        encoding: "legacy_fm_abhaya",
+        confidence: 0.8,
+        reason: "Specific SFT/ET legacy keywords detected."
+      };
+    }
+    const englishWords = text.match(/\b[A-Za-z]+\b/g);
+    const hasEnglish = englishWords && englishWords.length > Math.max(1, totalChars / 20);
+    if (hasEnglish) {
+      return {
+        encoding: "native_english",
+        confidence: 0.9,
+        reason: "Contains English alphabet letters with no legacy patterns."
+      };
+    }
+    return {
+      encoding: "unknown",
+      confidence: 0.3,
+      reason: "No Unicode Sinhala but contains some alphabet letters; not enough legacy patterns."
+    };
+  }
+  return {
+    encoding: "unknown",
+    confidence: 0.3,
+    reason: "No definitive Sinhala patterns detected."
+  };
+}
+var WORD_REPLACEMENTS = [
+  [/LKavdxl/g, "\u0D9B\u0DAB\u0DCA\u0DA9\u0DCF\u0D82\u0D9A"],
+  [/cHdñ;sh/g, "\u0DA2\u0DCA\u200D\u0DBA\u0DCF\u0DB8\u0DD2\u0DAD\u0DD2\u0DBA"],
+  [/;dlaIK/g, "\u0DAD\u0DCF\u0D9A\u0DCA\u200D\u0DC2\u0DAB"],
+  [/ms<s;=re/g, "\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DD4"],
+  [/m%Yak/g, "\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1"],
+  [/fuu/g, "\u0DB8\u0DD9\u0DB8"],
+  [/fyd/g, "\u0DC4\u0DDD"],
+  [/wxlh/g, "\u0D85\u0D82\u0D9A\u0DBA"],
+  [/wxl/g, "\u0D85\u0D82\u0D9A"],
+  [/Y%/g, "\u0DC1\u0DCA\u200D\u0DBB\u0DD3"],
+  [/m%/g, "\u0DB4\u0DCA\u200D\u0DBB"],
+  [/úNd/g, "\u0DC0\u0DD2\u0DB7\u0DCF"],
+  [/fnda/g, "\u0DB6\u0DDD"],
+  [/iS/g, "\u0DC3\u0DD3"]
+];
+var CHAR_REPLACEMENTS = [
+  // Consonants & basic letters
+  ["wxl", "\u0D85\u0D82\u0D9A"],
+  ["LKv", "\u0D9B\u0DAB\u0DCA\u0DA9"],
+  ["w", "\u0D85"],
+  ["W", "\u0D86"],
+  ["b", "\u0D89"],
+  ["B", "\u0D8A"],
+  ["t", "\u0D91"],
+  ["ta", "\u0D92"],
+  ["l", "\u0D9A"],
+  ["L", "\u0D9B"],
+  ["g", "\u0D9C"],
+  ["G", "\u0D9D"],
+  ["p", "\u0DA0"],
+  ["P", "\u0DA1"],
+  ["c", "\u0DA2"],
+  ["C", "\u0DA3"],
+  ["v", "\u0DA9"],
+  ["V", "\u0DAA"],
+  ["K", "\u0DAB"],
+  [";", "\u0DAD"],
+  ["Q", "\u0DAE"],
+  ["o", "\u0DAF"],
+  ["O", "\u0DB0"],
+  ["k", "\u0DB1"],
+  ["m", "\u0DB4"],
+  ["M", "\u0DB5"],
+  ["n", "\u0DB6"],
+  ["N", "\u0DB7"],
+  ["u", "\u0DB8"],
+  ["h", "\u0DBA"],
+  ["r", "\u0DBB"],
+  ["j", "\u0DC0"],
+  ["Y", "\u0DC1"],
+  ["I", "\u0DC2"],
+  ["i", "\u0DC3"],
+  ["y", "\u0DC4"],
+  ["<", "\u0DC5"],
+  // Vowels
+  ["d", "\u0DCF"],
+  ["s", "\u0DD2"],
+  ["S", "\u0DD3"],
+  ["=", "\u0DD4"],
+  ["W", "\u0DD6"],
+  ["D", "\u0DD8"],
+  ["f", "\u0DD9"],
+  ["F", "\u0DDA"],
+  ["x", "\u0D82"],
+  ["a", "\u0DCA"]
+];
+function normalizeSinhalaExtractedText(rawText) {
+  if (!rawText) {
+    return {
+      rawText: "",
+      normalizedText: "",
+      textEncoding: "unknown",
+      conversionApplied: false,
+      conversionConfidence: 0,
+      needsLegacyConversion: false,
+      warnings: []
+    };
+  }
+  const { encoding, confidence } = detectSinhalaTextEncoding(rawText);
+  if (encoding === "unicode_sinhala" || encoding === "native_english") {
+    return {
+      rawText,
+      normalizedText: rawText,
+      textEncoding: encoding,
+      conversionApplied: false,
+      conversionConfidence: 1,
+      needsLegacyConversion: false,
+      warnings: []
+    };
+  }
+  if (encoding === "legacy_fm_abhaya" || encoding === "legacy_unknown") {
+    let converted = rawText;
+    WORD_REPLACEMENTS.forEach(([regex, repl]) => {
+      converted = converted.replace(regex, repl);
+    });
+    converted = converted.replace(/f([a-zA-Z;<`\[\]ˆ])(d)?/g, (match, consonant, ra_hida) => {
+      let mappedCons = consonant;
+      for (const [key, val] of CHAR_REPLACEMENTS) {
+        if (key === consonant) {
+          mappedCons = val;
+          break;
+        }
+      }
+      return mappedCons + (ra_hida ? "\u0DDD" : "\u0DD9");
+    });
+    converted = converted.replace(/F([a-zA-Z;<`\[\]ˆ])/g, (match, consonant) => {
+      let mappedCons = consonant;
+      for (const [key, val] of CHAR_REPLACEMENTS) {
+        if (key === consonant) {
+          mappedCons = val;
+          break;
+        }
+      }
+      return mappedCons + "\u0DDA";
+    });
+    for (const [legacyChar, unicodeChar] of CHAR_REPLACEMENTS) {
+      const escaped = legacyChar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      converted = converted.replace(new RegExp(escaped, "g"), unicodeChar);
+    }
+    converted = converted.replace(/්‍රි/g, "\u0DCA\u200D\u0DBB\u0DD3").replace(/්ා/g, "\u0DCA").replace(/ිි/g, "\u0DD3");
+    const postUnicodeMatches = converted.match(/[\u0D80-\u0DFF]/g);
+    const postUnicodeCount = postUnicodeMatches ? postUnicodeMatches.length : 0;
+    const conversionSuccess = postUnicodeCount > 20;
+    return {
+      rawText,
+      normalizedText: converted,
+      textEncoding: encoding,
+      conversionApplied: true,
+      conversionConfidence: conversionSuccess ? Math.max(0.7, confidence) : 0.4,
+      needsLegacyConversion: !conversionSuccess,
+      warnings: conversionSuccess ? [] : ["Legacy conversion confidence is low. Manual check recommended."]
+    };
+  }
+  return {
+    rawText,
+    normalizedText: rawText,
+    textEncoding: "unknown",
+    conversionApplied: false,
+    conversionConfidence: 0,
+    needsLegacyConversion: true,
+    warnings: ["Could not detect legacy font encoding type."]
+  };
+}
+
+// server/pdf/extractText.ts
+if (typeof globalThis !== "undefined") {
+  if (!globalThis.DOMMatrix) {
+    globalThis.DOMMatrix = class DOMMatrix {
+    };
+  }
+  if (!globalThis.Path2D) {
+    globalThis.Path2D = class Path2D {
+    };
+  }
+}
+async function extractPdfText(pdfBuffer) {
+  let pdfjsLib = null;
+  try {
+    pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  } catch (err) {
+    console.error("Failed to load pdfjs-dist:", err.message);
+    return {
+      text: "",
+      pages: [],
+      needsOcr: false,
+      needsLegacyConversion: false,
+      textEncoding: "unknown",
+      message: "PDF_PARSER_UNAVAILABLE"
+    };
+  }
+  try {
+    const loadingTask = pdfjsLib.getDocument({
+      data: new Uint8Array(pdfBuffer),
+      disableFontFace: true,
+      verbosity: 0
+    });
+    const pdf = await loadingTask.promise;
+    let fullText = "";
+    const pages = [];
+    let overallNeedsLegacy = false;
+    let dominantEncoding = "unknown";
+    let legacyEncodingsCount = 0;
+    let unicodeEncodingsCount = 0;
+    let nativeEnglishCount = 0;
+    let ocrRequiredCount = 0;
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageTextRaw = textContent.items.map((item) => item.str).join(" ").trim();
+      const normResult = normalizeSinhalaExtractedText(pageTextRaw);
+      if (normResult.needsLegacyConversion) {
+        overallNeedsLegacy = true;
+      }
+      let pageQuality = "extraction_failed";
+      if (pageTextRaw.length < 40) {
+        pageQuality = "empty_expected";
+      } else if (normResult.textEncoding === "unicode_sinhala") {
+        unicodeEncodingsCount++;
+        pageQuality = "native_unicode";
+      } else if (normResult.textEncoding === "native_english") {
+        nativeEnglishCount++;
+        pageQuality = "native_english";
+      } else if (normResult.textEncoding.startsWith("legacy_")) {
+        legacyEncodingsCount++;
+        if (normResult.conversionConfidence > 0.6) {
+          pageQuality = "legacy_convertible";
+        } else {
+          pageQuality = "ocr_required";
+          ocrRequiredCount++;
+        }
+      } else {
+        pageQuality = "ocr_required";
+        ocrRequiredCount++;
+      }
+      pages.push({
+        pageNumber: i,
+        text: normResult.normalizedText,
+        rawText: normResult.rawText,
+        textEncoding: normResult.textEncoding,
+        conversionApplied: normResult.conversionApplied,
+        conversionConfidence: normResult.conversionConfidence,
+        needsLegacyConversion: normResult.needsLegacyConversion,
+        pageQuality
+      });
+      fullText += (fullText ? "\n\n" : "") + normResult.normalizedText;
+    }
+    if (legacyEncodingsCount > unicodeEncodingsCount && legacyEncodingsCount > nativeEnglishCount) {
+      dominantEncoding = "legacy_fm_abhaya";
+    } else if (unicodeEncodingsCount > 0 || nativeEnglishCount > 0) {
+      dominantEncoding = unicodeEncodingsCount >= nativeEnglishCount ? "unicode_sinhala" : "native_english";
+    }
+    const trimmed = fullText.trim();
+    if (trimmed.length === 0) {
+      return {
+        text: "",
+        pages: [],
+        needsOcr: true,
+        needsLegacyConversion: false,
+        textEncoding: "unknown",
+        message: "PDF \u0D91\u0D9A\u0DD9\u0DB1\u0DCA text extract \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0DB6\u0DD0\u0DC4\u0DD0. OCR \u0D85\u0DC0\u0DC1\u0DCA\u200D\u0DBA\u0DBA\u0DD2."
+      };
+    }
+    return {
+      text: trimmed,
+      pages,
+      needsOcr: ocrRequiredCount > 0,
+      // If any page needs OCR, we might trigger it for those pages
+      needsLegacyConversion: overallNeedsLegacy,
+      textEncoding: dominantEncoding
+    };
+  } catch (e) {
+    console.warn("PDF extraction error:", e.message);
+    return {
+      text: "",
+      pages: [],
+      needsOcr: true,
+      needsLegacyConversion: false,
+      textEncoding: "unknown",
+      message: "PDF \u0D91\u0D9A\u0DD9\u0DB1\u0DCA text extract \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0DB6\u0DD0\u0DC4\u0DD0. OCR \u0D85\u0DC0\u0DC1\u0DCA\u200D\u0DBA\u0DBA\u0DD2."
+    };
+  }
+}
+
+// server/rag/routes.ts
+init_retry();
+var import_multer = __toESM(require("multer"), 1);
+init_sourceInventoryService();
+
+// server/pdf/geminiPdfOcr.ts
+var import_genai2 = require("@google/genai");
+init_client();
+function isGeminiPdfOcrConfigured() {
+  const mode = String(process.env.GEMINI_USE_VERTEX || "").trim().toLowerCase();
+  if (mode === "false") return Boolean(process.env.GEMINI_API_KEY);
+  if (mode === "true") return Boolean(
+    process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID
+  );
+  return Boolean(
+    process.env.GEMINI_API_KEY || process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || process.env.GOOGLE_APPLICATION_CREDENTIALS
+  );
+}
+async function extractPdfPagesWithGemini(buffer) {
+  if (!buffer?.length) throw new Error("Cannot OCR an empty PDF buffer.");
+  const ai9 = getAIClient();
+  const response = await ai9.models.generateContent({
+    model: process.env.GEMINI_OCR_MODEL || process.env.GEMINI_PDF_QA_MODEL || "gemini-2.5-flash",
+    contents: [
+      {
+        inlineData: {
+          mimeType: "application/pdf",
+          data: buffer.toString("base64")
+        }
+      },
+      {
+        text: [
+          "OCR this Sri Lankan A/L PDF page by page.",
+          "Extract only text visible in the document; never invent missing questions or answers.",
+          "Preserve Sinhala and English Unicode, question/option numbers, formulas, and concise diagram labels.",
+          "Return JSON in the requested schema."
+        ].join(" ")
+      }
+    ],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: import_genai2.Type.OBJECT,
+        properties: {
+          pages: {
+            type: import_genai2.Type.ARRAY,
+            items: {
+              type: import_genai2.Type.OBJECT,
+              properties: {
+                pageNumber: { type: import_genai2.Type.INTEGER },
+                text: { type: import_genai2.Type.STRING }
+              },
+              required: ["pageNumber", "text"]
+            }
+          }
+        },
+        required: ["pages"]
+      }
+    }
+  });
+  const parsed = JSON.parse(response.text || "{}");
+  const pages = (Array.isArray(parsed?.pages) ? parsed.pages : []).map((page, index) => ({
+    pageNumber: Number(page?.pageNumber) || index + 1,
+    text: String(page?.text || "").trim()
+  })).filter((page) => page.text.length > 0);
+  if (pages.length === 0) throw new Error("Gemini OCR returned no readable pages.");
+  return pages;
+}
+
+// server/rag/routes.ts
+var ragRoutes = (0, import_express2.Router)();
+var upload = (0, import_multer.default)({ storage: import_multer.default.memoryStorage() });
+function normalizeSubject4(sub) {
+  const s = (sub || "").trim().toUpperCase();
+  if (s.includes("SFT") || s.includes("SCIENCE")) return "SFT";
+  if (s.includes("ET") || s.includes("ENGINEERING")) return "ET";
+  if (s.includes("ICT") || s.includes("INFORMATION")) return "ICT";
+  return s || "SFT";
+}
+var isPermissionError = (err) => {
+  const msg = (err?.message || "").toLowerCase();
+  return msg.includes("permission_denied") || msg.includes("permission denied") || err?.code === 7 || err?.status === 7;
+};
+function detectQuestionNo(text) {
+  const lower = text.toLowerCase();
+  if (lower.includes("q1") || lower.includes("question 1") || lower.includes("question 01") || lower.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 1") || lower.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 01") || lower.includes("\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 1") || lower.includes("\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 01") || lower.includes("\u0DB4\u0DC5\u0DB8\u0DD4") || lower.includes("\u0DB4\u0DC5\u0DC0\u0DD9\u0DB1\u0DD2") || /(?:^|\s|\n)0?1\.\s/.test(lower)) {
+    return "Q1";
+  }
+  if (lower.includes("q2") || lower.includes("question 2") || lower.includes("question 02") || lower.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 2") || lower.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 02") || lower.includes("\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 2") || lower.includes("\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 02") || lower.includes("\u0DAF\u0DD9\u0DC0\u0DB1") || lower.includes("\u0DAF\u0DD9\u0DC0\u0DD9\u0DB1\u0DD2") || /(?:^|\s|\n)0?2\.\s/.test(lower)) {
+    return "Q2";
+  }
+  if (lower.includes("q3") || lower.includes("question 3") || lower.includes("question 03") || lower.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 3") || lower.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 03") || lower.includes("\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 3") || lower.includes("\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA 03") || lower.includes("\u0DAD\u0DD4\u0DB1\u0DCA\u0DC0\u0DB1") || lower.includes("\u0DAD\u0DD4\u0DB1\u0DCA\u0DC0\u0DD9\u0DB1\u0DD2") || /(?:^|\s|\n)0?3\.\s/.test(lower)) {
+    return "Q3";
   }
   return null;
 }
-function normalizeQuizQuestion(question, index, subject, topic) {
-  const options = Array.isArray(question.options) && question.options.length >= 2 ? question.options.map((option) => String(option)) : ["Correct", "Incorrect", "Needs revision", "Not enough data"];
-  const answerText = String(question.answer ?? options[0]);
-  let correctIndex = options.findIndex((option) => option.trim().toLowerCase() === answerText.trim().toLowerCase());
-  if (typeof question.correctIndex === "number") correctIndex = question.correctIndex;
-  if (correctIndex < 0 || correctIndex >= options.length) correctIndex = 0;
-  return {
-    type: question.type || "mcq",
-    question: String(question.question || `${subject.toUpperCase()} ${topic} revision question ${index + 1}`),
-    options,
-    answer: options[correctIndex],
-    correctIndex,
-    explanation: String(question.explanation || "Review the referenced syllabus chunk and retry the question."),
-    marks: Number(question.marks || 1),
-    sourceRefs: Array.isArray(question.sourceRefs) ? question.sourceRefs : []
-  };
-}
-function buildFallbackQuiz(subject, topic, chunks) {
-  const seed = chunks.length ? chunks : [{ title: topic || subject, text: `${subject.toUpperCase()} ${topic || "syllabus"} revision` }];
-  return seed.slice(0, 5).map((chunk, index) => normalizeQuizQuestion({
-    question: `${chunk.subject?.toUpperCase() || subject.toUpperCase()} ${topic || chunk.topic || "lesson"}: which statement best matches the source?`,
-    options: [
-      String(chunk.title || chunk.topic || "This topic is included in the syllabus/source set."),
-      "This topic is not related to A/L Technology.",
-      "This topic should be ignored for revision.",
-      "No source is available for this topic."
-    ],
-    answer: String(chunk.title || chunk.topic || "This topic is included in the syllabus/source set."),
-    explanation: String(chunk.text || "").slice(0, 260) || "Generated from local syllabus/source metadata.",
-    marks: 1,
-    sourceRefs: [chunk.title].filter(Boolean)
-  }, index, subject, topic));
-}
-aiRoutes.post("/quiz", async (req, res) => {
+ragRoutes.get("/sources/:sourceId/download", requireFirebaseUser, async (req, res) => {
   try {
-    const user = await requireUser(req);
-    const subject = String(req.body.subject || req.body.activeSubject || "sft").toLowerCase();
-    const topic = String(req.body.topic || req.body.prompt || "revision").trim();
-    if (!topic) {
-      return res.status(400).json({ ok: false, error: "Topic is required" });
+    const user = req.user;
+    const { sourceId } = req.params;
+    const db = getAdminDb();
+    const docRef = db.collection("rag_sources").doc(sourceId);
+    const docSnap = await docRef.get();
+    if (!docSnap.exists) {
+      return res.status(404).json({ ok: false, error: "Source not found" });
     }
-    const { loadUserAIContext: loadUserAIContext2 } = await Promise.resolve().then(() => (init_userContext(), userContext_exports));
-    const userContext = await loadUserAIContext2(user.uid, user.email);
-    const chunks = await retrieveRelevantKnowledge({
-      prompt: `${subject} ${topic} quiz`,
-      activeSubject: subject,
-      mode: "quiz_generation",
-      uid: user.uid,
-      email: user.email,
-      userContext,
-      limit: 8
-    });
-    let quizObject = null;
-    const prompt = `Return only strict JSON for a Sinhala-first G.C.E. A/L Technology quiz. Schema: {"title":string,"subject":string,"topic":string,"questions":[{"type":"mcq","question":string,"options":string[],"answer":string,"explanation":string,"marks":number,"sourceRefs":string[]}]} Subject: ${subject}. Topic: ${topic}. Use these sources: ${JSON.stringify(chunks.slice(0, 6))}`;
-    for (const model of getModelFallbackChain(AI_MODELS.default)) {
+    const data = docSnap.data();
+    if (!data || !data.storagePath) {
+      return res.status(404).json({ ok: false, error: "Storage path not found" });
+    }
+    if (data.ownerUid !== user.uid) {
+      return res.status(403).json({ ok: false, error: "Unauthorized access to source. Only the owner of the source document can download the file." });
+    }
+    const bucket = getAdminBucket();
+    const file = bucket.file(data.storagePath);
+    const [exists] = await file.exists();
+    if (!exists) {
+      return res.status(404).json({ ok: false, error: "File not found in storage" });
+    }
+    const shouldStream = req.query.stream === "true";
+    if (!shouldStream) {
       try {
-        const ai = getAIClient();
-        const response = await ai.models.generateContent({
-          model,
-          contents: prompt,
-          config: { temperature: 0.25, responseMimeType: "application/json" }
+        const [signedUrl] = await retryGoogleAuthOperation("sourcesGetSignedUrl", async () => {
+          return await file.getSignedUrl({
+            action: "read",
+            expires: Date.now() + 15 * 60 * 1e3
+            // 15 mins
+          });
         });
-        quizObject = extractJsonObject(response.text || "");
-        if (quizObject?.questions?.length) break;
-      } catch (e) {
-        console.warn(`Quiz model ${model} failed:`, e);
+        return res.redirect(signedUrl);
+      } catch (signErr) {
+        console.warn("Failed to generate signed URL, falling back to direct stream:", signErr);
       }
     }
-    const questions = Array.isArray(quizObject?.questions) ? quizObject.questions.slice(0, 8).map((q, i) => normalizeQuizQuestion(q, i, subject, topic)) : buildFallbackQuiz(subject, topic, chunks);
-    const normalized = {
-      title: quizObject?.title || `${subject.toUpperCase()} ${topic} quiz`,
-      subject,
-      topic,
-      questions
-    };
-    res.json({ ok: true, quizObject: normalized, quiz: questions, sources: chunks });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message || "Quiz generation failed" });
+    res.setHeader("Content-Type", data.mimeType || "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(data.fileName || "source.pdf")}"`);
+    file.createReadStream().pipe(res);
+  } catch (e) {
+    if (isPermissionError(e)) {
+      return res.status(403).json({
+        ok: false,
+        code: "FIRESTORE_PERMISSION_DENIED",
+        message: "Firestore/Storage Admin permission issue. Check backend health."
+      });
+    }
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
-aiRoutes.get("/quota", async (req, res) => {
+ragRoutes.post("/upload", upload.single("file"), requireNonAnonymousUser, async (req, res) => {
+  return res.status(400).json({
+    ok: false,
+    code: "USE_CLIENT_STORAGE_UPLOAD",
+    recommendedUploadMode: "client_firebase_storage",
+    message: "Firebase Admin Storage is degraded in this workspace. Please use client-side storage uploads directly."
+  });
+});
+ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req, res) => {
+  try {
+    const {
+      id,
+      sourceId,
+      title,
+      fileName,
+      subject,
+      year,
+      category,
+      paperType,
+      type,
+      resourceType,
+      sourceType,
+      sourceScope,
+      storagePath,
+      chunkCount,
+      needsOcr,
+      createdAt,
+      updatedAt
+    } = req.body;
+    const finalId = id || sourceId;
+    if (!finalId) {
+      return res.status(400).json({ ok: false, error: "Missing paper ID" });
+    }
+    const normSubject = normalizeSubject4(subject || "");
+    const db = getAdminDb();
+    const existingSnapshot = await db.collection("past_papers").doc(finalId).get();
+    const existing = existingSnapshot.exists ? existingSnapshot.data() || {} : {};
+    const alreadyProcessed = Boolean(existing.processedAt) || Number(existing.chunkCount || 0) > 0 || existing.indexStatus === "failed" || existing.indexStatus === "needs_ocr";
+    const paperDoc = {
+      id: finalId,
+      sourceId: finalId,
+      title: title || fileName || "Untitled Past Paper",
+      fileName: fileName || title || "untitled.pdf",
+      subject: normSubject,
+      year: String(year || ""),
+      category: category || "A/L Past Papers",
+      paperType: paperType || type || "Full Paper",
+      type: paperType || type || "Full Paper",
+      resourceType: resourceType || "past_paper",
+      sourceType: sourceType || resourceType || "past_paper",
+      sourceScope: sourceScope || "past_paper",
+      storagePath: storagePath || null,
+      ownerUid: req.user.uid,
+      ownerEmail: req.user.email || "unknown",
+      uploaded: true,
+      chunkCount: alreadyProcessed ? Number(existing.chunkCount || 0) : Number(chunkCount || 0),
+      needsOcr: alreadyProcessed ? existing.needsOcr === true : needsOcr === true,
+      textIndexed: alreadyProcessed ? existing.textIndexed === true : Number(chunkCount || 0) > 0 && needsOcr !== true,
+      createdAt: createdAt || (/* @__PURE__ */ new Date()).toISOString(),
+      updatedAt: updatedAt || (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await db.collection("past_papers").doc(finalId).set(paperDoc, { merge: true });
+    invalidateInventoryCache(req.user.uid);
+    res.json({ ok: true, doc: paperDoc });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+ragRoutes.delete("/past-papers/:id", requireNonAnonymousUser, async (req, res) => {
+  try {
+    const sourceId = req.params.id;
+    const db = getAdminDb();
+    const isAdmin = req.user.roles?.includes("admin") || req.user.admin === true;
+    let storagePath = null;
+    let pastPaperDeleted = false;
+    let ragSourceDeleted = false;
+    let chunksDeletedCount = 0;
+    let syllabusChunksDeletedCount = 0;
+    const ppDoc = await db.collection("past_papers").doc(sourceId).get();
+    if (ppDoc.exists) {
+      const data = ppDoc.data();
+      if (data?.ownerUid !== req.user.uid && !isAdmin) {
+        return res.status(403).json({ ok: false, error: "Unauthorized" });
+      }
+      storagePath = data?.storagePath || null;
+      await db.collection("past_papers").doc(sourceId).delete();
+      pastPaperDeleted = true;
+    }
+    const sourceDoc = await db.collection("rag_sources").doc(sourceId).get();
+    if (sourceDoc.exists) {
+      const data = sourceDoc.data();
+      if (data?.ownerUid !== req.user.uid && !isAdmin) {
+        return res.status(403).json({ ok: false, error: "Unauthorized" });
+      }
+      if (!storagePath) {
+        storagePath = data?.storagePath || null;
+      }
+      await db.collection("rag_sources").doc(sourceId).delete();
+      ragSourceDeleted = true;
+    }
+    const chunks = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
+    const batch = db.batch();
+    chunks.docs.forEach((d) => {
+      batch.delete(d.ref);
+      chunksDeletedCount++;
+    });
+    const sylChunks = await db.collection("users").doc(req.user.uid).collection("syllabus_chunks").where("sourceId", "==", sourceId).get();
+    sylChunks.docs.forEach((d) => {
+      batch.delete(d.ref);
+      syllabusChunksDeletedCount++;
+    });
+    const syllabusResources = await db.collection("users").doc(req.user.uid).collection("syllabus_resources").doc(sourceId).get();
+    if (syllabusResources.exists) {
+      batch.delete(syllabusResources.ref);
+    }
+    await batch.commit();
+    let storageAttempted = false;
+    let storageOk = false;
+    let storageError = null;
+    if (storagePath) {
+      storageAttempted = true;
+      try {
+        const { getAdminBucket: getAdminBucket2 } = await Promise.resolve().then(() => (init_admin(), admin_exports));
+        const bucket = getAdminBucket2();
+        await bucket.file(storagePath).delete();
+        storageOk = true;
+      } catch (e) {
+        console.warn("Admin Storage delete failed (expected if degraded):", e.message);
+        storageError = e.message;
+      }
+    }
+    invalidateInventoryCache(req.user.uid);
+    res.json({
+      ok: true,
+      deleted: {
+        pastPaper: pastPaperDeleted,
+        ragSource: ragSourceDeleted,
+        chunks: chunksDeletedCount,
+        syllabusChunks: syllabusChunksDeletedCount
+      },
+      storageDelete: {
+        attempted: storageAttempted,
+        ok: storageOk,
+        skipped: !storagePath,
+        error: storageError
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+ragRoutes.delete("/sources/:sourceId", requireNonAnonymousUser, async (req, res) => {
+  try {
+    const user = req.user;
+    const { sourceId } = req.params;
+    const db = getAdminDb();
+    const docRef = db.collection("rag_sources").doc(sourceId);
+    const docSnap = await docRef.get();
+    if (!docSnap.exists) {
+      return res.status(404).json({ ok: false, error: "Source not found." });
+    }
+    const data = docSnap.data();
+    if (!data) {
+      return res.status(404).json({ ok: false, error: "Source data not found." });
+    }
+    const isAdmin = user.roles?.includes("admin") || user.admin === true;
+    if (data.ownerUid !== user.uid && !isAdmin) {
+      return res.status(403).json({ ok: false, error: "\u0D94\u0DB6\u0DA7 \u0DB8\u0DD9\u0DB8 PDF \u0D91\u0D9A \u0DB8\u0D9A\u0DCF \u0DAF\u0DD0\u0DB8\u0DD3\u0DB8\u0DA7 \u0D85\u0DC0\u0DC3\u0DBB \u0DB1\u0DD0\u0DAD." });
+    }
+    const storagePath = data.storagePath;
+    let storageAttempted = false;
+    let storageOk = false;
+    let storageError = null;
+    if (storagePath) {
+      storageAttempted = true;
+      try {
+        const bucket = getAdminBucket();
+        const file = bucket.file(storagePath);
+        const [exists] = await file.exists();
+        if (exists) {
+          await file.delete();
+          storageOk = true;
+        }
+      } catch (err) {
+        console.warn("Storage deletion error (continuing):", err.message);
+        storageError = err.message;
+      }
+    }
+    const batch = db.batch();
+    batch.delete(docRef);
+    if (data.sourceScope === "owner_syllabus" || data.sourceScope === "past_paper") {
+      const sylRef = db.collection("users").doc(user.uid).collection("syllabus_resources").doc(sourceId);
+      batch.delete(sylRef);
+      try {
+        const sylChunksSnap = await db.collection("users").doc(user.uid).collection("syllabus_chunks").where("sourceId", "==", sourceId).get();
+        sylChunksSnap.docs.forEach((doc) => {
+          batch.delete(doc.ref);
+        });
+      } catch (err) {
+        console.warn("Syllabus chunks query error (continuing):", err.message);
+      }
+    }
+    try {
+      const chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
+      chunksSnap.docs.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+    } catch (err) {
+      console.warn("RAG chunks query error (continuing):", err.message);
+    }
+    await batch.commit();
+    invalidateInventoryCache(user.uid);
+    return res.json({
+      ok: true,
+      message: "PDF document deleted successfully.",
+      storageDelete: {
+        attempted: storageAttempted,
+        ok: storageOk,
+        skipped: !storagePath,
+        error: storageError
+      }
+    });
+  } catch (error) {
+    console.error("Error deleting source:", error);
+    if (isPermissionError(error)) {
+      return res.status(403).json({
+        ok: false,
+        code: "FIRESTORE_PERMISSION_DENIED",
+        message: "Firestore Admin/IAM permission issue."
+      });
+    }
+    return res.status(500).json({ ok: false, error: error.message });
+  }
+});
+ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUser, async (req, res) => {
+  try {
+    const user = req.user;
+    const { sourceId, pages, mode = "auto" } = req.body;
+    if (!sourceId) {
+      return res.status(400).json({ ok: false, error: "Missing sourceId." });
+    }
+    const db = getAdminDb();
+    const sourceRef = db.collection("rag_sources").doc(sourceId);
+    const sourceSnap = await sourceRef.get();
+    if (!sourceSnap.exists) {
+      return res.status(404).json({ ok: false, error: "Source not found in rag_sources." });
+    }
+    const sourceData = sourceSnap.data();
+    const isAdmin = user.roles?.includes("admin") || user.admin === true;
+    if (sourceData?.ownerUid !== user.uid && !isAdmin) {
+      return res.status(403).json({ ok: false, error: "Unauthorized to reindex this source." });
+    }
+    let chunkCount = 0;
+    let needsOcr = sourceData?.needsOcr || false;
+    let needsLegacy = sourceData?.needsLegacyConversion || false;
+    let textEncoding = sourceData?.textEncoding || "unknown";
+    const title = sourceData?.title || "Reindexed Document";
+    const fileName = sourceData?.fileName || "document.pdf";
+    const subject = sourceData?.subject || "SFT";
+    const lesson = sourceData?.lesson || null;
+    const resourceType = sourceData?.resourceType || "uploaded_pdf";
+    const year = sourceData?.year || null;
+    const medium = sourceData?.medium || "Sinhala";
+    const sourceScope = sourceData?.sourceScope || "personal";
+    const batch = db.batch();
+    const rag_chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
+    rag_chunksSnap.docs.forEach((d) => {
+      batch.delete(d.ref);
+    });
+    const sylChunksSnap = await db.collection("users").doc(user.uid).collection("syllabus_chunks").where("sourceId", "==", sourceId).get();
+    sylChunksSnap.docs.forEach((d) => {
+      batch.delete(d.ref);
+    });
+    let finalPages = [];
+    let isOcrRun = false;
+    let isOcrFailed = false;
+    let pdfData = null;
+    if (req.file) {
+      pdfData = req.file.buffer;
+    } else if (!pages && sourceData?.storagePath) {
+      try {
+        const bucket = getAdminBucket();
+        const file = bucket.file(sourceData.storagePath);
+        const [exists] = await file.exists();
+        if (exists) {
+          const [buffer] = await retryGoogleAuthOperation("fileDownload", async () => await file.download());
+          pdfData = buffer;
+        }
+      } catch (err) {
+        console.error("Failed to download PDF from storage for reindexing:", err);
+      }
+    }
+    if (pdfData) {
+      if (mode === "text_extract") {
+        const extraction = await extractPdfText(pdfData);
+        needsOcr = extraction.needsOcr;
+        needsLegacy = extraction.needsLegacyConversion;
+        textEncoding = extraction.textEncoding;
+        if (!needsOcr && extraction.pages) {
+          finalPages = extraction.pages;
+        }
+      } else if (mode === "legacy_convert") {
+        const extraction = await extractPdfText(pdfData);
+        needsOcr = extraction.needsOcr;
+        needsLegacy = true;
+        textEncoding = extraction.textEncoding;
+        if (!needsOcr && extraction.pages) {
+          finalPages = extraction.pages;
+        }
+      } else if (mode === "ocr") {
+        if (!isGeminiPdfOcrConfigured()) {
+          invalidateInventoryCache(user.uid);
+          return res.json({
+            ok: true,
+            chunkCount: 0,
+            needsOcr: true,
+            indexStatus: "needs_ocr",
+            ocrUnavailable: true,
+            message: "OCR provider not configured"
+          });
+        }
+        isOcrRun = true;
+        try {
+          const ai9 = getAIClient();
+          const pdfBase64 = pdfData.toString("base64");
+          const response = await ai9.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: [
+              {
+                inlineData: {
+                  mimeType: "application/pdf",
+                  data: pdfBase64
+                }
+              },
+              {
+                text: "Extract all readable Sinhala/English text page-by-page from this Sri Lankan A/L Technology exam PDF. Preserve question numbers, MCQ numbers, diagrams descriptions, formulas. Return JSON pages [{pageNumber, text}]"
+              }
+            ],
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: import_genai3.Type.OBJECT,
+                properties: {
+                  pages: {
+                    type: import_genai3.Type.ARRAY,
+                    items: {
+                      type: import_genai3.Type.OBJECT,
+                      properties: {
+                        pageNumber: { type: import_genai3.Type.INTEGER },
+                        text: { type: import_genai3.Type.STRING }
+                      },
+                      required: ["pageNumber", "text"]
+                    }
+                  }
+                },
+                required: ["pages"]
+              }
+            }
+          });
+          const responseText = response.text || "";
+          const parsed = JSON.parse(responseText);
+          if (parsed && Array.isArray(parsed.pages) && parsed.pages.length > 0) {
+            finalPages = parsed.pages;
+            needsOcr = false;
+            textEncoding = "ocr_sinhala";
+            needsLegacy = false;
+          } else {
+            isOcrFailed = true;
+          }
+        } catch (err) {
+          console.error("Gemini OCR failed:", err);
+          isOcrFailed = true;
+        }
+      } else {
+        const extraction = await extractPdfText(pdfData);
+        needsOcr = extraction.needsOcr;
+        needsLegacy = extraction.needsLegacyConversion;
+        textEncoding = extraction.textEncoding;
+        const hasLegacyTextLayer = String(textEncoding || "").startsWith("legacy_") && Array.isArray(extraction.pages) && extraction.pages.length > 0;
+        if (hasLegacyTextLayer) {
+          finalPages = extraction.pages;
+          needsOcr = false;
+          needsLegacy = false;
+        }
+        if (!hasLegacyTextLayer && !needsOcr && extraction.pages) {
+          finalPages = extraction.pages;
+        } else if (!hasLegacyTextLayer) {
+          if (isGeminiPdfOcrConfigured()) {
+            isOcrRun = true;
+            try {
+              const ai9 = getAIClient();
+              const pdfBase64 = pdfData.toString("base64");
+              const response = await ai9.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: [
+                  {
+                    inlineData: {
+                      mimeType: "application/pdf",
+                      data: pdfBase64
+                    }
+                  },
+                  {
+                    text: "Extract all readable Sinhala/English text page-by-page from this Sri Lankan A/L Technology exam PDF. Preserve question numbers, MCQ numbers, diagrams descriptions, formulas. Return JSON pages [{pageNumber, text}]"
+                  }
+                ],
+                config: {
+                  responseMimeType: "application/json",
+                  responseSchema: {
+                    type: import_genai3.Type.OBJECT,
+                    properties: {
+                      pages: {
+                        type: import_genai3.Type.ARRAY,
+                        items: {
+                          type: import_genai3.Type.OBJECT,
+                          properties: {
+                            pageNumber: { type: import_genai3.Type.INTEGER },
+                            text: { type: import_genai3.Type.STRING }
+                          },
+                          required: ["pageNumber", "text"]
+                        }
+                      }
+                    },
+                    required: ["pages"]
+                  }
+                }
+              });
+              const responseText = response.text || "";
+              const parsed = JSON.parse(responseText);
+              if (parsed && Array.isArray(parsed.pages) && parsed.pages.length > 0) {
+                finalPages = parsed.pages;
+                needsOcr = false;
+                textEncoding = "ocr_sinhala";
+                needsLegacy = false;
+              } else {
+                isOcrFailed = true;
+              }
+            } catch (err) {
+              console.error("Auto OCR failed:", err);
+              isOcrFailed = true;
+            }
+          }
+        }
+      }
+    } else if (pages) {
+      const pagesArray = typeof pages === "string" ? JSON.parse(pages) : pages;
+      if (Array.isArray(pagesArray)) {
+        finalPages = pagesArray;
+      } else {
+        return res.status(400).json({ ok: false, error: "Invalid pages format." });
+      }
+    } else {
+      return res.status(400).json({ ok: false, error: "Missing file or pages array for reindexing." });
+    }
+    if (isOcrRun && isOcrFailed && finalPages.length === 0) {
+      const metaUpdate2 = {
+        chunkCount: 0,
+        needsOcr: true,
+        textIndexed: false,
+        indexStatus: "needs_ocr",
+        needsLegacyConversion: false,
+        textEncoding: "unknown",
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      await sourceRef.update(metaUpdate2).catch((err) => console.warn("Firestore update failed:", err));
+      if (sourceScope === "past_paper") {
+        await db.collection("past_papers").doc(sourceId).update(metaUpdate2).catch((err) => console.warn("Firestore update failed:", err));
+      }
+      invalidateInventoryCache(user.uid);
+      return res.json({
+        ok: true,
+        chunkCount: 0,
+        needsOcr: true,
+        indexStatus: "needs_ocr",
+        ocrUnavailable: false,
+        message: "OCR processing failed or returned empty pages."
+      });
+    }
+    if (finalPages.length === 0 && needsOcr) {
+      const metaUpdate2 = {
+        chunkCount: 0,
+        needsOcr: true,
+        textIndexed: false,
+        indexStatus: "needs_ocr",
+        needsLegacyConversion: false,
+        textEncoding: "unknown",
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      await sourceRef.update(metaUpdate2).catch((err) => console.warn("Firestore update failed:", err));
+      if (sourceScope === "past_paper") {
+        await db.collection("past_papers").doc(sourceId).update(metaUpdate2).catch((err) => console.warn("Firestore update failed:", err));
+      }
+      invalidateInventoryCache(user.uid);
+      return res.json({
+        ok: true,
+        chunkCount: 0,
+        needsOcr: true,
+        indexStatus: "needs_ocr",
+        ocrUnavailable: !isGeminiPdfOcrConfigured(),
+        message: "OCR provider not configured or PDF empty"
+      });
+    }
+    const chunkText = (text, size = 1e3, overlap = 150) => {
+      const chunks = [];
+      if (!text) return chunks;
+      let i = 0;
+      while (i < text.length) {
+        const chunk = text.slice(i, i + size);
+        chunks.push(chunk);
+        i += size - overlap;
+        if (size - overlap <= 0) break;
+      }
+      return chunks;
+    };
+    if (finalPages.length > 0) {
+      for (const p of finalPages) {
+        const pageText = (p.text || "").trim();
+        if (!pageText) continue;
+        const pageNum = Number(p.pageNumber || p.page_number || 1);
+        const subChunks = chunkText(pageText, 1e3, 150);
+        for (let j = 0; j < subChunks.length; j++) {
+          const chunkTextContent = subChunks[j];
+          const questionNo = detectQuestionNo(chunkTextContent);
+          const chunkId = `chunk_${sourceId}_${chunkCount}`;
+          const chunkDoc = {
+            sourceId,
+            pageNumber: pageNum,
+            questionNo: questionNo || null,
+            ownerUid: user.uid,
+            ownerEmail: user.email || "unknown",
+            text: chunkTextContent,
+            rawTextPreview: chunkTextContent.slice(0, 200),
+            textEncoding: textEncoding || "unknown",
+            conversionApplied: p.conversionApplied || false,
+            conversionConfidence: p.conversionConfidence || 0,
+            chunkIndex: chunkCount++,
+            title,
+            fileName,
+            subject: normalizeSubject4(subject || ""),
+            lesson,
+            subtopic: null,
+            resourceType,
+            year: year ? String(year) : null,
+            medium,
+            tags: [title, subject].filter(Boolean),
+            sourceScope,
+            visibility: sourceScope === "official" ? "official" : "private",
+            embeddingStatus: "none",
+            createdAt: (/* @__PURE__ */ new Date()).toISOString()
+          };
+          batch.set(db.collection("rag_chunks").doc(chunkId), chunkDoc);
+          if (sourceScope === "owner_syllabus") {
+            const sylChunkRef = db.collection("users").doc(user.uid).collection("syllabus_chunks").doc(chunkId);
+            batch.set(sylChunkRef, { id: chunkId, ...chunkDoc });
+          }
+        }
+      }
+    }
+    await batch.commit();
+    const finalIndexStatus = computeIndexStatus({
+      chunkCount,
+      needsOcr,
+      needsLegacyConversion: needsLegacy,
+      textEncoding,
+      indexStatus: chunkCount > 0 ? "ready" : "not_indexed"
+    });
+    const finalTextIndexed = chunkCount > 0 && !needsOcr;
+    const metaUpdate = {
+      chunkCount,
+      needsOcr,
+      textIndexed: finalTextIndexed,
+      indexStatus: finalIndexStatus,
+      needsLegacyConversion: needsLegacy,
+      textEncoding,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await sourceRef.update(metaUpdate);
+    if (sourceScope === "past_paper") {
+      await db.collection("past_papers").doc(sourceId).update(metaUpdate);
+    } else if (sourceScope === "owner_syllabus") {
+      await db.collection("users").doc(user.uid).collection("syllabus_resources").doc(sourceId).update({
+        status: finalIndexStatus,
+        ...metaUpdate
+      });
+    }
+    invalidateInventoryCache(user.uid);
+    return res.json({
+      ok: true,
+      message: `Document reindexed with ${chunkCount} chunks.`,
+      chunkCount,
+      needsOcr,
+      needsLegacyConversion: needsLegacy,
+      textEncoding
+    });
+  } catch (err) {
+    console.error("Error in reindex-uploaded endpoint:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+ragRoutes.get("/sources/:sourceId/chunks", requireFirebaseUser, async (req, res) => {
+  try {
+    const { sourceId } = req.params;
+    const db = getAdminDb();
+    const chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
+    const chunks = chunksSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    chunks.sort((a, b) => (a.chunkIndex || 0) - (b.chunkIndex || 0));
+    return res.json({
+      ok: true,
+      chunks
+    });
+  } catch (err) {
+    console.error("Error fetching chunks:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// server/syllabus/routes.ts
+var import_express3 = require("express");
+init_admin();
+init_sourceInventoryService();
+var syllabusRoutes = (0, import_express3.Router)();
+syllabusRoutes.get("/debug", async (req, res) => {
   try {
     const user = await requireUser(req);
     const db = getAdminDb();
-    const [files, images] = await Promise.all([
-      db.collection("users").doc(user.uid).collection("files").limit(200).get().catch(() => ({ docs: [] })),
-      db.collection("users").doc(user.uid).collection("generated_images").limit(200).get().catch(() => ({ docs: [] }))
-    ]);
-    const usedBytes = [...files.docs, ...images.docs].reduce((sum, doc) => {
-      const data = doc.data();
-      return sum + Number(data.size || data.bytes || 0);
-    }, 0);
-    res.json({ ok: true, used: usedBytes, quota: Number(process.env.USER_STORAGE_QUOTA_BYTES || 250 * 1024 * 1024) });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    const roleDoc = await db.collection("user_roles").doc(user.uid).get();
+    const roles = roleDoc.exists ? roleDoc.data()?.roles || (roleDoc.data()?.role ? [roleDoc.data().role] : []) : [];
+    const isOwner = roles.includes("admin") || roles.includes("teacher") || roles.includes("content_editor") || user.admin === true;
+    const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "admin";
+    let resourcesCount = 0;
+    let chunksCount = 0;
+    if (isOwner) {
+      const db2 = getAdminDb();
+      const resSnap = await db2.collection("users").doc(user.uid).collection("syllabus_resources").count().get();
+      resourcesCount = resSnap.data().count;
+      const chunkSnap = await db2.collection("users").doc(user.uid).collection("syllabus_chunks").count().get();
+      chunksCount = chunkSnap.data().count;
+    }
+    res.json({
+      ok: true,
+      ownerEmail,
+      currentUserEmail: user?.email,
+      currentUserIsOwner: isOwner,
+      uid: user?.uid,
+      resourcesCount,
+      chunksCount,
+      storagePrefix: `users/${user?.uid}/syllabus/`,
+      firestoreDatabaseId: process.env.FIRESTORE_DATABASE_ID
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
-aiRoutes.post("/lesson-optimizer", async (req, res) => {
-  const send = (event, data) => res.write(`event: ${event}
-data: ${JSON.stringify(data)}
-
-`);
+syllabusRoutes.get("/resources", async (req, res) => {
   try {
     const user = await requireUser(req);
-    req.user = user;
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no"
-    });
-    send("status", { message: "Loading progress and weak lessons..." });
-    const prompt = `${req.body.prompt || "Create the next best study plan."}
-
-Use provided app data and actual weak lessons. Keep Sinhala-first. App data snapshot: ${JSON.stringify(req.body.data || {}).slice(0, 12e3)}`;
-    const result = await processAIRequest({
-      ...req,
-      body: {
-        prompt,
-        activeSubject: req.body.activeSubject,
-        explicitMode: "study_plan",
-        history: req.body.history || []
-      },
-      user
-    });
-    if (result.ok) {
-      send("chunk", { text: result.text || result.response });
-      send("done", { ok: true });
-    } else {
-      send("error", { message: result.error || "Lesson optimizer failed" });
-      send("done", { ok: false });
+    const db = getAdminDb();
+    const userSnap = await db.collection("users").doc(user.uid).collection("syllabus_resources").orderBy("createdAt", "desc").get();
+    const userResources = userSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const roleDoc = await db.collection("user_roles").doc(user.uid).get();
+    const roles = roleDoc.exists ? roleDoc.data()?.roles || (roleDoc.data()?.role ? [roleDoc.data().role] : []) : [];
+    const isAdmin = roles.includes("admin") || user.admin === true;
+    let resources = [...userResources];
+    if (!isAdmin) {
+      let ownerUid = null;
+      const adminsSnap = await db.collection("user_roles").where("role", "==", "admin").limit(1).get();
+      if (!adminsSnap.empty) {
+        ownerUid = adminsSnap.docs[0].id;
+      } else {
+        const adminsSnap2 = await db.collection("user_roles").where("roles", "array-contains", "admin").limit(1).get();
+        if (!adminsSnap2.empty) {
+          ownerUid = adminsSnap2.docs[0].id;
+        }
+      }
+      if (ownerUid) {
+        const adminSnap = await db.collection("users").doc(ownerUid).collection("syllabus_resources").orderBy("createdAt", "desc").get();
+        const adminResources = adminSnap.docs.map((d) => ({ id: d.id, ...d.data(), isOfficial: true }));
+        const existingIds = new Set(resources.map((r) => r.id));
+        adminResources.forEach((r) => {
+          if (!existingIds.has(r.id)) {
+            resources.push(r);
+          }
+        });
+      }
     }
-    res.end();
-  } catch (error) {
-    if (!res.headersSent) {
-      res.writeHead(500, { "Content-Type": "text/event-stream; charset=utf-8" });
-    }
-    send("error", { message: error.message || "Lesson optimizer failed" });
-    send("done", { ok: false });
-    res.end();
+    res.json({ ok: true, resources });
+  } catch (e) {
+    res.status(403).json({ ok: false, error: e.message });
   }
 });
-aiRoutes.get("/past-papers/local/:subject/:year", async (req, res) => {
-  const subject = String(req.params.subject || "").toLowerCase();
-  const year = String(req.params.year || "");
-  const paper = (pastPapersData.papers || []).find((item) => {
-    const itemSubject = String(item.metadata?.subjectKey || "").toLowerCase();
-    const itemYear = String(item.metadata?.exam || "").match(/\b(20\d{2}|19\d{2})\b/)?.[1];
-    return itemSubject === subject && itemYear === year;
-  });
-  if (!paper) {
-    return res.status(404).json({ ok: false, error: "No verified local paper found for the requested subject/year" });
+syllabusRoutes.delete("/resources/:resourceId", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { resourceId } = req.params;
+    const db = getAdminDb();
+    const bucket = getAdminBucket();
+    const roleDoc = await db.collection("user_roles").doc(user.uid).get();
+    const roles = roleDoc.exists ? roleDoc.data()?.roles || (roleDoc.data()?.role ? [roleDoc.data().role] : []) : [];
+    const isAdmin = roles.includes("admin") || user.admin === true;
+    const docRef = db.collection("users").doc(user.uid).collection("syllabus_resources").doc(resourceId);
+    const docSnap = await docRef.get();
+    let canDelete = docSnap.exists;
+    let storagePath = null;
+    if (docSnap.exists) {
+      storagePath = docSnap.data()?.storagePath || null;
+    } else if (isAdmin) {
+      const ragRef = db.collection("rag_sources").doc(resourceId);
+      const ragSnap = await ragRef.get();
+      if (ragSnap.exists) {
+        canDelete = true;
+        storagePath = ragSnap.data()?.storagePath || null;
+      }
+    }
+    if (!canDelete) {
+      return res.status(403).json({ ok: false, error: "Unauthorized or resource not found" });
+    }
+    const batch = db.batch();
+    batch.delete(docRef);
+    const chunksSnap = await db.collection("users").doc(user.uid).collection("syllabus_chunks").where("sourceId", "==", resourceId).get();
+    chunksSnap.docs.forEach((d) => batch.delete(d.ref));
+    batch.delete(db.collection("rag_sources").doc(resourceId));
+    const rag_chunks = await db.collection("rag_chunks").where("sourceId", "==", resourceId).get();
+    rag_chunks.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    let storageAttempted = false;
+    let storageOk = false;
+    let storageError = null;
+    if (storagePath) {
+      storageAttempted = true;
+      try {
+        await bucket.file(storagePath).delete();
+        storageOk = true;
+      } catch (err) {
+        console.warn("Syllabus Admin Storage delete failed:", err.message);
+        storageError = err.message;
+      }
+    }
+    invalidateInventoryCache(user.uid);
+    res.json({
+      ok: true,
+      deletedId: resourceId,
+      storageDelete: {
+        attempted: storageAttempted,
+        ok: storageOk,
+        skipped: !storagePath,
+        error: storageError
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
-  res.json({ ok: true, paper });
+});
+syllabusRoutes.get("/resources/:resourceId/download", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { resourceId } = req.params;
+    const db = getAdminDb();
+    let resourceDoc = await db.collection("users").doc(user.uid).collection("syllabus_resources").doc(resourceId).get();
+    if (!resourceDoc.exists) {
+      let ownerUid = null;
+      const adminsSnap = await db.collection("user_roles").where("role", "==", "admin").limit(1).get();
+      if (!adminsSnap.empty) {
+        ownerUid = adminsSnap.docs[0].id;
+      } else {
+        const adminsSnap2 = await db.collection("user_roles").where("roles", "array-contains", "admin").limit(1).get();
+        if (!adminsSnap2.empty) {
+          ownerUid = adminsSnap2.docs[0].id;
+        }
+      }
+      if (ownerUid) {
+        resourceDoc = await db.collection("users").doc(ownerUid).collection("syllabus_resources").doc(resourceId).get();
+      }
+    }
+    if (!resourceDoc.exists) {
+      resourceDoc = await db.collection("rag_sources").doc(resourceId).get();
+    }
+    if (!resourceDoc.exists) {
+      return res.status(404).json({ ok: false, error: "Resource not found in syllabus library" });
+    }
+    const data = resourceDoc.data();
+    if (!data || !data.storagePath) {
+      return res.status(404).json({ ok: false, error: "Storage path not found" });
+    }
+    const bucket = getAdminBucket();
+    const file = bucket.file(data.storagePath);
+    const [exists] = await file.exists();
+    if (!exists) {
+      return res.status(404).json({ ok: false, error: "File not found in storage" });
+    }
+    try {
+      const [signedUrl] = await file.getSignedUrl({
+        action: "read",
+        expires: Date.now() + 15 * 60 * 1e3
+        // 15 mins
+      });
+      return res.redirect(signedUrl);
+    } catch (signErr) {
+      console.warn("Failed to generate signed URL, falling back to direct stream:", signErr);
+    }
+    res.setHeader("Content-Type", data.mimeType || "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(data.fileName || "syllabus_resource.pdf")}"`);
+    file.createReadStream().pipe(res);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // server/auth/routes.ts
-var import_express2 = __toESM(require("express"), 1);
+var import_express4 = __toESM(require("express"), 1);
 init_userRepository();
 var import_auth2 = require("firebase-admin/auth");
 init_admin();
-var authRoutes = import_express2.default.Router();
-var pendingCodes = /* @__PURE__ */ new Map();
-function buildLocalSession(email, profile) {
+
+// server/utils/authContext.ts
+init_admin();
+function computeSourceCapabilities(auth, source) {
+  const isOwner = source.ownerUid === auth.uid;
+  const isAdmin = auth.roles.includes("admin");
+  const isOps = auth.roles.includes("ops");
+  const isEditor = auth.roles.includes("content_editor");
+  const isReviewer = auth.roles.includes("reviewer");
+  const isTeacher = auth.roles.includes("teacher");
+  const visibility = source.visibility || "private";
+  const isPublicOrOfficial = visibility === "public" || visibility === "official";
+  const isShared = visibility === "shared";
+  let canView = false;
+  if (isOwner || isAdmin || isOps) {
+    canView = true;
+  } else if (isPublicOrOfficial) {
+    canView = true;
+  } else if (isShared) {
+    canView = true;
+  }
+  let canDownload = canView;
+  let canAskAI = canView;
+  let canDelete = false;
+  if (isAdmin || isOps) {
+    canDelete = true;
+  } else if (isOwner && !isPublicOrOfficial) {
+    canDelete = true;
+  }
+  let canReprocess = false;
+  let canReindex = false;
+  let canRunOcr = false;
+  if (isAdmin || isOps) {
+    canReprocess = true;
+    canReindex = true;
+    canRunOcr = true;
+  } else if (isOwner && !isPublicOrOfficial) {
+    canReprocess = true;
+    canReindex = true;
+    canRunOcr = true;
+  }
+  let canViewOcrText = false;
+  if (isAdmin || isOps || isOwner) {
+    canViewOcrText = true;
+  } else if (isPublicOrOfficial && (isEditor || isTeacher)) {
+    canViewOcrText = true;
+  }
+  let canReviewCache = isAdmin || isReviewer;
+  let canRepairSource = isAdmin || isOps;
+  if (isOwner && !isPublicOrOfficial) {
+    canRepairSource = true;
+  }
+  let canChangeVisibility = isAdmin || isEditor;
+  if (isOwner && !isPublicOrOfficial) {
+    canChangeVisibility = true;
+  }
+  let canEditMetadata = isAdmin || isEditor;
+  if (isOwner && !isPublicOrOfficial) {
+    canEditMetadata = true;
+  }
   return {
-    email: email.toLowerCase(),
-    name: profile?.username || profile?.name || email.split("@")[0],
-    picture: profile?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
-    emailVerified: true,
-    uid: `email_${Buffer.from(email.toLowerCase()).toString("base64url")}`
+    canView,
+    canDownload,
+    canAskAI,
+    canDelete,
+    canReprocess,
+    canReindex,
+    canRunOcr,
+    canViewOcrText,
+    canReviewCache,
+    canRepairSource,
+    canChangeVisibility,
+    canEditMetadata
   };
 }
-authRoutes.post("/email-login", async (req, res) => {
+async function createAuditEvent(params) {
   try {
-    const email = String(req.body.email || "").trim().toLowerCase();
-    const password = String(req.body.password || "");
-    if (!email || !email.includes("@") || !password) {
-      return res.status(400).json({ error: "Valid email and password are required" });
-    }
-    const userData = readUser(email);
-    if (!userData.profile) {
-      userData.profile = {
-        email,
-        username: email.split("@")[0],
-        picture: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
-        bio: "A/L Technology learner",
-        isVerified: true,
-        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      writeUser(email, userData);
-    }
-    const user = buildLocalSession(email, userData.profile);
-    res.json({ success: true, user, profile: userData.profile });
-  } catch (error) {
-    res.status(500).json({ error: error.message || "Email login failed" });
-  }
-});
-authRoutes.post("/register-start", async (req, res) => {
-  try {
-    const email = String(req.body.email || "").trim().toLowerCase();
-    if (!email || !email.includes("@")) {
-      return res.status(400).json({ error: "Valid email is required" });
-    }
-    const code = String(Math.floor(1e5 + Math.random() * 9e5));
-    const profile = {
-      email,
-      username: req.body.username || req.body.name || email.split("@")[0],
-      picture: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
-      nic: req.body.nic || "",
-      mobileNumber: req.body.mobileNumber || "",
-      bday: req.body.bday || "",
-      gender: req.body.gender || "",
-      isVerified: process.env.NODE_ENV !== "production",
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      bio: "Success-driven Technology Stream Learner"
+    const db = getAdminDb();
+    const docRef = db.collection("audit_logs").doc();
+    const auditRecord = {
+      auditId: docRef.id,
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      ...params
     };
-    pendingCodes.set(email, { code, profile, expiresAt: Date.now() + 10 * 60 * 1e3 });
-    if (process.env.NODE_ENV !== "production") {
-      const userData = readUser(email);
-      userData.profile = profile;
-      writeUser(email, userData);
-      return res.json({ success: true, user: buildLocalSession(email, profile), profile, debugCode: code });
-    }
-    res.json({ success: true, requiresVerification: true, email });
-  } catch (error) {
-    res.status(500).json({ error: error.message || "Registration failed" });
+    await docRef.set(auditRecord);
+    console.log(`[AUDIT] ${params.operation} by ${params.actorUid} on ${params.targetType}:${params.targetId} - ${params.result}`);
+  } catch (err) {
+    console.error("Failed to write audit log:", err);
   }
-});
-authRoutes.post("/verify-code", async (req, res) => {
+}
+
+// server/auth/routes.ts
+var authRoutes = import_express4.default.Router();
+authRoutes.get("/context", requireFirebaseUser, async (req, res) => {
   try {
-    const email = String(req.body.email || "").trim().toLowerCase();
-    const code = String(req.body.code || "").trim();
-    const pending = pendingCodes.get(email);
-    if (!pending || pending.expiresAt < Date.now()) {
-      return res.status(400).json({ error: "Verification code expired" });
+    const authContext = req.authContext;
+    const user = req.user;
+    if (!authContext) {
+      return res.status(401).json({ ok: false, error: "AuthContext not available" });
     }
-    if (pending.code !== code && process.env.NODE_ENV === "production") {
-      return res.status(400).json({ error: "Invalid verification code" });
-    }
-    const profile = { ...pending.profile, isVerified: true, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
-    const userData = readUser(email);
-    userData.profile = profile;
-    writeUser(email, userData);
-    pendingCodes.delete(email);
-    res.json({ success: true, user: buildLocalSession(email, profile), profile });
-  } catch (error) {
-    res.status(500).json({ error: error.message || "Verification failed" });
+    const capabilities = computeSourceCapabilities(authContext, {});
+    const canUploadVideo = authContext.roles.some((role) => ["admin", "content_editor", "ops"].includes(role));
+    res.json({
+      ok: true,
+      user: {
+        uid: user.uid,
+        email: user.email,
+        name: user.name,
+        isAnonymous: user.isAnonymous
+      },
+      roles: authContext.roles,
+      capabilities: { ...capabilities, canUploadVideo }
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 authRoutes.post("/force-reset-password", async (req, res) => {
@@ -3022,7 +10622,7 @@ authRoutes.post("/session", async (req, res) => {
       userData.profile = {
         email: email.toLowerCase(),
         username: profileData?.username || decodedToken.name || email.split("@")[0],
-        picture: decodedToken.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
+        picture: decodedToken.picture || "",
         nic: profileData?.nic || "",
         mobileNumber: profileData?.mobileNumber || "",
         bday: profileData?.bday || "",
@@ -3046,100 +10646,4343 @@ authRoutes.post("/session", async (req, res) => {
   }
 });
 
-// server.ts
-init_client();
+// server/pdf/routes.ts
+var import_express5 = __toESM(require("express"), 1);
+var import_multer2 = __toESM(require("multer"), 1);
 init_admin();
-if (!(0, import_app.getApps)().length) {
-  (0, import_app.initializeApp)({
-    projectId: process.env.VITE_FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || "al-ai-chat",
-    storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET
+
+// server/pdf/processingPipeline.ts
+init_admin();
+
+// server/ocr/cloudVisionOcr.ts
+init_retry();
+var import_vision = require("@google-cloud/vision");
+init_admin();
+var visionClient = null;
+function getVisionClient() {
+  if (!visionClient) {
+    const isEnabled = process.env.ENABLE_CLOUD_VISION_OCR === "true";
+    if (!isEnabled) {
+      throw new Error("Cloud Vision OCR is not enabled (ENABLE_CLOUD_VISION_OCR is not true).");
+    }
+    visionClient = new import_vision.ImageAnnotatorClient();
+  }
+  return visionClient;
+}
+async function runCloudVisionPdfOcr(params) {
+  const { sourceId, uid, buffer, languageHints = ["si", "en"] } = params;
+  const inputBucketName = process.env.VISION_OCR_INPUT_BUCKET || "al-ai-chat-ocr-input";
+  const outputBucketName = process.env.VISION_OCR_OUTPUT_BUCKET || "al-ai-chat-ocr-output";
+  const client2 = getVisionClient();
+  const storage = getAdminStorage();
+  const gcsSourceUri = params.gcsInputUri || `gs://${inputBucketName}/jobs/${sourceId}/original.pdf`;
+  if (!params.gcsInputUri) {
+    const inputBucket = storage.bucket(inputBucketName);
+    const gcsFile = inputBucket.file(`jobs/${sourceId}/original.pdf`);
+    await gcsFile.save(buffer, {
+      contentType: "application/pdf",
+      metadata: {
+        owner: uid,
+        sourceId
+      }
+    });
+    console.log(`Uploaded PDF to ${gcsSourceUri} for Cloud Vision OCR`);
+  }
+  const gcsDestinationUri = `gs://${outputBucketName}/jobs/${sourceId}/`;
+  const request = {
+    requests: [
+      {
+        inputConfig: {
+          mimeType: "application/pdf",
+          gcsSource: {
+            uri: gcsSourceUri
+          }
+        },
+        features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
+        outputConfig: {
+          gcsDestination: {
+            uri: gcsDestinationUri
+          }
+        },
+        imageContext: {
+          languageHints
+        }
+      }
+    ]
+  };
+  console.log(`Triggering asyncBatchAnnotateFiles for sourceId: ${sourceId}`);
+  const [operation] = await client2.asyncBatchAnnotateFiles(request);
+  const operationName = operation.name;
+  if (!operationName) {
+    throw new Error("Failed to start Cloud Vision asyncBatchAnnotateFiles operation.");
+  }
+  const db = getAdminDb();
+  await db.collection("ocr_jobs").doc(sourceId).set({
+    sourceId,
+    uid,
+    operationName,
+    status: "running",
+    inputUri: gcsSourceUri,
+    outputUri: gcsDestinationUri,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   });
-}
-prepareGoogleCredentials();
-var app = (0, import_express3.default)();
-var PORT = Number(process.env.PORT || 3e3);
-function cleanStoragePath(input) {
-  const raw = String(input || `files/${Date.now()}_upload.bin`);
-  return raw.replace(/\\/g, "/").split("/").filter(Boolean).map((part) => part.replace(/[^a-zA-Z0-9._-]/g, "_")).join("/").slice(0, 240);
-}
-app.post("/api/upload-proxy", import_express3.default.raw({ type: "*/*", limit: "25mb" }), async (req, res) => {
-  try {
-    if (!req.headers.authorization && req.headers["x-firebase-auth"]) {
-      req.headers.authorization = `Bearer ${req.headers["x-firebase-auth"]}`;
-    }
-    const user = await requireUser(req);
-    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body || "");
-    if (!body.length) {
-      return res.status(400).json({ ok: false, error: "Upload body is empty" });
-    }
-    if (body.length > 25 * 1024 * 1024) {
-      return res.status(413).json({ ok: false, error: "File is too large. Maximum size is 25MB." });
-    }
-    const contentType = String(req.headers["content-type"] || "application/octet-stream");
-    const allowed = [
-      "application/pdf",
-      "image/png",
-      "image/jpeg",
-      "image/webp",
-      "text/plain",
-      "application/octet-stream"
-    ];
-    if (!allowed.some((type) => contentType.includes(type))) {
-      return res.status(415).json({ ok: false, error: "Only PDF, image, or text uploads are allowed." });
-    }
-    const storagePath = cleanStoragePath(req.query.name);
-    const bucketName = process.env.VITE_FIREBASE_STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET;
-    const bucket = bucketName ? (0, import_storage2.getStorage)().bucket(bucketName) : (0, import_storage2.getStorage)().bucket();
-    const file = bucket.file(storagePath);
-    await file.save(body, { metadata: { contentType } });
-    let url = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
+  console.log(`Started Cloud Vision OCR operation: ${operationName}. Polling for quick completion...`);
+  const startTime = Date.now();
+  let completedResponse = null;
+  while (Date.now() - startTime < 25e3) {
     try {
-      await file.makePublic();
-    } catch {
-      const [signedUrl] = await file.getSignedUrl({
-        action: "read",
-        expires: Date.now() + 1e3 * 60 * 60 * 24 * 30
-      });
-      url = signedUrl;
+      const [op] = await client2.operationsClient.getOperation({ name: operationName });
+      if (op.done) {
+        completedResponse = op;
+        break;
+      }
+    } catch (pollErr) {
+      console.warn("Polling operation error (ignoring and retrying):", pollErr);
     }
-    await getAdminDb().collection("users").doc(user.uid).collection("files").doc().set({
-      path: storagePath,
-      url,
-      contentType,
-      size: body.length,
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
-    }).catch(() => null);
-    res.json({ ok: true, url, path: storagePath, size: body.length });
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+  }
+  if (completedResponse && completedResponse.done) {
+    console.log(`Cloud Vision OCR finished quickly! Downloading and parsing output...`);
+    const result = await parseOcrOutputFromGcs(sourceId);
+    await db.collection("ocr_jobs").doc(sourceId).update({
+      status: "ready",
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    return { queued: false, result };
+  }
+  return { queued: true, operationName };
+}
+async function checkOcrJobStatus(sourceId) {
+  const db = getAdminDb();
+  const jobSnap = await db.collection("ocr_jobs").doc(sourceId).get();
+  if (!jobSnap.exists) {
+    return { status: "queued" };
+  }
+  const jobData = jobSnap.data();
+  if (jobData.status === "ready") {
+    try {
+      const result = await parseOcrOutputFromGcs(sourceId);
+      return { status: "ready", result };
+    } catch (err) {
+      return { status: "failed", error: `Failed to parse OCR outputs: ${err.message}` };
+    }
+  }
+  if (jobData.status === "failed") {
+    return { status: "failed", error: jobData.error || "OCR job failed." };
+  }
+  const operationName = jobData.operationName;
+  if (!operationName) {
+    return { status: "failed", error: "Missing operation name in database." };
+  }
+  try {
+    const client2 = getVisionClient();
+    const [op] = await client2.operationsClient.getOperation({ name: operationName });
+    if (op.error) {
+      const errMsg = op.error.message || "Unknown error during GCV async processing";
+      await db.collection("ocr_jobs").doc(sourceId).update({
+        status: "failed",
+        error: errMsg,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      return { status: "failed", error: errMsg };
+    }
+    if (op.done) {
+      console.log(`Cloud Vision OCR background job finished. Downloading and parsing output...`);
+      const result = await parseOcrOutputFromGcs(sourceId);
+      await db.collection("ocr_jobs").doc(sourceId).update({
+        status: "ready",
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      return { status: "ready", result };
+    }
+    return { status: "running" };
+  } catch (err) {
+    console.error("Error checking Cloud Vision operation status:", err);
+    return { status: "running" };
+  }
+}
+async function parseOcrOutputFromGcs(sourceId) {
+  const outputBucketName = process.env.VISION_OCR_OUTPUT_BUCKET || "al-ai-chat-ocr-output";
+  const storage = getAdminStorage();
+  const outputBucket = storage.bucket(outputBucketName);
+  const prefix = `jobs/${sourceId}/`;
+  const [files] = await outputBucket.getFiles({ prefix });
+  const jsonFiles = files.filter((f) => f.name.endsWith(".json"));
+  if (jsonFiles.length === 0) {
+    throw new Error(`No OCR output JSON files found in bucket ${outputBucketName} at ${prefix}`);
+  }
+  const pages = [];
+  for (const file of jsonFiles) {
+    const [contentBuffer] = await retryGoogleAuthOperation("fileDownload", async () => await file.download());
+    const content = JSON.parse(contentBuffer.toString("utf8"));
+    if (content.responses && Array.isArray(content.responses)) {
+      for (const resp of content.responses) {
+        const pageNumber = resp.context?.pageNumber || 1;
+        const text = resp.fullTextAnnotation?.text || "";
+        let totalConfidence = 0;
+        let blockCount = 0;
+        if (resp.fullTextAnnotation?.pages) {
+          for (const page of resp.fullTextAnnotation.pages) {
+            if (page.blocks) {
+              for (const block of page.blocks) {
+                if (typeof block.confidence === "number") {
+                  totalConfidence += block.confidence;
+                  blockCount++;
+                }
+              }
+            }
+          }
+        }
+        const confidence = blockCount > 0 ? totalConfidence / blockCount : 0.85;
+        pages.push({
+          pageNumber,
+          text,
+          confidence
+        });
+      }
+    }
+  }
+  if (pages.length === 0) {
+    throw new Error("No pages could be parsed from Cloud Vision OCR output JSON files.");
+  }
+  pages.sort((a, b) => a.pageNumber - b.pageNumber);
+  const fullText = pages.map((p) => p.text).join("\n\n");
+  const totalConfidenceSum = pages.reduce((sum, p) => sum + p.confidence, 0);
+  const avgConfidence = totalConfidenceSum / pages.length;
+  return {
+    pages,
+    fullText,
+    provider: "cloud_vision",
+    confidence: avgConfidence
+  };
+}
+
+// server/pdf/generateSinhalaTextPdf.ts
+init_admin();
+async function generateSinhalaTextPdf(params) {
+  const { uid, sourceId, fileName, title, subject, year, extractionMethod, pages } = params;
+  const storage = getAdminStorage();
+  const bucket = storage.bucket();
+  const safeFileName = fileName.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_\u0D80-\u0DFF-]/g, "_");
+  const jsonStoragePath = `users/${uid}/ocr_text/${sourceId}/pages.json`;
+  const htmlStoragePath = `users/${uid}/ocr_text_pdfs/${sourceId}/${safeFileName}_sinhala_text.html`;
+  try {
+    const jsonFile = bucket.file(jsonStoragePath);
+    await jsonFile.save(
+      JSON.stringify({
+        sourceId,
+        title,
+        fileName,
+        subject,
+        year,
+        extractionMethod,
+        pages,
+        generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      }, null, 2),
+      {
+        contentType: "application/json",
+        metadata: {
+          owner: uid,
+          sourceId
+        }
+      }
+    );
+    console.log(`Saved OCR raw pages JSON to: ${jsonStoragePath}`);
+    let htmlContent = `<!DOCTYPE html>
+<html lang="si">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title} - Sinhala Text Version</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Sinhala:wght@400;500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+    
+    body {
+      font-family: "Noto Sans Sinhala", "Inter", sans-serif;
+      line-height: 1.8;
+      color: #1e293b;
+      background-color: #f8fafc;
+      margin: 0;
+      padding: 0;
+    }
+
+    .container {
+      max-width: 800px;
+      margin: 40px auto;
+      background: #ffffff;
+      box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid #e2e8f0;
+    }
+
+    .doc-header {
+      background-color: #0f172a;
+      color: #ffffff;
+      padding: 32px;
+      border-bottom: 4px solid #3b82f6;
+    }
+
+    .doc-header h1 {
+      margin: 0 0 12px 0;
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+
+    .metadata-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      font-size: 13px;
+      opacity: 0.9;
+    }
+
+    .metadata-item span {
+      display: block;
+      color: #94a3b8;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 2px;
+    }
+
+    .metadata-item strong {
+      color: #f1f5f9;
+      font-weight: 500;
+    }
+
+    .page {
+      padding: 40px;
+      border-bottom: 1px dashed #e2e8f0;
+      position: relative;
+    }
+
+    .page:last-child {
+      border-bottom: none;
+    }
+
+    .page-num {
+      position: absolute;
+      top: 40px;
+      right: 40px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 12px;
+      color: #94a3b8;
+      background: #f1f5f9;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .page-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #3b82f6;
+      margin-top: 0;
+      margin-bottom: 24px;
+      border-bottom: 1px solid #f1f5f9;
+      padding-bottom: 8px;
+    }
+
+    .page-content {
+      font-size: 16px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .page-content p {
+      margin-top: 0;
+      margin-bottom: 16px;
+    }
+
+    .diagram-desc {
+      background-color: #eff6ff;
+      border-left: 4px solid #3b82f6;
+      padding: 16px;
+      margin: 20px 0;
+      border-radius: 0 8px 8px 0;
+      font-size: 14px;
+      font-style: italic;
+    }
+
+    .footer {
+      text-align: center;
+      padding: 24px;
+      font-size: 12px;
+      color: #64748b;
+      background-color: #f8fafc;
+      border-top: 1px solid #e2e8f0;
+    }
+
+    @media print {
+      body {
+        background-color: #ffffff;
+      }
+      .container {
+        box-shadow: none;
+        border: none;
+        max-width: 100%;
+        margin: 0;
+      }
+      .doc-header {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+        border-bottom: 2px solid #000000;
+        padding: 20px 0;
+      }
+      .metadata-item strong {
+        color: #000000 !important;
+      }
+      .page {
+        page-break-after: always;
+        padding: 20px 0;
+      }
+      .footer {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="doc-header">
+      <h1>${title || fileName}</h1>
+      <div class="metadata-grid">
+        <div class="metadata-item">
+          <span>Subject / \u0DC0\u0DD2\u0DC2\u0DBA</span>
+          <strong>${subject || "N/A"}</strong>
+        </div>
+        <div class="metadata-item">
+          <span>Year / \u0DC0\u0DBB\u0DCA\u0DC2\u0DBA</span>
+          <strong>${year || "N/A"}</strong>
+        </div>
+        <div class="metadata-item">
+          <span>Method / \u0D9A\u0DCA\u200D\u0DBB\u0DB8\u0DBA</span>
+          <strong>${extractionMethod.replace(/_/g, " ").toUpperCase()}</strong>
+        </div>
+        <div class="metadata-item">
+          <span>Generated / \u0DC3\u0DCF\u0DAF\u0DB1 \u0DBD\u0DAF\u0DD3</span>
+          <strong>${(/* @__PURE__ */ new Date()).toLocaleDateString("si-LK")}</strong>
+        </div>
+      </div>
+    </header>
+
+    <main>`;
+    for (const page of pages) {
+      const cleanText = page.text.replace(/\s+/g, " ").trim();
+      htmlContent += `
+      <section class="page">
+        <div class="page-num">Page ${page.pageNumber}</div>
+        <div class="page-title">\u0DB4\u0DD2\u0DA7\u0DD4\u0DC0 ${page.pageNumber} / Page ${page.pageNumber}</div>
+        <div class="page-content">${cleanText || "<i>(\u0DB8\u0DD9\u0DB8 \u0DB4\u0DD2\u0DA7\u0DD4\u0DC0\u0DDA \u0D9A\u0DD2\u0DC3\u0DD2\u0DAF\u0DD4 \u0D85\u0D9A\u0DD4\u0DBB\u0D9A\u0DCA \u0DC4\u0DB3\u0DD4\u0DB1\u0DCF\u0D9C\u0DAD \u0DB1\u0DDC\u0DC4\u0DD0\u0D9A\u0DD2 \u0DC0\u0DD2\u0DBA / No text detected on this page)</i>"}</div>
+      </section>`;
+    }
+    htmlContent += `
+    </main>
+
+    <footer class="footer">
+      Clora X / A.L Tech Blueprint - Sinhala-First A/L Learning Platform &copy; ${(/* @__PURE__ */ new Date()).getFullYear()}
+    </footer>
+  </div>
+</body>
+</html>`;
+    const htmlFile = bucket.file(htmlStoragePath);
+    await htmlFile.save(htmlContent, {
+      contentType: "text/html",
+      metadata: {
+        owner: uid,
+        sourceId
+      }
+    });
+    console.log(`Successfully generated and uploaded readable HTML document to GCS: ${htmlStoragePath}`);
+    return {
+      ocrTextPdfStoragePath: htmlStoragePath,
+      ocrTextStoragePath: jsonStoragePath,
+      ocrTextPdfStatus: "ready"
+    };
   } catch (error) {
-    res.status(error.message?.startsWith("Unauthorized") ? 401 : 500).json({
+    console.error("Error generating Sinhala text HTML/PDF document:", error);
+    return {
+      ocrTextPdfStoragePath: null,
+      ocrTextStoragePath: jsonStoragePath,
+      ocrTextPdfStatus: "failed_storage_upload"
+    };
+  }
+}
+
+// server/pdf/processingPipeline.ts
+init_sourceInventoryService();
+
+// server/pdf/lessonDetector.ts
+init_syllabus();
+function detectLessonForChunk(text, subject) {
+  const normSubj = subject.toLowerCase().trim();
+  const def = SYLLABUS[normSubj];
+  if (!def) return null;
+  const topics = /* @__PURE__ */ new Set();
+  if (def.mcqItems) {
+    for (const item of def.mcqItems) {
+      if (item.title) topics.add(item.title);
+    }
+  }
+  if (def.partAItems) {
+    for (const item of def.partAItems) {
+      if (item.topics) {
+        for (const t of item.topics) topics.add(t);
+      }
+    }
+  }
+  if (def.bcdGroups) {
+    for (const g of def.bcdGroups) {
+      if (g.items) {
+        for (const item of g.items) {
+          if (item.topics) {
+            for (const t of item.topics) topics.add(t);
+          }
+        }
+      }
+    }
+  }
+  const lowerText = text.toLowerCase();
+  for (const topic of topics) {
+    if (topic.length > 3 && lowerText.includes(topic.toLowerCase())) {
+      return topic;
+    }
+  }
+  return null;
+}
+
+// server/pdf/processingPipeline.ts
+async function processUploadedPdf(params) {
+  let {
+    uid,
+    sourceId,
+    storagePath,
+    fileName,
+    title,
+    subject,
+    year,
+    resourceType,
+    sourceType,
+    sourceScope,
+    lesson,
+    buffer,
+    forceOcr = false
+  } = params;
+  console.log(`Starting PDF processing pipeline for sourceId: ${sourceId}, title: "${title}", forceOcr: ${forceOcr}`);
+  const db = getAdminDb();
+  const sourceRef = db.collection("rag_sources").doc(sourceId);
+  try {
+    if (!buffer) {
+      if (!storagePath) {
+        throw new Error("Either buffer or storagePath must be provided.");
+      }
+      console.log(`Downloading PDF from ${storagePath} for sourceId: ${sourceId}`);
+      const bucket = getAdminBucket();
+      const file = bucket.file(storagePath);
+      const [downloaded] = await file.download();
+      buffer = downloaded;
+    }
+    let pages = [];
+    let fullText = "";
+    let needsOcr = false;
+    let needsLegacyConversion = false;
+    let textEncoding = "unknown";
+    let extractionMethod = "pdf_text";
+    let ocrConfidence = 1;
+    const extraction = await extractPdfText(buffer);
+    pages = extraction.pages || [];
+    fullText = extraction.text || "";
+    needsOcr = extraction.needsOcr;
+    needsLegacyConversion = extraction.needsLegacyConversion;
+    textEncoding = extraction.textEncoding;
+    const textLength = fullText.length;
+    const unicodeMatches = fullText.match(/[\u0D80-\u0DFF]/g);
+    const unicodeCount = unicodeMatches ? unicodeMatches.length : 0;
+    const unicodeSinhalaRatio = textLength > 0 ? unicodeCount / textLength : 0;
+    const replacementMatches = fullText.match(/\uFFFD/g);
+    const replacementCount = replacementMatches ? replacementMatches.length : 0;
+    const replacementCharRatio = textLength > 0 ? replacementCount / textLength : 0;
+    const legacyPatterns = [
+      "LKavdxl",
+      "cHd",
+      "\xF1",
+      "\xFA",
+      "Y%",
+      "m%",
+      "fuu",
+      "fyd",
+      "iS",
+      "wxl",
+      "m%Yak",
+      "ms<s;=re",
+      "fnda",
+      ";dlaIK"
+    ];
+    let legacyPatternScore = 0;
+    legacyPatterns.forEach((pat) => {
+      const regex = new RegExp(pat.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+      const matches = fullText.match(regex);
+      if (matches) {
+        legacyPatternScore += matches.length;
+      }
+    });
+    const isScanned = textLength < 40 || pages.length === 0;
+    const hasHighReplacement = replacementCharRatio > 0.05;
+    console.log(`PDF Quality Metrics for ${sourceId}:`, {
+      textLength,
+      unicodeSinhalaRatio: unicodeSinhalaRatio.toFixed(3),
+      replacementCharRatio: replacementCharRatio.toFixed(3),
+      legacyPatternScore,
+      isScanned,
+      hasHighReplacement,
+      needsOcr,
+      needsLegacyConversion
+    });
+    let triggerOcr = forceOcr || isScanned || hasHighReplacement;
+    if (textEncoding.startsWith("legacy_") || legacyPatternScore > 5) {
+      extractionMethod = "legacy_text_layer";
+      textEncoding = "legacy_converted_sinhala";
+      needsOcr = false;
+      needsLegacyConversion = false;
+      triggerOcr = Boolean(forceOcr);
+      console.log(`Legacy Sinhala text layer detected. Keeping ${textLength} extracted characters without OCR.`);
+    }
+    if (triggerOcr) {
+      needsOcr = true;
+      const isCloudVisionEnabled = process.env.ENABLE_CLOUD_VISION_OCR === "true";
+      const ocrErrors = [];
+      if (isCloudVisionEnabled) {
+        console.log(`Triggering Cloud Vision OCR fallback for sourceId: ${sourceId}...`);
+        try {
+          const ocrResponse = await runCloudVisionPdfOcr({
+            sourceId,
+            uid,
+            buffer,
+            languageHints: ["si", "en"]
+          });
+          if (ocrResponse.queued) {
+            const metaUpdate = {
+              ocrStatus: "running",
+              indexStatus: "needs_ocr",
+              needsOcr: true,
+              chunkCount: 0,
+              textIndexed: false,
+              updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+            };
+            await sourceRef.set({
+              sourceId,
+              ownerUid: uid,
+              storagePath,
+              fileName,
+              title,
+              subject: normalizeSubject4(subject || ""),
+              resourceType,
+              sourceType: sourceType || resourceType,
+              sourceScope,
+              ...metaUpdate
+            }, { merge: true });
+            if (sourceScope === "past_paper") {
+              await db.collection("past_papers").doc(sourceId).set({
+                id: sourceId,
+                sourceId,
+                ownerUid: uid,
+                sourceScope,
+                ...metaUpdate
+              }, { merge: true }).catch(() => {
+              });
+            }
+            return {
+              ok: true,
+              status: "queued",
+              message: "OCR processing has been queued.",
+              chunkCount: 0,
+              needsOcr: true,
+              extractionMethod: "cloud_vision_ocr"
+            };
+          }
+          if (ocrResponse.result) {
+            pages = ocrResponse.result.pages.map((page) => ({
+              pageNumber: page.pageNumber,
+              text: page.text,
+              rawText: page.text,
+              textEncoding: "unicode_sinhala",
+              conversionApplied: false,
+              conversionConfidence: 1
+            }));
+            fullText = ocrResponse.result.fullText;
+            extractionMethod = "cloud_vision_ocr";
+            textEncoding = "unicode_sinhala";
+            ocrConfidence = ocrResponse.result.confidence;
+            needsOcr = false;
+            needsLegacyConversion = false;
+          }
+        } catch (ocrErr) {
+          console.error("Cloud Vision OCR operation failed; trying Gemini PDF OCR:", ocrErr);
+          ocrErrors.push(`Cloud Vision: ${ocrErr?.message || String(ocrErr)}`);
+        }
+      }
+      if (needsOcr && isGeminiPdfOcrConfigured()) {
+        try {
+          const geminiPages = await extractPdfPagesWithGemini(buffer);
+          pages = geminiPages.map((page) => ({
+            ...page,
+            rawText: page.text,
+            textEncoding: "unicode_sinhala",
+            conversionApplied: false,
+            conversionConfidence: 1
+          }));
+          fullText = geminiPages.map((page) => page.text).join("\n\n");
+          extractionMethod = "gemini_pdf_ocr";
+          textEncoding = "unicode_sinhala";
+          ocrConfidence = 0.85;
+          needsOcr = false;
+          needsLegacyConversion = false;
+          console.log(`Gemini PDF OCR completed successfully. Extracted ${pages.length} pages.`);
+        } catch (ocrErr) {
+          console.error("Gemini PDF OCR operation failed:", ocrErr);
+          ocrErrors.push(`Gemini: ${ocrErr?.message || String(ocrErr)}`);
+        }
+      }
+      if (needsOcr) {
+        const errorMsg = ocrErrors.length > 0 ? `OCR failed. ${ocrErrors.join(" | ")}` : "OCR is required, but neither Cloud Vision nor Gemini PDF OCR is configured.";
+        await finalizeFailedProcessing({
+          sourceId,
+          sourceScope,
+          uid,
+          errorMsg,
+          needsOcr: true,
+          needsLegacyConversion: false,
+          status: "needs_ocr"
+        });
+        return {
+          ok: false,
+          status: "needs_ocr",
+          message: errorMsg,
+          chunkCount: 0,
+          needsOcr: true,
+          extractionMethod: "none",
+          error: errorMsg
+        };
+      }
+    }
+    if (pages.length === 0) {
+      const errorMsg = "No pages could be extracted or OCR'd.";
+      await finalizeFailedProcessing({
+        sourceId,
+        sourceScope,
+        uid,
+        errorMsg,
+        needsOcr: true,
+        needsLegacyConversion: false,
+        status: "needs_ocr"
+      });
+      return {
+        ok: false,
+        status: "needs_ocr",
+        message: errorMsg,
+        chunkCount: 0,
+        needsOcr: true,
+        extractionMethod: "none"
+      };
+    }
+    const finalizeResult = await finalizePipelineProcessing({
+      uid,
+      sourceId,
+      storagePath,
+      fileName,
+      title,
+      subject,
+      year,
+      resourceType,
+      sourceType,
+      sourceScope,
+      lesson,
+      pages,
+      extractionMethod,
+      textEncoding,
+      ocrConfidence,
+      needsOcr,
+      needsLegacyConversion
+    });
+    return {
+      ok: true,
+      status: finalizeResult.indexStatus,
+      message: `PDF processed successfully with ${finalizeResult.chunkCount} chunks.`,
+      chunkCount: finalizeResult.chunkCount,
+      needsOcr: finalizeResult.needsOcr,
+      extractionMethod
+    };
+  } catch (err) {
+    console.error(`Unhandled error in processUploadedPdf pipeline for ${sourceId}:`, err);
+    await finalizeFailedProcessing({
+      sourceId,
+      sourceScope,
+      uid,
+      errorMsg: err.message,
+      needsOcr: true,
+      needsLegacyConversion: false,
+      status: "failed"
+    });
+    return {
       ok: false,
-      error: error.message || "Upload failed"
+      status: "failed",
+      message: err.message,
+      chunkCount: 0,
+      needsOcr: true,
+      extractionMethod: "none",
+      error: err.message
+    };
+  }
+}
+async function finalizePipelineProcessing(params) {
+  const {
+    uid,
+    sourceId,
+    storagePath,
+    fileName,
+    title,
+    subject,
+    year,
+    resourceType,
+    sourceType,
+    sourceScope,
+    lesson,
+    pages,
+    extractionMethod,
+    textEncoding,
+    ocrConfidence,
+    needsOcr,
+    needsLegacyConversion
+  } = params;
+  const db = getAdminDb();
+  const bulkWriter = db.bulkWriter();
+  const rag_chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
+  rag_chunksSnap.docs.forEach((d) => {
+    bulkWriter.delete(d.ref);
+  });
+  if (sourceScope === "owner_syllabus") {
+    const sylChunksSnap = await db.collection("users").doc(uid).collection("syllabus_chunks").where("sourceId", "==", sourceId).get();
+    sylChunksSnap.docs.forEach((d) => {
+      bulkWriter.delete(d.ref);
+    });
+  }
+  const chunkText = (text, size = 1e3, overlap = 150) => {
+    const chunks = [];
+    if (!text) return chunks;
+    let i = 0;
+    while (i < text.length) {
+      const chunk = text.slice(i, i + size);
+      chunks.push(chunk);
+      i += size - overlap;
+      if (size - overlap <= 0) break;
+    }
+    return chunks;
+  };
+  let chunkCount = 0;
+  const normalizedSubjectKey = normalizeSubject4(subject || "");
+  for (const p of pages) {
+    const pageText = (p.text || "").trim();
+    if (!pageText) continue;
+    const pageNum = Number(p.pageNumber || 1);
+    const subChunks = chunkText(pageText, 1e3, 150);
+    for (let j = 0; j < subChunks.length; j++) {
+      const chunkTextContent = subChunks[j];
+      const questionNo = detectQuestionNo(chunkTextContent);
+      const detectedLesson = lesson?.trim() || detectLessonForChunk(chunkTextContent, normalizedSubjectKey);
+      const chunkId = `chunk_${sourceId}_${chunkCount}`;
+      const rawPreview = p.rawText ? p.rawText.slice(0, 200) : chunkTextContent.slice(0, 200);
+      const cleanedChunkText = chunkTextContent.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").trim();
+      const chunkDoc = {
+        sourceId,
+        pageNumber: pageNum,
+        questionNo: questionNo || null,
+        ownerUid: uid,
+        text: cleanedChunkText,
+        rawTextPreview: rawPreview,
+        textEncoding,
+        extractionMethod,
+        conversionApplied: p.conversionApplied || false,
+        ocrConfidence,
+        chunkIndex: chunkCount++,
+        title,
+        fileName,
+        subject: normalizedSubjectKey,
+        lesson: detectedLesson,
+        resourceType,
+        sourceType: sourceType || resourceType,
+        year: year ? String(year) : null,
+        medium: "Sinhala",
+        tags: [title, subject].filter(Boolean),
+        sourceScope,
+        visibility: sourceScope === "official" ? "official" : "private",
+        embeddingStatus: "none",
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      bulkWriter.set(db.collection("rag_chunks").doc(chunkId), chunkDoc);
+      if (sourceScope === "owner_syllabus") {
+        const sylChunkRef = db.collection("users").doc(uid).collection("syllabus_chunks").doc(chunkId);
+        bulkWriter.set(sylChunkRef, { id: chunkId, ...chunkDoc });
+      }
+    }
+  }
+  console.log(`Generating separate readable Sinhala text PDF (HTML companion) for sourceId: ${sourceId}...`);
+  const textPdfResponse = await generateSinhalaTextPdf({
+    uid,
+    sourceId,
+    fileName,
+    title,
+    subject: normalizedSubjectKey,
+    year,
+    extractionMethod,
+    pages: pages.map((p) => ({ pageNumber: p.pageNumber, text: p.text }))
+  });
+  const finalIndexStatus = computeIndexStatus({
+    chunkCount,
+    needsOcr,
+    needsLegacyConversion,
+    textEncoding,
+    indexStatus: chunkCount > 0 ? "ready" : "not_indexed"
+  });
+  const textIndexed = chunkCount > 0 && !needsOcr;
+  const metaUpdate = {
+    chunkCount,
+    needsOcr,
+    textIndexed,
+    indexStatus: finalIndexStatus,
+    needsLegacyConversion,
+    textEncoding,
+    extractionMethod,
+    ocrConfidence,
+    ocrStatus: "ready",
+    ocrProvider: "cloud_vision",
+    ocrTextPdfStoragePath: textPdfResponse.ocrTextPdfStoragePath,
+    ocrTextStoragePath: textPdfResponse.ocrTextStoragePath,
+    ocrTextPdfStatus: textPdfResponse.ocrTextPdfStatus,
+    lesson: lesson?.trim() || null,
+    processedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await bulkWriter.close();
+  console.log(`Committed ${chunkCount} chunks to Firestore for source: ${sourceId}`);
+  await db.collection("rag_sources").doc(sourceId).set({
+    sourceId,
+    ownerUid: uid,
+    storagePath,
+    fileName,
+    title,
+    subject: normalizedSubjectKey,
+    year: year ? String(year) : null,
+    resourceType,
+    sourceType: sourceType || resourceType,
+    sourceScope,
+    visibility: sourceScope === "official" ? "official" : "private",
+    ...metaUpdate
+  }, { merge: true });
+  if (sourceScope === "past_paper") {
+    await db.collection("past_papers").doc(sourceId).set({
+      id: sourceId,
+      sourceId,
+      ownerUid: uid,
+      storagePath,
+      fileName,
+      title,
+      subject: normalizedSubjectKey,
+      year: year ? String(year) : null,
+      resourceType,
+      sourceType: sourceType || resourceType,
+      sourceScope,
+      ...metaUpdate
+    }, { merge: true }).catch(() => {
+    });
+  } else if (sourceScope === "owner_syllabus") {
+    await db.collection("users").doc(uid).collection("syllabus_resources").doc(sourceId).set({
+      id: sourceId,
+      sourceId,
+      ownerUid: uid,
+      storagePath,
+      fileName,
+      title,
+      subject: normalizedSubjectKey,
+      year: year ? String(year) : null,
+      resourceType,
+      sourceType: sourceType || resourceType,
+      sourceScope,
+      status: finalIndexStatus,
+      ...metaUpdate
+    }, { merge: true }).catch(() => {
+    });
+  }
+  invalidateInventoryCache(uid);
+  return {
+    chunkCount,
+    indexStatus: finalIndexStatus,
+    needsOcr
+  };
+}
+async function finalizeFailedProcessing(params) {
+  const { sourceId, sourceScope, uid, errorMsg, needsOcr, needsLegacyConversion, status } = params;
+  const db = getAdminDb();
+  const metaUpdate = {
+    chunkCount: 0,
+    needsOcr,
+    textIndexed: false,
+    indexStatus: status,
+    ocrStatus: "failed",
+    ocrError: errorMsg,
+    needsLegacyConversion,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await db.collection("rag_sources").doc(sourceId).set({
+    sourceId,
+    ownerUid: uid,
+    sourceScope,
+    ...metaUpdate
+  }, { merge: true }).catch(() => {
+  });
+  if (sourceScope === "past_paper") {
+    await db.collection("past_papers").doc(sourceId).set({
+      id: sourceId,
+      sourceId,
+      ownerUid: uid,
+      sourceScope,
+      ...metaUpdate
+    }, { merge: true }).catch(() => {
+    });
+  } else if (sourceScope === "owner_syllabus") {
+    await db.collection("users").doc(uid).collection("syllabus_resources").doc(sourceId).set({
+      id: sourceId,
+      sourceId,
+      ownerUid: uid,
+      sourceScope,
+      status,
+      ...metaUpdate
+    }, { merge: true }).catch(() => {
+    });
+  }
+  invalidateInventoryCache(uid);
+}
+
+// server/pdf/directPdfQa.ts
+init_admin();
+init_client();
+async function askGeminiDirectPdf(params) {
+  const { sourceId, pdfBuffer, prompt, questionId, subject, year } = params;
+  const db = getAdminDb();
+  if (questionId) {
+    const cacheRef = db.collection("pdf_question_cache");
+    const cacheSnap = await cacheRef.where("sourceId", "==", sourceId).where("questionId", "==", questionId).limit(1).get();
+    if (!cacheSnap.empty) {
+      const cachedData = cacheSnap.docs[0].data();
+      console.log(`Cache hit for ${sourceId} question ${questionId}`);
+      return {
+        answer: cachedData.answer,
+        cached: true,
+        model: "cached"
+      };
+    }
+  }
+  console.log(`Calling Gemini Direct PDF QA for source ${sourceId}, prompt length: ${prompt.length}`);
+  const ai9 = getAIClient();
+  const modelName = "gemini-3.1-pro-preview";
+  const systemInstruction = `You are a specialized A/L Technology Tutor for SFT, ET, and ICT in Sri Lanka. 
+You are currently reading an uploaded PDF file which is an exam paper, tute, or marking scheme.
+Instructions:
+- Provide accurate, helpful answers in Sinhala Unicode.
+- If the question asks for a specific MCQ answer, find it in the PDF and explain why.
+- If the PDF has old Sinhala fonts (legacy fonts like LKavdxl), use your visual understanding to read them correctly and output in Unicode.
+- If you cannot find the answer in the provided PDF, state that clearly. Do NOT guess.
+- Be precise. Cite page numbers if possible.`;
+  const pdfPart = {
+    inlineData: {
+      mimeType: "application/pdf",
+      data: pdfBuffer.toString("base64")
+    }
+  };
+  const textPart = {
+    text: prompt
+  };
+  try {
+    const response = await ai9.models.generateContent({
+      model: modelName,
+      contents: { parts: [pdfPart, textPart] },
+      config: {
+        systemInstruction,
+        temperature: 0.2
+        // Lower temperature for more factual answers
+      }
+    });
+    const answer = response.text || "\u0DC3\u0DB8\u0DCF\u0DC0\u0DB1\u0DCA\u0DB1, \u0D91\u0DB8 \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA\u0DA7 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DD4 \u0DAF\u0DD3\u0DB8\u0DA7 \u0DB8\u0DA7 \u0DB1\u0DDC\u0DC4\u0DD0\u0D9A\u0DD2 \u0DC0\u0DD2\u0DBA.";
+    if (questionId && answer) {
+      await db.collection("pdf_question_cache").add({
+        sourceId,
+        questionId,
+        answer,
+        subject: subject || null,
+        year: year || null,
+        timestamp: (/* @__PURE__ */ new Date()).toISOString()
+      });
+    }
+    return {
+      answer,
+      cached: false,
+      model: modelName
+    };
+  } catch (err) {
+    console.error("Gemini Direct PDF QA Error:", err);
+    throw new Error(`Direct PDF QA failed: ${err.message}`);
+  }
+}
+
+// server/pdf/routes.ts
+init_stripVisualBlocks();
+init_aiCircuitBreaker();
+var pdfRoutes = (0, import_express5.Router)();
+var upload2 = (0, import_multer2.default)({ storage: import_multer2.default.memoryStorage() });
+function storageObjectPath(input) {
+  const value = String(input || "").trim();
+  if (!value) return "";
+  if (value.startsWith("gs://")) {
+    return value.replace(/^gs:\/\/[^/]+\//, "");
+  }
+  if (value.startsWith("https://firebasestorage.googleapis.com")) {
+    try {
+      const parsed = new URL(value);
+      const marker = "/o/";
+      const index = parsed.pathname.indexOf(marker);
+      return index >= 0 ? decodeURIComponent(parsed.pathname.slice(index + marker.length)) : "";
+    } catch {
+      return "";
+    }
+  }
+  return value.replace(/^\/+/, "");
+}
+function canUseStoragePath(user, path5) {
+  const roles = Array.isArray(user?.roles) ? user.roles : [];
+  const privileged = user?.admin === true || roles.some((role) => ["admin", "content_editor", "ops"].includes(role));
+  return privileged || path5.startsWith(`users/${user.uid}/`) || path5.startsWith(`rag_uploads/${user.uid}/`);
+}
+async function resolveDirectQaSource(user, sourceId, submittedPath) {
+  const db = getAdminDb();
+  const snapshots = await Promise.all([
+    sourceId ? db.collection("rag_sources").doc(sourceId).get() : Promise.resolve(null),
+    sourceId ? db.collection("past_papers").doc(sourceId).get() : Promise.resolve(null)
+  ]);
+  const sourceSnapshot = snapshots.find((snapshot) => snapshot?.exists);
+  const source = sourceSnapshot?.data?.() || null;
+  const path5 = storageObjectPath(source?.storagePath || submittedPath);
+  if (!path5) throw Object.assign(new Error("PDF source has no valid storage path."), { status: 400, code: "DIRECT_QA_SOURCE_PATH_INVALID" });
+  const roles = Array.isArray(user?.roles) ? user.roles : [];
+  const privileged = user?.admin === true || roles.some((role) => ["admin", "content_editor", "ops"].includes(role));
+  const visible = ["public", "official", "shared"].includes(String(source?.visibility || ""));
+  const owned = source?.ownerUid === user.uid || canUseStoragePath(user, path5);
+  if (!privileged && !visible && !owned) {
+    throw Object.assign(new Error("You do not have access to this PDF source."), { status: 403, code: "DIRECT_QA_SOURCE_FORBIDDEN" });
+  }
+  return { source, path: path5 };
+}
+pdfRoutes.post("/process-uploaded", requireFirebaseUser, import_express5.default.json(), async (req, res) => {
+  try {
+    const user = req.user;
+    const {
+      sourceId,
+      storagePath,
+      title,
+      fileName,
+      subject,
+      year,
+      resourceType,
+      sourceType,
+      sourceScope,
+      lesson,
+      deferProcessing
+    } = req.body;
+    if (!sourceId || !storagePath) {
+      return res.status(400).json({ ok: false, error: "Missing sourceId or storagePath." });
+    }
+    const normalizedStoragePath = storageObjectPath(storagePath);
+    if (!normalizedStoragePath || !canUseStoragePath(user, normalizedStoragePath)) {
+      return res.status(403).json({ ok: false, error: "Storage path is outside the signed-in user's upload area." });
+    }
+    const db = getAdminDb();
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    await db.collection("rag_sources").doc(sourceId).set({
+      sourceId,
+      ownerUid: user.uid,
+      storagePath: normalizedStoragePath,
+      title: title || fileName || "Uploaded PDF",
+      fileName: fileName || "upload.pdf",
+      subject: String(subject || "").toUpperCase(),
+      lesson: lesson ? String(lesson).trim().slice(0, 180) : null,
+      year: year ? String(year) : null,
+      resourceType: resourceType || "uploaded_pdf",
+      sourceType: sourceType || resourceType || "uploaded_pdf",
+      sourceScope: sourceScope || "personal",
+      visibility: "private",
+      indexStatus: "queued",
+      chunkCount: 0,
+      needsOcr: false,
+      textIndexed: false,
+      createdAt: now,
+      updatedAt: now
+    }, { merge: true });
+    if ((sourceScope || "") === "past_paper") {
+      await db.collection("past_papers").doc(sourceId).set({
+        id: sourceId,
+        sourceId,
+        ownerUid: user.uid,
+        storagePath: normalizedStoragePath,
+        title: title || fileName || "Uploaded PDF",
+        fileName: fileName || "upload.pdf",
+        subject: String(subject || "").toUpperCase(),
+        year: year ? String(year) : null,
+        resourceType: resourceType || "past_paper",
+        sourceType: sourceType || resourceType || "past_paper",
+        sourceScope: "past_paper",
+        indexStatus: "queued",
+        chunkCount: 0,
+        needsOcr: false,
+        textIndexed: false,
+        createdAt: now,
+        updatedAt: now
+      }, { merge: true });
+    }
+    if (deferProcessing !== true) setImmediate(() => {
+      processUploadedPdf({
+        uid: user.uid,
+        sourceId,
+        storagePath: normalizedStoragePath,
+        fileName: fileName || "upload.pdf",
+        title: title || fileName || "Uploaded PDF",
+        subject,
+        year: year || null,
+        resourceType: resourceType || "uploaded_pdf",
+        sourceType: sourceType || resourceType || "uploaded_pdf",
+        sourceScope: sourceScope || "personal",
+        lesson: lesson ? String(lesson).trim().slice(0, 180) : void 0,
+        forceOcr: false
+      }).catch((err) => console.error("Async processUploadedPdf error:", err));
+    });
+    return res.json({
+      ok: true,
+      status: deferProcessing === true ? "awaiting_client_file" : "queued",
+      message: deferProcessing === true ? "Source registered; awaiting direct client file hand-off" : "Processing queued",
+      sourceId
+    });
+  } catch (err) {
+    console.error("Error in process-uploaded route:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+pdfRoutes.post("/reprocess/:sourceId", requireFirebaseUser, upload2.single("file"), async (req, res) => {
+  try {
+    const user = req.user;
+    const { sourceId } = req.params;
+    const db = getAdminDb();
+    const sourceSnap = await db.collection("rag_sources").doc(sourceId).get();
+    if (!sourceSnap.exists) {
+      return res.status(404).json({ ok: false, error: "Source not found." });
+    }
+    const srcData = sourceSnap.data();
+    const roles = Array.isArray(user?.roles) ? user.roles : [];
+    const privileged = user?.admin === true || roles.some((role) => ["admin", "content_editor", "ops"].includes(role));
+    if (srcData.ownerUid !== user.uid && !privileged) {
+      return res.status(403).json({ ok: false, error: "You do not have permission to reprocess this source." });
+    }
+    let buffer;
+    if (req.file) {
+      buffer = req.file.buffer;
+    } else {
+      const storagePath = srcData.storagePath;
+      if (!storagePath) {
+        return res.status(400).json({ ok: false, error: "Source has no original PDF storage path." });
+      }
+      console.log(`Downloading original file from GCS: ${storagePath} to reprocess...`);
+      const bucket = getAdminBucket();
+      const file = bucket.file(storagePath);
+      const [downloaded] = await file.download();
+      buffer = downloaded;
+    }
+    const result = await processUploadedPdf({
+      uid: srcData.ownerUid || user.uid,
+      sourceId,
+      storagePath: srcData.storagePath,
+      fileName: srcData.fileName,
+      title: srcData.title,
+      subject: srcData.subject,
+      year: srcData.year,
+      resourceType: srcData.resourceType || "uploaded_pdf",
+      sourceType: srcData.sourceType || "uploaded_pdf",
+      sourceScope: srcData.sourceScope || "personal",
+      buffer,
+      forceOcr: true
+      // repocess always forces OCR
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error("Error in reprocess route:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+pdfRoutes.get("/ocr-status/:sourceId", requireFirebaseUser, async (req, res) => {
+  try {
+    const { sourceId } = req.params;
+    const db = getAdminDb();
+    const sourceSnap = await db.collection("rag_sources").doc(sourceId).get();
+    if (!sourceSnap.exists) {
+      return res.status(404).json({ ok: false, error: "Source not found." });
+    }
+    const src = sourceSnap.data();
+    const job = await checkOcrJobStatus(sourceId);
+    if (job.status === "ready" && job.result) {
+      console.log(`Background OCR job became ready. Running finalization for ${sourceId}`);
+      await finalizePipelineProcessing({
+        uid: src.ownerUid,
+        sourceId,
+        storagePath: src.storagePath,
+        fileName: src.fileName,
+        title: src.title,
+        subject: src.subject,
+        year: src.year,
+        resourceType: src.resourceType || "uploaded_pdf",
+        sourceScope: src.sourceScope || "personal",
+        pages: job.result.pages.map((p) => ({
+          pageNumber: p.pageNumber,
+          text: p.text,
+          rawText: p.text,
+          textEncoding: "unicode_sinhala",
+          conversionApplied: false,
+          conversionConfidence: 1
+        })),
+        extractionMethod: "cloud_vision_ocr",
+        textEncoding: "unicode_sinhala",
+        ocrConfidence: job.result.confidence,
+        needsOcr: false,
+        needsLegacyConversion: false
+      });
+      const updatedSnap = await db.collection("rag_sources").doc(sourceId).get();
+      const updatedSrc = updatedSnap.data();
+      return res.json({
+        ok: true,
+        sourceId,
+        ocrStatus: "ready",
+        indexStatus: updatedSrc.indexStatus,
+        chunkCount: updatedSrc.chunkCount,
+        textIndexed: updatedSrc.textIndexed,
+        needsOcr: updatedSrc.needsOcr,
+        extractionMethod: updatedSrc.extractionMethod,
+        ocrTextPdfStoragePath: updatedSrc.ocrTextPdfStoragePath,
+        ocrTextPdfStatus: updatedSrc.ocrTextPdfStatus
+      });
+    }
+    return res.json({
+      ok: true,
+      sourceId,
+      ocrStatus: job.status,
+      indexStatus: src.indexStatus || "not_indexed",
+      chunkCount: src.chunkCount || 0,
+      textIndexed: src.textIndexed || false,
+      needsOcr: src.needsOcr || false,
+      extractionMethod: src.extractionMethod || "none",
+      ocrTextPdfStoragePath: src.ocrTextPdfStoragePath || null,
+      ocrTextPdfStatus: src.ocrTextPdfStatus || "disabled",
+      error: job.error || null
+    });
+  } catch (err) {
+    console.error("Error in ocr-status route:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+pdfRoutes.get("/ocr-text/:sourceId", requireFirebaseUser, async (req, res) => {
+  try {
+    const { sourceId } = req.params;
+    const db = getAdminDb();
+    const sourceSnap = await db.collection("rag_sources").doc(sourceId).get();
+    if (!sourceSnap.exists) {
+      return res.status(404).json({ ok: false, error: "Source not found." });
+    }
+    const source = sourceSnap.data();
+    const uid = source.ownerUid;
+    const bucket = getAdminBucket();
+    const safeFileName = source.fileName ? source.fileName.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_\u0D80-\u0DFF-]/g, "_") : "document";
+    const jsonStoragePath = `users/${uid}/ocr_text/${sourceId}/pages.json`;
+    const jsonFile = bucket.file(jsonStoragePath);
+    const [exists] = await jsonFile.exists();
+    if (exists) {
+      const [downloaded] = await jsonFile.download();
+      const parsed = JSON.parse(downloaded.toString("utf8"));
+      return res.json({
+        ok: true,
+        source,
+        pages: parsed.pages || []
+      });
+    }
+    const chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
+    const pageMap = /* @__PURE__ */ new Map();
+    chunksSnap.docs.forEach((d) => {
+      const chunk = d.data();
+      const pageNum = chunk.pageNumber || 1;
+      const current = pageMap.get(pageNum) || "";
+      pageMap.set(pageNum, current + (current ? "\n\n" : "") + chunk.text);
+    });
+    const pages = Array.from(pageMap.entries()).map(([pageNumber, text]) => ({
+      pageNumber,
+      text,
+      confidence: 1,
+      method: source.extractionMethod || "pdf_text"
+    })).sort((a, b) => a.pageNumber - b.pageNumber);
+    return res.json({
+      ok: true,
+      source,
+      pages
+    });
+  } catch (err) {
+    console.error("Error in ocr-text route:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+var inFlightDirectQa = /* @__PURE__ */ new Map();
+var failedDirectQaCooldown = /* @__PURE__ */ new Map();
+pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload2.single("file"), async (req, res) => {
+  try {
+    const { sourceId, storagePath, prompt, questionId, questionNo, questionType, subject, year } = req.body;
+    console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}`);
+    const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}`;
+    const cooldownUntil = failedDirectQaCooldown.get(idempotencyKey);
+    if (cooldownUntil && Date.now() < cooldownUntil || isAiBillingCircuitOpen()) {
+      return res.status(429).json({
+        ok: false,
+        found: false,
+        errorCode: "AI_BILLING_EXHAUSTED",
+        stage: "AI_UNAVAILABLE",
+        message: "AI credits \u0D85\u0DC0\u0DC3\u0DB1\u0DCA \u0DB1\u0DD2\u0DC3\u0DCF Direct PDF QA run \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0DB6\u0DD0\u0DC4\u0DD0.",
+        canRetry: false,
+        billing: getAiBillingState()
+      });
+    }
+    if (inFlightDirectQa.has(idempotencyKey)) {
+      console.log(`[DirectPDFQA] Duplicate request detected for ${idempotencyKey}, attaching to existing promise.`);
+      try {
+        const result = await inFlightDirectQa.get(idempotencyKey);
+        if (result.status) {
+          const { status, ...rest } = result;
+          return res.status(status).json(rest);
+        }
+        return res.json(result);
+      } catch (e) {
+        return res.status(500).json({ ok: false, errorCode: "DIRECT_QA_BACKEND_ERROR", error: e.message });
+      }
+    }
+    const requestPromise = async () => {
+      let buffer;
+      let resolvedSource = null;
+      if (req.file) {
+        buffer = req.file.buffer;
+        console.log(`[DirectPDFQA] File received via upload. Buffer size: ${buffer.length} bytes`);
+      } else {
+        const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath);
+        resolvedSource = resolved.source;
+        console.log(`[DirectPDFQA] Reading verified source from Firebase Admin: ${resolved.path}`);
+        const [downloaded] = await getAdminBucket().file(resolved.path).download();
+        buffer = downloaded;
+        if (!buffer?.length) {
+          return { ok: false, status: 404, errorCode: "DIRECT_QA_SOURCE_EMPTY", error: "The stored PDF is empty or unavailable." };
+        }
+      }
+      const effectivePrompt = prompt?.trim() || `${year || ""} ${subject || ""} ${questionType || "question"} ${questionNo} answer`;
+      if (!questionNo || !questionType) {
+        console.error("[DirectPDFQA] Missing questionNo or questionType");
+        return {
+          ok: false,
+          status: 400,
+          found: false,
+          errorCode: "DIRECT_QA_MISSING_STRUCTURED_INTENT",
+          stage: "VALIDATION",
+          message: "Direct PDF QA requires questionNo and questionType."
+        };
+      }
+      if (questionNo && questionType) {
+        console.log(`[DirectPDFQA] Using structured extraction for ${questionType} ${questionNo}`);
+        const { askGeminiDirectPdfStructured: askGeminiDirectPdfStructured2 } = await Promise.resolve().then(() => (init_directPdfQa(), directPdfQa_exports));
+        const result2 = await askGeminiDirectPdfStructured2({
+          uid: req.user.uid,
+          sourceId: sourceId || "uploaded_temp",
+          pdfBuffer: buffer,
+          year: year || "unknown",
+          subject: subject || "unknown",
+          questionType,
+          questionNo,
+          prompt: effectivePrompt,
+          allowOfficialAnswer: [
+            resolvedSource?.resourceType,
+            resolvedSource?.sourceType,
+            resolvedSource?.sourceScope
+          ].some((value) => String(value || "").toLowerCase().includes("marking")) || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || ""))
+        });
+        console.log(`[DirectPDFQA] Structured extraction result: ${result2.found ? "FOUND" : "NOT_FOUND"}`);
+        if (!result2.ok || !result2.found || !result2.sourceEvidence?.questionText) {
+          const isRequire = result2.errorCode === "AI_CLIENT_RUNTIME_ERROR" || result2.error && String(result2.error).includes("require is not defined");
+          const isBilling = result2.errorCode === "AI_BILLING_EXHAUSTED" || result2.error && (String(result2.error).includes("depleted") || String(result2.error).includes("credits") || String(result2.error).includes("billing") || String(result2.error).includes("RESOURCE_EXHAUSTED"));
+          const isRateLimit = result2.errorCode === "AI_RATE_LIMITED";
+          if (isBilling || result2.errorCode === "AI_BILLING_EXHAUSTED") {
+            failedDirectQaCooldown.set(idempotencyKey, Date.now() + 10 * 60 * 1e3);
+            return {
+              ok: false,
+              found: false,
+              errorCode: "AI_BILLING_EXHAUSTED",
+              stage: "MODEL_CALL",
+              reason: "AI billing exhausted. PDF was not fully analyzed by Gemini.",
+              message: "AI credits \u0D85\u0DC0\u0DC3\u0DB1\u0DCA \u0DB1\u0DD2\u0DC3\u0DCF PDF scan/answer generation complete \u0DC0\u0DD4\u0DAB\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0.",
+              canRetry: false
+            };
+          }
+          return {
+            ok: false,
+            found: false,
+            errorCode: isRequire ? "AI_CLIENT_RUNTIME_ERROR" : isRateLimit ? "AI_RATE_LIMITED" : result2.errorCode || "EXACT_QUESTION_EVIDENCE_MISSING",
+            stage: result2.stage || "MODEL_CALL",
+            reason: isRequire ? "AI client runtime error: require is not defined" : isRateLimit ? "AI rate limit hit. Please retry in a moment." : result2.reason || "Question evidence not found in PDF.",
+            error: result2.error
+          };
+        }
+        return {
+          ok: true,
+          ...result2
+        };
+      }
+      console.log("[DirectPDFQA] Using general extraction");
+      const result = await askGeminiDirectPdf({
+        sourceId: sourceId || "uploaded_temp",
+        pdfBuffer: buffer,
+        prompt: effectivePrompt,
+        questionId,
+        subject,
+        year
+      });
+      if (result.answer) {
+        result.answer = stripRawVisualBlocks(result.answer);
+      }
+      console.log(`[DirectPDFQA] General extraction result: ${result.answer ? "SUCCESS" : "EMPTY"}`);
+      return {
+        ok: true,
+        ...result
+      };
+    };
+    inFlightDirectQa.set(idempotencyKey, requestPromise());
+    try {
+      const result = await inFlightDirectQa.get(idempotencyKey);
+      if (result && result.errorCode === "AI_BILLING_EXHAUSTED") {
+        setTimeout(() => {
+          inFlightDirectQa.delete(idempotencyKey);
+        }, 10 * 60 * 1e3);
+      } else {
+        inFlightDirectQa.delete(idempotencyKey);
+      }
+      if (result.status) {
+        const { status, ...rest } = result;
+        return res.status(status).json(rest);
+      }
+      return res.json(result);
+    } catch (err) {
+      inFlightDirectQa.delete(idempotencyKey);
+      throw err;
+    }
+  } catch (err) {
+    console.error("[DirectPDFQA] Backend error:", err);
+    return res.status(Number(err.status) || 500).json({
+      ok: false,
+      found: false,
+      errorCode: err.code || err.errorCode || "DIRECT_QA_BACKEND_FAILED",
+      stage: err.stage || "MODEL_CALL",
+      message: err.message || "Direct PDF QA failed"
     });
   }
 });
-app.use(import_express3.default.json({ limit: "50mb" }));
-app.get("/api/notifications", (_req, res) => res.json({ notifications: [] }));
-app.post("/api/notifications/trigger", (_req, res) => res.json({ success: true }));
-app.post("/api/notifications/read", (_req, res) => res.json({ success: true }));
-app.post("/api/notifications/delete", (_req, res) => res.json({ success: true }));
+pdfRoutes.get("/question-cache", requireFirebaseUser, async (req, res) => {
+  try {
+    const { sourceId } = req.query;
+    if (!sourceId) return res.status(400).json({ ok: false, error: "Missing sourceId" });
+    const db = getAdminDb();
+    const cacheSnap = await db.collection("pdf_question_cache").where("sourceId", "==", sourceId).orderBy("updatedAt", "desc").get();
+    const items = cacheSnap.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+    return res.json({
+      ok: true,
+      sourceId,
+      items
+    });
+  } catch (err) {
+    console.error("Error in question-cache route:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+pdfRoutes.post("/question-cache/:docId/reject", requireFirebaseUser, async (req, res) => {
+  try {
+    const { docId } = req.params;
+    const db = getAdminDb();
+    await db.collection("pdf_question_cache").doc(docId).update({
+      validationStatus: "rejected",
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    return res.json({ ok: true });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+pdfRoutes.post("/question-cache/:docId/resolve", requireFirebaseUser, async (req, res) => {
+  try {
+    const { docId } = req.params;
+    const db = getAdminDb();
+    const doc = await db.collection("pdf_question_cache").doc(docId).get();
+    if (!doc.exists) return res.status(404).json({ ok: false, error: "Cache not found" });
+    const data = doc.data();
+    if (!data.questionText || !data.options) {
+      return res.status(400).json({ ok: false, error: "Missing question text or options for solving" });
+    }
+    const { solveExtractedMcqQuestion: solveExtractedMcqQuestion2 } = await Promise.resolve().then(() => (init_solveExtractedQuestion(), solveExtractedQuestion_exports));
+    const solved = await solveExtractedMcqQuestion2({
+      questionText: data.questionText,
+      options: data.options,
+      subject: data.subject || "SFT",
+      year: data.year || "unknown",
+      questionNo: data.questionNo || ""
+    });
+    if (solved) {
+      await db.collection("pdf_question_cache").doc(docId).update({
+        solvedAnswer: solved,
+        explanationSinhala: solved.explanationSinhala,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      return res.json({ ok: true, solved });
+    }
+    return res.status(500).json({ ok: false, error: "Solver failed to return result" });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+pdfRoutes.get("/verified-answers/:sourceId", requireFirebaseUser, async (req, res) => {
+  try {
+    const { sourceId } = req.params;
+    const db = getAdminDb();
+    const snap = await db.collection("verified_answers").where("sourceId", "==", sourceId).get();
+    const items = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    return res.json({ ok: true, items });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+pdfRoutes.post("/verified-answers", requireFirebaseUser, async (req, res) => {
+  try {
+    const user = req.user;
+    const isAdmin = user.roles?.includes("admin") || user.admin === true;
+    if (!isAdmin) return res.status(403).json({ ok: false, error: "Admin only" });
+    const { sourceId, questionType, questionNo, ...data } = req.body;
+    if (!sourceId || !questionType || !questionNo) {
+      return res.status(400).json({ ok: false, error: "Missing identification fields" });
+    }
+    const db = getAdminDb();
+    const docId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
+    const verifiedDoc = {
+      ...data,
+      sourceId,
+      questionType,
+      questionNo,
+      verifiedBy: user.uid,
+      verifiedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      status: "verified"
+    };
+    await db.collection("verified_answers").doc(docId).set(verifiedDoc, { merge: true });
+    return res.json({ ok: true, id: docId });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+pdfRoutes.get("/sources", requireFirebaseUser, async (req, res) => {
+  try {
+    const user = req.user;
+    const db = getAdminDb();
+    const isAdmin = user.roles?.includes("admin") || user.admin === true;
+    let query = db.collection("rag_sources");
+    if (!isAdmin) {
+      query = query.where("ownerUid", "==", user.uid);
+    }
+    const snap = await query.orderBy("createdAt", "desc").get();
+    const sources = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    return res.json({ ok: true, sources });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+pdfRoutes.post("/admin/repair-source/:sourceId", requireFirebaseUser, async (req, res) => {
+  try {
+    const { sourceId } = req.params;
+    const db = getAdminDb();
+    const sourceSnap = await db.collection("rag_sources").doc(sourceId).get();
+    if (!sourceSnap.exists) {
+      return res.status(404).json({ ok: false, error: "Source not found." });
+    }
+    const src = sourceSnap.data();
+    await db.collection("rag_sources").doc(sourceId).update({
+      indexStatus: "queued",
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    setImmediate(() => {
+      processUploadedPdf({
+        uid: src.ownerUid,
+        sourceId,
+        storagePath: src.storagePath,
+        fileName: src.fileName,
+        title: src.title,
+        subject: src.subject,
+        year: src.year,
+        resourceType: src.resourceType || "uploaded_pdf",
+        sourceType: src.sourceType || "uploaded_pdf",
+        sourceScope: src.sourceScope || "personal",
+        forceOcr: req.body.forceOcr === true
+      }).catch((err) => console.error("Async repair error:", err));
+    });
+    return res.json({ ok: true, message: "Repair queued." });
+  } catch (err) {
+    console.error("Error in repair endpoint:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// server/routes/examIntelRoutes.ts
+var import_express6 = require("express");
+init_admin();
+
+// server/ai-core/pdf/indexing.ts
+init_retry();
+var import_genai4 = require("@google/genai");
+init_admin();
+var import_storage3 = require("firebase-admin/storage");
+init_client();
+var ai = getAIClient();
+async function buildExamIndex() {
+  const db = getAdminDb();
+  const storage = (0, import_storage3.getStorage)();
+  const sourcesSnap = await db.collection("rag_sources").get();
+  const sources = sourcesSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const results = [];
+  for (const source of sources) {
+    try {
+      const file = storage.bucket().file(source.storagePath);
+      const [buffer] = await retryGoogleAuthOperation("fileDownload", async () => await file.download());
+      const prompt = `
+        Analyze this PDF which is an exam paper for ${source.subject}.
+        Extract all questions including MCQ, Structured, and Essay questions.
+        For each question, identify the lesson, subtopic, marks, and skill type.
+      `;
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: [
+          { text: prompt },
+          { inlineData: { data: buffer.toString("base64"), mimeType: "application/pdf" } }
+        ],
+        config: {
+          systemInstruction: "You are a professional exam paper digitizer. Extract questions into the specified JSON format.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: import_genai4.Type.ARRAY,
+            items: {
+              type: import_genai4.Type.OBJECT,
+              properties: {
+                questionNo: { type: import_genai4.Type.INTEGER },
+                partNo: { type: import_genai4.Type.STRING },
+                questionType: { type: import_genai4.Type.STRING, enum: ["MCQ", "Structured", "Essay", "Practical", "Drawing", "Calculation", "Diagram", "Theory"] },
+                marks: { type: import_genai4.Type.NUMBER },
+                compulsory: { type: import_genai4.Type.BOOLEAN },
+                lesson: { type: import_genai4.Type.STRING },
+                subtopic: { type: import_genai4.Type.STRING },
+                concept: { type: import_genai4.Type.STRING },
+                skillType: { type: import_genai4.Type.STRING, enum: ["memory", "understanding", "calculation", "diagram", "application", "comparison", "explanation", "data interpretation"] },
+                questionText: { type: import_genai4.Type.STRING },
+                options: { type: import_genai4.Type.ARRAY, items: { type: import_genai4.Type.STRING } },
+                answer: { type: import_genai4.Type.STRING },
+                markingPoints: { type: import_genai4.Type.ARRAY, items: { type: import_genai4.Type.STRING } },
+                pageNumber: { type: import_genai4.Type.INTEGER }
+              },
+              required: ["questionNo", "questionType", "lesson", "questionText"]
+            }
+          }
+        }
+      });
+      const questions = JSON.parse(response.text || "[]");
+      const batch = db.batch();
+      for (const q of questions) {
+        const questionId = `${source.id}_${q.questionNo}_${q.partNo || "main"}`;
+        const ref = db.collection("exam_question_index").doc(questionId);
+        batch.set(ref, {
+          ...q,
+          sourceId: source.id,
+          sourceTitle: source.title,
+          subject: source.subject,
+          year: source.year || "unknown",
+          paperType: source.type || "past_paper",
+          extractionMethod: "gemini-3.5-flash",
+          confidence: 0.9,
+          verified: false,
+          createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        });
+      }
+      await batch.commit();
+      results.push({ sourceId: source.id, count: questions.length });
+    } catch (err) {
+      console.error(`Failed to index source ${source.id}:`, err);
+      results.push({ sourceId: source.id, error: String(err) });
+    }
+  }
+  return results;
+}
+
+// server/ai-core/exam-intel/probabilityRanker.ts
+var import_genai5 = require("@google/genai");
+init_admin();
+init_client();
+var ai2 = getAIClient();
+async function rankTopicProbability(subject) {
+  const db = getAdminDb();
+  const reportSnap = await db.collection("exam_pattern_reports").doc(subject).get();
+  const patternData = reportSnap.exists ? reportSnap.data() : null;
+  const syllabusSnap = await db.collection("syllabus_nodes").where("subject", "==", subject).get();
+  const syllabusNodes = syllabusSnap.docs.map((d) => d.data());
+  const prompt = `
+    Analyze the exam patterns and syllabus for ${subject}.
+    
+    Pattern Data: ${JSON.stringify(patternData)}
+    Syllabus Structure: ${JSON.stringify(syllabusNodes)}
+    
+    Rank the probability of topics appearing in the 2026 exam.
+    Consider:
+    1. Syllabus weight
+    2. Past frequency
+    3. Recency
+    4. Rotation pattern
+    5. Not asked recently
+    
+    Return a list of rankings.
+  `;
+  const response = await ai2.models.generateContent({
+    model: "gemini-3.1-pro-preview",
+    // Use Pro for complex reasoning
+    contents: prompt,
+    config: {
+      systemInstruction: "You are an advanced exam intelligence architect. Output evidence-based probability rankings in JSON. Do not claim exact prediction.",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: import_genai5.Type.ARRAY,
+        items: {
+          type: import_genai5.Type.OBJECT,
+          properties: {
+            topic: { type: import_genai5.Type.STRING },
+            subject: { type: import_genai5.Type.STRING },
+            lesson: { type: import_genai5.Type.STRING },
+            probability: { type: import_genai5.Type.STRING, enum: ["Very High", "High", "Medium", "Low"] },
+            confidence: { type: import_genai5.Type.NUMBER },
+            evidence: {
+              type: import_genai5.Type.ARRAY,
+              items: {
+                type: import_genai5.Type.OBJECT,
+                properties: {
+                  year: { type: import_genai5.Type.INTEGER },
+                  question: { type: import_genai5.Type.STRING },
+                  reason: { type: import_genai5.Type.STRING }
+                }
+              }
+            },
+            studentPriority: { type: import_genai5.Type.STRING, enum: ["Must study today", "This week", "Later"] },
+            riskIfSkipped: { type: import_genai5.Type.STRING, enum: ["High", "Medium", "Low"] }
+          },
+          required: ["topic", "subject", "lesson", "probability", "confidence", "evidence", "studentPriority", "riskIfSkipped"]
+        }
+      }
+    }
+  });
+  return JSON.parse(response.text || "{}");
+}
+
+// server/ai-core/exam-intel/unaskedTopicDetector.ts
+var import_genai6 = require("@google/genai");
+init_admin();
+init_client();
+var ai3 = getAIClient();
+async function detectUnaskedTopics(subject) {
+  const db = getAdminDb();
+  const syllabusSnap = await db.collection("syllabus_nodes").where("subject", "==", subject).get();
+  const syllabus = syllabusSnap.docs.map((d) => d.data());
+  const questionsSnap = await db.collection("exam_question_index").where("subject", "==", subject).get();
+  const coveredQuestions = questionsSnap.docs.map((d) => d.data());
+  const prompt = `
+    Compare the syllabus with the questions asked in the past.
+    
+    Syllabus: ${JSON.stringify(syllabus)}
+    Covered Questions: ${JSON.stringify(coveredQuestions)}
+    
+    Identify topics or subtopics that have NEVER been asked or are RARELY asked.
+    Assess their importance based on syllabus weight.
+  `;
+  const response = await ai3.models.generateContent({
+    model: "gemini-3.5-flash",
+    contents: prompt,
+    config: {
+      systemInstruction: "You are a senior syllabus auditor. Identify unasked and rare topics in JSON.",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: import_genai6.Type.OBJECT,
+        properties: {
+          subject: { type: import_genai6.Type.STRING },
+          unaskedTopics: { type: import_genai6.Type.ARRAY, items: { type: import_genai6.Type.STRING } },
+          rarelyAskedTopics: { type: import_genai6.Type.ARRAY, items: { type: import_genai6.Type.STRING } },
+          lastAppeared: { type: import_genai6.Type.ARRAY, items: { type: import_genai6.Type.OBJECT, properties: { topic: { type: import_genai6.Type.STRING }, year: { type: import_genai6.Type.STRING } } } },
+          syllabusImportance: { type: import_genai6.Type.ARRAY, items: { type: import_genai6.Type.OBJECT, properties: { topic: { type: import_genai6.Type.STRING }, weight: { type: import_genai6.Type.NUMBER } } } },
+          predictionWeight: { type: import_genai6.Type.ARRAY, items: { type: import_genai6.Type.OBJECT, properties: { topic: { type: import_genai6.Type.STRING }, weight: { type: import_genai6.Type.NUMBER } } } }
+        },
+        required: ["subject", "unaskedTopics", "rarelyAskedTopics", "lastAppeared", "syllabusImportance", "predictionWeight"]
+      }
+    }
+  });
+  return JSON.parse(response.text || "{}");
+}
+
+// server/ai-core/exam-intel/predictedPaper.ts
+var import_genai7 = require("@google/genai");
+init_admin();
+init_client();
+var ai4 = getAIClient();
+async function generatePredictedPaper(params) {
+  const db = getAdminDb();
+  const reportSnap = await db.collection("exam_pattern_reports").doc(params.subject).get();
+  const patternData = reportSnap.exists ? reportSnap.data() : null;
+  let studentWeakness = null;
+  if (params.studentUid) {
+    const forecastSnap = await db.collection("users").doc(params.studentUid).collection("forecasts").orderBy("updatedAt", "desc").limit(1).get();
+    if (!forecastSnap.empty) {
+      studentWeakness = forecastSnap.docs[0].data().mustFix;
+    }
+  }
+  const prompt = `
+    Generate a Predicted Exam Paper for ${params.subject} in ${params.mode} mode.
+    
+    Pattern Data: ${JSON.stringify(patternData)}
+    Student Weakness: ${JSON.stringify(studentWeakness)}
+    
+    Modes:
+    - safe: high frequency + syllabus weight
+    - balanced: high frequency + medium rotation + student weak areas
+    - surprise: rare but syllabus-important topics
+    
+    Include:
+    - questions
+    - answer key
+    - evidence citation for each prediction
+    - confidence report
+  `;
+  const response = await ai4.models.generateContent({
+    model: "gemini-3.1-pro-preview",
+    contents: prompt,
+    config: {
+      systemInstruction: "You are an expert exam predictor. Generate a simulated revision paper in JSON. Always cite evidence. Do not claim it will appear exactly.",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: import_genai7.Type.OBJECT,
+        properties: {
+          paperMode: { type: import_genai7.Type.STRING },
+          questions: {
+            type: import_genai7.Type.ARRAY,
+            items: {
+              type: import_genai7.Type.OBJECT,
+              properties: {
+                questionNo: { type: import_genai7.Type.INTEGER },
+                text: { type: import_genai7.Type.STRING },
+                options: { type: import_genai7.Type.ARRAY, items: { type: import_genai7.Type.STRING } },
+                marks: { type: import_genai7.Type.NUMBER },
+                lesson: { type: import_genai7.Type.STRING },
+                subtopic: { type: import_genai7.Type.STRING }
+              }
+            }
+          },
+          answerKey: { type: import_genai7.Type.ARRAY, items: { type: import_genai7.Type.STRING } },
+          evidenceMap: {
+            type: import_genai7.Type.ARRAY,
+            items: {
+              type: import_genai7.Type.OBJECT,
+              properties: {
+                questionNo: { type: import_genai7.Type.INTEGER },
+                evidence: { type: import_genai7.Type.STRING },
+                confidence: { type: import_genai7.Type.NUMBER }
+              }
+            }
+          },
+          confidenceReport: { type: import_genai7.Type.ARRAY, items: { type: import_genai7.Type.STRING } }
+        },
+        required: ["paperMode", "questions", "answerKey", "evidenceMap", "confidenceReport"]
+      }
+    }
+  });
+  return JSON.parse(response.text || "{}");
+}
+
+// server/routes/examIntelRoutes.ts
+var router = (0, import_express6.Router)();
+router.post("/build-index", async (req, res) => {
+  try {
+    await requireAdmin(req);
+    const results = await buildExamIndex();
+    res.json({ ok: true, results });
+  } catch (err) {
+    res.status(err.message.includes("Unauthorized") ? 401 : 500).json({ error: err.message });
+  }
+});
+router.get("/report", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { subject } = req.query;
+    if (!subject) return res.status(400).json({ error: "Subject is required" });
+    const db = getAdminDb();
+    const reportSnap = await db.collection("exam_pattern_reports").doc(subject).get();
+    if (reportSnap.exists) {
+      res.json(reportSnap.data());
+    } else {
+      res.json({ subject, message: "Report not yet generated for this subject" });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router.get("/probability", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { subject } = req.query;
+    if (!subject) return res.status(400).json({ error: "Subject is required" });
+    const rankings = await rankTopicProbability(subject);
+    res.json(rankings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router.get("/unasked-topics", async (req, res) => {
+  try {
+    await requireUser(req);
+    const { subject } = req.query;
+    if (!subject) return res.status(400).json({ error: "Subject is required" });
+    const data = await detectUnaskedTopics(subject);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router.post("/predicted-paper", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { subject, mode, targetMarks, includeAnswers } = req.body;
+    const paper = await generatePredictedPaper({
+      subject,
+      mode,
+      targetMarks,
+      includeAnswers,
+      studentUid: user.uid
+    });
+    res.json(paper);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var examIntelRoutes_default = router;
+
+// server/routes/studentRoutes.ts
+var import_express7 = require("express");
+init_admin();
+
+// server/ai-core/student/studentDiagnosis.ts
+var import_genai8 = require("@google/genai");
+init_admin();
+init_client();
+var ai5 = getAIClient();
+async function diagnoseStudent(uid, subject) {
+  const db = getAdminDb();
+  const progressSnap = await db.collection("users").doc(uid).collection("progress").doc("data").get();
+  const progressData = progressSnap.exists ? progressSnap.data()?.data?.[subject.toLowerCase()] : null;
+  const mockResultsSnap = await db.collection("users").doc(uid).collection("mock_results").where("subject", "==", subject).orderBy("date", "desc").limit(5).get();
+  const mockResults = mockResultsSnap.docs.map((d) => d.data());
+  const mistakesSnap = await db.collection("users").doc(uid).collection("mistake_notebook").where("subject", "==", subject).limit(50).get();
+  const mistakes = mistakesSnap.docs.map((d) => d.data());
+  const prompt = `
+    Analyze the following student data for subject: ${subject}.
+    
+    Student Progress: ${JSON.stringify(progressData)}
+    Recent Mock Results: ${JSON.stringify(mockResults)}
+    Mistake History: ${JSON.stringify(mistakes)}
+    
+    Identify:
+    - Weak lessons (low completion or low marks)
+    - High-yield weak lessons (important lessons where student is weak)
+    - Urgent repair lessons (lessons with frequent mistakes)
+    - Already strong lessons
+    - Recommended daily focus
+    - Risk reasons
+  `;
+  const response = await ai5.models.generateContent({
+    model: "gemini-3.5-flash",
+    contents: prompt,
+    config: {
+      systemInstruction: "You are an expert A/L education analyst. Provide a detailed diagnosis in JSON format.",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: import_genai8.Type.OBJECT,
+        properties: {
+          subject: { type: import_genai8.Type.STRING },
+          weakLessons: { type: import_genai8.Type.ARRAY, items: { type: import_genai8.Type.STRING } },
+          highYieldWeakLessons: { type: import_genai8.Type.ARRAY, items: { type: import_genai8.Type.STRING } },
+          urgentRepairLessons: { type: import_genai8.Type.ARRAY, items: { type: import_genai8.Type.STRING } },
+          alreadyStrongLessons: { type: import_genai8.Type.ARRAY, items: { type: import_genai8.Type.STRING } },
+          recommendedDailyFocus: { type: import_genai8.Type.ARRAY, items: { type: import_genai8.Type.STRING } },
+          riskReasons: { type: import_genai8.Type.ARRAY, items: { type: import_genai8.Type.STRING } }
+        },
+        required: ["subject", "weakLessons", "highYieldWeakLessons", "urgentRepairLessons", "alreadyStrongLessons", "recommendedDailyFocus", "riskReasons"]
+      }
+    }
+  });
+  return JSON.parse(response.text || "{}");
+}
+
+// server/ai-core/study/warPlan.ts
+var import_genai9 = require("@google/genai");
+init_admin();
+init_client();
+var ai6 = getAIClient();
+async function generateWarPlan(params) {
+  const db = getAdminDb();
+  const progressSnap = await db.collection("users").doc(params.uid).collection("progress").doc("data").get();
+  const progress = progressSnap.exists ? progressSnap.data()?.data : {};
+  const mockResultsSnap = await db.collection("users").doc(params.uid).collection("mock_results").orderBy("date", "desc").limit(10).get();
+  const mocks = mockResultsSnap.docs.map((d) => d.data());
+  const prompt = `
+    Generate a 30-Day A3 Recovery War Plan for a student.
+    
+    Target: ${params.target}
+    Daily Hours: ${params.dailyHours}
+    Subjects: ${params.subjects.join(", ")}
+    Exam Dates: ${JSON.stringify(params.examDates)}
+    
+    Student Progress: ${JSON.stringify(progress)}
+    Mock Performance: ${JSON.stringify(mocks)}
+    
+    Rules:
+    - Daily schedule with morning/afternoon/night tasks.
+    - Prioritize 80% mark-return lessons.
+    - Include MCQ drills, past paper blocks, and mistake repair.
+    - Use forgetting-curve repeats (3-day, 7-day).
+    - Give a realistic forecast and risk assessment.
+  `;
+  const response = await ai6.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: prompt,
+    config: {
+      systemInstruction: "You are a top-tier A/L exam coach. Output a strict but motivating 30-day war plan in JSON.",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: import_genai9.Type.OBJECT,
+        properties: {
+          target: { type: import_genai9.Type.STRING },
+          daysRemaining: { type: import_genai9.Type.INTEGER },
+          currentRisk: { type: import_genai9.Type.STRING, enum: ["High", "Medium", "Low"] },
+          realisticForecast: { type: import_genai9.Type.OBJECT },
+          dailyPlan: {
+            type: import_genai9.Type.ARRAY,
+            items: {
+              type: import_genai9.Type.OBJECT,
+              properties: {
+                day: { type: import_genai9.Type.INTEGER },
+                morning: { type: import_genai9.Type.STRING },
+                afternoon: { type: import_genai9.Type.STRING },
+                night: { type: import_genai9.Type.STRING },
+                mock: { type: import_genai9.Type.STRING },
+                targetScore: { type: import_genai9.Type.INTEGER }
+              }
+            }
+          },
+          weeklyMilestones: { type: import_genai9.Type.ARRAY, items: { type: import_genai9.Type.STRING } },
+          mustDoLessons: { type: import_genai9.Type.ARRAY, items: { type: import_genai9.Type.STRING } },
+          skipOrLowPriorityLessons: { type: import_genai9.Type.ARRAY, items: { type: import_genai9.Type.STRING } },
+          mockTestSchedule: { type: import_genai9.Type.ARRAY, items: { type: import_genai9.Type.STRING } },
+          revisionCycles: { type: import_genai9.Type.ARRAY, items: { type: import_genai9.Type.STRING } },
+          warnings: { type: import_genai9.Type.ARRAY, items: { type: import_genai9.Type.STRING } }
+        },
+        required: ["target", "daysRemaining", "currentRisk", "realisticForecast", "dailyPlan", "weeklyMilestones", "mustDoLessons", "skipOrLowPriorityLessons", "mockTestSchedule", "revisionCycles", "warnings"]
+      }
+    }
+  });
+  const plan = JSON.parse(response.text || "{}");
+  await db.collection("users").doc(params.uid).collection("war_plans").add({
+    ...plan,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString()
+  });
+  return plan;
+}
+
+// server/routes/studentRoutes.ts
+var router2 = (0, import_express7.Router)();
+router2.get("/diagnosis", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { subject } = req.query;
+    if (!subject) return res.status(400).json({ error: "Subject is required" });
+    const diagnosis = await diagnoseStudent(user.uid, subject);
+    res.json(diagnosis);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.post("/war-plan", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { target, days, dailyHours, subjects, examDates } = req.body;
+    const plan = await generateWarPlan({
+      uid: user.uid,
+      target,
+      days,
+      dailyHours,
+      subjects,
+      examDates
+    });
+    res.json(plan);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.post("/mock-result", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const db = getAdminDb();
+    const { subject, date, mcqMarks, structuredMarks, essayMarks, totalMarks, timeTaken, weakLessons } = req.body;
+    const resultRef = await db.collection("users").doc(user.uid).collection("mock_results").add({
+      subject,
+      date: date || (/* @__PURE__ */ new Date()).toISOString(),
+      mcqMarks,
+      structuredMarks,
+      essayMarks,
+      totalMarks,
+      timeTaken,
+      weakLessons,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    const currentMarkEstimate = totalMarks;
+    await db.collection("users").doc(user.uid).collection("forecasts").add({
+      uid: user.uid,
+      currentMarkEstimate,
+      forecast7Day: currentMarkEstimate + 5,
+      forecast30Day: currentMarkEstimate + 15,
+      a3Chance: currentMarkEstimate > 50 ? "Medium" : "Low",
+      mustFix: weakLessons || [],
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    res.json({ ok: true, id: resultRef.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router2.get("/mistakes", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const snapshot = await getAdminDb().collection("users").doc(user.uid).collection("mistake_notebook").orderBy("createdAt", "desc").limit(100).get();
+    const bucket = getAdminBucket();
+    const mistakes = await Promise.all(snapshot.docs.map(async (document) => {
+      const data = document.data();
+      let imageUrl = null;
+      if (data.imageStoragePath) {
+        try {
+          [imageUrl] = await bucket.file(data.imageStoragePath).getSignedUrl({
+            action: "read",
+            expires: Date.now() + 7 * 24 * 60 * 60 * 1e3
+          });
+        } catch (error) {
+          console.warn("[mistakes] Could not sign image", { id: document.id, error: String(error) });
+        }
+      }
+      return { id: document.id, ...data, imageUrl };
+    }));
+    res.json({ ok: true, mistakes });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+router2.post("/mistake", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const db = getAdminDb();
+    const { subject, lesson, questionText, errorText, imageStoragePath, imageMimeType, imageFileName } = req.body || {};
+    const normalizedSubject = String(subject || "").trim().toUpperCase();
+    const normalizedLesson = String(lesson || "").trim().slice(0, 180);
+    const normalizedError = String(errorText || questionText || "").trim().slice(0, 8e3);
+    const normalizedImagePath = String(imageStoragePath || "").replace(/^\/+/, "");
+    if (!["SFT", "ET", "ICT"].includes(normalizedSubject)) {
+      return res.status(400).json({ ok: false, error: "Choose SFT, ET, or ICT." });
+    }
+    if (!normalizedLesson) {
+      return res.status(400).json({ ok: false, error: "Lesson is required." });
+    }
+    if (!normalizedError && !normalizedImagePath) {
+      return res.status(400).json({ ok: false, error: "Add error text or an image." });
+    }
+    if (normalizedImagePath && !normalizedImagePath.startsWith(`users/${user.uid}/images/`)) {
+      return res.status(403).json({ ok: false, error: "Invalid mistake image path." });
+    }
+    const document = await db.collection("users").doc(user.uid).collection("mistake_notebook").add({
+      uid: user.uid,
+      subject: normalizedSubject,
+      lesson: normalizedLesson,
+      errorText: normalizedError,
+      questionText: normalizedError,
+      imageStoragePath: normalizedImagePath || null,
+      imageMimeType: normalizedImagePath ? String(imageMimeType || "image/jpeg").slice(0, 100) : null,
+      imageFileName: normalizedImagePath ? String(imageFileName || "mistake-image").slice(0, 180) : null,
+      retryDate: (/* @__PURE__ */ new Date()).toISOString(),
+      repeatCount: 0,
+      mastered: false,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    res.json({ ok: true, id: document.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var studentRoutes_default = router2;
+
+// server/routes/reportRoutes.ts
+var import_express8 = require("express");
+init_admin();
+var router3 = (0, import_express8.Router)();
+router3.post("/student-weekly", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const db = getAdminDb();
+    res.json({ ok: true, message: "Weekly report generated (Mocked for now)" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+var reportRoutes_default = router3;
+
+// server/tts/routes.ts
+var import_express9 = require("express");
+init_admin();
+var import_crypto2 = __toESM(require("crypto"), 1);
+var ttsRoutes = (0, import_express9.Router)();
+var TTS_MAX_CHARS = parseInt(process.env.TTS_MAX_CHARS || "4500", 10);
+var DAILY_TTS_LIMIT_PER_USER = 20;
+function createTextHash(text, language, voice) {
+  const normalized = text.trim().toLowerCase();
+  return import_crypto2.default.createHash("sha256").update(`${normalized}_${language}_${voice}`).digest("hex");
+}
+ttsRoutes.post("/generate", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { text, languageCode, voice = "auto", format = "mp3" } = req.body;
+    if (process.env.ENABLE_TTS === "false") {
+      return res.status(403).json({ ok: false, code: "TTS_DISABLED", message: "TTS is disabled" });
+    }
+    if (!text || typeof text !== "string") {
+      return res.status(400).json({ ok: false, error: "Text is required" });
+    }
+    const cleanText = text.replace(/```json[\s\S]*?```/g, "").replace(/\[.*?\]/g, "").trim();
+    if (cleanText.length > TTS_MAX_CHARS) {
+      return res.status(400).json({ ok: false, code: "TTS_TEXT_TOO_LONG", message: `Text exceeds ${TTS_MAX_CHARS} characters` });
+    }
+    const lang = languageCode || process.env.TTS_DEFAULT_LANGUAGE || "si-LK";
+    const adminDb = getAdminDb();
+    const textHash = createTextHash(cleanText, lang, voice);
+    const cacheRef = adminDb.collection("tts_cache").doc(textHash);
+    if (process.env.ENABLE_TTS_CACHE === "true") {
+      const cacheDoc = await cacheRef.get();
+      if (cacheDoc.exists) {
+        const data = cacheDoc.data();
+        if (data?.storagePath) {
+          return res.json({ ok: true, cached: true, storagePath: data.storagePath, provider: data.provider, voice: data.voice });
+        }
+      }
+    }
+    const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+    const usageRef = adminDb.collection("users").doc(user.uid).collection("usage").doc(`tts_${today}`);
+    let dailyUsage = 0;
+    if (process.env.ENABLE_TTS_LIMITS === "true") {
+      const usageDoc = await usageRef.get();
+      dailyUsage = usageDoc.exists ? usageDoc.data()?.count || 0 : 0;
+      if (dailyUsage >= DAILY_TTS_LIMIT_PER_USER) {
+        return res.status(429).json({ ok: false, code: "TTS_DAILY_LIMIT", message: "Daily TTS limit reached." });
+      }
+    }
+    const { generateGoogleTts: generateGoogleTts2 } = await Promise.resolve().then(() => (init_googleTts(), googleTts_exports));
+    const audioData = await generateGoogleTts2({ text: cleanText, languageCode: lang, voice });
+    const requestId = import_crypto2.default.randomUUID();
+    const storagePath = `users/${user.uid}/tts/${requestId}/voice.mp3`;
+    const storageBucket = getAdminBucket();
+    const file = storageBucket.file(storagePath);
+    await file.save(audioData.buffer, {
+      contentType: "audio/mpeg"
+    });
+    const metadata = {
+      id: requestId,
+      ownerUid: user.uid,
+      ownerEmail: user.email || "",
+      textHash,
+      language: lang,
+      voice: audioData.voiceName || voice,
+      provider: "google_cloud",
+      storagePath,
+      contentType: "audio/mpeg",
+      chars: cleanText.length,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await adminDb.collection("tts_outputs").doc(requestId).set(metadata);
+    if (process.env.ENABLE_TTS_CACHE === "true") {
+      await cacheRef.set({ storagePath, provider: "google_cloud", voice: audioData.voiceName || voice, createdAt: (/* @__PURE__ */ new Date()).toISOString() });
+    }
+    if (process.env.ENABLE_TTS_LIMITS === "true") {
+      await usageRef.set({ count: dailyUsage + 1 }, { merge: true });
+    }
+    let audioUrl = "";
+    try {
+      const [signedUrl] = await file.getSignedUrl({ action: "read", expires: Date.now() + 1e3 * 60 * 60 * 24 });
+      audioUrl = signedUrl;
+    } catch (e) {
+    }
+    res.json({
+      ok: true,
+      audioUrl,
+      storagePath,
+      chars: cleanText.length,
+      provider: "google_cloud",
+      voice: audioData.voiceName || voice
+    });
+  } catch (error) {
+    console.error("TTS generation error:", error);
+    res.status(500).json({
+      ok: false,
+      code: error.code || "TTS_FAILED",
+      message: error.message,
+      providerError: error.providerError
+    });
+  }
+});
+
+// server/voice/routes.ts
+var import_express10 = require("express");
+init_admin();
+
+// server/ai/pdfIntentDetector.ts
+function detectPdfIntent(text) {
+  const normalized = text.toLowerCase();
+  const pdfKeywords = [
+    "pdf",
+    "paper",
+    "\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA",
+    "prashna",
+    "question",
+    "marking",
+    "scheme",
+    "answer sheet",
+    "page",
+    "\u0DB4\u0DD2\u0DA7\u0DD4\u0DC0",
+    "upload",
+    "\u0DB8\u0DDA file \u0D91\u0D9A",
+    "\u0DB8\u0DDA pdf \u0D91\u0D9A",
+    "source",
+    "q1",
+    "q2",
+    "mcq",
+    "essay",
+    "structured"
+  ];
+  const isPdfIntent = pdfKeywords.some((kw) => normalized.includes(kw));
+  let subject = void 0;
+  if (normalized.includes("sft") || normalized.includes("science for technology")) subject = "SFT";
+  if (normalized.includes("et") || normalized.includes("engineering technology")) subject = "ET";
+  if (normalized.includes("ict") || normalized.includes("information technology")) subject = "ICT";
+  let questionType = "unknown";
+  if (normalized.includes("mcq")) questionType = "mcq";
+  else if (normalized.includes("structured")) questionType = "structured";
+  else if (normalized.includes("essay")) questionType = "essay";
+  const yearMatch = normalized.match(/\b(201\d|202\d)\b/);
+  const year = yearMatch ? yearMatch[1] : void 0;
+  const qMatch = normalized.match(/(?:q|question|ප්‍රශ්න|prashna)\s*(?:no|number|අංක)?\s*(\d+)/i);
+  const questionNo = qMatch ? qMatch[1] : void 0;
+  return {
+    isPdfIntent,
+    questionNo,
+    questionType,
+    subject,
+    year,
+    needsSourceSelection: isPdfIntent && !year && !subject
+    // If they just say "this pdf" it needs source
+  };
+}
+
+// server/voice/routes.ts
+init_retrieve();
+init_modelRouter();
+var import_crypto3 = __toESM(require("crypto"), 1);
+var voiceRoutes = (0, import_express10.Router)();
+voiceRoutes.post("/live-turn", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { transcript, chatId, activeSubject, activeSourceId, recentAttachmentIds, usePdfContext } = req.body;
+    if (!transcript) {
+      return res.status(400).json({ ok: false, message: "Transcript is required" });
+    }
+    const intent = detectPdfIntent(transcript);
+    let answerText = "";
+    let mode = "live_normal_answer";
+    let usedSources = [];
+    let promptContext = "";
+    const db = getAdminDb();
+    if (intent.isPdfIntent && usePdfContext) {
+      mode = "live_pdf_answer";
+      let sourceIdToUse = activeSourceId;
+      if (!sourceIdToUse && recentAttachmentIds && recentAttachmentIds.length > 0) {
+        sourceIdToUse = recentAttachmentIds[0];
+      }
+      if (!sourceIdToUse && intent.needsSourceSelection) {
+        return res.json({
+          ok: true,
+          mode: "live_pdf_answer",
+          transcript,
+          answerText: "\u0D9A\u0DBB\u0DD4\u0DAB\u0DCF\u0D9A\u0DBB \u0D94\u0DB6\u0DA7 \u0D85\u0DC0\u0DC1\u0DCA\u200D\u0DBA PDF \u0D91\u0D9A select \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0DC4\u0DDD upload \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.",
+          sources: []
+        });
+      }
+      if (sourceIdToUse) {
+        const retrieveResult = await retrieveRelevantKnowledge({
+          query: transcript,
+          subject: intent.subject || activeSubject || "general"
+        });
+        const activeChunks = retrieveResult.chunks || [];
+        if (activeChunks.length > 0) {
+          promptContext = "Here is the PDF context:\n" + activeChunks.map((c) => c.text).join("\n\n");
+          usedSources = activeChunks.map((c) => ({
+            sourceId: c.sourceId || sourceIdToUse,
+            title: c.title || "Uploaded PDF",
+            pageNumber: c.metadata?.pageNumber || c.page,
+            confidence: c.similarity || 1,
+            usedInAnswer: true
+          }));
+        } else {
+          promptContext = "No relevant context found in the active PDF.";
+        }
+      }
+    }
+    let systemInstruction = "You are Clora X, a helpful AI tutor for Sri Lankan students. Answer concisely and conversationally in Sinhala.";
+    let aiTask = "normal_chat";
+    if (mode === "live_pdf_answer") {
+      systemInstruction += " Use the provided PDF context to answer the user's question accurately. Do NOT guess if you are unsure based on the provided PDF context. If the evidence is missing, state 'PDF \u0D91\u0D9A\u0DD9\u0DB1\u0DCA verify \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0DB6\u0DD0\u0DBB\u0DD2 \u0DB1\u0DD2\u0DC3\u0DCF answer guess \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1\u0DD9 \u0DB1\u0DD0\u0DC4\u0DD0. PDF \u0D91\u0D9A select \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0DC4\u0DDD reindex \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.'";
+      aiTask = "direct_pdf_solve";
+    }
+    const aiRes = await callGeminiWithFallback(aiTask, {
+      model: "gemini-2.5-flash",
+      contents: promptContext ? `Context:
+${promptContext}
+
+Question: ${transcript}` : transcript,
+      config: {
+        systemInstruction,
+        temperature: 0.3
+      }
+    });
+    answerText = aiRes.result.text || "\u0DB8\u0DA7 \u0DAD\u0DDA\u0DBB\u0DD4\u0DAB\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0. \u0D9A\u0DBB\u0DD4\u0DAB\u0DCF\u0D9A\u0DBB \u0DB1\u0DD0\u0DC0\u0DAD \u0D9A\u0DD2\u0DBA\u0DB1\u0DCA\u0DB1.";
+    const { generateGoogleTts: generateGoogleTts2 } = await Promise.resolve().then(() => (init_googleTts(), googleTts_exports));
+    const { getAdminBucket: getAdminBucket2 } = await Promise.resolve().then(() => (init_admin(), admin_exports));
+    const storageBucket = getAdminBucket2();
+    const cleanText = answerText.replace(/```json[\s\S]*?```/g, "").replace(/\[.*?\]/g, "").trim().substring(0, 4500);
+    const audioData = await generateGoogleTts2({ text: cleanText, languageCode: "si-LK", voice: "auto" });
+    const requestId = import_crypto3.default.randomUUID();
+    const storagePath = `users/${user.uid}/tts/${requestId}/voice.mp3`;
+    const file = storageBucket.file(storagePath);
+    await file.save(audioData.buffer, { contentType: "audio/mpeg" });
+    let ttsAudioUrl = "";
+    try {
+      const [signedUrl] = await file.getSignedUrl({ action: "read", expires: Date.now() + 1e3 * 60 * 60 * 24 });
+      ttsAudioUrl = signedUrl;
+    } catch (e) {
+    }
+    res.json({
+      ok: true,
+      mode,
+      transcript,
+      answerText,
+      ttsStoragePath: storagePath,
+      ttsAudioUrl,
+      sources: usedSources
+    });
+  } catch (err) {
+    console.error("Live turn error:", err);
+    res.status(500).json({ ok: false, message: err.message });
+  }
+});
+
+// server/video/routes.ts
+var import_node_crypto3 = __toESM(require("node:crypto"), 1);
+var import_express11 = __toESM(require("express"), 1);
+init_admin();
+
+// server/video/videoService.ts
+var import_node_crypto2 = __toESM(require("node:crypto"), 1);
+var import_app_check = require("firebase-admin/app-check");
+init_admin();
+var QUALITY_LADDER = [
+  { key: "144p", width: 256, height: 144, bitrate: 18e4 },
+  { key: "240p", width: 426, height: 240, bitrate: 3e5 },
+  { key: "360p", width: 640, height: 360, bitrate: 7e5 },
+  { key: "480p", width: 854, height: 480, bitrate: 12e5 },
+  { key: "720p", width: 1280, height: 720, bitrate: 25e5 },
+  { key: "1080p", width: 1920, height: 1080, bitrate: 5e6 },
+  { key: "1440p", width: 2560, height: 1440, bitrate: 9e6 },
+  { key: "2160p", width: 3840, height: 2160, bitrate: 16e6 }
+];
+function safeVideoFileName(value) {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/_+/g, "_").slice(0, 120);
+}
+async function verifyVideoAppCheck(req) {
+  if (!env.VIDEO_REQUIRE_APP_CHECK) return;
+  const token = req.header("X-Firebase-AppCheck");
+  if (!token) throw new Error("APP_CHECK_REQUIRED");
+  const app2 = getAdminApp();
+  if (!app2) throw new Error("APP_CHECK_UNAVAILABLE");
+  await (0, import_app_check.getAppCheck)(app2).verifyToken(token);
+}
+async function validateUploadedVideo(video) {
+  const bucket = getAdminBucketByName(video.inputBucket);
+  const file = bucket.file(video.inputObjectPath);
+  const [exists] = await file.exists();
+  if (!exists) throw new Error("VIDEO_SOURCE_MISSING");
+  const [metadata] = await file.getMetadata();
+  const size = Number(metadata.size || 0);
+  const maxBytes = env.VIDEO_UPLOAD_MAX_MB * 1024 * 1024;
+  if (size <= 0 || size > maxBytes) throw new Error("VIDEO_SIZE_INVALID");
+  const [head] = await file.download({ start: 0, end: 15 });
+  const isIsoMedia = head.length >= 12 && head.subarray(4, 8).toString("ascii") === "ftyp";
+  const isWebm = head.length >= 4 && head.subarray(0, 4).equals(Buffer.from([26, 69, 223, 163]));
+  if (!isIsoMedia && !isWebm) throw new Error("VIDEO_CONTAINER_UNSUPPORTED");
+  return {
+    sizeBytes: size,
+    generation: metadata.generation,
+    contentType: metadata.contentType || video.mimeType
+  };
+}
+function selectQualityProfiles(video) {
+  const height = video.sourceHeight || 720;
+  const requested = new Set(video.qualityProfiles?.length ? video.qualityProfiles : ["144p", "240p", "360p", "480p", "720p", "1080p", "1440p"]);
+  return QUALITY_LADDER.filter((quality) => {
+    if (!requested.has(quality.key)) return false;
+    if (quality.height > height) return false;
+    if (quality.key === "2160p" && !env.ENABLE_4K) return false;
+    return true;
+  });
+}
+async function startTranscode(video) {
+  if (!env.ENABLE_VIDEO_TRANSCODING) {
+    return { enabled: false, jobName: null };
+  }
+  const qualities = selectQualityProfiles(video);
+  if (qualities.length === 0) throw new Error("VIDEO_NO_VALID_RENDITIONS");
+  const audioKey = "audio-main";
+  const elementaryStreams = qualities.map((quality) => ({
+    key: `video-${quality.key}`,
+    videoStream: {
+      h264: {
+        widthPixels: quality.width,
+        heightPixels: quality.height,
+        bitrateBps: quality.bitrate,
+        frameRate: 30,
+        pixelFormat: "yuv420p",
+        rateControlMode: "vbr"
+      }
+    }
+  }));
+  elementaryStreams.push({
+    key: audioKey,
+    audioStream: { codec: "aac", bitrateBps: 128e3, channelCount: 2, channelLayout: ["fl", "fr"] }
+  });
+  const muxStreams = qualities.map((quality) => ({
+    key: `hls-${quality.key}`,
+    container: "ts",
+    elementaryStreams: [`video-${quality.key}`, audioKey],
+    segmentSettings: { segmentDuration: "6s" }
+  }));
+  const project = env.GOOGLE_CLOUD_PROJECT;
+  const location = env.VIDEO_TRANSCODER_LOCATION;
+  const endpoint = `https://transcoder.googleapis.com/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(location)}/jobs`;
+  const token = await getGoogleAccessToken();
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      inputUri: `gs://${video.inputBucket}/${video.inputObjectPath}`,
+      outputUri: `gs://${env.VIDEO_OUTPUT_BUCKET}/${video.hlsPrefix}`,
+      config: {
+        elementaryStreams,
+        muxStreams,
+        manifests: [{
+          fileName: "master.m3u8",
+          type: "HLS",
+          muxStreams: muxStreams.map((stream) => stream.key)
+        }]
+      },
+      labels: { video_id: video.id, source_id: video.sourceId, version: String(video.version) }
+    })
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || !payload?.name) {
+    throw new Error(payload?.error?.message || `TRANSCODER_CREATE_FAILED_${response.status}`);
+  }
+  return { enabled: true, jobName: payload.name };
+}
+async function refreshTranscodeStatus(video) {
+  if (!env.ENABLE_VIDEO_TRANSCODING && video.status === "uploaded") {
+    const updates2 = {
+      status: "ready",
+      isPublished: true,
+      allowPlayback: true,
+      playbackMode: "direct",
+      publishedAt: video.updatedAt || (/* @__PURE__ */ new Date()).toISOString(),
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await getAdminDb().collection("videos").doc(video.id).set(updates2, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "ready", updatedAt: updates2.updatedAt }, { merge: true });
+    return { ...video, ...updates2 };
+  }
+  if (!video.transcoderJobName || !["queued", "transcoding"].includes(video.status)) return video;
+  const queuedAt = Date.parse(video.updatedAt || video.createdAt || "");
+  const fallbackToDirect = async (reason) => {
+    const updates2 = {
+      status: "ready",
+      isPublished: true,
+      allowPlayback: true,
+      playbackMode: "direct",
+      transcoderErrorCode: reason,
+      publishedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await getAdminDb().collection("videos").doc(video.id).set(updates2, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "ready", updatedAt: updates2.updatedAt }, { merge: true });
+    return { ...video, ...updates2 };
+  };
+  if (Number.isFinite(queuedAt) && Date.now() - queuedAt > 30 * 60 * 1e3) {
+    return fallbackToDirect("TRANSCODER_TIMEOUT_DIRECT_FALLBACK");
+  }
+  const token = await getGoogleAccessToken();
+  const response = await fetch(`https://transcoder.googleapis.com/v1/${video.transcoderJobName}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    return Number.isFinite(queuedAt) && Date.now() - queuedAt > 5 * 60 * 1e3 ? fallbackToDirect(`TRANSCODER_STATUS_${response.status}`) : video;
+  }
+  const job = await response.json();
+  const state = String(job.state || "").toUpperCase();
+  let status = video.status;
+  if (state === "RUNNING") status = "transcoding";
+  if (state === "SUCCEEDED") status = "ready";
+  if (state === "FAILED") return fallbackToDirect("TRANSCODER_FAILED_DIRECT_FALLBACK");
+  if (status === video.status) return video;
+  const updates = {
+    status,
+    allowPlayback: status === "ready" ? video.allowPlayback : false,
+    transcoderErrorCode: job.error?.code ? String(job.error.code) : void 0,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await getAdminDb().collection("videos").doc(video.id).set(updates, { merge: true });
+  await getAdminDb().collection("sources").doc(video.sourceId).set({
+    processingStatus: status === "ready" ? "ready" : status,
+    lastErrorCode: updates.transcoderErrorCode || null,
+    updatedAt: updates.updatedAt
+  }, { merge: true });
+  return { ...video, ...updates };
+}
+function base64Url(input) {
+  return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+function decodeSigningKey(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = normalized.length % 4 ? "=".repeat(4 - normalized.length % 4) : "";
+  return Buffer.from(normalized + padding, "base64");
+}
+function createSignedPlaybackCookie(video) {
+  if (!env.VIDEO_CDN_BASE_URL || !env.VIDEO_CDN_KEY_NAME || !env.VIDEO_CDN_SIGNING_KEY) {
+    throw new Error("VIDEO_CDN_NOT_CONFIGURED");
+  }
+  const prefix = `${env.VIDEO_CDN_BASE_URL}/videos/${video.id}/versions/${video.version}/hls/`;
+  const expires = Math.floor(Date.now() / 1e3) + env.VIDEO_COOKIE_TTL_SECONDS;
+  const policy = `URLPrefix=${base64Url(prefix)}:Expires=${expires}:KeyName=${env.VIDEO_CDN_KEY_NAME}`;
+  const signature = import_node_crypto2.default.createHmac("sha1", decodeSigningKey(env.VIDEO_CDN_SIGNING_KEY)).update(policy).digest();
+  return {
+    cookieValue: `${policy}:Signature=${base64Url(signature)}`,
+    manifestUrl: `${prefix}master.m3u8`,
+    path: `/videos/${video.id}/versions/${video.version}/hls/`,
+    expiresAt: new Date(expires * 1e3).toISOString()
+  };
+}
+async function createDirectPlaybackUrl(video) {
+  const bucket = getAdminBucketByName(video.inputBucket);
+  const expiresAtMs = Date.now() + env.VIDEO_SESSION_TTL_SECONDS * 1e3;
+  const [url] = await bucket.file(video.inputObjectPath).getSignedUrl({
+    action: "read",
+    expires: expiresAtMs,
+    responseDisposition: "inline",
+    responseType: video.mimeType || "video/mp4"
+  });
+  return { url, expiresAt: new Date(expiresAtMs).toISOString() };
+}
+function canUserPlayVideo(video, user) {
+  if (user.admin) return true;
+  if (!video.isPublished || !video.allowPlayback || video.status !== "ready") return false;
+  if (video.allowedUserIds?.includes(user.uid)) return true;
+  if (video.allowedRoles?.some((role) => user.roles?.includes(role))) return true;
+  if (video.visibility === "public") return true;
+  return ["class", "institution"].includes(video.visibility) && !video.allowedUserIds?.length && !video.allowedRoles?.length;
+}
+
+// server/video/routes.ts
+init_chatSanitizer();
+var videoRoutes = import_express11.default.Router();
+var VIDEO_MIME_TYPES = /* @__PURE__ */ new Set(["video/mp4", "video/quicktime", "video/webm", "application/octet-stream"]);
+function publicVideo(video) {
+  const { inputBucket, inputObjectPath, transcoderJobName, ...safe } = video;
+  return safe;
+}
+function normalizeVideoFilter(value) {
+  return String(value || "").trim().toLocaleLowerCase();
+}
+function matchesVideoFilter(video, subject, lesson) {
+  const requestedSubject = normalizeVideoFilter(subject);
+  const requestedLesson = normalizeVideoFilter(lesson);
+  return (!requestedSubject || normalizeVideoFilter(video.subject) === requestedSubject) && (!requestedLesson || normalizeVideoFilter(video.lesson) === requestedLesson);
+}
+function setPlaybackCookie(res, signed) {
+  res.cookie("Cloud-CDN-Cookie", signed.cookieValue, {
+    secure: true,
+    httpOnly: true,
+    sameSite: "none",
+    domain: env.VIDEO_COOKIE_DOMAIN || void 0,
+    path: signed.path,
+    maxAge: env.VIDEO_COOKIE_TTL_SECONDS * 1e3
+  });
+}
+async function loadVideo(videoId) {
+  const snapshot = await getAdminDb().collection("videos").doc(videoId).get();
+  if (!snapshot.exists) throw new Error("VIDEO_NOT_FOUND");
+  return { id: snapshot.id, ...snapshot.data() };
+}
+function requireVideoEnabled() {
+  if (!env.ENABLE_VIDEO) throw new Error("VIDEO_FEATURE_DISABLED");
+}
+videoRoutes.use((_req, res, next) => {
+  if (!env.ENABLE_VIDEO) return res.status(404).json({ ok: false, code: "VIDEO_FEATURE_DISABLED" });
+  next();
+});
+videoRoutes.post("/admin/videos", async (req, res) => {
+  try {
+    requireVideoEnabled();
+    await verifyVideoAppCheck(req);
+    const admin = await requireAdmin(req);
+    const {
+      title,
+      description,
+      subject,
+      lesson,
+      concept,
+      visibility = "private",
+      originalFileName,
+      mimeType,
+      sizeBytes,
+      width,
+      height,
+      durationMs,
+      qualityProfiles
+    } = req.body || {};
+    if (!title || !originalFileName || !mimeType || !Number.isFinite(Number(sizeBytes))) {
+      return res.status(400).json({ ok: false, code: "VIDEO_METADATA_INVALID", message: "Missing video metadata." });
+    }
+    if (!VIDEO_MIME_TYPES.has(mimeType)) {
+      return res.status(415).json({ ok: false, code: "VIDEO_MIME_UNSUPPORTED", message: "Use MP4, MOV, or WebM video." });
+    }
+    if (Number(sizeBytes) > env.VIDEO_UPLOAD_MAX_MB * 1024 * 1024) {
+      return res.status(413).json({ ok: false, code: "VIDEO_TOO_LARGE", message: `Maximum video size is ${env.VIDEO_UPLOAD_MAX_MB} MB.` });
+    }
+    const db = getAdminDb();
+    const videoRef = db.collection("videos").doc();
+    const sourceRef = db.collection("sources").doc();
+    const version = 1;
+    const inputObjectPath = `videos/${videoRef.id}/versions/${version}/source/${safeVideoFileName(originalFileName)}`;
+    const hlsPrefix = `videos/${videoRef.id}/versions/${version}/hls/`;
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const selectedQualities = Array.isArray(qualityProfiles) && qualityProfiles.length ? qualityProfiles.map(String) : ["144p", "240p", "360p", "480p", "720p", "1080p", "1440p"];
+    const video = {
+      id: videoRef.id,
+      sourceId: sourceRef.id,
+      title: String(title).trim().slice(0, 180),
+      description: description ? String(description).trim().slice(0, 2e3) : void 0,
+      subject: subject ? String(subject).toUpperCase().slice(0, 20) : void 0,
+      lesson: lesson ? String(lesson).slice(0, 180) : void 0,
+      concept: concept ? String(concept).slice(0, 180) : void 0,
+      status: "draft",
+      visibility: ["private", "class", "institution", "public"].includes(visibility) ? visibility : "private",
+      allowedRoles: [],
+      allowedUserIds: [],
+      inputBucket: env.VIDEO_INPUT_BUCKET,
+      inputObjectPath,
+      hlsPrefix,
+      masterManifestPath: `${hlsPrefix}master.m3u8`,
+      sourceSizeBytes: Number(sizeBytes),
+      sourceWidth: Number(width) || void 0,
+      sourceHeight: Number(height) || void 0,
+      durationMs: Number(durationMs) || void 0,
+      mimeType,
+      createdBy: admin.uid,
+      createdAt: now,
+      updatedAt: now,
+      isPublished: false,
+      allowPlayback: false,
+      watermarkEnabled: true,
+      maxConcurrentSessions: 1,
+      qualityProfiles: selectedQualities,
+      version
+    };
+    await db.runTransaction(async (tx) => {
+      tx.create(videoRef, removeUndefinedDeep(video));
+      tx.create(sourceRef, removeUndefinedDeep({
+        sourceId: sourceRef.id,
+        ownerUid: admin.uid,
+        notebookIds: [],
+        visibility: video.visibility,
+        displayTitle: video.title,
+        originalFileName,
+        normalizedName: safeVideoFileName(originalFileName).toLowerCase(),
+        normalizedStem: safeVideoFileName(originalFileName).replace(/\.[^.]+$/, "").toLowerCase(),
+        aliases: [video.title],
+        sha256: "0".repeat(64),
+        sourceVersion: version,
+        processingVersion: 1,
+        mimeType,
+        mediaKind: "video",
+        resourceRole: "video",
+        sizeBytes: Number(sizeBytes),
+        durationMs: video.durationMs,
+        subject: video.subject,
+        storagePath: inputObjectPath,
+        hlsPrefix,
+        masterManifestPath: video.masterManifestPath,
+        processingStatus: "uploaded",
+        chunkCount: 0,
+        createdAt: now,
+        updatedAt: now
+      }));
+    });
+    res.status(201).json({ ok: true, videoId: video.id, sourceId: video.sourceId, version });
+  } catch (error) {
+    const status = String(error?.message).includes("Forbidden") ? 403 : 500;
+    res.status(status).json({ ok: false, code: "VIDEO_CREATE_FAILED", message: error.message });
+  }
+});
+videoRoutes.post("/admin/videos/:videoId/create-upload", async (req, res) => {
+  try {
+    requireVideoEnabled();
+    await verifyVideoAppCheck(req);
+    const admin = await requireAdmin(req);
+    const video = await loadVideo(req.params.videoId);
+    if (video.createdBy !== admin.uid && !admin.admin) throw new Error("VIDEO_FORBIDDEN");
+    if (!["draft", "uploading", "failed"].includes(video.status)) throw new Error("VIDEO_UPLOAD_STATE_INVALID");
+    if (String(req.body?.mimeType || video.mimeType) !== video.mimeType || Number(req.body?.sizeBytes) !== video.sourceSizeBytes) {
+      throw new Error("VIDEO_UPLOAD_METADATA_MISMATCH");
+    }
+    const bucket = getAdminBucketByName(video.inputBucket);
+    const file = bucket.file(video.inputObjectPath);
+    const origin = req.header("origin") || void 0;
+    const [uploadUrl] = await file.createResumableUpload({
+      origin,
+      metadata: {
+        contentType: video.mimeType,
+        metadata: {
+          ownerUid: admin.uid,
+          videoId: video.id,
+          sourceId: video.sourceId,
+          sourceVersion: String(video.version)
+        }
+      },
+      preconditionOpts: { ifGenerationMatch: 0 }
+    });
+    await getAdminDb().collection("videos").doc(video.id).set({ status: "uploading", updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, { merge: true });
+    res.json({
+      ok: true,
+      uploadUrl,
+      storagePath: video.inputObjectPath,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1e3).toISOString()
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, code: "VIDEO_UPLOAD_SESSION_FAILED", message: error.message });
+  }
+});
+videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
+  try {
+    requireVideoEnabled();
+    await verifyVideoAppCheck(req);
+    await requireAdmin(req);
+    const video = await loadVideo(req.params.videoId);
+    if (["queued", "transcoding", "ready"].includes(video.status)) {
+      return res.json({
+        ok: true,
+        videoId: video.id,
+        sourceId: video.sourceId,
+        status: video.status,
+        transcodeQueued: video.status !== "ready",
+        idempotent: true
+      });
+    }
+    if (!["uploading", "uploaded", "failed"].includes(video.status)) throw new Error("VIDEO_FINALIZE_STATE_INVALID");
+    const validated = await validateUploadedVideo(video);
+    if (validated.sizeBytes !== video.sourceSizeBytes) throw new Error("VIDEO_SIZE_MISMATCH");
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    await getAdminDb().collection("videos").doc(video.id).set({
+      status: "uploaded",
+      uploadGeneration: validated.generation,
+      sourceSizeBytes: validated.sizeBytes,
+      updatedAt: now
+    }, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({
+      processingStatus: "uploaded",
+      sizeBytes: validated.sizeBytes,
+      updatedAt: now
+    }, { merge: true });
+    let transcode = { enabled: false, jobName: null };
+    try {
+      transcode = await startTranscode({ ...video, status: "uploaded", sourceSizeBytes: validated.sizeBytes });
+      if (transcode.enabled && transcode.jobName) {
+        await getAdminDb().collection("videos").doc(video.id).set({
+          status: "queued",
+          transcoderJobName: transcode.jobName,
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        }, { merge: true });
+        await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "queued" }, { merge: true });
+      }
+    } catch (error) {
+      console.warn("Video transcoder unavailable; using original quality playback.", error?.message || error);
+      transcode = { enabled: false, jobName: null };
+    }
+    const fallbackReady = !transcode.enabled;
+    if (fallbackReady) {
+      await getAdminDb().collection("videos").doc(video.id).set({
+        status: "ready",
+        isPublished: true,
+        allowPlayback: true,
+        playbackMode: "direct",
+        publishedAt: now,
+        updatedAt: now
+      }, { merge: true });
+      await getAdminDb().collection("sources").doc(video.sourceId).set({
+        processingStatus: "ready",
+        updatedAt: now
+      }, { merge: true });
+    } else {
+      await getAdminDb().collection("videos").doc(video.id).set({
+        isPublished: true,
+        allowPlayback: true,
+        playbackMode: "hls",
+        updatedAt: now
+      }, { merge: true });
+    }
+    res.json({
+      ok: true,
+      videoId: video.id,
+      sourceId: video.sourceId,
+      status: transcode.enabled ? "queued" : "ready",
+      transcodeQueued: transcode.enabled,
+      playbackMode: transcode.enabled ? "hls" : "direct"
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, code: "VIDEO_FINALIZE_FAILED", message: error.message });
+  }
+});
+videoRoutes.post("/admin/videos/:videoId/transcode", async (req, res) => {
+  try {
+    await verifyVideoAppCheck(req);
+    await requireAdmin(req);
+    const video = await loadVideo(req.params.videoId);
+    if (!["uploaded", "failed"].includes(video.status)) throw new Error("VIDEO_TRANSCODE_STATE_INVALID");
+    const result = await startTranscode(video);
+    if (!result.enabled || !result.jobName) throw new Error("VIDEO_TRANSCODING_DISABLED");
+    await getAdminDb().collection("videos").doc(video.id).set({ status: "queued", transcoderJobName: result.jobName, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, { merge: true });
+    res.json({ ok: true, status: "queued" });
+  } catch (error) {
+    res.status(400).json({ ok: false, code: "VIDEO_TRANSCODE_FAILED", message: error.message });
+  }
+});
+videoRoutes.post("/admin/videos/:videoId/reprocess", async (req, res) => {
+  try {
+    await verifyVideoAppCheck(req);
+    await requireAdmin(req);
+    const current = await loadVideo(req.params.videoId);
+    if (!["ready", "failed", "uploaded", "unpublished"].includes(current.status)) throw new Error("VIDEO_REPROCESS_STATE_INVALID");
+    const nextVersion = current.version + 1;
+    const video = {
+      ...current,
+      version: nextVersion,
+      hlsPrefix: `videos/${current.id}/versions/${nextVersion}/hls/`,
+      masterManifestPath: `videos/${current.id}/versions/${nextVersion}/hls/master.m3u8`
+    };
+    const result = await startTranscode(video);
+    if (!result.enabled || !result.jobName) throw new Error("VIDEO_TRANSCODING_DISABLED");
+    await getAdminDb().collection("videos").doc(video.id).set({
+      version: nextVersion,
+      hlsPrefix: video.hlsPrefix,
+      masterManifestPath: video.masterManifestPath,
+      status: "queued",
+      isPublished: false,
+      allowPlayback: false,
+      transcoderJobName: result.jobName,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    }, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({
+      sourceVersion: nextVersion,
+      processingVersion: Number(current.processingVersion || 1) + 1,
+      processingStatus: "queued",
+      hlsPrefix: video.hlsPrefix,
+      masterManifestPath: video.masterManifestPath,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    }, { merge: true });
+    res.json({ ok: true, status: "queued", version: nextVersion });
+  } catch (error) {
+    res.status(400).json({ ok: false, code: "VIDEO_REPROCESS_FAILED", message: error.message });
+  }
+});
+videoRoutes.patch("/admin/videos/:videoId", async (req, res) => {
+  try {
+    await verifyVideoAppCheck(req);
+    await requireAdmin(req);
+    const allowed = ["title", "description", "subject", "lesson", "concept", "visibility", "allowedRoles", "allowedUserIds", "watermarkEnabled", "maxConcurrentSessions", "qualityProfiles"];
+    const updates = { updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    for (const key of allowed) if (req.body?.[key] !== void 0) updates[key] = req.body[key];
+    await getAdminDb().collection("videos").doc(req.params.videoId).set(updates, { merge: true });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ ok: false, code: "VIDEO_UPDATE_FAILED", message: error.message });
+  }
+});
+for (const action of ["publish", "unpublish"]) {
+  videoRoutes.post(`/admin/videos/:videoId/${action}`, async (req, res) => {
+    try {
+      await verifyVideoAppCheck(req);
+      await requireAdmin(req);
+      const video = await loadVideo(req.params.videoId);
+      if (action === "publish" && video.status !== "ready") throw new Error("VIDEO_NOT_READY");
+      await getAdminDb().collection("videos").doc(video.id).set({
+        isPublished: action === "publish",
+        allowPlayback: action === "publish",
+        status: action === "unpublish" ? "unpublished" : "ready",
+        publishedAt: action === "publish" ? (/* @__PURE__ */ new Date()).toISOString() : null,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      }, { merge: true });
+      res.json({ ok: true, published: action === "publish" });
+    } catch (error) {
+      res.status(400).json({ ok: false, code: `VIDEO_${action.toUpperCase()}_FAILED`, message: error.message });
+    }
+  });
+}
+videoRoutes.delete("/admin/videos/:videoId", async (req, res) => {
+  try {
+    await verifyVideoAppCheck(req);
+    await requireAdmin(req);
+    const video = await loadVideo(req.params.videoId);
+    await getAdminDb().collection("videos").doc(video.id).set({ status: "archived", isPublished: false, allowPlayback: false, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "deleted", deletedAt: (/* @__PURE__ */ new Date()).toISOString() }, { merge: true });
+    res.json({ ok: true, archived: true });
+  } catch (error) {
+    res.status(400).json({ ok: false, code: "VIDEO_DELETE_FAILED", message: error.message });
+  }
+});
+videoRoutes.get("/admin/videos", async (req, res) => {
+  try {
+    await verifyVideoAppCheck(req);
+    await requireAdmin(req);
+    const snapshot = await getAdminDb().collection("videos").orderBy("createdAt", "desc").limit(100).get();
+    const candidates = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((video) => video.status !== "archived").filter((video) => matchesVideoFilter(video, req.query.subject, req.query.lesson));
+    const videos = (await Promise.all(candidates.map((video) => refreshTranscodeStatus(video)))).map(publicVideo);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json({ ok: true, videos });
+  } catch (error) {
+    res.status(400).json({ ok: false, code: "VIDEOS_LIST_FAILED", message: error.message });
+  }
+});
+videoRoutes.get("/admin/videos/:videoId", async (req, res) => {
+  try {
+    await verifyVideoAppCheck(req);
+    await requireAdmin(req);
+    const video = await refreshTranscodeStatus(await loadVideo(req.params.videoId));
+    res.json({ ok: true, video: publicVideo(video) });
+  } catch (error) {
+    res.status(404).json({ ok: false, code: "VIDEO_NOT_FOUND", message: error.message });
+  }
+});
+videoRoutes.get("/videos", async (req, res) => {
+  try {
+    await verifyVideoAppCheck(req);
+    const user = await requireUser(req);
+    const snapshot = await getAdminDb().collection("videos").where("isPublished", "==", true).limit(100).get();
+    const candidates = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((video) => matchesVideoFilter(video, req.query.subject, req.query.lesson));
+    const videos = (await Promise.all(candidates.map((video) => refreshTranscodeStatus(video)))).filter((video) => canUserPlayVideo(video, user)).map(publicVideo);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json({ ok: true, videos });
+  } catch (error) {
+    res.status(401).json({ ok: false, code: "VIDEOS_ACCESS_FAILED", message: error.message });
+  }
+});
+videoRoutes.get("/videos/:videoId", async (req, res) => {
+  try {
+    await verifyVideoAppCheck(req);
+    const user = await requireUser(req);
+    const video = await refreshTranscodeStatus(await loadVideo(req.params.videoId));
+    if (!canUserPlayVideo(video, user)) return res.status(403).json({ ok: false, code: "VIDEO_FORBIDDEN" });
+    res.json({ ok: true, video: publicVideo(video) });
+  } catch (error) {
+    res.status(404).json({ ok: false, code: "VIDEO_NOT_FOUND", message: error.message });
+  }
+});
+videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
+  try {
+    await verifyVideoAppCheck(req);
+    const user = await requireUser(req);
+    const video = await refreshTranscodeStatus(await loadVideo(req.params.videoId));
+    if (!canUserPlayVideo(video, user)) return res.status(403).json({ ok: false, code: "VIDEO_FORBIDDEN" });
+    const db = getAdminDb();
+    const active = await db.collection("videoPlaybackSessions").where("userId", "==", user.uid).where("status", "==", "active").limit(Math.max(1, video.maxConcurrentSessions)).get();
+    const now = Date.now();
+    const liveSessions = active.docs.filter((doc) => {
+      const session = doc.data();
+      return session.videoId === video.id && Number(session.expiresAtMs || 0) > now;
+    });
+    if (liveSessions.length >= video.maxConcurrentSessions) {
+      return res.status(409).json({ ok: false, code: "PLAYBACK_SESSION_LIMIT", message: "This account already has an active playback session." });
+    }
+    const directPlayback = !video.transcoderJobName || video.playbackMode === "direct";
+    const signed = directPlayback ? null : createSignedPlaybackCookie(video);
+    const sessionRef = db.collection("videoPlaybackSessions").doc();
+    const expiresAtMs = now + env.VIDEO_SESSION_TTL_SECONDS * 1e3;
+    await sessionRef.set({
+      sessionId: sessionRef.id,
+      userId: user.uid,
+      videoId: video.id,
+      deviceId: String(req.header("X-Device-ID") || "unknown").slice(0, 160),
+      userAgentHash: import_node_crypto3.default.createHash("sha256").update(String(req.header("user-agent") || "unknown")).digest("hex"),
+      createdAt: new Date(now).toISOString(),
+      lastHeartbeatAt: new Date(now).toISOString(),
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      expiresAtMs,
+      status: "active"
+    });
+    if (signed) setPlaybackCookie(res, signed);
+    const direct = directPlayback ? await createDirectPlaybackUrl(video) : null;
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ok: true,
+      sessionId: sessionRef.id,
+      playbackMode: direct ? "direct" : "hls",
+      directUrl: direct?.url,
+      manifestUrl: signed?.manifestUrl,
+      expiresAt: direct?.expiresAt || signed?.expiresAt,
+      watermark: { userId: user.uid, label: user.email || user.uid }
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, code: "PLAYBACK_SESSION_FAILED", message: error.message });
+  }
+});
+videoRoutes.post("/video-sessions/:sessionId/refresh", async (req, res) => {
+  try {
+    await verifyVideoAppCheck(req);
+    const user = await requireUser(req);
+    const ref = getAdminDb().collection("videoPlaybackSessions").doc(req.params.sessionId);
+    const snapshot = await ref.get();
+    const session = snapshot.data();
+    if (!snapshot.exists || session?.userId !== user.uid || session?.status !== "active") {
+      return res.status(403).json({ ok: false, code: "SESSION_REVOKED" });
+    }
+    const video = await refreshTranscodeStatus(await loadVideo(String(session.videoId || "")));
+    if (!canUserPlayVideo(video, user)) {
+      return res.status(403).json({ ok: false, code: "VIDEO_FORBIDDEN" });
+    }
+    const directPlayback = !video.transcoderJobName || video.playbackMode === "direct";
+    const signed = directPlayback ? null : createSignedPlaybackCookie(video);
+    if (signed) setPlaybackCookie(res, signed);
+    const direct = directPlayback ? await createDirectPlaybackUrl(video) : null;
+    const expiresAtMs = Date.now() + env.VIDEO_SESSION_TTL_SECONDS * 1e3;
+    await ref.set({
+      lastHeartbeatAt: (/* @__PURE__ */ new Date()).toISOString(),
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      expiresAtMs
+    }, { merge: true });
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.json({
+      ok: true,
+      playbackMode: direct ? "direct" : "hls",
+      directUrl: direct?.url,
+      manifestUrl: signed?.manifestUrl,
+      expiresAt: direct?.expiresAt || signed?.expiresAt
+    });
+  } catch (error) {
+    return res.status(400).json({ ok: false, code: "SESSION_REFRESH_FAILED", message: error.message });
+  }
+});
+videoRoutes.post("/video-sessions/:sessionId/heartbeat", async (req, res) => {
+  try {
+    await verifyVideoAppCheck(req);
+    const user = await requireUser(req);
+    const ref = getAdminDb().collection("videoPlaybackSessions").doc(req.params.sessionId);
+    const snapshot = await ref.get();
+    if (!snapshot.exists || snapshot.data()?.userId !== user.uid || snapshot.data()?.status !== "active") {
+      return res.status(403).json({ ok: false, code: "SESSION_REVOKED" });
+    }
+    const expiresAtMs = Date.now() + env.VIDEO_SESSION_TTL_SECONDS * 1e3;
+    await ref.set({ lastHeartbeatAt: (/* @__PURE__ */ new Date()).toISOString(), expiresAt: new Date(expiresAtMs).toISOString(), expiresAtMs }, { merge: true });
+    res.json({ ok: true, expiresAt: new Date(expiresAtMs).toISOString() });
+  } catch (error) {
+    res.status(400).json({ ok: false, code: "SESSION_HEARTBEAT_FAILED", message: error.message });
+  }
+});
+videoRoutes.post("/video-sessions/:sessionId/end", async (req, res) => {
+  try {
+    await verifyVideoAppCheck(req);
+    const user = await requireUser(req);
+    const ref = getAdminDb().collection("videoPlaybackSessions").doc(req.params.sessionId);
+    const snapshot = await ref.get();
+    if (!snapshot.exists || snapshot.data()?.userId !== user.uid) return res.status(403).json({ ok: false, code: "SESSION_FORBIDDEN" });
+    await ref.set({ status: "revoked", endedAt: (/* @__PURE__ */ new Date()).toISOString() }, { merge: true });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(400).json({ ok: false, code: "SESSION_END_FAILED", message: error.message });
+  }
+});
+
+// server/utils/rateLimiter.ts
+var store = /* @__PURE__ */ new Map();
+function buildRateLimiter(options) {
+  return (req, res, next) => {
+    const now = Date.now();
+    const user = req.user;
+    const isAuth = !!user;
+    const isAnonymous = user?.isAnonymous === true;
+    const roles = user?.roles || [];
+    const isAdmin = user?.admin === true || roles.includes("admin") || roles.includes("ops");
+    let max = options.defaultMax;
+    if (options.limitByRole) {
+      if (!isAuth || isAnonymous) {
+        max = options.limitByRole.anonymous;
+      } else if (isAdmin) {
+        max = options.limitByRole.admin;
+      } else {
+        max = options.limitByRole.student;
+      }
+    }
+    let key = "";
+    if (isAuth && user.uid) {
+      key = `uid:${options.keyPrefix}:${user.uid}`;
+    } else {
+      const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || req.ip || "unknown-ip";
+      const clientIp = Array.isArray(ip) ? ip[0] : typeof ip === "string" ? ip.split(",")[0].trim() : "unknown-ip";
+      key = `ip:${options.keyPrefix}:${clientIp}`;
+    }
+    const record = store.get(key);
+    if (!record || record.resetTime <= now) {
+      store.set(key, {
+        count: 1,
+        resetTime: now + options.windowMs
+      });
+      res.setHeader("X-RateLimit-Limit", max);
+      res.setHeader("X-RateLimit-Remaining", max - 1);
+      res.setHeader("X-RateLimit-Reset", Math.ceil((now + options.windowMs) / 1e3));
+      return next();
+    }
+    if (record.count >= max) {
+      const retryAfterSeconds = Math.ceil((record.resetTime - now) / 1e3);
+      res.setHeader("Retry-After", retryAfterSeconds);
+      res.setHeader("X-RateLimit-Limit", max);
+      res.setHeader("X-RateLimit-Remaining", 0);
+      res.setHeader("X-RateLimit-Reset", Math.ceil(record.resetTime / 1e3));
+      return res.status(429).json({
+        ok: false,
+        code: "RATE_LIMITED",
+        retryAfterSeconds,
+        message: `Too many requests. Please retry after ${retryAfterSeconds} seconds.`
+      });
+    }
+    record.count++;
+    res.setHeader("X-RateLimit-Limit", max);
+    res.setHeader("X-RateLimit-Remaining", max - record.count);
+    res.setHeader("X-RateLimit-Reset", Math.ceil(record.resetTime / 1e3));
+    next();
+  };
+}
+var globalLimiter = buildRateLimiter({
+  windowMs: 60 * 1e3,
+  keyPrefix: "global",
+  defaultMax: 100,
+  limitByRole: {
+    anonymous: 40,
+    student: 120,
+    admin: 300
+  }
+});
+var aiLimiter = buildRateLimiter({
+  windowMs: 60 * 1e3,
+  keyPrefix: "ai",
+  defaultMax: 20,
+  limitByRole: {
+    anonymous: 5,
+    student: 30,
+    admin: 100
+  }
+});
+var adminLimiter = buildRateLimiter({
+  windowMs: 60 * 1e3,
+  keyPrefix: "admin",
+  defaultMax: 10,
+  limitByRole: {
+    anonymous: 1,
+    student: 2,
+    admin: 60
+  }
+});
+
+// server.ts
+init_admin();
+init_sourceInventoryService();
+
+// server/utils/authGuards.ts
+init_admin();
+function sendUnauthenticated(res, message = "Authentication is required.") {
+  return res.status(401).json({
+    ok: false,
+    code: "UNAUTHENTICATED",
+    message,
+    requestId: res.getHeader("x-request-id") || Math.random().toString(36).substring(7)
+  });
+}
+function sendForbidden(res, message = "You do not have permission to perform this action.") {
+  return res.status(403).json({
+    ok: false,
+    code: "FORBIDDEN",
+    message,
+    requestId: res.getHeader("x-request-id") || Math.random().toString(36).substring(7)
+  });
+}
+function requireRole(...allowedRoles) {
+  return async (req, res, next) => {
+    try {
+      const user = await verifyAndExtractUser(req);
+      if (!user) {
+        return sendUnauthenticated(res);
+      }
+      req.user = user;
+      req.authContext = user.authContext;
+      if (!req.authContext) {
+        return sendUnauthenticated(res);
+      }
+      const hasRole = req.authContext.roles.some((r) => allowedRoles.includes(r));
+      if (!hasRole) {
+        await createAuditEvent({
+          actorUid: req.authContext.uid,
+          actorRoles: req.authContext.roles,
+          operation: "unauthorized_role_attempt",
+          targetType: "role_guard",
+          targetId: allowedRoles.join(","),
+          reason: `Requires one of: ${allowedRoles.join(",")}`,
+          result: "failure"
+        });
+        return sendForbidden(res);
+      }
+      next();
+    } catch (err) {
+      return sendUnauthenticated(res, err.message);
+    }
+  };
+}
+
+// server/ocr/ocrWorker.ts
+init_admin();
+function startOcrWorker(intervalMs = 6e4) {
+  if (process.env.NODE_ENV === "test") return;
+  setInterval(async () => {
+    try {
+      const db = getAdminDb();
+      const snapshot = await db.collection("ocr_jobs").where("status", "==", "running").limit(10).get();
+      if (snapshot.empty) return;
+      for (const doc of snapshot.docs) {
+        const sourceId = doc.id;
+        try {
+          const job = await checkOcrJobStatus(sourceId);
+          if (job.status === "ready" && job.result) {
+            console.log(`[OCR Worker] Background OCR job became ready. Running finalization for ${sourceId}`);
+            const srcSnap = await db.collection("rag_sources").doc(sourceId).get();
+            if (!srcSnap.exists) continue;
+            const src = srcSnap.data();
+            await finalizePipelineProcessing({
+              uid: src.ownerUid,
+              sourceId,
+              storagePath: src.storagePath,
+              fileName: src.fileName,
+              title: src.title,
+              subject: src.subject,
+              year: src.year,
+              resourceType: src.resourceType || "uploaded_pdf",
+              sourceScope: src.sourceScope || "personal",
+              pages: job.result.pages.map((p) => ({
+                pageNumber: p.pageNumber,
+                text: p.text,
+                rawText: p.text,
+                textEncoding: "unicode_sinhala",
+                conversionApplied: false,
+                conversionConfidence: 1
+              })),
+              extractionMethod: "cloud_vision_ocr",
+              textEncoding: "unicode_sinhala",
+              ocrConfidence: job.result.confidence,
+              needsOcr: false,
+              needsLegacyConversion: false
+            });
+            console.log(`[OCR Worker] Successfully finalized OCR for ${sourceId}`);
+          } else if (job.status === "failed") {
+            console.warn(`[OCR Worker] Job ${sourceId} failed.`);
+          }
+        } catch (err) {
+          console.error(`[OCR Worker] Error processing job ${sourceId}:`, err);
+        }
+      }
+    } catch (err) {
+      console.error("[OCR Worker] Error in worker loop:", err);
+    }
+  }, intervalMs);
+}
+
+// server/ai-core/routes.ts
+var import_express12 = require("express");
+
+// server/ai-core/study/mockForecast.ts
+init_admin();
+async function updateStudentForecast(uid) {
+  const db = getAdminDb();
+  const mockResultsSnap = await db.collection("users").doc(uid).collection("mock_results").orderBy("date", "desc").limit(10).get();
+  const mocks = mockResultsSnap.docs.map((d) => d.data());
+  const mistakesSnap = await db.collection("users").doc(uid).collection("mistake_notebook").where("mastered", "==", false).get();
+  const unmasteredMistakes = mistakesSnap.docs.map((d) => d.data());
+  let sftLatest = mocks.find((m) => m.subject === "SFT")?.totalMarks || 0;
+  let etLatest = mocks.find((m) => m.subject === "ET")?.totalMarks || 0;
+  let ictLatest = mocks.find((m) => m.subject === "ICT")?.totalMarks || 0;
+  const currentMarkEstimate = {
+    sft: sftLatest,
+    et: etLatest,
+    ict: ictLatest
+  };
+  const forecast7Day = {
+    sft: Math.min(100, sftLatest + 3),
+    et: Math.min(100, etLatest + 3),
+    ict: Math.min(100, ictLatest + 3)
+  };
+  const forecast30Day = {
+    sft: Math.min(100, sftLatest + 15),
+    et: Math.min(100, etLatest + 15),
+    ict: Math.min(100, ictLatest + 15)
+  };
+  const average = (sftLatest + etLatest + ictLatest) / 3;
+  let a3Chance = "Low";
+  let riskLevel = "High";
+  if (average >= 75) {
+    a3Chance = "High";
+    riskLevel = "Low";
+  } else if (average >= 60) {
+    a3Chance = "Medium";
+    riskLevel = "Medium";
+  }
+  const mustFix = unmasteredMistakes.slice(0, 5).map((m) => m.lesson);
+  const forecast = {
+    currentMarkEstimate,
+    forecast7Day,
+    forecast30Day,
+    a3Chance,
+    riskLevel,
+    mustFix: Array.from(new Set(mustFix)),
+    warnings: riskLevel === "High" ? ["Target A3 is currently at risk. Need intensive daily MCQ drills."] : [],
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await db.collection("users").doc(uid).collection("student_forecasts").add(forecast);
+  return forecast;
+}
+
+// server/ai-core/study/mistakeNotebook.ts
+init_admin();
+async function addMistake(uid, mistakeData) {
+  const db = getAdminDb();
+  const mistakeId = `${mistakeData.subject}_${Date.now()}`;
+  const record = {
+    ...mistakeData,
+    retryDate: getNextRetryDate(0),
+    repeatCount: 0,
+    mastered: false,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await db.collection("users").doc(uid).collection("mistake_notebook").doc(mistakeId).set(record);
+  return { id: mistakeId, ...record };
+}
+async function getTodayRetries(uid) {
+  const db = getAdminDb();
+  const today = (/* @__PURE__ */ new Date()).toISOString();
+  const snap = await db.collection("users").doc(uid).collection("mistake_notebook").where("mastered", "==", false).where("retryDate", "<=", today).get();
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+function getNextRetryDate(repeatCount) {
+  const date = /* @__PURE__ */ new Date();
+  switch (repeatCount) {
+    case 0:
+      date.setDate(date.getDate() + 1);
+      break;
+    // 1 day
+    case 1:
+      date.setDate(date.getDate() + 3);
+      break;
+    // 3 days
+    case 2:
+      date.setDate(date.getDate() + 7);
+      break;
+    // 7 days
+    default:
+      date.setDate(date.getDate() + 14);
+      break;
+  }
+  return date.toISOString();
+}
+
+// server/ai-core/exam-intel/patternAnalyzer.ts
+var import_genai10 = require("@google/genai");
+init_admin();
+init_client();
+var ai7 = getAIClient();
+async function buildPatternReport(subject) {
+  const db = getAdminDb();
+  const questionsSnap = await db.collection("exam_question_index").where("subject", "==", subject).get();
+  const questions = questionsSnap.docs.map((d) => d.data());
+  const prompt = `
+    Analyze the following exam questions for subject ${subject} to build a pattern report.
+    
+    Questions: ${JSON.stringify(questions.map((q) => ({
+    year: q.year,
+    questionType: q.questionType,
+    lesson: q.lesson,
+    subtopic: q.subtopic,
+    marks: q.marks,
+    concept: q.concept
+  })))}
+    
+    Identify:
+    - Lesson frequency
+    - Marks by lesson
+    - MCQ/Structured/Essay frequency
+    - Repeated concepts
+    - Rare concepts
+    - Not asked recently
+    - Trend changes in the last 5 years
+    - High probability topics
+    - Low probability topics
+  `;
+  const response = await ai7.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: prompt,
+    config: {
+      systemInstruction: "You are an expert A/L exam pattern analyst. Format your report as JSON.",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: import_genai10.Type.OBJECT,
+        properties: {
+          subject: { type: import_genai10.Type.STRING },
+          yearsAnalyzed: { type: import_genai10.Type.ARRAY, items: { type: import_genai10.Type.INTEGER } },
+          lessonFrequencyTable: { type: import_genai10.Type.ARRAY, items: { type: import_genai10.Type.OBJECT } },
+          marksByLesson: { type: import_genai10.Type.ARRAY, items: { type: import_genai10.Type.OBJECT } },
+          mcqFrequency: { type: import_genai10.Type.ARRAY, items: { type: import_genai10.Type.OBJECT } },
+          structuredFrequency: { type: import_genai10.Type.ARRAY, items: { type: import_genai10.Type.OBJECT } },
+          essayFrequency: { type: import_genai10.Type.ARRAY, items: { type: import_genai10.Type.OBJECT } },
+          repeatedConcepts: { type: import_genai10.Type.ARRAY, items: { type: import_genai10.Type.STRING } },
+          rareConcepts: { type: import_genai10.Type.ARRAY, items: { type: import_genai10.Type.STRING } },
+          notAskedRecently: { type: import_genai10.Type.ARRAY, items: { type: import_genai10.Type.STRING } },
+          trendChangesLastFiveYears: { type: import_genai10.Type.ARRAY, items: { type: import_genai10.Type.STRING } },
+          highProbabilityTopics: { type: import_genai10.Type.ARRAY, items: { type: import_genai10.Type.STRING } },
+          lowProbabilityTopics: { type: import_genai10.Type.ARRAY, items: { type: import_genai10.Type.STRING } },
+          confidence: { type: import_genai10.Type.NUMBER }
+        },
+        required: ["subject"]
+      }
+    }
+  });
+  const report = JSON.parse(response.text || "{}");
+  report.generatedAt = (/* @__PURE__ */ new Date()).toISOString();
+  report.version = "1.0";
+  await db.collection("exam_pattern_reports").doc(`${subject}_${report.version}`).set(report);
+  return report;
+}
+
+// server/ai-core/reports/studentWeeklyReport.ts
+var import_genai11 = require("@google/genai");
+init_admin();
+init_client();
+var ai8 = getAIClient();
+async function generateStudentWeeklyReport(uid) {
+  const db = getAdminDb();
+  const profileSnap = await db.collection("users").doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() : {};
+  const progressSnap = await db.collection("users").doc(uid).collection("progress").doc("data").get();
+  const progress = progressSnap.exists ? progressSnap.data()?.data : {};
+  const mockResultsSnap = await db.collection("users").doc(uid).collection("mock_results").orderBy("date", "desc").limit(10).get();
+  const mocks = mockResultsSnap.docs.map((d) => d.data());
+  const mistakesSnap = await db.collection("users").doc(uid).collection("mistake_notebook").orderBy("createdAt", "desc").limit(50).get();
+  const mistakes = mistakesSnap.docs.map((d) => d.data());
+  const prompt = `
+    Generate a weekly progress report for an A/L Technology student.
+    
+    Student Profile: ${JSON.stringify(profile)}
+    Progress Data: ${JSON.stringify(progress)}
+    Recent Mock Results: ${JSON.stringify(mocks)}
+    Recent Mistakes: ${JSON.stringify(mistakes)}
+    
+    The report should include:
+    - Progress summary
+    - Weak lessons
+    - Next week's plan
+    - High probability exam topics
+    - Mock score trend
+    - Mistake trend
+    - Risk warning
+    - A parent-friendly summary
+  `;
+  const response = await ai8.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: prompt,
+    config: {
+      systemInstruction: "You are an expert A/L education analyst generating a weekly report. Format output as JSON.",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: import_genai11.Type.OBJECT,
+        properties: {
+          progressSummary: { type: import_genai11.Type.STRING },
+          weakLessons: { type: import_genai11.Type.ARRAY, items: { type: import_genai11.Type.STRING } },
+          nextWeekPlan: { type: import_genai11.Type.ARRAY, items: { type: import_genai11.Type.STRING } },
+          highProbabilityTopics: { type: import_genai11.Type.ARRAY, items: { type: import_genai11.Type.STRING } },
+          mockScoreTrend: { type: import_genai11.Type.STRING },
+          mistakeTrend: { type: import_genai11.Type.STRING },
+          riskWarning: { type: import_genai11.Type.STRING },
+          parentFriendlySummary: { type: import_genai11.Type.STRING }
+        },
+        required: [
+          "progressSummary",
+          "weakLessons",
+          "nextWeekPlan",
+          "highProbabilityTopics",
+          "mockScoreTrend",
+          "mistakeTrend",
+          "riskWarning",
+          "parentFriendlySummary"
+        ]
+      }
+    }
+  });
+  const report = JSON.parse(response.text || "{}");
+  await db.collection("users").doc(uid).collection("weekly_reports").add({
+    ...report,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  });
+  return report;
+}
+
+// server/ai-core/routes.ts
+init_admin();
+var router4 = (0, import_express12.Router)();
+router4.get("/student/diagnosis", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { subject } = req.query;
+    if (!subject) return res.status(400).json({ error: "Missing subject" });
+    const result = await diagnoseStudent(user.uid, String(subject));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router4.post("/study/war-plan", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const result = await generateWarPlan({ ...req.body, uid: user.uid });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router4.post("/study/mock-result", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const result = await updateStudentForecast(user.uid);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router4.get("/mistakes", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const result = await getTodayRetries(user.uid);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router4.post("/mistakes", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const result = await addMistake(user.uid, req.body);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router4.post("/exam-intel/build-index", async (req, res) => {
+  try {
+    const result = await buildExamIndex();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router4.get("/exam-intel/report", async (req, res) => {
+  try {
+    const { subject } = req.query;
+    const result = await buildPatternReport(String(subject));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router4.get("/exam-intel/probability", async (req, res) => {
+  try {
+    const { subject } = req.query;
+    const result = await rankTopicProbability(String(subject));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router4.get("/exam-intel/unasked", async (req, res) => {
+  try {
+    const { subject } = req.query;
+    const result = await detectUnaskedTopics(String(subject));
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router4.post("/exam-intel/predicted-paper", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const result = await generatePredictedPaper({ ...req.body, uid: user.uid });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router4.post("/reports/student-weekly", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const result = await generateStudentWeeklyReport(user.uid);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+router4.post("/admin/repair-data", requireFirebaseUser, requireRole("admin"), async (req, res) => {
+  try {
+    const { getAdminDb: getAdminDb2 } = await Promise.resolve().then(() => (init_admin(), admin_exports));
+    const db = getAdminDb2();
+    const snapshot = await db.collection("exam_question_index").get();
+    let deletedCount = 0;
+    const batch = db.batch();
+    snapshot.docs.forEach((doc) => {
+      const data = doc.data();
+      if (!data.questionText && !data.sourceId) {
+        batch.delete(doc.ref);
+        deletedCount++;
+      }
+    });
+    if (deletedCount > 0) {
+      await batch.commit();
+    }
+    res.json({ message: `Repair finished. Deleted ${deletedCount} invalid documents.`, ok: true });
+  } catch (err) {
+    console.error("Repair error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+var routes_default = router4;
+
+// server/realtime/routes.ts
+var import_express13 = require("express");
+init_config();
+var requireUser2 = async (req) => {
+  const user = await verifyAndExtractUser(req);
+  if (!user) throw new Error("Unauthorized");
+  return user;
+};
+var router5 = (0, import_express13.Router)();
+router5.get("/status", (req, res) => {
+  const cfg = getRealtimeConfig();
+  res.json({
+    ok: true,
+    enabled: cfg.enabled,
+    provider: cfg.provider,
+    available: cfg.available,
+    model: cfg.model,
+    project: cfg.project,
+    location: cfg.location,
+    authMode: cfg.authMode,
+    missing: cfg.missing
+  });
+});
+router5.get("/self-test", async (req, res) => {
+  try {
+    const cfg = getRealtimeConfig();
+    if (!cfg.enabled) {
+      return res.json({ ok: false, code: "REALTIME_DISABLED" });
+    }
+    if (cfg.provider === "gemini_live") {
+      return res.json({
+        ok: false,
+        code: "GEMINI_LIVE_BRIDGE_NOT_IMPLEMENTED",
+        message: "Gemini Live backend bridge is not implemented yet."
+      });
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.json({ ok: false, code: "TEST_FAILED", message: err.message });
+  }
+});
+router5.post("/session", async (req, res) => {
+  try {
+    await requireUser2(req);
+    const cfg = getRealtimeConfig();
+    if (!cfg.enabled) {
+      return res.json({
+        ok: false,
+        code: "REALTIME_DISABLED",
+        message: "Realtime voice is disabled."
+      });
+    }
+    if (cfg.provider === "gemini_live") {
+      return res.status(501).json({
+        ok: false,
+        code: "GEMINI_LIVE_BRIDGE_NOT_IMPLEMENTED",
+        provider: "gemini_live",
+        message: "Gemini Live backend bridge is not implemented yet. OpenAI key is not required."
+      });
+    }
+    const { activeSubject, activeSourceId } = req.body;
+    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+    if (!OPENAI_API_KEY) {
+      return res.status(400).json({ ok: false, error: "Missing OPENAI_API_KEY on server.", message: "OpenAI API key is missing. For Gemini Live, please configure provider to gemini_live." });
+    }
+    const response = await fetch("https://api.openai.com/v1/realtime/sessions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview-2024-12-17",
+        voice: process.env.OPENAI_REALTIME_VOICE || "alloy",
+        instructions: `You are Clora X, a Sinhala-first A/L Technology live tutor for SFT, ET, ICT.
+- Speak naturally like a teacher in a live call.
+- Sinhala-first, simple, short chunks.
+- Do not read long essays unless user asks.
+- Ask follow-up questions when unclear.
+- Allow user to interrupt.
+- When explaining calculations, speak step by step.
+- For official paper answers, use evidence only.
+- If evidence missing, say you cannot verify from PDF and ask user to select/upload source.
+- For non-syllabus/general questions, answer normally and do not attach fake PDF sources.
+- Do not mention internal model/tool names.
+If user mentions PDF, paper, question, Q1, MCQ, essay, structured, marking scheme, page, uploaded file, "\u0DB8\u0DDA PDF \u0D91\u0D9A", "pdf eke", "prashne" then call pdf_answer_tool before answering.`,
+        tools: [
+          {
+            type: "function",
+            name: "pdf_answer_tool",
+            description: "Answers a question based on PDF evidence.",
+            parameters: {
+              type: "object",
+              properties: {
+                transcript: { type: "string" },
+                questionNo: { type: "string" },
+                questionType: { type: "string" },
+                year: { type: "string" }
+              },
+              required: ["transcript"]
+            }
+          },
+          {
+            type: "function",
+            name: "source_search_tool",
+            description: "Searches for sources if not found in PDF.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+                subject: { type: "string" }
+              },
+              required: ["query"]
+            }
+          },
+          {
+            type: "function",
+            name: "web_search_tool",
+            description: "Searches the web for general knowledge.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" }
+              },
+              required: ["query"]
+            }
+          },
+          {
+            type: "function",
+            name: "student_context_tool",
+            description: "Gets user progress context.",
+            parameters: {
+              type: "object",
+              properties: {
+                intent: { type: "string" }
+              },
+              required: ["intent"]
+            }
+          }
+        ]
+      })
+    });
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`OpenAI Realtime session error: ${response.status} ${errorData}`);
+    }
+    const data = await response.json();
+    res.json({
+      ok: true,
+      clientSecret: data.client_secret.value,
+      sessionId: data.id,
+      expiresAt: data.client_secret.expires_at
+    });
+  } catch (error) {
+    console.error("Error creating realtime session:", error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+var routes_default2 = router5;
+router5.post("/tool-result", async (req, res) => {
+  try {
+    const user = await requireUser2(req);
+    const { toolName, arguments: args, chatId, activeSubject, activeSourceId, recentAttachmentIds } = req.body;
+    if (toolName === "pdf_answer_tool") {
+      const { answerFromPdfEvidence: answerFromPdfEvidence2 } = await Promise.resolve().then(() => (init_pdfAnswerService(), pdfAnswerService_exports));
+      const result = await answerFromPdfEvidence2({
+        uid: user.uid,
+        chatId,
+        transcriptOrPrompt: args.transcript,
+        activeSubject,
+        activeSourceId,
+        recentAttachmentIds,
+        questionNo: args.questionNo,
+        questionType: args.questionType,
+        year: args.year,
+        mode: "live_voice"
+      });
+      return res.json({ ok: true, output: result });
+    }
+    return res.json({ ok: true, output: { message: "Tool not fully implemented yet." } });
+  } catch (error) {
+    console.error("Error executing tool:", error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// server.ts
+init_client();
+
+// server/utils/errorHandler.ts
+var import_node_crypto4 = __toESM(require("node:crypto"), 1);
+function globalErrorHandler(err, req, res, next) {
+  const requestId = import_node_crypto4.default.randomUUID?.() || Math.random().toString(36).substring(2, 15);
+  console.error(`[ERROR] RequestId: ${requestId} | Path: ${req.path} | Error:`, err);
+  let status = 500;
+  let code = "INTERNAL_ERROR";
+  let message = "An internal server error occurred. Please try again later.";
+  let retryable = false;
+  if (err.code === "QUERY_TOKEN_NOT_ALLOWED") {
+    status = 400;
+    code = "QUERY_TOKEN_NOT_ALLOWED";
+    message = err.message;
+  } else if (err.code === "LIMIT_FILE_SIZE") {
+    status = 413;
+    code = "FILE_TOO_LARGE";
+    message = "The uploaded file exceeds the maximum allowed size.";
+  } else if (err.code === "LIMIT_FILE_COUNT") {
+    status = 400;
+    code = "TOO_MANY_FILES";
+    message = "Too many files were uploaded. Only 1 file is allowed.";
+  } else if (err.code === "LIMIT_FIELD_COUNT") {
+    status = 400;
+    code = "TOO_MANY_FIELDS";
+    message = "The request contains too many fields.";
+  } else if (err.type === "entity.too.large" || err.status === 413) {
+    status = 413;
+    code = "BODY_TOO_LARGE";
+    message = "The request payload size exceeds the maximum limit.";
+  } else if (err.status === 401 || err.message?.includes("Unauthorized") || err.message?.includes("LOGIN_REQUIRED")) {
+    status = 401;
+    code = "UNAUTHENTICATED";
+    message = "Authentication is required to perform this action.";
+  } else if (err.status === 403 || err.message?.includes("Forbidden") || err.message?.includes("Access denied")) {
+    status = 403;
+    code = "FORBIDDEN";
+    message = "You do not have permission to perform this action.";
+  } else if (err.code === "RATE_LIMITED" || err.status === 429) {
+    status = 429;
+    code = "RATE_LIMITED";
+    message = err.message || "Too many requests. Please try again later.";
+    retryable = true;
+  } else if (err.code === "FEATURE_NOT_AVAILABLE") {
+    status = 501;
+    code = "FEATURE_NOT_AVAILABLE";
+    message = err.message || "This feature is not available.";
+  } else if (err.name === "ValidationError" || err.code === "VALIDATION_FAILED") {
+    status = 400;
+    code = "VALIDATION_FAILED";
+    message = err.message || "Validation failed.";
+  } else if (err.code === "DEPENDENCY_UNAVAILABLE") {
+    status = 503;
+    code = "DEPENDENCY_UNAVAILABLE";
+    message = "A required dependency service is temporarily unavailable.";
+  } else if (err.code === "QUOTA_EXCEEDED") {
+    status = 429;
+    code = "QUOTA_EXCEEDED";
+    message = "API request quota has been exceeded.";
+  } else if (err.code === "REQUEST_TIMEOUT" || err.status === 408) {
+    status = 408;
+    code = "REQUEST_TIMEOUT";
+    message = "The request timed out.";
+  } else {
+    if (err.isPublic) {
+      code = err.code || "BAD_REQUEST";
+      message = err.message;
+      status = err.status || 400;
+    }
+  }
+  const responsePayload = {
+    ok: false,
+    code,
+    message,
+    requestId,
+    retryable
+  };
+  res.status(status).json(responsePayload);
+}
+
+// server.ts
+logEnvConfig();
+prepareGoogleCredentials();
+getAdminApp();
+var app = (0, import_express14.default)();
+var PORT2 = env.PORT;
+var videoCdnOrigin = (() => {
+  try {
+    return env.VIDEO_CDN_BASE_URL ? new URL(env.VIDEO_CDN_BASE_URL).origin : "";
+  } catch {
+    return "";
+  }
+})();
+app.use((req, res, next) => {
+  const cspHeader = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com https://www.gstatic.com https://*.firebaseapp.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    "img-src 'self' data: blob: https://*.googleusercontent.com https://api.dicebear.com https://*.firebaseapp.com https://*.firebasestorage.app",
+    `connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.firebaseapp.com https://*.run.app wss://*.run.app ${videoCdnOrigin}`.trim(),
+    `media-src 'self' blob: ${videoCdnOrigin}`.trim(),
+    "frame-src 'self' https://*.firebaseapp.com https://*.google.com https://accounts.google.com",
+    "object-src 'none'",
+    "frame-ancestors 'self' https://ai.studio https://*.google.com"
+  ].join("; ");
+  res.setHeader("Content-Security-Policy", cspHeader);
+  if (env.NODE_ENV === "production") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  }
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+  res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), autoplay=(self), clipboard-write=(self), fullscreen=(self)");
+  if (req.path.startsWith("/api/")) {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  }
+  next();
+});
+var vercelRuntimeOrigins = [process.env.VERCEL_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL].filter(Boolean).map((host) => `https://${String(host).replace(/^https?:\/\//, "")}`);
+var allowedOrigins = [.../* @__PURE__ */ new Set([...env.ALLOWED_ORIGINS.length > 0 ? env.ALLOWED_ORIGINS : [
+  "https://tecal.vercel.app",
+  "https://a-l-tech-blueprint-807408268472.us-west1.run.app",
+  "http://localhost:5173",
+  "http://localhost:3000"
+], ...vercelRuntimeOrigins])];
+app.use((0, import_cors.default)({
+  origin: (origin, callback) => {
+    if (!origin) {
+      return callback(null, true);
+    }
+    const cleanOrigin = origin.trim().toLowerCase();
+    const isAllowed = allowedOrigins.some((allowed) => allowed.trim().toLowerCase() === cleanOrigin);
+    const isDevPreview = env.NODE_ENV !== "production" && cleanOrigin.endsWith(".run.app");
+    if (isAllowed || isDevPreview) {
+      callback(null, true);
+    } else {
+      callback(new Error("CORS_BLOCKED: Origin not allowed by security policy."));
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Firebase-AppCheck", "X-Device-ID"]
+}));
+app.use(import_express14.default.json({ limit: `${env.MAX_BODY_LIMIT_MB}mb` }));
+app.use("/api", globalLimiter);
+app.use("/api/rag", ragRoutes);
+app.use("/api/syllabus", syllabusRoutes);
+app.use("/api/pdf", pdfRoutes);
+app.use("/api/exam-intel", examIntelRoutes_default);
+app.use("/api/student", studentRoutes_default);
+app.use("/api/reports", reportRoutes_default);
+app.use("/api/tts", ttsRoutes);
+app.use("/api/voice", voiceRoutes);
+app.use("/api", videoRoutes);
+app.get("/api/sources/inventory", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const uid = user.uid;
+    const userEmail = (user.email || "").toLowerCase();
+    const isAdmin = !!(user.admin || user.roles && user.roles.includes("admin"));
+    const subjectQuery = req.query.subject ? String(req.query.subject).toUpperCase() : void 0;
+    const yearQuery = req.query.year ? String(req.query.year) : void 0;
+    const typeQuery = req.query.resourceType ? String(req.query.resourceType).toLowerCase() : void 0;
+    const inventory = await getSourceInventory({
+      uid,
+      subject: subjectQuery,
+      year: yearQuery,
+      resourceType: typeQuery,
+      isAdmin
+    });
+    res.json({
+      ok: true,
+      groups: inventory.groups,
+      total: inventory.total
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+app.get("/api/notifications", requireFirebaseUser, async (req, res) => {
+  try {
+    const user = req.user;
+    const db = getAdminDb();
+    const snap = await db.collection("users").doc(user.email?.toLowerCase() || user.uid).collection("notifications").orderBy("timestamp", "desc").limit(50).get();
+    const notifications = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    res.json({ ok: true, notifications });
+  } catch (error) {
+    res.status(500).json({ ok: false, code: "NOTIFICATIONS_FETCH_FAILED", message: error.message });
+  }
+});
+app.post("/api/notifications/trigger", requireFirebaseUser, adminLimiter, async (req, res) => {
+  try {
+    const user = req.user;
+    const { notification } = req.body;
+    if (!notification || !notification.title || !notification.message) {
+      return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "Missing title or message" });
+    }
+    const db = getAdminDb();
+    const id = notification.id || db.collection("users").doc(user.email?.toLowerCase() || user.uid).collection("notifications").doc().id;
+    const newNotif = {
+      id,
+      title: notification.title,
+      message: notification.message,
+      type: notification.type || "announcement",
+      senderEmail: notification.senderEmail || user.email || "system@alblueprint.com",
+      senderName: notification.senderName || user.name || "System Admin",
+      read: false,
+      timestamp: notification.timestamp || (/* @__PURE__ */ new Date()).toISOString()
+    };
+    await db.collection("users").doc(user.email?.toLowerCase() || user.uid).collection("notifications").doc(id).set(newNotif, { merge: true });
+    res.json({ ok: true, success: true, notification: newNotif });
+  } catch (error) {
+    res.status(500).json({ ok: false, code: "NOTIFICATIONS_TRIGGER_FAILED", message: error.message });
+  }
+});
+app.post("/api/notifications/read", requireFirebaseUser, async (req, res) => {
+  try {
+    const user = req.user;
+    const { notificationId, readAll } = req.body;
+    const db = getAdminDb();
+    const coll = db.collection("users").doc(user.email?.toLowerCase() || user.uid).collection("notifications");
+    if (readAll) {
+      const snap = await coll.where("read", "==", false).get();
+      const batch = db.batch();
+      snap.docs.forEach((doc) => {
+        batch.update(doc.ref, { read: true });
+      });
+      await batch.commit();
+    } else if (notificationId) {
+      await coll.doc(notificationId).update({ read: true });
+    } else {
+      return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "Missing notificationId or readAll flag" });
+    }
+    res.json({ ok: true, success: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, code: "NOTIFICATIONS_READ_FAILED", message: error.message });
+  }
+});
+app.post("/api/notifications/delete", requireFirebaseUser, async (req, res) => {
+  try {
+    const user = req.user;
+    const { notificationId } = req.body;
+    if (!notificationId) {
+      return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "Missing notificationId" });
+    }
+    const db = getAdminDb();
+    await db.collection("users").doc(user.email?.toLowerCase() || user.uid).collection("notifications").doc(notificationId).delete();
+    res.json({ ok: true, success: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, code: "NOTIFICATIONS_DELETE_FAILED", message: error.message });
+  }
+});
 app.get("/api/profile", async (req, res) => {
   try {
     const user = await requireUser(req);
     const db = getAdminDb();
-    const email = user.email?.toLowerCase();
-    const [uidRoot, uidProfile, emailRoot, emailProfile] = await Promise.all([
-      db.collection("users").doc(user.uid).get().catch(() => null),
-      db.collection("users").doc(user.uid).collection("profile").doc("main").get().catch(() => null),
-      email ? db.collection("users").doc(email).get().catch(() => null) : null,
-      email ? db.collection("users").doc(email).collection("profile").doc("info").get().catch(() => null) : null
-    ]);
-    const profile = {
-      ...emailRoot?.exists ? emailRoot.data() : {},
-      ...emailProfile?.exists ? emailProfile.data() : {},
-      ...uidRoot?.exists ? uidRoot.data() : {},
-      ...uidProfile?.exists ? uidProfile.data() : {}
-    };
-    res.json({ ok: true, profile });
+    const uidDoc = await db.collection("users").doc(user.uid).get();
+    let profileData = uidDoc.exists ? uidDoc.data() : {};
+    if (user.email) {
+      const emailDoc = await db.collection("users").doc(user.email.toLowerCase()).get();
+      if (emailDoc.exists) {
+        profileData = { ...emailDoc.data(), ...profileData };
+      }
+    }
+    res.json({ ok: true, profile: profileData });
   } catch (error) {
     res.status(401).json({ ok: false, error: error.message });
   }
@@ -3150,10 +14993,9 @@ app.post("/api/profile", async (req, res) => {
     const db = getAdminDb();
     const profileData = req.body.profile || req.body;
     const batch = db.batch();
-    batch.set(db.collection("users").doc(user.uid).collection("profile").doc("main"), profileData, { merge: true });
-    batch.set(db.collection("users").doc(user.uid), { email: user.email || profileData.email || null, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, { merge: true });
+    batch.set(db.collection("users").doc(user.uid), profileData, { merge: true });
     if (user.email) {
-      batch.set(db.collection("users").doc(user.email.toLowerCase()).collection("profile").doc("info"), profileData, { merge: true });
+      batch.set(db.collection("users").doc(user.email.toLowerCase()), profileData, { merge: true });
     }
     await batch.commit();
     res.json({ ok: true });
@@ -3161,137 +15003,288 @@ app.post("/api/profile", async (req, res) => {
     res.status(500).json({ ok: false, error: error.message });
   }
 });
-app.get("/api/data", async (req, res) => {
+app.get("/api/data", requireFirebaseUser, async (req, res) => {
   try {
-    const user = await requireUser(req);
-    const email = (req.query.email || user.email || "").toLowerCase();
+    const user = req.user;
     const db = getAdminDb();
-    const [uidProgress, emailProgress, uidRoot, emailRoot] = await Promise.all([
-      db.collection("users").doc(user.uid).collection("progress").doc("data").get().catch(() => null),
-      email ? db.collection("users").doc(email).collection("progress").doc("data").get().catch(() => null) : null,
-      db.collection("users").doc(user.uid).get().catch(() => null),
-      email ? db.collection("users").doc(email).get().catch(() => null) : null
-    ]);
-    const uidProgressData = uidProgress?.exists ? uidProgress.data()?.data || uidProgress.data() : null;
-    const emailProgressData = emailProgress?.exists ? emailProgress.data()?.data || emailProgress.data() : null;
-    const appData = uidProgressData || emailProgressData || uidRoot?.data()?.appData || uidRoot?.data()?.data || emailRoot?.data()?.appData || emailRoot?.data()?.data || null;
-    if (!uidProgressData && emailProgressData) {
-      await db.collection("users").doc(user.uid).collection("progress").doc("data").set({
-        data: emailProgressData,
-        migratedFromEmail: email,
-        migratedAt: (/* @__PURE__ */ new Date()).toISOString()
-      }, { merge: true }).catch(() => null);
+    let appData = null;
+    const uidRef = db.collection("users").doc(user.uid).collection("progress").doc("data");
+    const uidSnap = await uidRef.get();
+    if (uidSnap.exists) {
+      appData = uidSnap.data()?.data || uidSnap.data();
     }
-    res.json({ ok: true, data: appData });
+    if (!appData) {
+      const rootUidSnap = await db.collection("users").doc(user.uid).get();
+      if (rootUidSnap.exists) {
+        appData = rootUidSnap.data()?.appData || rootUidSnap.data()?.data;
+      }
+    }
+    if (!appData && user.email) {
+      const legacyEmail = user.email.toLowerCase();
+      const emailRef = db.collection("users").doc(legacyEmail).collection("progress").doc("data");
+      const emailSnap = await emailRef.get();
+      if (emailSnap.exists) {
+        appData = emailSnap.data()?.data || emailSnap.data();
+      }
+      if (!appData) {
+        const rootEmailSnap = await db.collection("users").doc(legacyEmail).get();
+        if (rootEmailSnap.exists) {
+          appData = rootEmailSnap.data()?.appData || rootEmailSnap.data()?.data;
+        }
+      }
+      if (appData) {
+        console.log(`[DATA MIGRATION] Migrating data for user ${user.uid} from legacy email ${legacyEmail}`);
+        const batch = db.batch();
+        const payload = {
+          email: legacyEmail,
+          data: appData,
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        batch.set(uidRef, payload, { merge: true });
+        batch.set(db.collection("users").doc(user.uid), { appData }, { merge: true });
+        await batch.commit();
+      }
+    }
+    res.json({ ok: true, data: appData || null });
   } catch (error) {
     res.status(401).json({ ok: false, error: error.message });
   }
 });
-app.post("/api/data", async (req, res) => {
+app.post("/api/data", requireFirebaseUser, async (req, res) => {
   try {
-    const user = await requireUser(req);
-    const email = (req.body.email || user.email || "").toLowerCase();
+    const user = req.user;
+    const { data } = req.body;
+    if (data && (data.role || data.roles || data.admin || data.uid)) {
+      return res.status(400).json({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        message: "Modifying security-related fields is strictly prohibited."
+      });
+    }
     const db = getAdminDb();
+    const batch = db.batch();
     const payload = {
-      email,
-      data: req.body.data || {},
+      email: user.email?.toLowerCase() || "",
+      data: data || {},
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
-    const batch = db.batch();
-    batch.set(db.collection("users").doc(user.uid).collection("progress").doc("data"), payload, { merge: true });
-    batch.set(db.collection("users").doc(user.uid), { appData: payload.data, email }, { merge: true });
-    if (email) {
-      batch.set(db.collection("users").doc(email).collection("progress").doc("data"), payload, { merge: true });
-      batch.set(db.collection("users").doc(email), { appData: payload.data, migratedToUid: user.uid }, { merge: true });
-    }
+    const uidDocRef = db.collection("users").doc(user.uid).collection("progress").doc("data");
+    batch.set(uidDocRef, payload, { merge: true });
+    batch.set(db.collection("users").doc(user.uid), { appData: data || {} }, { merge: true });
     await batch.commit();
     res.json({ success: true, ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
   }
 });
-app.get("/api/cookies", async (req, res) => {
+app.post("/api/admin/support/data", requireFirebaseUser, requireRole("admin"), adminLimiter, async (req, res) => {
   try {
-    const user = await requireUser(req);
-    const snap = await getAdminDb().collection("users").doc(user.uid).collection("bypass").doc("config").get();
-    res.json({ ok: true, cookies: snap.exists ? snap.data()?.cookies || "" : "" });
-  } catch {
-    res.json({ ok: true, cookies: "" });
-  }
-});
-app.post("/api/cookies", async (req, res) => {
-  try {
-    const user = await requireUser(req);
-    const cookies = String(req.body.cookies || "");
-    await getAdminDb().collection("users").doc(user.uid).collection("bypass").doc("config").set({
-      cookies,
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-    }, { merge: true });
-    res.json({ ok: true });
-  } catch (error) {
-    res.status(401).json({ ok: false, error: error.message });
-  }
-});
-app.post("/api/send-email", async (req, res) => {
-  try {
-    await requireUser(req);
-    const { to, subject, html, text } = req.body || {};
-    if (!to || !subject || !html && !text) {
-      return res.status(400).json({ ok: false, error: "to, subject, and html/text are required" });
-    }
-    if (!process.env.SEND_EMAIL_WEBHOOK_URL) {
-      return res.status(501).json({
+    const adminUser = req.user;
+    const { targetUid, operation, reason, data } = req.body;
+    if (!targetUid || !operation || !reason) {
+      return res.status(400).json({
         ok: false,
-        code: "EMAIL_NOT_CONFIGURED",
-        error: "Email sending is not configured on this server."
+        code: "VALIDATION_FAILED",
+        message: "Missing targetUid, operation, or reason for administrative action."
       });
     }
-    const response = await fetch(process.env.SEND_EMAIL_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to, subject, html, text })
-    });
-    res.status(response.ok ? 200 : 502).json({ ok: response.ok });
+    const db = getAdminDb();
+    const targetRef = db.collection("users").doc(targetUid);
+    const targetSnap = await targetRef.get();
+    if (!targetSnap.exists) {
+      return res.status(404).json({ ok: false, error: "Target user profile not found." });
+    }
+    let previousStateSummary = {};
+    if (targetSnap.exists) {
+      previousStateSummary = { appData: targetSnap.data()?.appData || {} };
+    }
+    if (operation === "view") {
+      let targetData = null;
+      const progRef = targetRef.collection("progress").doc("data");
+      const progSnap = await progRef.get();
+      if (progSnap.exists) {
+        targetData = progSnap.data()?.data || progSnap.data();
+      } else {
+        targetData = targetSnap.data()?.appData || targetSnap.data()?.data;
+      }
+      await createAuditEvent({
+        actorUid: adminUser.uid,
+        actorRoles: adminUser.roles || ["admin"],
+        operation: "admin_view_user_data",
+        targetType: "user_data",
+        targetId: targetUid,
+        previousState: previousStateSummary,
+        newState: { action: "viewed" },
+        reason,
+        result: "success"
+      });
+      return res.json({ ok: true, data: targetData });
+    } else if (operation === "edit") {
+      if (!data) {
+        return res.status(400).json({ ok: false, error: "Missing data payload for edit operation." });
+      }
+      const batch = db.batch();
+      const payload = {
+        data,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      batch.set(targetRef.collection("progress").doc("data"), payload, { merge: true });
+      batch.set(targetRef, { appData: data }, { merge: true });
+      await batch.commit();
+      await createAuditEvent({
+        actorUid: adminUser.uid,
+        actorRoles: adminUser.roles || ["admin"],
+        operation: "admin_edit_user_data",
+        targetType: "user_data",
+        targetId: targetUid,
+        previousState: previousStateSummary,
+        newState: { appData: data },
+        reason,
+        result: "success"
+      });
+      return res.json({ ok: true, message: "User data updated successfully by admin." });
+    } else {
+      return res.status(400).json({ ok: false, error: `Unsupported administrative operation: ${operation}` });
+    }
   } catch (error) {
-    res.status(401).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
-app.use("/api/auth", authRoutes);
-app.use("/api/ai", aiRoutes);
-app.use("/api", aiRoutes);
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok" });
+app.get("/api/quota", async (req, res) => {
+  res.status(501).json({ ok: false, error: "not_implemented" });
 });
-async function startServer() {
-  const distPath = import_path3.default.join(process.cwd(), "dist");
-  const serveBuiltClient = process.env.NODE_ENV === "production" || import_fs4.default.existsSync(import_path3.default.join(distPath, "index.html"));
-  if (!serveBuiltClient) {
-    const { createServer: createViteServer } = await import("vite");
-    const vite = await createViteServer({
+app.post("/api/send-email", async (req, res) => {
+  res.status(501).json({ ok: false, error: "not_implemented" });
+});
+app.post("/api/quiz", async (req, res) => {
+  res.status(501).json({ ok: false, error: "not_implemented" });
+});
+app.post("/api/lesson-optimizer", async (req, res) => {
+  res.status(501).json({ ok: false, error: "not_implemented" });
+});
+app.get("/api/past-papers/local/:id", async (req, res) => {
+  res.status(501).json({ ok: false, error: "not_implemented" });
+});
+app.get("/api/cookies", (req, res) => res.json({}));
+app.use("/api/auth", authRoutes);
+startOcrWorker();
+app.use("/api", routes_default);
+app.use(["/api/ai", "/api"], aiRoutes);
+app.use("/api/realtime", routes_default2);
+app.post("/api/profile/target-zscore", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const { targetZScore } = req.body;
+    if (targetZScore === void 0 || typeof targetZScore !== "number" || targetZScore < 0 || targetZScore > 4) {
+      return res.status(400).json({ ok: false, error: "Invalid targetZScore" });
+    }
+    const db = getAdminDb();
+    const batch = db.batch();
+    const uidRef = db.collection("users").doc(user.uid).collection("profile").doc("main");
+    batch.set(uidRef, { targetZScore, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, { merge: true });
+    batch.set(db.collection("users").doc(user.uid), { targetZScore, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, { merge: true });
+    const progRef = db.collection("users").doc(user.uid).collection("progress").doc("data");
+    batch.set(progRef, { targetZScore, data: { targetZ: targetZScore }, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, { merge: true });
+    if (user.email) {
+      const emailRef = db.collection("users").doc(user.email.toLowerCase()).collection("profile").doc("main");
+      batch.set(emailRef, { targetZScore, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, { merge: true });
+      batch.set(db.collection("users").doc(user.email.toLowerCase()), { targetZScore, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }, { merge: true });
+    }
+    await batch.commit();
+    const { loadUserAIContext: loadUserAIContext2 } = await Promise.resolve().then(() => (init_userContext(), userContext_exports));
+    const ctx = await loadUserAIContext2(user.uid, user.email);
+    res.json({ ok: true, targetZScore, zScoreContext: ctx?.zScoreContext });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+app.post("/api/ai/model-test", requireFirebaseUser, adminLimiter, async (req, res, next) => {
+  try {
+    const user = req.user;
+    const isAdmin = !!(user.admin || user.roles && user.roles.includes("admin"));
+    if (!isAdmin) {
+      return res.status(403).json({ ok: false, code: "FORBIDDEN", message: "Admin access required" });
+    }
+    if (!env.ENABLE_MODEL_TEST_ROUTE || env.NODE_ENV === "production") {
+      return res.status(501).json({ ok: false, code: "FEATURE_NOT_AVAILABLE", message: "This feature is not available in production." });
+    }
+    const ai9 = getAIClient();
+    const testModel = async (modelName) => {
+      try {
+        const result = await ai9.models.generateContent({
+          model: modelName,
+          contents: "Return only the word OK"
+        });
+        return { model: modelName, ok: true, response: result.text };
+      } catch (e) {
+        return { model: modelName, ok: false, error: e.message };
+      }
+    };
+    const results = await Promise.all([
+      testModel(AI_MODELS.pro),
+      testModel(AI_MODELS.default),
+      testModel(AI_MODELS.urlContext)
+    ]);
+    res.json({ ok: true, results });
+  } catch (e) {
+    next(e);
+  }
+});
+function getPublicOrDistFile(fileName) {
+  const distFile = import_path2.default.join(process.cwd(), "dist", fileName);
+  if (import_fs3.default.existsSync(distFile)) return distFile;
+  const publicFile = import_path2.default.join(process.cwd(), "public", fileName);
+  if (import_fs3.default.existsSync(publicFile)) return publicFile;
+  return null;
+}
+app.get(["/manifest.json", "/manifest.webmanifest"], (req, res) => {
+  const file = getPublicOrDistFile("manifest.webmanifest");
+  if (file) {
+    res.type("application/manifest+json");
+    return res.sendFile(file);
+  }
+  res.status(404).json({ error: "manifest not found" });
+});
+app.get(["/pdf.worker.min.mjs", "/pdf.worker.min.js"], (req, res) => {
+  const file = getPublicOrDistFile(req.path.substring(1));
+  if (file) {
+    res.type("text/javascript");
+    return res.sendFile(file);
+  }
+  res.status(404).send("worker not found");
+});
+app.use("/api", (req, res) => {
+  res.status(404).json({ ok: false, code: "API_NOT_FOUND", message: "API endpoint not found" });
+});
+if (process.env.NODE_ENV !== "production") {
+  import("vite").then(({ createServer: createViteServer }) => {
+    createViteServer({
       server: { middlewareMode: true },
       appType: "spa"
+    }).then((vite) => {
+      app.use(vite.middlewares);
+      if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
+        app.listen(PORT2, "0.0.0.0", () => {
+          console.log(`Server running on port ${PORT2}`);
+        });
+      }
     });
-    app.use(vite.middlewares);
-  } else {
-    app.use(import_express3.default.static(distPath));
-    app.get("*", (_req, res) => {
-      res.sendFile(import_path3.default.join(distPath, "index.html"));
+  });
+} else {
+  const distPath = import_path2.default.join(process.cwd(), "dist");
+  app.use(import_express14.default.static(distPath));
+  app.get("/assets/*", (req, res) => {
+    res.status(404).type("text/plain").send("Static asset not found");
+  });
+  app.get("*", (req, res) => {
+    res.sendFile(import_path2.default.join(distPath, "index.html"));
+  });
+  if (process.env.NODE_ENV !== "test" && !process.env.VERCEL) {
+    app.listen(PORT2, "0.0.0.0", () => {
+      console.log(`Server running on port ${PORT2}`);
     });
   }
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on port ${PORT}`);
-  });
 }
-if (process.env.VERCEL !== "1" && process.env.NODE_ENV !== "test") {
-  startServer().catch((error) => {
-    console.error("Failed to start server", error);
-    process.exit(1);
-  });
-}
+app.use(globalErrorHandler);
 var server_default = app;
-// Annotate the CommonJS export names for ESM import in node:
-0 && (module.exports = {
-  app,
-  startServer
-});
 //# sourceMappingURL=server.cjs.map

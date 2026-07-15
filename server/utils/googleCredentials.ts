@@ -76,19 +76,8 @@ export function parseGoogleServiceAccountJson(
   rawValue: string,
   source = "GOOGLE_APPLICATION_CREDENTIALS_JSON",
 ): GoogleServiceAccount {
-  let raw = rawValue.replace(/^\uFEFF/, "").trim();
+  const raw = rawValue.trim();
   if (!raw) configurationError(source, "is empty");
-
-  raw = raw
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "")
-    .trim();
-  const assignment = raw.match(/^(?:GOOGLE_APPLICATION_CREDENTIALS_JSON|GOOGLE_SERVICE_ACCOUNT_JSON)\s*=\s*([\s\S]+)$/i);
-  if (assignment) raw = assignment[1].trim();
-  if (raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'")) {
-    const unwrapped = raw.slice(1, -1).trim();
-    if (unwrapped.startsWith("{") || unwrapped.startsWith('\"{')) raw = unwrapped;
-  }
 
   if (/^(?:PASTE|REPLACE|YOUR)[_\s-]/i.test(raw) || /^<[^>]+>$/.test(raw)) {
     configurationError(source, "still contains a placeholder instead of service-account JSON");
@@ -101,19 +90,10 @@ export function parseGoogleServiceAccountJson(
     // one extra JSON-encoding layer around a pasted secret.
     if (typeof parsed === "string") parsed = JSON.parse(parsed);
   } catch {
-    try {
-      const compact = raw.replace(/\s+/g, "");
-      if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact) || compact.length % 4 !== 0) throw new Error("not base64");
-      const decoded = Buffer.from(compact, "base64").toString("utf8").replace(/^\uFEFF/, "").trim();
-      if (!decoded.startsWith("{") && !decoded.startsWith('\"')) throw new Error("not JSON base64");
-      parsed = JSON.parse(decoded);
-      if (typeof parsed === "string") parsed = JSON.parse(parsed);
-    } catch {
-      return configurationError(
-        source,
-        "is not valid JSON or Base64 JSON; provide the complete downloaded service-account file",
-      );
-    }
+    return configurationError(
+      source,
+      "is not valid JSON; paste the entire downloaded file from the first { to the final }",
+    );
   }
 
   return validateServiceAccountObject(parsed, source);

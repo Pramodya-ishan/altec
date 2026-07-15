@@ -146,9 +146,9 @@ function AuthOverlay() {
 
   if (isAuthLoading) {
     return (
-      <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-[#f7f8fa]" role="status" aria-live="polite" aria-label="Checking sign-in">
-        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-[0_8px_30px_rgba(15,23,42,0.06)]">
-          <Loader2 className="h-5 w-5 animate-spin text-slate-700" />
+      <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-white" role="status" aria-live="polite" aria-label="Checking sign-in">
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 px-5 py-4 shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
           <div>
             <p className="text-sm font-bold text-slate-800">Opening your workspace</p>
             <p className="text-xs text-slate-500">Checking your secure session…</p>
@@ -161,16 +161,16 @@ function AuthOverlay() {
   if (user) return null;
 
   return (
-    <div className="fixed inset-0 bg-[#f7f8fa] z-[999999] flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-[0_18px_60px_rgba(15,23,42,0.08)] p-8 max-w-sm w-full text-center flex flex-col gap-6">
+    <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-slate-50 p-4">
+      <div className="flex w-full max-w-sm flex-col gap-6 rounded-[1.5rem] border border-slate-200 bg-white p-8 text-center shadow-[0_20px_60px_rgba(15,23,42,0.1)]">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-14 h-14 rounded-xl bg-slate-950 text-white flex items-center justify-center">
+          <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shadow-sm border border-indigo-100">
             <GraduationCap className="w-8 h-8" />
           </div>
           <div className="space-y-1.5">
-            <h2 className="text-2xl font-semibold text-slate-950 tracking-tight">A/L Learning Workspace</h2>
+            <h2 className="text-2xl font-black text-slate-900 tracking-tight">Tec A/L</h2>
             <p className="text-sm font-medium text-slate-500">
-              Sign in to continue to your lessons, papers and progress.
+              Sign in with your Google account to access your A/L dashboard.
             </p>
           </div>
         </div>
@@ -200,9 +200,10 @@ function AuthOverlay() {
 }
 
 function AppContent() {
-  const { theme, isSidebarOpen, setCurrentView, user, isUserDataLoading, hasHydratedUserData } = useApp();
+  const { theme, isSidebarOpen, setCurrentView, user, isUserDataLoading, hasHydratedUserData, currentSubject } = useApp();
   const location = useLocation();
   const isChatRoute = location.pathname === "/clora-x" || location.pathname === "/ai-chat";
+  const previousSubjectRef = React.useRef(currentSubject);
 
   React.useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -215,6 +216,12 @@ function AppContent() {
      }
      setCurrentView(path as any);
   }, [location.pathname, setCurrentView]);
+
+  React.useEffect(() => {
+    if (previousSubjectRef.current === currentSubject) return;
+    previousSubjectRef.current = currentSubject;
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  }, [currentSubject]);
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 relative">
@@ -237,7 +244,7 @@ function AppContent() {
                 {user && isUserDataLoading && !hasHydratedUserData ? (
                   <PageSkeleton pathname={location.pathname} />
                 ) : (
-                <Routes location={location} key={location.pathname}>
+                <Routes location={location}>
                   <Route path="/" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="/paper-structure" element={<PaperStructureView />} />
                   <Route path="/question-marks" element={<Navigate to="/paper-structure" replace />} />

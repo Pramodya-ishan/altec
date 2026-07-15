@@ -19,7 +19,6 @@ import { CloraToolPalette } from '../ui/clora/CloraToolPalette';
 import { CloraSourceDrawer } from '../ui/clora/CloraSourceDrawer';
 import { openSourcePdf } from '../../lib/sourceActions';
 import { ErrorLogModal } from '../modals/ErrorLogModal';
-const PdfViewerModal = React.lazy(() => import('../PdfViewerModal').then(m => ({ default: m.PdfViewerModal })));
 import {
   Paperclip,
   Loader2,
@@ -110,7 +109,7 @@ function ThoughtProcessPanel({ msg, isStreamingActive, status, tools }: any) {
     <div className="flex flex-col gap-2 mb-3 max-w-full">
       <div className="flex flex-wrap items-center gap-2">
         <AIWorkflowStatus
-          status={isStreamingActive && status ? status : { stage: 'done', label: 'Sources' }}
+          status={isStreamingActive && status ? status : { stage: 'done', label: 'Reasoning Process' }}
           onClick={() => setExpanded(!expanded)}
         />
       </div>
@@ -128,7 +127,7 @@ function ThoughtProcessPanel({ msg, isStreamingActive, status, tools }: any) {
                 <div className="space-y-2">
                   <h4 className="text-[10px] font-black text-slate-500/80 uppercase tracking-widest flex items-center gap-1.5 border-b border-slate-200/40 pb-1">
                     <Database className="w-3 h-3 text-slate-400" />
-                    Sources used
+                    Mapped Sources
                   </h4>
                   <div className="flex flex-wrap gap-1.5 sm:gap-2.5">
                     {msg.sources.filter((s: any) => s.usedInAnswer !== false && (s.storagePath || s.url || s.id || s.sourceId)).map((src: any, i: number) => (
@@ -136,15 +135,12 @@ function ThoughtProcessPanel({ msg, isStreamingActive, status, tools }: any) {
                         key={i}
                         className="flex items-center gap-2.5 bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 text-left pl-2 pr-4 py-2 rounded-xl transition-all shadow-sm group active:scale-95"
                         onClick={() => {
+                          if (src.url) {
+                            window.open(src.url, '_blank');
+                            return;
+                          }
                           import('../../lib/sourceActions').then(m => {
-                            // API source routes require the Firebase bearer token. Never
-                            // open them as a plain anchor/window because that produces a
-                            // misleading LOGIN_REQUIRED JSON page.
-                            m.openSourcePdf({
-                              ...src,
-                              id: src.id || src.sourceId,
-                              url: src.url
-                            }).catch((e: any) => {
+                            m.openSourcePdf(src).catch((e: any) => {
                               console.error('Download trigger failed:', e);
                               if (e.message?.includes('LOGIN_REQUIRED')) {
                                  alert('PDF open කරන්න login අවශ්‍යයි. නැවත sign in කරන්න.');
@@ -216,8 +212,6 @@ export default function CloraXView() {
 
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [activeSources, setActiveSources] = useState<any[]>([]);
-  const [pdfModalOpen, setPdfModalOpen] = useState(false);
-  const [pdfModalUrl, setPdfModalUrl] = useState('');
 
 const [messages, setMessages] = useState<{
     role: 'user' | 'assistant',
@@ -1460,36 +1454,16 @@ const [messages, setMessages] = useState<{
         <CloraSourceDrawer
           sources={activeSources}
           onClose={() => setIsDrawerOpen(false)}
-          onSourceClick={async (source, preview) => {
-             if (preview) {
-                try {
-                  const { getPdfUrl } = await import("../../lib/sourceActions");
-                  const url = await getPdfUrl(source);
-                  setPdfModalUrl(url);
-                  setPdfModalOpen(true);
-                } catch (e) {
-                  showNotification("PDF preview open කරන්න බැහැ. Open in new tab try කරන්න.", "error");
-                }
-             } else {
-                openSourcePdf(source).catch((e: any) => {
-                   console.error("Failed to open source:", e);
-                });
-             }
+          onSourceClick={(source) => {
+            openSourcePdf(source).catch((e: any) => {
+              console.error("Failed to open source:", e);
+              showNotification("PDF එක open කරන්න බැහැ. නැවත sign in කර retry කරන්න.", "error");
+            });
           }}
         />
       }
       main={
         <>
-          {pdfModalOpen && (
-            <React.Suspense fallback={null}>
-              <PdfViewerModal
-                isOpen={pdfModalOpen}
-                onClose={() => setPdfModalOpen(false)}
-                pdfUrl={pdfModalUrl}
-                title="Source Document"
-              />
-            </React.Suspense>
-          )}
           <TtsComposerModal uploadedFile={uploadedFile}
              isOpen={showTtsModal}
              onClose={() => setShowTtsModal(false)}
@@ -1550,14 +1524,14 @@ const [messages, setMessages] = useState<{
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.95 }}
                 onClick={() => scrollToBottom('smooth')}
-                className="absolute bottom-36 left-1/2 z-30 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg transition-colors hover:bg-slate-50"
+                className="absolute bottom-28 left-1/2 z-30 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg transition-colors hover:bg-slate-50 sm:bottom-36"
               >
                 New message ↓
               </motion.button>
             )}
           </AnimatePresence>
 
-          <div className="relative shrink-0 border-t border-slate-100 bg-white/95 pt-3 backdrop-blur">
+          <div className="relative shrink-0 border-t border-slate-100 bg-white/95 pt-2 backdrop-blur sm:pt-3">
             <CloraComposer
               input={input}
               setInput={setInput}

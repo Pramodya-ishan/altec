@@ -91,7 +91,8 @@ export function CloraComposer({
   useEffect(() => {
     if (!textareaRef.current) return;
     textareaRef.current.style.height = 'auto';
-    textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 176)}px`;
+    const mobileLimit = window.matchMedia('(max-width: 640px)').matches ? 112 : 176;
+    textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, mobileLimit)}px`;
   }, [input]);
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -134,7 +135,7 @@ export function CloraComposer({
 
   return (
     <div
-      className="relative mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5 sm:pb-4"
+      className="relative mx-auto w-full max-w-3xl px-2 pb-[max(0.35rem,env(safe-area-inset-bottom))] sm:px-5 sm:pb-4"
     >
       <CloraToolPalette
         isOpen={showCommandPalette}
@@ -145,7 +146,7 @@ export function CloraComposer({
 
       <motion.div
         layout
-        className="overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.08)] transition focus-within:border-slate-400 focus-within:shadow-[0_12px_36px_rgba(15,23,42,0.12)]"
+        className="overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-[0_6px_22px_rgba(15,23,42,0.07)] transition focus-within:border-slate-400 sm:rounded-[26px]"
       >
         {(uploadTelemetry || uploadError) && (
           <div className="border-b border-slate-100 px-4 py-3">
@@ -211,11 +212,11 @@ export function CloraComposer({
           placeholder="Ask about a lesson, paper, or result"
           disabled={disabled}
           rows={1}
-          className="block max-h-36 min-h-12 w-full resize-none bg-transparent px-4 pb-1 pt-3 text-[15px] leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed sm:max-h-44 sm:min-h-14 sm:px-5 sm:pb-2 sm:pt-4"
+          className="block max-h-28 min-h-10 w-full resize-none bg-transparent px-4 pb-0.5 pt-2.5 text-[15px] leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed sm:max-h-44 sm:min-h-14 sm:px-5 sm:pb-2 sm:pt-4"
           aria-label="Message the study assistant"
         />
 
-        <div className="flex items-center justify-between gap-3 px-3 pb-3">
+        <div className="flex items-center justify-between gap-3 px-2.5 pb-2.5 sm:px-3 sm:pb-3">
           <div className="flex items-center gap-1">
             <button type="button" onClick={onAttachClick} disabled={disabled} className="rounded-full p-2.5 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Attach PDF, image, audio, or video" title="Attach PDF, image, audio, or video">
               <Paperclip className="h-5 w-5" />
@@ -252,7 +253,6 @@ export function CloraComposer({
           </div>
         </div>
       </motion.div>
-      <p className="mt-2 text-center text-[10px] text-slate-400">AI answers can be wrong. Verify important exam information.</p>
     </div>
   );
 }

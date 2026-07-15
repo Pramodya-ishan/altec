@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useRe
 import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
 import { isFirebaseEnabled, db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, deleteDoc } from 'firebase/firestore';
-import { GoogleAuthProvider, signInWithCredential, signInWithPopup, getRedirectResult, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, browserLocalPersistence, setPersistence } from 'firebase/auth';
+import { GoogleAuthProvider, signInWithCredential, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 
 type ModalsState = {
   playlist: { open: boolean; topic: string };
@@ -199,7 +199,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setProfile({
       email,
       username: email.split('@')[0],
-      picture: user?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
+      picture: user?.picture || '',
       bio: 'Student on A/L Tech Blueprint journey!',
       updatedAt: new Date().toISOString()
     });
@@ -275,7 +275,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setProfile({
         email: 'local_user',
         username: 'LocalStudent',
-        picture: `https://api.dicebear.com/7.x/bottts/svg?seed=LocalStudent`,
+        picture: '',
         bio: 'Student on A/L Tech/SFT/ICT journey!',
         updatedAt: new Date().toISOString()
       });
@@ -669,12 +669,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let unsubscribeAutoAuth = () => {};
     
     if (isFirebaseEnabled && auth) {
-      // Make the authenticated Firebase user survive refreshes and tab changes.
-      // This is explicit because old redirect attempts may have left the SDK
-      // using session/in-memory persistence in this browser.
-      void setPersistence(auth, browserLocalPersistence).catch((error) => {
-        console.warn('Unable to enable local Firebase auth persistence:', error);
-      });
       void getRedirectResult(auth).then((redirectResult) => {
         if (!redirectResult) return;
         const credential = GoogleAuthProvider.credentialFromResult(redirectResult);
@@ -711,7 +705,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setUser({
             email: firebaseUser.email || '',
             name: firebaseUser.displayName || '',
-            picture: firebaseUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(firebaseUser.email || '')}`,
+            picture: firebaseUser.photoURL || '',
             token: savedToken,
             emailVerified: firebaseUser.emailVerified
           });
@@ -728,36 +722,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }, 1500);
           setIsAuthLoading(false);
         } else {
-          // If Firebase has no user but we have local fallback, we can try
-          const savedUserSession = localStorage.getItem('email_user_session');
-          if (savedUserSession) {
-             try {
-                const parsedUser = JSON.parse(savedUserSession);
-                setUser(parsedUser);
-                const savedProfile = localStorage.getItem('email_user_profile');
-                if (savedProfile) setProfile(JSON.parse(savedProfile));
-                
-                const savedData = localStorage.getItem(`student_progress_data_${parsedUser.email.toLowerCase()}`);
-                if (savedData) {
-                   try { setData(JSON.parse(savedData)); } catch(e) {}
-                }
-
-                try {
-                  await signInAnonymously(auth);
-                } catch(e) {}
-                
-                setIsAuthLoading(false);
-                void fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData });
-                setTimeout(() => {
-                  fetchYoutubeCookies(parsedUser.email).catch(() => {});
-                }, 1500);
-             } catch(e) {}
-          } else {
-             const savedToken = localStorage.getItem('google_access_token');
-             if (savedToken) {
-               await fetchUserInfo(savedToken);
-             }
-          }
+          // Firebase Auth is the source of truth. A cached profile must never be
+          // promoted into an anonymous session because the API then receives an
+          // anonymous ID token and correctly rejects the user as unauthenticated.
+          setUser(null);
+          setProfile(null);
+          localStorage.removeItem('email_user_session');
+          localStorage.removeItem('email_user_profile');
           setIsAuthLoading(false);
         }
       });
@@ -813,80 +784,74 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       if (isFirebaseEnabled && auth) {
         const provider = new GoogleAuthProvider();
+        
         provider.setCustomParameters({ prompt: 'select_account' });
-
-        // Vercel and firebaseapp.com are different origins. Redirect auth uses
-        // a third-party storage bridge that modern browsers block. Popup auth
-        // completes on the current page and is the supported Firebase fix for
-        // apps hosted outside Firebase Hosting.
-        await setPersistence(auth, browserLocalPersistence);
-        const result = await signInWithPopup(auth, provider);
-
+        let result;
+        try {
+          result = await signInWithPopup(auth, provider);
+        } catch (popupError: any) {
+          if (["auth/popup-blocked", "auth/operation-not-supported-in-this-environment"].includes(String(popupError?.code))) {
+            await signInWithRedirect(auth, provider);
+            return;
+          }
+          throw popupError;
+        }
+        
         const credential = GoogleAuthProvider.credentialFromResult(result);
         const accessToken = credential?.accessToken;
         if (accessToken) {
           localStorage.setItem('google_access_token', accessToken);
         }
 
-        // Firebase authentication is the source of truth. Persist it before
-        // calling our optional profile/session bootstrap API so a temporary
-        // backend error never sends a successfully authenticated user back to
-        // the sign-in screen.
-        const firebaseUser = result.user;
-        const clientUser: User = {
-          email: firebaseUser.email || '',
-          name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Student',
-          picture: firebaseUser.photoURL || undefined,
-          token: accessToken || undefined,
-          emailVerified: firebaseUser.emailVerified,
+        const immediateUser = {
+          email: result.user.email || '',
+          name: result.user.displayName || result.user.email?.split('@')[0] || 'Student',
+          picture: result.user.photoURL || '',
+          token: accessToken || '',
+          emailVerified: result.user.emailVerified,
         };
-        setUser(clientUser);
-        localStorage.setItem('email_user_session', JSON.stringify(clientUser));
-
-        try {
-          const idToken = await firebaseUser.getIdToken(true);
-          const res = await apiFetch('/api/auth/session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ idToken })
+        setUser(immediateUser);
+        if (!profile || profile.email !== immediateUser.email) {
+          setProfile({
+            email: immediateUser.email,
+            username: immediateUser.name,
+            picture: immediateUser.picture,
+            bio: 'Technology Stream student',
+            updatedAt: new Date().toISOString(),
           });
-          const resData = await res.json();
-          if (res.ok && resData?.user) {
-            const serverUser = { ...resData.user, token: accessToken || resData.user.token };
-            setUser(serverUser);
-            localStorage.setItem('email_user_session', JSON.stringify(serverUser));
-            if (resData.profile) {
-              setProfile(resData.profile);
-              localStorage.setItem('email_user_profile', JSON.stringify(resData.profile));
-            }
-          } else {
-            console.warn('Server session bootstrap was unavailable; continuing with Firebase session.', resData);
-          }
-        } catch (sessionError) {
-          console.warn('Server session bootstrap failed; continuing with Firebase session.', sessionError);
         }
 
-        const savedData = localStorage.getItem(`student_progress_data_${clientUser.email.toLowerCase()}`);
-        if (savedData) {
-          try { setData(JSON.parse(savedData)); } catch(e) {}
+        const idToken = await result.user.getIdToken(true);
+        const res = await apiFetch('/api/auth/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken })
+        });
+        const resData = await res.json();
+        if (res.ok) {
+          setUser({ ...resData.user, token: accessToken || resData.user.token });
+          setProfile(resData.profile);
+          localStorage.setItem('email_user_session', JSON.stringify({ ...resData.user, token: accessToken || resData.user.token }));
+          localStorage.setItem('email_user_profile', JSON.stringify(resData.profile));
+          const savedData = localStorage.getItem(`student_progress_data_${resData.user.email.toLowerCase()}`);
+          if (savedData) {
+             try { setData(JSON.parse(savedData)); } catch(e) {}
+          }
+          void fetchUserDataFromDB(resData.user.email, { showLoading: false });
+          void fetchYoutubeCookies(resData.user.email);
+          showNotification("Successfully logged in with Google!", "success");
+        } else {
+          // Firebase authentication already succeeded. Keep the signed-in user
+          // usable while the optional server profile recovers.
+          localStorage.setItem('email_user_session', JSON.stringify(immediateUser));
+          showNotification("Signed in. Profile sync will retry in the background.", "info");
         }
-        void fetchUserDataFromDB(clientUser.email, { showLoading: !savedData });
-        void fetchYoutubeCookies(clientUser.email);
-        showNotification("Successfully logged in with Google!", "success");
       } else {
          showNotification("Firebase is required for Google login", "error");
       }
     } catch (error: any) {
       console.error("Google Popup Login Error:", error);
-      const code = typeof error?.code === 'string' ? error.code : '';
-      const message = code === 'auth/popup-blocked'
-        ? 'Google sign-in popup was blocked. Allow popups for this site and try again.'
-        : code === 'auth/popup-closed-by-user'
-          ? 'Google sign-in was cancelled before it finished.'
-          : code === 'auth/unauthorized-domain'
-            ? 'This domain is not authorized in Firebase Authentication settings.'
-            : `Google login failed${code ? ` (${code})` : ''}.`;
-      showNotification(message, "error");
+      showNotification("Google login failed or was cancelled.", "error");
     }
     setIsAuthLoading(false);
   };

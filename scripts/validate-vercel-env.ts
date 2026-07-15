@@ -52,7 +52,6 @@ try {
   console.error("\n[VERCEL_ENV] Firebase/Google credential validation failed:");
   console.error(`  ${detail}`);
   console.error("  Fix: Vercel Project Settings -> Environment Variables -> GOOGLE_APPLICATION_CREDENTIALS_JSON");
-  console.error("  Set it to the complete Firebase service-account JSON or one-line Base64 of that JSON, then redeploy.");
-  console.error("  Do not use a filename, partial private key, or placeholder.\n");
+  console.error("  Replace the placeholder with the complete Firebase service-account JSON, then redeploy.\n");
   process.exit(1);
 }

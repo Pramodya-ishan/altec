@@ -7,15 +7,15 @@
 
 @layer utilities {
   .clora-gradient-text {
-    @apply text-slate-950;
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500;
   }
   
   .clora-bg-gradient {
-    @apply bg-slate-50;
+    @apply bg-gradient-to-b from-slate-50 to-white;
   }
   
   .clora-glass {
-    @apply bg-white border border-slate-200 shadow-sm;
+    @apply bg-white/80 backdrop-blur-xl border border-white/20 shadow-sm;
   }
   
   .clora-glass-dark {
@@ -27,7 +27,7 @@
   }
   
   .clora-hero-glow {
-    background: #ffffff;
+    background: radial-gradient(circle at 50% 0%, rgba(99, 102, 241, 0.15) 0%, rgba(255, 255, 255, 0) 70%);
   }
 
   .clora-scrollbar::-webkit-scrollbar {

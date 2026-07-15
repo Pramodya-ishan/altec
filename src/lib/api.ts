@@ -13,18 +13,28 @@ export async function getAuthToken(): Promise<string | null> {
   
   // Wait for auth state if not loaded
   return new Promise((resolve) => {
-    const unsubscribe = auth.onAuthStateChanged(async (user: any) => {
+    let settled = false;
+    let unsubscribe = () => {};
+    let timeout = 0;
+    const finish = (token: string | null) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
       unsubscribe();
+      resolve(token);
+    };
+    unsubscribe = auth.onAuthStateChanged(async (user: any) => {
       if (user) {
         try {
-          resolve(await user.getIdToken());
+          finish(await user.getIdToken());
         } catch (e) {
-          resolve(null);
+          finish(null);
         }
       } else {
-        resolve(null);
+        finish(null);
       }
     });
+    timeout = window.setTimeout(() => finish(null), 2500);
   });
 }
 

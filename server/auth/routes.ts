@@ -63,7 +63,7 @@ authRoutes.post("/session", async (req, res) => {
          userData.profile = {
            email: email.toLowerCase(),
            username: profileData?.username || decodedToken.name || email.split('@')[0],
-           picture: decodedToken.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
+           picture: decodedToken.picture || "",
            nic: profileData?.nic || "",
            mobileNumber: profileData?.mobileNumber || "",
            bday: profileData?.bday || "",

@@ -840,50 +840,40 @@ export default function AdmissionPredictorView() {
               {/* LEFT COLUMN: LIVE COHORT METRICS SUMMARY cards (5 columns) */}
               <div className="lg:col-span-5 space-y-6">
                 <div className="bg-transparent border-none shadow-none p-0 space-y-5">
-                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2 border-b border-slate-200/80 pb-3">
-                    <Database className="w-5 h-5 text-primary-500" /> Subject
-                    Predictor Metrics
-                  </h3>
-
                   <div className="grid grid-cols-3 gap-2.5">
-                    <div className="bg-indigo-50 border border-indigo-100 p-3.5 rounded-2xl text-center shadow-sm relative overflow-hidden">
+                    <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-3.5 text-center shadow-sm">
                       <div className="absolute top-0 right-0 p-2 opacity-[0.03] pointer-events-none -rotate-12">
                         <LineChart className="w-10 h-10 text-indigo-900" />
                       </div>
-                      <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-1 leading-tight relative">
-                        Practice Z
+                      <p className="relative mb-1 text-[10px] font-bold uppercase leading-tight tracking-widest text-slate-500">
+                        Z score
                       </p>
-                      <p className="text-lg font-black text-indigo-700 tracking-tight relative">
+                      <p className="relative text-lg font-black tracking-tight text-slate-900">
                         {formatZ(overallZScore, 4)}
                       </p>
                     </div>
-                    <div className="bg-emerald-50 border border-emerald-100 p-3.5 rounded-2xl text-center shadow-sm relative overflow-hidden">
+                    <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-3.5 text-center shadow-sm">
                       <div className="absolute top-0 right-0 p-2 opacity-[0.03] pointer-events-none -rotate-12">
                         <MapPin className="w-10 h-10 text-emerald-900" />
                       </div>
-                      <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest mb-1 leading-tight relative">
+                      <p className="relative mb-1 text-[10px] font-bold uppercase leading-tight tracking-widest text-slate-500">
                         District rank
                       </p>
-                      <p className="text-sm font-black text-emerald-700 relative">
+                      <p className="relative text-sm font-black text-slate-900">
                         ≈ {prediction.estimatedDistrictRank.toLocaleString()}
                       </p>
                     </div>
-                    <div className="bg-amber-50 border border-amber-100 p-3.5 rounded-2xl text-center shadow-sm relative overflow-hidden">
+                    <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-3.5 text-center shadow-sm">
                       <div className="absolute bottom-0 left-0 p-2 opacity-[0.03] pointer-events-none rotate-12">
                         <Globe className="w-10 h-10 text-amber-900" />
                       </div>
-                      <p className="text-[10px] font-bold text-amber-500 uppercase tracking-widest mb-1 leading-tight relative">
+                      <p className="relative mb-1 text-[10px] font-bold uppercase leading-tight tracking-widest text-slate-500">
                         Island rank
                       </p>
-                      <p className="text-sm font-black text-amber-700 relative">
+                      <p className="relative text-sm font-black text-slate-900">
                         ≈ {prediction.estimatedIslandRank.toLocaleString()}
                       </p>
                     </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-indigo-100 bg-indigo-50/70 px-4 py-3 text-xs leading-5 text-indigo-900">
-                    <strong>Exam Score Predictor estimate.</strong>{" "}
-                    Z-score and rank projections use your syllabus completion model. They are planning estimates, not official examination results.
                   </div>
 
                   <div className="space-y-4 pt-2">
@@ -896,23 +886,14 @@ export default function AdmissionPredictorView() {
                         <span className="text-xs font-bold text-slate-800 leading-none truncate flex-1 pl-1">
                           Science for Technology
                         </span>
-                        <span className="text-[10px] font-bold text-slate-400 font-mono shrink-0 whitespace-nowrap">
-                          {prediction.projections.sft.minimum}–{prediction.projections.sft.maximum} range
-                        </span>
                       </div>
                       <div className="flex items-baseline justify-between">
                         <div>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            Raw Score
-                          </span>
                           <div className="text-xl font-extrabold text-slate-900 leading-none">
                             {formatMark(sftMark)}
                           </div>
                         </div>
                         <div className="text-right">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            Subject Z
-                          </span>
                           <div className="text-xl font-mono font-black text-slate-700 leading-none">
                             {formatZ(sftZ)}
                           </div>
@@ -929,23 +910,14 @@ export default function AdmissionPredictorView() {
                         <span className="text-xs font-bold text-slate-800 leading-none truncate flex-1 pl-1">
                           Engineering Tech
                         </span>
-                        <span className="text-[10px] font-bold text-slate-400 font-mono shrink-0 whitespace-nowrap">
-                          {prediction.projections.et.minimum}–{prediction.projections.et.maximum} range
-                        </span>
                       </div>
                       <div className="flex items-baseline justify-between">
                         <div>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            Raw Score
-                          </span>
                           <div className="text-xl font-extrabold text-slate-900 leading-none">
                             {formatMark(etMark)}
                           </div>
                         </div>
                         <div className="text-right">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            Subject Z
-                          </span>
                           <div className="text-xl font-mono font-black text-slate-700 leading-none">
                             {formatZ(etZ)}
                           </div>
@@ -962,23 +934,14 @@ export default function AdmissionPredictorView() {
                         <span className="text-xs font-bold text-slate-800 leading-none truncate flex-1 pl-1">
                           Information Tech
                         </span>
-                        <span className="text-[10px] font-bold text-slate-400 font-mono shrink-0 whitespace-nowrap">
-                          {prediction.projections.ict.minimum}–{prediction.projections.ict.maximum} range
-                        </span>
                       </div>
                       <div className="flex items-baseline justify-between">
                         <div>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            Raw Score
-                          </span>
                           <div className="text-xl font-extrabold text-slate-900 leading-none">
                             {formatMark(ictMark)}
                           </div>
                         </div>
                         <div className="text-right">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            Subject Z
-                          </span>
                           <div className="text-xl font-mono font-black text-slate-700 leading-none">
                             {formatZ(ictZ)}
                           </div>
@@ -993,24 +956,7 @@ export default function AdmissionPredictorView() {
 
               {/* RIGHT COLUMN: CHRONOLOGICAL PROGRESSION AREA CHART (7 columns) */}
               <div className="lg:col-span-7 space-y-6">
-                <div className="bg-white rounded-[1.8rem] border border-slate-200 p-6 shadow-sm space-y-6">
-                  <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                      <LineChart className="w-5 h-5 text-primary-500" /> Z-Score
-                      vs. Admission Target Progress Tracker
-                    </h3>
-                    <div className="flex gap-3 items-center">
-                      {chartData.length > 0 && (
-                        <span className="text-[10px] font-bold text-slate-400 uppercase">
-                          Tracking since {new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric" }).format(new Date(`${chartData[0].name}T12:00:00`))}
-                        </span>
-                      )}
-                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-500">
-                        Predictor history
-                      </span>
-                    </div>
-                  </div>
-
+                <div className="space-y-6 rounded-[1.8rem] border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
                   <div className="w-full h-80 min-h-0 min-w-0">
                     {chartData.length === 0 ? (
                       <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
@@ -1079,12 +1025,6 @@ export default function AdmissionPredictorView() {
                             domain={[-2.5, 3.0]}
                           />
                           <Tooltip content={<CustomTooltip />} />
-                          <Legend
-                            verticalAlign="top"
-                            height={36}
-                            iconType="circle"
-                            wrapperStyle={{ fontSize: "11px", fontWeight: 700 }}
-                          />
                           <Area
                             type="monotone"
                             dataKey="Calculated Z Score"

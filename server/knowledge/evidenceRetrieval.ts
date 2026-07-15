@@ -62,16 +62,14 @@ export async function retrieveEvidence(
     
     const requestedYear = route.entities?.year;
     
-    const isConversationLocked = ["continue_grounded_discussion", "selected_resource_discussion", "lesson_question_discussion"].includes(intent)
-      && Boolean(activeConversationState?.selectedSourceId);
-    const strictRes = (isLessonEvidenceMode(intent) || isConversationLocked) ? { selectedSource: null } : resolveStrictSource(allAvailableSources, {
+    const strictRes = isLessonEvidenceMode(intent) ? { selectedSource: null } : resolveStrictSource(allAvailableSources, {
       year: requestedYear,
       subject,
       activeSourceId: activeConversationState?.selectedSourceId || null,
       prompt
     });
     
-    if (["continue_grounded_discussion", "selected_resource_discussion", "lesson_question_discussion"].includes(intent) && activeConversationState?.selectedSourceId) {
+    if (intent === "continue_grounded_discussion" && activeConversationState?.selectedSourceId) {
       selectedSource = allAvailableSources.find(s => s.id === activeConversationState.selectedSourceId || s.sourceId === activeConversationState.selectedSourceId);
       if (selectedSource) {
         evidenceStatus = "verified";
@@ -84,7 +82,7 @@ export async function retrieveEvidence(
       evidenceStatus = "verified";
       allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
       allowAnswerGeneration = true;
-    } else if (!isLessonEvidenceMode(intent) && !isConversationLocked) {
+    } else if (!isLessonEvidenceMode(intent)) {
       if (allAvailableSources.length > 0) {
         // Find best match manually if resolveStrictSource failed
         const matches = allAvailableSources.filter(s => {

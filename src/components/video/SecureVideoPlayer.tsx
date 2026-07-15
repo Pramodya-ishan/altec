@@ -11,6 +11,7 @@ type SessionResponse = {
   playbackMode?: "direct" | "hls";
   directUrl?: string;
   manifestUrl?: string;
+  expiresAt?: string;
   watermark: { userId: string; label: string };
 };
 
@@ -45,6 +46,9 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
   useEffect(() => {
     let disposed = false;
     let heartbeat: number | undefined;
+    let accessRefreshTimer: number | undefined;
+    let refreshInFlight: Promise<void> | null = null;
+    let lastErrorRefreshAt = 0;
     const video = videoRef.current;
     if (!video) return;
 
@@ -53,6 +57,56 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
       if (!sessionId) return;
       void apiFetch(`/api/video-sessions/${sessionId}/end`, { method: "POST", keepalive: true });
       sessionIdRef.current = null;
+    };
+
+    const scheduleAccessRefresh = (expiresAt?: string) => {
+      if (accessRefreshTimer) window.clearTimeout(accessRefreshTimer);
+      const expiresAtMs = expiresAt ? Date.parse(expiresAt) : NaN;
+      const delay = Number.isFinite(expiresAtMs)
+        ? Math.max(30_000, expiresAtMs - Date.now() - 90_000)
+        : 7 * 60_000;
+      accessRefreshTimer = window.setTimeout(() => void refreshAccess(), delay);
+    };
+
+    const applyDirectUrl = (url: string, preservePlayback: boolean) => {
+      const resumeAt = preservePlayback && Number.isFinite(video.currentTime) ? video.currentTime : 0;
+      const shouldResume = preservePlayback && !video.paused;
+      const restore = () => {
+        video.removeEventListener("loadedmetadata", restore);
+        if (resumeAt > 0 && Number.isFinite(video.duration)) {
+          video.currentTime = Math.min(resumeAt, Math.max(0, video.duration - 0.25));
+        }
+        if (shouldResume) void video.play().catch(() => undefined);
+      };
+      video.addEventListener("loadedmetadata", restore);
+      video.src = url;
+      video.load();
+    };
+
+    const refreshAccess = async () => {
+      if (disposed || !sessionIdRef.current) return;
+      if (refreshInFlight) return refreshInFlight;
+      refreshInFlight = (async () => {
+        const response = await apiFetch(`/api/video-sessions/${sessionIdRef.current}/refresh`, {
+          method: "POST",
+          headers: { "X-Device-ID": getDeviceId() },
+        });
+        const refreshed = await response.json().catch(() => null) as Partial<SessionResponse> & { message?: string } | null;
+        if (!response.ok || !refreshed?.ok) throw new Error(refreshed?.message || "Video access refresh failed");
+        if (disposed) return;
+        if (refreshed.playbackMode === "direct" && refreshed.directUrl) {
+          applyDirectUrl(refreshed.directUrl, true);
+        } else if (refreshed.manifestUrl && shakaRef.current) {
+          // The refreshed CDN cookie normally keeps the current stream alive.
+          // Reload only when the manifest address itself changes.
+          const currentUri = shakaRef.current.getAssetUri?.();
+          if (currentUri && currentUri !== refreshed.manifestUrl) {
+            await shakaRef.current.load(refreshed.manifestUrl, video.currentTime || 0);
+          }
+        }
+        scheduleAccessRefresh(refreshed.expiresAt);
+      })().finally(() => { refreshInFlight = null; });
+      return refreshInFlight;
     };
 
     const boot = async () => {
@@ -72,8 +126,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
         setPlaybackMode(mode);
 
         if (mode === "direct" && session.directUrl) {
-          video.src = session.directUrl;
-          video.load();
+          applyDirectUrl(session.directUrl, false);
         } else {
           if (!session.manifestUrl) throw new Error("The secure video source is unavailable.");
           shaka.polyfill.installAll();
@@ -102,6 +155,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
         const resumeAt = Number(localStorage.getItem(`clora_video_resume_${videoId}`) || 0);
         if (resumeAt > 5 && Number.isFinite(resumeAt)) video.currentTime = resumeAt;
         setStatus("Ready to play");
+        scheduleAccessRefresh(session.expiresAt);
 
         heartbeat = window.setInterval(() => {
           if (sessionIdRef.current) {
@@ -121,14 +175,26 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
         localStorage.setItem(`clora_video_resume_${videoId}`, String(video.currentTime));
       }
     };
+    const recoverExpiredSource = () => {
+      const now = Date.now();
+      if (!sessionIdRef.current || now - lastErrorRefreshAt < 15_000) return;
+      lastErrorRefreshAt = now;
+      setStatus("Refreshing secure video…");
+      void refreshAccess()
+        .then(() => setStatus("Ready to play"))
+        .catch((caught) => setError(caught?.message || "Video playback failed"));
+    };
     video.addEventListener("pause", saveProgress);
+    video.addEventListener("error", recoverExpiredSource);
     window.addEventListener("pagehide", endSession);
     void boot();
 
     return () => {
       disposed = true;
       if (heartbeat) window.clearInterval(heartbeat);
+      if (accessRefreshTimer) window.clearTimeout(accessRefreshTimer);
       video.removeEventListener("pause", saveProgress);
+      video.removeEventListener("error", recoverExpiredSource);
       window.removeEventListener("pagehide", endSession);
       saveProgress();
       endSession();
@@ -175,7 +241,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
         </header>
 
         <div className="relative aspect-video w-full overflow-hidden bg-black">
-          <video ref={videoRef} className="h-full w-full" playsInline />
+          <video ref={videoRef} className="h-full w-full" playsInline preload="metadata" controlsList="nodownload noremoteplayback" />
           {watermark && <div className="pointer-events-none absolute right-3 top-3 rounded-md bg-black/30 px-2 py-1 text-[9px] font-medium text-white/45">{watermark}</div>}
           {error && <div className="absolute inset-0 grid place-items-center bg-slate-950 p-8 text-center text-sm font-semibold text-rose-300">{error}</div>}
         </div>

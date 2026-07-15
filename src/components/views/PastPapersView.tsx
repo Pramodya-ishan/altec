@@ -3,12 +3,11 @@ import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../../lib/utils';
 import { openSourcePdf } from '../../lib/sourceActions';
 import { useApp } from '../../context/AppContext';
-import { db, storage, auth } from '../../lib/firebase';
+import { db, auth } from '../../lib/firebase';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { apiFetch } from '../../lib/api';
 import { getRecommendedUploadMode } from '../../lib/uploadMode';
 import { uploadPdfWithClientStorage, deletePrivateStorageObject, type UploadProgressSnapshot, type UploadTaskControls } from '../../lib/clientStorageUpload';
-import { DocumentCover } from '../ui/DocumentCover';
 
 function normalizeSubject(s: string) {
   return String(s || "").trim().toUpperCase();
@@ -66,7 +65,10 @@ export default function PastPapersView() {
   const uploadStartedAtRef = useRef(0);
   const uploadControlsRef = useRef<UploadTaskControls | null>(null);
 
-  const categories = ['A/L Past Papers', 'Model Papers'];
+  const categories = [
+    { value: 'A/L Past Papers', label: 'Papers' },
+    { value: 'Model Papers', label: 'Models' },
+  ];
 
   useEffect(() => {
     if (toast) {
@@ -99,13 +101,6 @@ export default function PastPapersView() {
     if (!file || !db) return;
 
     const user = auth.currentUser;
-    console.log({
-      uid: user?.uid,
-      email: user?.email,
-      isAnonymous: user?.isAnonymous,
-      storageBucket: storage?.app?.options?.storageBucket,
-    });
-
     if (!user || user.isAnonymous) {
       setToast({ type: 'error', message: "Please sign in before uploading PDFs." });
       return;
@@ -344,9 +339,7 @@ export default function PastPapersView() {
  hidden: { opacity: 0 },
  show: {
  opacity: 1,
- transition: {
- staggerChildren: 0.1
- }
+ transition: { staggerChildren: 0.035 }
  }
  };
 
@@ -357,23 +350,23 @@ export default function PastPapersView() {
  };
 
  return (
- <div className="space-y-6 ">
- <div className="bg-white p-4 sm:p-6 border border-slate-200 rounded-[1.8rem] shadow-sm relative overflow-visible">
+ <div className="space-y-5">
+ <div className="relative overflow-visible">
  
  <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
  <div className="flex gap-2 bg-slate-100 p-1 rounded-xl w-full md:w-auto overflow-x-auto">
  {categories.map(cat => (
  <button
- key={cat}
- onClick={() => setSelectedCategory(cat)}
+ key={cat.value}
+ onClick={() => setSelectedCategory(cat.value)}
  className={cn(
- "px-4 py-2 text-xs font-bold rounded-lg transition-all whitespace-nowrap",
- selectedCategory === cat 
- ? "bg-white text-primary-600 shadow-sm" 
+ "min-w-0 flex-1 px-4 py-2 text-xs font-bold rounded-lg transition-all whitespace-nowrap md:min-w-24",
+ selectedCategory === cat.value
+ ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200" 
  : "text-slate-500 hover:text-slate-800 hover:bg-slate-200/50"
  )}
  >
- {cat}
+ {cat.label}
  </button>
  ))}
  </div>
@@ -444,7 +437,7 @@ export default function PastPapersView() {
  variants={containerVariants}
  initial="hidden"
  animate="show"
- className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+ className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3"
  >
  <AnimatePresence mode="popLayout">
  {filteredPapers.map(paper => (
@@ -453,7 +446,7 @@ export default function PastPapersView() {
  layout
  variants={itemVariants as any}
  exit="exit"
- className="group flex h-full cursor-pointer flex-col justify-between overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_14px_34px_rgba(15,23,42,0.08)]"
+ className="group relative flex min-h-52 cursor-pointer flex-col justify-between overflow-hidden rounded-[22px] border border-slate-800 bg-[#111c3f] p-5 text-white shadow-[0_14px_30px_rgba(15,23,42,0.12)] transition duration-200 hover:-translate-y-1 hover:border-slate-700 hover:shadow-[0_20px_42px_rgba(15,23,42,0.2)]"
  onClick={() => {
     openSourcePdf({ storagePath: paper.storagePath, url: paper.url, id: paper.id }).catch((e: any) => {
       console.error('Download trigger failed:', e);
@@ -471,39 +464,37 @@ export default function PastPapersView() {
     });
   }}
  >
- <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-primary-100 to-transparent rounded-bl-full opacity-0 group-hover:opacity-50 transition-opacity pointer-events-none"></div>
  <div className="relative z-10">
  <div className="flex justify-between items-start mb-3">
  <span className={cn(
  "px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider",
- paper.type === 'MCQ' ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"
+ paper.type === 'MCQ' ? "bg-amber-300 text-slate-950" : "bg-indigo-300 text-slate-950"
  )}>
  {paper.type}
  </span>
  <div className="flex items-center gap-1.5">
- <span className="text-xs font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-md shadow-inner">
+ <span className="rounded-md bg-white/10 px-2 py-1 text-xs font-bold text-slate-200">
  {paper.year}
  </span>
  </div>
  </div>
- <h4 className="font-bold text-slate-800 text-base mb-1 group-hover:text-primary-600 transition-colors leading-tight">{paper.title}</h4>
- <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider mt-2">{paper.category}</p>
- <DocumentCover title={paper.title} eyebrow={`${paper.year || "A/L"} · ${paper.type || "Paper"}`} className="mt-4" />
+ <h4 className="mt-5 line-clamp-3 text-base font-bold leading-snug text-white transition-colors group-hover:text-sky-100">{paper.title}</h4>
+ <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">{paper.year || "A/L"} · {paper.type || "Paper"}</p>
  </div>
  
- <div className="mt-5 pt-3 border-t border-slate-100 flex justify-between items-center relative z-10">
- <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Open PDF</span>
+ <div className="relative z-10 mt-5 flex items-center justify-between border-t border-white/10 pt-4">
+ <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-300">Open</span>
  <div className="flex items-center gap-2">
   {isDeleteAllowed(paper) && (
     <button
     onClick={(e) => handleDeletePaper(paper, e)}
-    className="w-8 h-8 rounded-full bg-slate-50 border border-slate-200 text-slate-400 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-600 flex items-center justify-center transition-all shadow-sm cursor-pointer shrink-0"
+    className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-white/10 text-slate-300 transition-all hover:border-rose-300/30 hover:bg-rose-500/20 hover:text-rose-200"
     title="Delete Paper"
    >
     <i className="fa-regular fa-trash-can text-xs"></i>
    </button>
   )}
-  <div className="w-8 h-8 rounded-full bg-slate-50 border border-slate-200 text-slate-400 group-hover:bg-primary-500 group-hover:border-primary-500 group-hover:text-white flex items-center justify-center transition-all shadow-sm shrink-0">
+  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white text-slate-900 shadow-sm transition-all group-hover:bg-sky-100">
   <i className="fa-solid fa-arrow-right"></i>
   </div>
  </div>
