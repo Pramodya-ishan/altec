@@ -123,9 +123,13 @@ const RATE_LIMIT_UID_MAX = validateNumber("RATE_LIMIT_UID_MAX", 100, 1);
 
 const ENABLE_VIDEO = validateBoolean("ENABLE_VIDEO", true);
 const ENABLE_VIDEO_TRANSCODING = validateBoolean("ENABLE_VIDEO_TRANSCODING", false);
-// Direct object URLs are useful for local development only. Production uses
-// authenticated HLS sessions so the original file URL is never returned.
-const VIDEO_ALLOW_DIRECT_PLAYBACK = validateBoolean("VIDEO_ALLOW_DIRECT_PLAYBACK", NODE_ENV !== "production");
+// Keep uploaded lessons playable when the optional Transcoder/HLS pipeline is
+// not configured. Direct playback still uses a short-lived, authenticated URL.
+// Install a signed-cookie CDN + HLS pipeline before explicitly disabling this.
+// Keep an authenticated short-lived direct stream as a safety net even when
+// HLS transcoding is enabled.  Otherwise a temporary Transcoder outage leaves
+// an otherwise valid upload permanently marked as failed and hidden.
+const VIDEO_ALLOW_DIRECT_PLAYBACK = validateBoolean("VIDEO_ALLOW_DIRECT_PLAYBACK", true);
 const VIDEO_REQUIRE_APP_CHECK = validateBoolean("VIDEO_REQUIRE_APP_CHECK", false);
 const VIDEO_INPUT_BUCKET = validateOptional("VIDEO_INPUT_BUCKET", FIREBASE_STORAGE_BUCKET);
 const VIDEO_OUTPUT_BUCKET = validateOptional("VIDEO_OUTPUT_BUCKET", "");

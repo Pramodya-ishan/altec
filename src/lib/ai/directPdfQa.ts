@@ -25,6 +25,14 @@ export type DirectPdfQaResult = {
   sourceEvidence?: any;
 };
 
+function looksLikeLegacySinhalaGarbage(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  const sinhala = (text.match(/[\u0D80-\u0DFF]/g) || []).length;
+  const signals = (text.match(/[ñú;=<>]|\b(?:fuu|iy|iys|l=|fkdie|mß|wd;;)\b/g) || []).length;
+  return sinhala === 0 && signals >= 2;
+}
+
 function makeDirectQaError(code: string, source: any, details: any = {}): Error {
   const err = new Error(details.message || `Direct PDF QA Stage Failed: ${code}`);
   (err as any).errorCode = code;
@@ -181,15 +189,10 @@ export async function askDirectPdfQa(params: {
     if (result.ok && result.answer && typeof result.answer === 'object') {
        const { officialAnswer, solvedAnswer, explanationSinhala } = result.answer;
        const { questionText, options } = result.sourceEvidence || {};
+       const readableEvidence = !looksLikeLegacySinhalaGarbage(questionText)
+         && !(Array.isArray(options) && options.some(looksLikeLegacySinhalaGarbage));
 
-       let text = `**Source:** ${source.title || "Paper"}`;
-       if (year || source.year) text += ` · ${year || source.year}`;
-       if (questionNo) text += ` · ${questionType || "Question"} ${questionNo}`;
-       text += ` · ${result.found ? "Exact PDF evidence" : "Evidence not found"}\n\n`;
-
-       if (questionText) text += `### ❓ Question\n\n${stripRawVisualBlocks(questionText)}\n\n`;
-
-       if (options && options.length) text += `${options.map((option: string, index: number) => `${index + 1}. ${stripRawVisualBlocks(option)}`).join('\n')}\n\n`;
+       let text = "";
 
        let finalAnswerText = "";
        let answerStatus = "Unknown";
@@ -206,23 +209,31 @@ export async function askDirectPdfQa(params: {
          explanation = solvedAnswer.explanationSinhala || explanation;
          whyOthersWrong = solvedAnswer.whyOthersWrong || [];
        } else {
-         finalAnswerText = "Exact question එක extract වුණා, නමුත් answer එක auto-solve කරන්න බැරි වුණා. Marking scheme/Admin verification අවශ්යයි.";
+         return {
+           ok: false,
+           found: false,
+           errorCode: "MCQ_SOLVER_EMPTY",
+           stage: "ANSWER_VALIDATION",
+           error: readableEvidence
+             ? "The question was located, but no validated answer option was returned."
+             : "The PDF visual could not be transcribed safely.",
+         };
        }
 
        if (finalAnswerText) {
-         text += `### ✅ Answer\n\n${stripRawVisualBlocks(finalAnswerText)}\n\n`;
+         text += `**පිළිතුර:** ${stripRawVisualBlocks(finalAnswerText)}\n\n`;
        }
 
        if (explanation) {
-         text += `### 🧠 Explanation\n\n${stripRawVisualBlocks(explanation)}\n\n`;
+         text += `${stripRawVisualBlocks(explanation)}\n\n`;
        }
 
        if (whyOthersWrong && whyOthersWrong.length > 0) {
-         text += `### Why the other options do not fit\n\n`;
+         text += `**අනෙක් විකල්ප නොගැළපෙන්නේ ඇයි?**\n\n`;
          text += whyOthersWrong.map((reason: string) => `- ${stripRawVisualBlocks(reason)}`).join('\n') + "\n\n";
        }
 
-       text += `_${answerStatus}_\n`;
+       if (answerStatus === "Official marking scheme verified") text += `_Marking scheme එකෙන් තහවුරු කළ පිළිතුර._\n`;
 
        result.answer = text;
     }

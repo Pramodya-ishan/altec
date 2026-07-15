@@ -393,7 +393,11 @@ videoRoutes.get("/admin/videos", async (req, res) => {
     await verifyVideoAppCheck(req);
     await requireAdmin(req);
     const snapshot = await getAdminDb().collection("videos").orderBy("createdAt", "desc").limit(100).get();
-    res.json({ ok: true, videos: snapshot.docs.map((doc: any) => publicVideo({ id: doc.id, ...doc.data() } as VideoDocument)) });
+    const videos = await Promise.all(snapshot.docs.map(async (doc: any) => {
+      const video = { id: doc.id, ...doc.data() } as VideoDocument;
+      return publicVideo(await refreshTranscodeStatus(video));
+    }));
+    res.json({ ok: true, videos });
   } catch (error: any) {
     res.status(400).json({ ok: false, code: "VIDEOS_LIST_FAILED", message: error.message });
   }
@@ -414,9 +418,15 @@ videoRoutes.get("/videos", async (req, res) => {
   try {
     await verifyVideoAppCheck(req);
     const user = await requireUser(req);
-    const snapshot = await getAdminDb().collection("videos").where("isPublished", "==", true).limit(100).get();
-    const videos = snapshot.docs
-      .map((doc: any) => ({ id: doc.id, ...doc.data() } as VideoDocument))
+    // Read recent records before filtering so legacy uploads that were marked
+    // failed only because transcoding was disabled can be recovered to direct
+    // playback by refreshTranscodeStatus().
+    const snapshot = await getAdminDb().collection("videos").orderBy("createdAt", "desc").limit(100).get();
+    const refreshed = await Promise.all(snapshot.docs.map((doc: any) =>
+      refreshTranscodeStatus({ id: doc.id, ...doc.data() } as VideoDocument),
+    ));
+    const videos = refreshed
+      .filter((video: VideoDocument) => video.status !== "archived" && video.isPublished === true)
       .filter((video: VideoDocument) => canUserPlayVideo(video, user))
       .map(publicVideo);
     res.json({ ok: true, videos });

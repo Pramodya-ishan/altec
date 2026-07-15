@@ -456,14 +456,8 @@ export async function aiRespondStream(req: any, res: any) {
         };
       });
       const answer = lessonSources.length > 0
-        ? [
-            `**${lessonName}** lesson එකට match වෙන saved PDF resource${lessonSources.length === 1 ? " එක" : "s"}:`,
-            "",
-            ...lessonSources.map((source: any, index: number) => `${index + 1}. **${source.title}**`),
-            "",
-            "PDF එක open කරන්න authenticated source card එකේ **Open PDF** භාවිත කරන්න. මෙය saved lesson resources වල exact result එකයි; source එකේ නැති exam details add කරන්නේ නැහැ.",
-          ].join("\n")
-        : `**${lessonName}** lesson එකට match වෙන saved PDF resource එකක් හමු වුණේ නැහැ. Lesson resource එක නිවැරදි lesson name එක යටතේ upload කර index කරන්න.`;
+        ? `“${lessonSources[0].title}” තෝරාගත්තා. දැන් “Q1”, “4th MCQ” හෝ ප්‍රශ්නයේ කොටසක් කියන්න.`
+        : `“${lessonName}” සඳහා save කරපු PDF එකක් හමු වුණේ නැහැ.`;
 
       if (lessonSources.length > 0) {
         const selected = lessonSources[0];
@@ -986,7 +980,7 @@ export async function aiRespondStream(req: any, res: any) {
           let composedAnswer = "";
           if (route.mode === "pdf_link_request") {
             const pSrc = resolution.paperSource;
-            composedAnswer = `**${pSrc?.title || "PDF source"}** හමු වුණා.\n\n- Subject: ${requestedSubject}\n- Year: ${requestedYear}\n- Source: verified saved resource\n\nපහළ source card එකේ **Open PDF** භාවිත කරන්න. එය ඔබගේ Firebase session token එක සමඟ secure ලෙස file එක විවෘත කරනවා.`;
+            composedAnswer = `මෙන්න **${pSrc?.title || "PDF එක"}**. පහළ file card එකෙන් විවෘත කරන්න.`;
           } else {
             const { composeMarkingSchemeAnswer } = await import("./markingSchemeResolver");
             composedAnswer = composeMarkingSchemeAnswer({
@@ -1001,10 +995,6 @@ export async function aiRespondStream(req: any, res: any) {
               officialAnswer: resolution.bestTextBlocks.join("\n\n") || "නිල ලකුණු දීමේ පටිපාටියට අනුකූල පිළිතුර.",
               isEstimated: !resolution.markingSchemeSource,
             });
-          }
-
-          if (resolution.paperSource && resolution.paperSource.ocrTextPdfStoragePath) {
-            composedAnswer = `💡 *Sinhala text PDF එකත් generate වෙලා තියෙනවා. එතනින් indexed text භාවිතා කරනවා.*\n\n` + composedAnswer;
           }
 
           emitSse(res, "token", { text: stripRawVisualBlocks(composedAnswer) });

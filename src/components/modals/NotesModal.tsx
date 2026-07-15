@@ -8,6 +8,7 @@ import { apiFetch } from "../../lib/api";
 import {
   deletePrivateStorageObject,
   openPrivateStoragePdf,
+  prefetchPrivateStorageUrl,
   uploadPdfWithClientStorage,
   type UploadProgressSnapshot,
   type UploadTaskControls,
@@ -79,6 +80,7 @@ export function NotesModal() {
   const [remoteVideos, setRemoteVideos] = useState<LessonResource[]>([]);
   const controlsRef = useRef<UploadTaskControls | null>(null);
   const uploadStartedAtRef = useRef(0);
+  const speedSampleRef = useRef({ time: 0, bytes: 0, smoothed: 0 });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const isAdmin = videoPermission === "allowed";
 
@@ -141,10 +143,11 @@ export function NotesModal() {
   }, [modals.playlist.open]);
 
   useEffect(() => {
-    if (!modals.playlist.open || videoPermission !== "allowed") return;
+    if (!modals.playlist.open || videoPermission === "loading" || videoPermission === "unavailable") return;
     let active = true;
     const syncVideos = async () => {
-      const response = await apiFetch("/api/admin/videos");
+      const endpoint = videoPermission === "allowed" ? "/api/admin/videos" : "/api/videos";
+      const response = await apiFetch(endpoint);
       const payload = await response.json().catch(() => null);
       if (!active || !response.ok || !Array.isArray(payload?.videos)) return;
       const matching = payload.videos
@@ -172,6 +175,15 @@ export function NotesModal() {
     return () => { active = false; window.clearInterval(timer); };
   }, [currentSubject, modals.playlist.open, topic, videoPermission]);
 
+  useEffect(() => {
+    if (!modals.playlist.open) return;
+    const paths = resources
+      .filter((resource) => resource.mediaKind !== "video" && Boolean(resource.storagePath))
+      .map((resource) => String(resource.storagePath))
+      .slice(0, 12);
+    paths.forEach((path) => { void prefetchPrivateStorageUrl(path); });
+  }, [modals.playlist.open, resources]);
+
   if (!modals.playlist.open) return null;
 
   const close = () => {
@@ -181,8 +193,18 @@ export function NotesModal() {
   };
 
   const updateProgress = (fileName: string) => (snapshot: UploadProgressSnapshot) => {
-    const elapsedSeconds = Math.max(0.25, (performance.now() - uploadStartedAtRef.current) / 1000);
-    const speed = snapshot.bytesTransferred / elapsedSeconds;
+    const now = performance.now();
+    const sample = speedSampleRef.current;
+    let speed = sample.smoothed;
+    if (snapshot.bytesTransferred > sample.bytes && now > sample.time) {
+      const instant = (snapshot.bytesTransferred - sample.bytes) / ((now - sample.time) / 1000);
+      speed = sample.smoothed > 0 ? sample.smoothed * 0.72 + instant * 0.28 : instant;
+      speedSampleRef.current = { time: now, bytes: snapshot.bytesTransferred, smoothed: speed };
+    }
+    if (snapshot.bytesTransferred === 0) {
+      speedSampleRef.current = { time: now, bytes: 0, smoothed: 0 };
+      speed = 0;
+    }
     const remaining = Math.max(0, snapshot.totalBytes - snapshot.bytesTransferred);
     setTelemetry({
       ...snapshot,
@@ -227,6 +249,7 @@ export function NotesModal() {
     setIsUploading(true);
     setIsPaused(false);
     uploadStartedAtRef.current = performance.now();
+    speedSampleRef.current = { time: uploadStartedAtRef.current, bytes: 0, smoothed: 0 };
     updateProgress(file.name)({ bytesTransferred: 0, totalBytes: file.size, progress: 0, state: "running" });
 
     try {
@@ -324,14 +347,30 @@ export function NotesModal() {
   const openResource = async (resource: LessonResource) => {
     if (resource.mediaKind === "video" && resource.videoId) {
       const endpoint = isAdmin ? `/api/admin/videos/${resource.videoId}` : `/api/videos/${resource.videoId}`;
-      const response = await apiFetch(endpoint);
-      const payload = await response.json().catch(() => null);
-      const liveStatus = payload?.video?.status || resource.status;
+      const readVideo = async () => {
+        const response = await apiFetch(endpoint);
+        const payload = await response.json().catch(() => null);
+        return { response, payload, status: payload?.video?.status || resource.status };
+      };
+      let live = await readVideo();
+      if (live.response.ok && ["uploaded", "processing", "failed"].includes(String(live.status || ""))) {
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
+        live = await readVideo();
+      }
+      const { response, payload, status: liveStatus } = live;
       if (!response.ok || liveStatus !== "ready") {
-        showNotification(`Video is still processing (${liveStatus || "pending"}).`, "info");
+        const message = liveStatus === "failed"
+          ? "The original video is being restored. Please retry in a moment."
+          : `Video is still processing (${liveStatus || "pending"}).`;
+        showNotification(message, liveStatus === "failed" ? "error" : "info");
         return;
       }
-      setPlayerResource({ ...resource, status: "ready" });
+      setPlayerResource({
+        ...resource,
+        status: "ready",
+        title: payload?.video?.title || resource.title,
+        sizeBytes: payload?.video?.sourceSizeBytes || resource.sizeBytes,
+      });
       return;
     }
     if (resource.url?.startsWith("http")) window.open(resource.url, "_blank", "noopener,noreferrer");

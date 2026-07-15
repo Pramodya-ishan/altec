@@ -7,6 +7,17 @@ import { solveExtractedMcqQuestion } from "./solveExtractedQuestion";
 import { trackAIUsage, checkSpecificLimit } from "../../cost/usageTracker";
 import { classifyAiError } from "../../ai/aiErrorClassifier";
 
+const EVIDENCE_VERSION = 3;
+
+function looksLikeLegacySinhalaGarbage(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  const sinhala = (text.match(/[\u0D80-\u0DFF]/g) || []).length;
+  const legacySignals = (text.match(/[ñú;=<>]|\b(?:fuu|iy|iys|l=|fkdie|mß|wd;;|T[123])\b/g) || []).length;
+  const latin = (text.match(/[A-Za-z]/g) || []).length;
+  return sinhala === 0 && legacySignals >= 2 && latin / Math.max(1, text.length) > 0.18;
+}
+
 function directQaCacheId(sourceId: string, questionType: string, questionNo: string) {
   return `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
 }
@@ -35,12 +46,21 @@ async function readVerifiedQuestionCache(params: {
     const isMcq = String(params.questionType).toLowerCase().includes("mcq");
     const subjectMatches = !cached.subject || String(cached.subject).toUpperCase() === String(params.subject).toUpperCase();
     const yearMatches = !cached.year || String(cached.year) === String(params.year) || params.year === "unknown";
-    const verified = Number(cached.evidenceVersion || 0) >= 2
+    const cachedHasLegacyGarbage = looksLikeLegacySinhalaGarbage(questionText)
+      || options.some(looksLikeLegacySinhalaGarbage);
+    const hasVerifiedAnswer = Boolean(
+      (params.allowOfficialAnswer && String(cached.officialAnswer || "").trim())
+      || (/^[1-5]$/.test(String(cached?.solvedAnswer?.optionNo || "").trim())
+        && String(cached?.solvedAnswer?.explanationSinhala || cached.explanationSinhala || "").trim())
+    );
+    const verified = Number(cached.evidenceVersion || 0) >= EVIDENCE_VERSION
       && cached.validationStatus !== "rejected"
       && subjectMatches
       && yearMatches
       && questionText.length >= 12
+      && !cachedHasLegacyGarbage
       && (!isMcq || options.length >= 4)
+      && (!isMcq || hasVerifiedAnswer)
       && (!params.requiresSyllabusGrounding || cached.syllabusGrounded === true);
     if (!verified) return null;
 
@@ -135,6 +155,9 @@ STRICT RULES:
 8. Do NOT create a similar or model question.
 9. Do NOT answer from syllabus or general memory.
 10. Do NOT fill answer.estimatedAnswer unless questionText exists.
+11. Read the rendered glyphs, diagrams, labels, arrows and geometry on the page—not only the embedded text layer.
+12. If the PDF uses FM Abhaya or another legacy Sinhala font, TRANSCRIBE the visible Sinhala into proper Unicode Sinhala. Never return Latin/ASCII font codes such as "fuu", "mß", "l=", "ñ" or "ú".
+13. For a diagram-based MCQ, include the diagram's relevant relationships in questionText using a short bracketed Unicode description so the solver has all required evidence.
 
 Return JSON only:
 {
@@ -222,15 +245,67 @@ Return JSON with exact evidence. If not found, set found:false.
     }
     
     // [FIX 4/7] Direct PDF QA Validation
-    const qText = result?.sourceEvidence?.questionText;
-    const opts = result?.sourceEvidence?.options;
+    let qText = result?.sourceEvidence?.questionText;
+    let opts = result?.sourceEvidence?.options;
 
-    if (!result.found || !qText || qText.length < 20) {
+    let extractedOptions = Array.isArray(opts) ? opts : [];
+    let hasUnreadableLegacyText = looksLikeLegacySinhalaGarbage(qText)
+      || extractedOptions.some(looksLikeLegacySinhalaGarbage);
+
+    // Legacy-font PDFs can expose a completely corrupted text layer while the
+    // rendered page and diagram remain perfectly readable.  In that case do a
+    // visual-only solve before rejecting the extraction.  The solver must
+    // return both a Unicode transcription and a selected option, so raw OCR can
+    // never reach the client.
+    if (
+      questionType === "MCQ"
+      && hasUnreadableLegacyText
+      && (pdfBuffer || pdfGcsUri)
+    ) {
+      const visualSolved = await solveExtractedMcqQuestion({
+        questionText: "",
+        options: [],
+        subject,
+        year,
+        questionNo,
+        referencePdfBuffer: syllabusPdfBuffer,
+        referencePdfGcsUri: syllabusPdfGcsUri,
+        referenceLabel: "Sri Lankan A/L SFT syllabus PDF",
+        questionPdfBuffer: pdfBuffer,
+        questionPdfGcsUri: pdfGcsUri,
+        visualOnly: true,
+      }).catch((error) => {
+        console.error("[DirectPDFQA] Visual legacy-font solver failed:", error);
+        return null;
+      });
+
+      if (visualSolved?.questionUnicode && visualSolved.optionsUnicode?.length && result?.sourceEvidence) {
+        result.sourceEvidence.questionText = visualSolved.questionUnicode;
+        result.sourceEvidence.options = visualSolved.optionsUnicode;
+        result.found = true;
+        result.reason = "VISUAL_LEGACY_FONT_TRANSCRIPTION";
+        result.answer = {
+          ...(result.answer || {}),
+          officialAnswer: null,
+          solvedAnswer: visualSolved,
+          explanationSinhala: visualSolved.explanationSinhala || null,
+        };
+        result.confidence = Math.max(Number(result.confidence || 0), visualSolved.confidence);
+        qText = result.sourceEvidence.questionText;
+        opts = result.sourceEvidence.options;
+        extractedOptions = opts;
+        hasUnreadableLegacyText = false;
+      }
+    }
+
+    if (!result.found || !qText || qText.length < 20 || hasUnreadableLegacyText) {
       console.log(`[DirectPDFQA] Extraction failed validation: found=${result.found}, textLength=${qText?.length || 0}`);
       result = {
         ...result,
         found: false,
-        reason: result.reason || "EXACT_QUESTION_TEXT_MISSING",
+        reason: hasUnreadableLegacyText
+          ? "LEGACY_SINHALA_VISUAL_TRANSCRIPTION_REQUIRED"
+          : (result.reason || "EXACT_QUESTION_TEXT_MISSING"),
         answer: {
           officialAnswer: null,
           estimatedAnswer: null,
@@ -270,6 +345,8 @@ Return JSON with exact evidence. If not found, set found:false.
           referencePdfBuffer: syllabusPdfBuffer,
           referencePdfGcsUri: syllabusPdfGcsUri,
           referenceLabel: "Sri Lankan A/L SFT syllabus PDF",
+          questionPdfBuffer: pdfBuffer,
+          questionPdfGcsUri: pdfGcsUri,
         });
         if (solved) {
           // [PHASE 1] Track Solver Call
@@ -286,6 +363,22 @@ Return JSON with exact evidence. If not found, set found:false.
       } catch (solveErr) {
         console.error("[DirectPDFQA] Solver pass failed:", solveErr);
       }
+    }
+
+    if (
+      questionType === "MCQ"
+      && result.found === true
+      && !result.answer?.officialAnswer
+      && !/^[1-5]$/.test(String(result.answer?.solvedAnswer?.optionNo || "").trim())
+    ) {
+      return {
+        ok: false,
+        found: false,
+        errorCode: "MCQ_SOLVER_EMPTY",
+        stage: "ANSWER_VALIDATION",
+        reason: "The exact MCQ was located, but the solver did not return one validated option.",
+        canRetry: true,
+      };
     }
 
     // Save to cache if found
@@ -306,7 +399,7 @@ Return JSON with exact evidence. If not found, set found:false.
            ? "gemini_targeted_legacy_page"
            : "gemini_direct_pdf_qa",
          validationStatus: result.confidence > 0.8 ? "valid" : "needs_review",
-         evidenceVersion: 2,
+         evidenceVersion: EVIDENCE_VERSION,
          syllabusGrounded: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri),
          updatedAt: new Date().toISOString()
        };
@@ -470,6 +563,21 @@ Rules:
       if (solved) result.answer.solvedAnswer = solved;
     }
 
+    if (
+      isMcq
+      && !result.answer.officialAnswer
+      && !/^[1-5]$/.test(String(result.answer?.solvedAnswer?.optionNo || "").trim())
+    ) {
+      return {
+        ok: false,
+        found: false,
+        errorCode: "MCQ_SOLVER_EMPTY",
+        stage: "ANSWER_VALIDATION",
+        reason: "The indexed question was found, but no validated MCQ option was produced.",
+        canRetry: true,
+      };
+    }
+
     const cacheId = directQaCacheId(sourceId, questionType, questionNo);
     await getAdminDb().collection("pdf_question_cache").doc(cacheId).set(removeUndefinedDeep({
       sourceId,
@@ -482,7 +590,7 @@ Rules:
       confidence: Number(result.confidence || 0),
       extractionMethod: "indexed_pdf_text",
       validationStatus: Number(result.confidence || 0) >= 0.8 ? "valid" : "needs_review",
-      evidenceVersion: 2,
+      evidenceVersion: EVIDENCE_VERSION,
       syllabusGrounded: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri),
       updatedAt: new Date().toISOString(),
     }), { merge: true });

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../../lib/utils';
-import { openSourcePdf } from '../../lib/sourceActions';
+import { openSourcePdf, prefetchSourcePdf } from '../../lib/sourceActions';
 import { useApp } from '../../context/AppContext';
 import { auth } from '../../lib/firebase';
 import { apiFetch } from '../../lib/api';
@@ -89,6 +89,12 @@ export default function PastPapersView() {
     const matchesCategory = paper.category === selectedCategory;
     return matchesSearch && matchesCategory;
   });
+
+  useEffect(() => {
+    filteredPapers.slice(0, 12).forEach((paper) => {
+      if (paper.storagePath) void prefetchSourcePdf(paper);
+    });
+  }, [papers, uploadedPapers, selectedCategory, searchTerm]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

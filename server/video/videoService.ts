@@ -181,17 +181,33 @@ export async function startTranscode(video: VideoDocument) {
 }
 
 export async function refreshTranscodeStatus(video: VideoDocument): Promise<VideoDocument> {
-  if (!env.ENABLE_VIDEO_TRANSCODING && video.status === "uploaded") {
-    const allowDirect = env.VIDEO_ALLOW_DIRECT_PLAYBACK;
+  const updatedAtMs = Date.parse(video.updatedAt || video.createdAt || "");
+  // A failed transcode is terminal. The original object was already validated
+  // during upload-complete, so recover it through the authenticated direct
+  // playback path even when an old Transcoder job name is still stored.
+  const failedWithoutUsableJob = video.status === "failed";
+  const uploadedWithoutActiveJob = video.status === "uploaded"
+    && !video.transcoderJobName
+    && Number.isFinite(updatedAtMs)
+    && Date.now() - updatedAtMs > 30_000;
+
+  if (
+    env.VIDEO_ALLOW_DIRECT_PLAYBACK
+    && (failedWithoutUsableJob || uploadedWithoutActiveJob)
+    && video.inputObjectPath
+  ) {
     const updates = {
-      status: (allowDirect ? "ready" : "failed") as VideoStatus,
-      isPublished: allowDirect,
-      allowPlayback: allowDirect,
-      playbackMode: (allowDirect ? "direct" : "hls") as "direct" | "hls",
-      transcoderErrorCode: allowDirect ? undefined : "SECURE_TRANSCODING_REQUIRED",
+      status: "ready" as VideoStatus,
+      isPublished: true,
+      allowPlayback: true,
+      playbackMode: "direct" as const,
+      transcoderErrorCode: video.status === "failed" ? "TRANSCODER_FAILED_DIRECT_RECOVERY" : undefined,
       updatedAt: new Date().toISOString(),
     };
-    await getAdminDb().collection("videos").doc(video.id).set(updates, { merge: true });
+    await getAdminDb().collection("videos").doc(video.id).set({
+      ...updates,
+      transcoderErrorCode: updates.transcoderErrorCode || null,
+    }, { merge: true });
     await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: updates.status, lastErrorCode: updates.transcoderErrorCode || null, updatedAt: updates.updatedAt }, { merge: true });
     return { ...video, ...updates };
   }

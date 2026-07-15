@@ -320,7 +320,6 @@ export function useAIWorkflowStream() {
                    onToken?.(errorMsg);
                    setIsStreaming(false);
                    doneReceived = true;
-                  doneReceived = true;
                    onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: "DIRECT_QA_SOURCE_MISSING_STORAGE_PATH", sources: [{ id: sourceId }] });
                    return;
                 }
@@ -380,7 +379,6 @@ export function useAIWorkflowStream() {
                     paperInfo: {
                       sourceId: sourceId,
                       questionNo,
-                   signal: abortRef.current?.signal,
                       questionType,
                       year,
                       subject,
@@ -390,7 +388,7 @@ export function useAIWorkflowStream() {
                   });
                 } else {
                   if (import.meta.env.DEV) console.error("[DirectPDFQA] Failed to get answer:", result);
-                  let userMsg = "PDF එකේ exact question evidence එක කියවීමට නොහැකි වුණා. Answer එක guess කරලා නැහැ; source access හෝ index එක නැවත සකස් කර retry කරන්න.";
+                  let userMsg = "මේ වතාවේ PDF එකෙන් පිළිතුර තහවුරු කරගන්න බැරි වුණා. තත්පර කිහිපයකින් එම ප්‍රශ්නය නැවත අහන්න.";
 
                   const errorStr = String(result.error || "").toLowerCase();
                   const isBillingExhausted = result.errorCode === "AI_BILLING_EXHAUSTED" ||
@@ -407,10 +405,12 @@ export function useAIWorkflowStream() {
                      userMsg = "AI credits අවසන් වෙලා තියෙනවා. Billing/credits update කළාම නැවත PDF scan/AI answer දෙන්න පුළුවන්.";
                   } else if (isRuntimeError) {
                      userMsg = "AI client runtime configuration/import issue. Please check server console.";
+                  } else if (result.errorCode === "MCQ_SOLVER_EMPTY") {
+                     userMsg = "ප්‍රශ්නය හමු වුණා, නමුත් නිවැරදි විකල්පය තහවුරු වුණේ නැහැ. මම raw OCR text එක පෙන්වන්නේ නැහැ; එම MCQ එක නැවත අහන්න.";
                   } else if (result.found === false) {
-                     userMsg = (result as any).message || result.reason || "PDF scan කළා. හැබැයි exact question text හම්බුණේ නැහැ. Reindex/OCR/page image අවශ්‍යයි.";
+                     userMsg = "PDF එකෙන් එම ප්‍රශ්නය පැහැදිලිව හඳුනාගන්න බැරි වුණා. ප්‍රශ්න අංකය සමඟ නැවත අහන්න.";
                   } else if (["DIRECT_QA_FIREBASE_FETCH_FAILED", "ADMIN_STORAGE_DEGRADED_USE_CLIENT_HANDOFF", "DIRECT_QA_SOURCE_DOWNLOAD_FAILED"].includes(String(result.errorCode || ""))) {
-                     userMsg = "PDF source එක තියෙනවා, නමුත් Firebase download URL සහ Admin Storage දෙකෙන්ම original file එක read කරන්න බැරි වුණා. නැවත sign in කර source එක reopen කර retry කරන්න.";
+                     userMsg = "PDF access session එක refresh කරගන්න බැරි වුණා. නැවත sign in කර එම ප්‍රශ්නය අහන්න.";
                   }
 
                   setStatus({
@@ -433,13 +433,13 @@ export function useAIWorkflowStream() {
                 let errorCode = err.errorCode || "FATAL_ERROR";
 
                 if (err.errorCode === "DIRECT_QA_BACKEND_NON_JSON_RESPONSE") {
-                  userFriendlyMsg = "⚠️ PDF scan endpoint එකෙන් non-JSON response එකක් ලැබුණා (උදා: gateway/proxy timeout හෝ backend crash වීමක්). විශාල PDF එකක් නිසා scan කිරීමට වැඩි වේලාවක් ගතවුණා විය හැක. කරුණාකර මෙම PDF එක Reindex/Process කර නැවත උත්සාහ කරන්න.";
+                  userFriendlyMsg = "PDF answer service එක තාවකාලිකව ප්‍රතිචාර නොදුන්නා. තත්පර කිහිපයකින් නැවත උත්සාහ කරන්න.";
                   friendlyLabel = "Scan Timeout / Error";
                 } else if (err.errorCode === "DIRECT_QA_BACKEND_ERROR") {
-                  userFriendlyMsg = `⚠️ PDF scan backend එකේ දෝෂයක් ඇති විය: ${err.details?.message || err.message}`;
+                  userFriendlyMsg = "PDF answer service එක තාවකාලිකව unavailable. නැවත උත්සාහ කරන්න.";
                   friendlyLabel = "Backend Error";
                 } else if (err.errorCode === "DIRECT_QA_FIREBASE_FETCH_FAILED") {
-                  userFriendlyMsg = `⚠️ PDF ගොනුව Firebase Storage එකෙන් බාගත කර ගැනීමට නොහැකි විය: ${err.details?.message || err.message}\nකරුණාකර Storage rules/login status පරීක්ෂා කරන්න.`;
+                  userFriendlyMsg = "PDF access session එක refresh කරගන්න බැරි වුණා. නැවත sign in කර උත්සාහ කරන්න.";
                   friendlyLabel = "Storage Error";
                 } else if (err.message && err.message.includes("Failed to fetch")) {
                   userFriendlyMsg = "⚠️ Backend සේවාදායකය සමඟ සම්බන්ධ වීමට නොහැකි විය (Network Connection / CORS Error). කරුණාකර ඔබගේ අන්තර්ජාල සම්බන්ධතාවය පරීක්ෂා කර නැවත උත්සාහ කරන්න.";
