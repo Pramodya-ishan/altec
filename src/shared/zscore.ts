@@ -128,7 +128,7 @@ export function buildPracticeZSnapshot(appData: any): PracticeZSnapshot {
     reliability,
     message: complete
       ? "Practice estimate from actual saved paper totals. Official exam cohort statistics are not available."
-      : "Your Exam Score Predictor estimate will become more stable as you add marks and lesson progress.",
+      : "Add saved paper marks for SFT, ET and ICT to build your progress history.",
   };
 }
 

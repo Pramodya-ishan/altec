@@ -147,7 +147,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
 
         if (disposed) return;
         plyrRef.current = new Plyr(video, {
-          controls: ["play-large", "play", "progress", "current-time", "duration", "mute", "volume", "settings", "pip", "fullscreen"],
+          controls: ["play-large", "play", "progress", "current-time", "duration", "mute", "volume", "settings", "fullscreen"],
           settings: ["speed"],
           speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
         });
@@ -241,7 +241,15 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
         </header>
 
         <div className="relative aspect-video w-full overflow-hidden bg-black">
-          <video ref={videoRef} className="h-full w-full" playsInline preload="metadata" controlsList="nodownload noremoteplayback" />
+          <video
+            ref={videoRef}
+            className="h-full w-full"
+            playsInline
+            preload="metadata"
+            controlsList="nodownload noremoteplayback"
+            disablePictureInPicture
+            onContextMenu={(event) => event.preventDefault()}
+          />
           {watermark && <div className="pointer-events-none absolute right-3 top-3 rounded-md bg-black/30 px-2 py-1 text-[9px] font-medium text-white/45">{watermark}</div>}
           {error && <div className="absolute inset-0 grid place-items-center bg-slate-950 p-8 text-center text-sm font-semibold text-rose-300">{error}</div>}
         </div>

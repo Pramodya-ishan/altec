@@ -1,18 +1,14 @@
 import React, { useState } from 'react';
 import { X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize, Loader2 } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { motion, AnimatePresence } from 'motion/react';
 
-// Configure pdfjs worker
-if (typeof window !== 'undefined') {
-  fetch('/pdf-worker-manifest.json').then(r => r.json()).then(d => {
-    pdfjs.GlobalWorkerOptions.workerSrc = d.worker;
-  }).catch(() => {
-    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-  });
-}
+// Keep the worker in Vite's hashed asset graph. Root-level worker URLs are
+// swallowed by the Vercel SPA fallback and returned as index.html.
+pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 interface PdfViewerModalProps {
   isOpen: boolean;

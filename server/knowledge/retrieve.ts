@@ -681,19 +681,8 @@ export async function retrieveExactPaperQuestion({
   const needsOcr = !hasLegacyTextLayer && (sourceData.needsOcr === true || sourceData.indexStatus === "needs_ocr");
   const needsLegacyConversion = sourceData.needsLegacyConversion === true || sourceData.indexStatus === "needs_legacy_conversion";
 
-  if (needsOcr || chunkCount === 0) {
-    return {
-      source: sourceData,
-      chunks: [],
-      hasExactQuestionText: false,
-      badTextQuality: false,
-      needsOcr,
-      needsLegacyConversion,
-      reason: needsOcr ? "This source has no searchable text layer." : "No searchable chunks are indexed; use direct PDF reading."
-    };
-  }
-
-  // Query rag_chunks only where sourceId == selected sourceId
+  // Query the collection even when source metadata says chunkCount=0. Older
+  // uploads frequently have stale metadata although their chunks are present.
   let chunks: any[] = [];
   try {
     const chunkSnap = await db.collection("rag_chunks")
@@ -757,6 +746,7 @@ export async function retrieveExactPaperQuestion({
     }
   }
 
+  const effectiveNeedsOcr = chunks.length === 0 && needsOcr;
   return {
     source: {
       id: sourceId,
@@ -765,8 +755,10 @@ export async function retrieveExactPaperQuestion({
     chunks: matchedChunks,
     hasExactQuestionText,
     badTextQuality,
-    needsOcr,
+    needsOcr: effectiveNeedsOcr,
     needsLegacyConversion,
-    reason: matchedChunks.length > 0 ? "Exact matching chunks successfully retrieved." : "Exact question chunks missing from index."
+    reason: matchedChunks.length > 0
+      ? "Exact matching chunks successfully retrieved."
+      : (chunks.length === 0 || chunkCount === 0 ? "No searchable chunks are indexed." : "Exact question chunks missing from index.")
   };
 }

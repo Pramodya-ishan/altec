@@ -409,20 +409,9 @@ export function NotesModal() {
           </div>
 
           <div className="clora-scrollbar min-h-0 flex-1 overflow-y-auto bg-white p-4 sm:p-6">
-            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_8px_28px_rgba(15,23,42,0.05)] sm:p-5">
-              <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h3 className="text-xs font-black uppercase tracking-[0.14em] text-slate-700">Lesson library</h3>
-                  <p className="mt-1 text-xs text-slate-400">Files and saved lesson videos.</p>
-                </div>
-                <input ref={fileInputRef} type="file" accept="application/pdf,image/*,audio/*,video/mp4,video/quicktime,video/webm,.doc,.docx,.ppt,.pptx,.txt" onChange={handleFileInput} className="hidden" id="lesson-resource-upload" disabled={isUploading} />
-                <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isUploading} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 shadow-sm transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60">
-                  <UploadCloud className="h-4 w-4" /> {isUploading ? `${Math.round((telemetry?.progress || 0) * 100)}% uploading` : isAdmin ? "Upload resource / video" : videoPermission === "loading" ? "Checking upload access…" : "Upload PDF / image"}
-                </button>
-              </div>
-
-              {videoResources.length > 0 && (
-                <div className="mt-4 inline-grid grid-cols-2 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Lesson library view">
+            <section className="bg-white">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="inline-grid grid-cols-2 rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Lesson resources view">
                   {(["resources", "videos"] as const).map((tab) => (
                     <button
                       key={tab}
@@ -430,14 +419,18 @@ export function NotesModal() {
                       role="tab"
                       aria-selected={activeTab === tab}
                       onClick={() => setActiveTab(tab)}
-                      className="relative min-w-24 rounded-lg px-4 py-2 text-xs font-bold capitalize text-slate-500 transition-colors"
+                      className="relative min-w-24 rounded-lg px-4 py-2 text-xs font-bold text-slate-500 transition-colors"
                     >
                       {activeTab === tab && <motion.span layoutId="lesson-resource-tab" className="absolute inset-0 rounded-lg bg-white shadow-sm ring-1 ring-slate-200" transition={{ type: "spring", stiffness: 420, damping: 34 }} />}
                       <span className="relative z-10">{tab === "resources" ? "Resources" : `Videos (${videoResources.length})`}</span>
                     </button>
                   ))}
                 </div>
-              )}
+                <input ref={fileInputRef} type="file" accept="application/pdf,image/*,audio/*,video/mp4,video/quicktime,video/webm,.doc,.docx,.ppt,.pptx,.txt" onChange={handleFileInput} className="hidden" id="lesson-resource-upload" disabled={isUploading} />
+                <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isUploading} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 shadow-sm transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60">
+                  <UploadCloud className="h-4 w-4" /> {isUploading ? `${Math.round((telemetry?.progress || 0) * 100)}% uploading` : isAdmin ? "Upload resource / video" : videoPermission === "loading" ? "Checking upload access…" : "Upload PDF / image"}
+                </button>
+              </div>
 
               {isUploading && telemetry && (
                 <div className="mt-4 overflow-hidden rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4">
@@ -464,7 +457,7 @@ export function NotesModal() {
                 </div>
               )}
 
-              <div onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (event.currentTarget === event.target) setIsDragging(false); }} onDrop={(event) => { event.preventDefault(); setIsDragging(false); const file = event.dataTransfer.files?.[0]; if (file) void processFile(file); }} className={`mt-4 rounded-2xl border border-dashed p-3 transition ${isDragging ? "border-slate-400 bg-slate-100" : "border-slate-200 bg-slate-50/70"}`}>
+              <div onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (event.currentTarget === event.target) setIsDragging(false); }} onDrop={(event) => { event.preventDefault(); setIsDragging(false); const file = event.dataTransfer.files?.[0]; if (file) void processFile(file); }} className={`mt-4 rounded-2xl transition ${isDragging ? "bg-slate-50 ring-2 ring-slate-300" : "bg-white"}`}>
                 {isLoadingVideos && activeTab === "videos" ? (
                   <div className="flex items-center justify-center gap-2 py-10 text-xs font-semibold text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading saved videos…</div>
                 ) : (activeTab === "videos" ? videoResources : fileResources).length === 0 ? (

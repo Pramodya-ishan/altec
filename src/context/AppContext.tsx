@@ -4,7 +4,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useRe
 import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
 import { isFirebaseEnabled, db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, deleteDoc } from 'firebase/firestore';
-import { GoogleAuthProvider, signInWithCredential, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { GoogleAuthProvider, signInWithCredential, signInWithPopup, onAuthStateChanged, signInAnonymously, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 
 type ModalsState = {
   playlist: { open: boolean; topic: string };
@@ -669,14 +669,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let unsubscribeAutoAuth = () => {};
     
     if (isFirebaseEnabled && auth) {
-      void getRedirectResult(auth).then((redirectResult) => {
-        if (!redirectResult) return;
-        const credential = GoogleAuthProvider.credentialFromResult(redirectResult);
-        if (credential?.accessToken) localStorage.setItem('google_access_token', credential.accessToken);
-      }).catch((error) => {
-        console.error("Google Redirect Login Error:", error);
-        showNotification("Google login could not be completed. Please try again.", "error");
-      });
       unsubscribeAutoAuth = onAuthStateChanged(auth, async (firebaseUser) => {
         if (firebaseUser) {
           if (firebaseUser.isAnonymous) {
@@ -786,16 +778,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const provider = new GoogleAuthProvider();
         
         provider.setCustomParameters({ prompt: 'select_account' });
-        let result;
-        try {
-          result = await signInWithPopup(auth, provider);
-        } catch (popupError: any) {
-          if (["auth/popup-blocked", "auth/operation-not-supported-in-this-environment"].includes(String(popupError?.code))) {
-            await signInWithRedirect(auth, provider);
-            return;
-          }
-          throw popupError;
-        }
+        // Redirect auth depends on Firebase Hosting's /__/auth/handler. This
+        // project is hosted on Vercel, so a redirect fallback can land on a
+        // blank firebaseapp.com page and lose the app session. Keep the flow
+        // popup-only and surface a useful message if the browser blocks it.
+        const result = await signInWithPopup(auth, provider);
         
         const credential = GoogleAuthProvider.credentialFromResult(result);
         const accessToken = credential?.accessToken;
@@ -851,7 +838,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     } catch (error: any) {
       console.error("Google Popup Login Error:", error);
-      showNotification("Google login failed or was cancelled.", "error");
+      const code = String(error?.code || '');
+      if (code === 'auth/popup-blocked') {
+        showNotification("Allow pop-ups for this site, then try Google sign-in again.", "error");
+      } else if (code === 'auth/unauthorized-domain') {
+        showNotification("Add this Vercel domain to Firebase Authentication → Authorized domains.", "error");
+      } else {
+        showNotification("Google login failed or was cancelled. Please try again.", "error");
+      }
     }
     setIsAuthLoading(false);
   };

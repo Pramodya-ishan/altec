@@ -354,19 +354,18 @@ export default function PastPapersView() {
  <div className="relative overflow-visible">
  
  <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
- <div className="flex gap-2 bg-slate-100 p-1 rounded-xl w-full md:w-auto overflow-x-auto">
+ <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-full md:w-auto overflow-x-auto" role="tablist" aria-label="Paper category">
  {categories.map(cat => (
  <button
  key={cat.value}
  onClick={() => setSelectedCategory(cat.value)}
  className={cn(
- "min-w-0 flex-1 px-4 py-2 text-xs font-bold rounded-lg transition-all whitespace-nowrap md:min-w-24",
- selectedCategory === cat.value
- ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200" 
- : "text-slate-500 hover:text-slate-800 hover:bg-slate-200/50"
+ "relative min-w-0 flex-1 px-4 py-2 text-xs font-bold rounded-lg transition-colors whitespace-nowrap md:min-w-24",
+ selectedCategory === cat.value ? "text-slate-950" : "text-slate-500 hover:text-slate-800"
  )}
  >
- {cat.label}
+ {selectedCategory === cat.value && <motion.span layoutId="paper-category-pill" className="absolute inset-0 rounded-lg bg-white shadow-sm ring-1 ring-slate-200" transition={{ type: "spring", stiffness: 420, damping: 34 }} />}
+ <span className="relative z-10">{cat.label}</span>
  </button>
  ))}
  </div>
@@ -446,7 +445,7 @@ export default function PastPapersView() {
  layout
  variants={itemVariants as any}
  exit="exit"
- className="group relative flex min-h-52 cursor-pointer flex-col justify-between overflow-hidden rounded-[22px] border border-slate-800 bg-[#111c3f] p-5 text-white shadow-[0_14px_30px_rgba(15,23,42,0.12)] transition duration-200 hover:-translate-y-1 hover:border-slate-700 hover:shadow-[0_20px_42px_rgba(15,23,42,0.2)]"
+ className="group relative flex min-h-52 cursor-pointer flex-col justify-between overflow-hidden rounded-[22px] border border-slate-200 bg-white p-5 text-slate-900 shadow-sm transition duration-200 hover:-translate-y-1 hover:border-slate-300 hover:shadow-[0_18px_40px_rgba(15,23,42,0.09)]"
  onClick={() => {
     openSourcePdf({ storagePath: paper.storagePath, url: paper.url, id: paper.id }).catch((e: any) => {
       console.error('Download trigger failed:', e);
@@ -468,33 +467,33 @@ export default function PastPapersView() {
  <div className="flex justify-between items-start mb-3">
  <span className={cn(
  "px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wider",
- paper.type === 'MCQ' ? "bg-amber-300 text-slate-950" : "bg-indigo-300 text-slate-950"
+ paper.type === 'MCQ' ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-800"
  )}>
  {paper.type}
  </span>
  <div className="flex items-center gap-1.5">
- <span className="rounded-md bg-white/10 px-2 py-1 text-xs font-bold text-slate-200">
+ <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">
  {paper.year}
  </span>
  </div>
  </div>
- <h4 className="mt-5 line-clamp-3 text-base font-bold leading-snug text-white transition-colors group-hover:text-sky-100">{paper.title}</h4>
- <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">{paper.year || "A/L"} · {paper.type || "Paper"}</p>
+ <h4 className="mt-5 line-clamp-3 text-base font-bold leading-snug text-slate-900 transition-colors group-hover:text-blue-700">{paper.title}</h4>
+ <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{paper.year || "A/L"} · {paper.type || "Paper"}</p>
  </div>
  
- <div className="relative z-10 mt-5 flex items-center justify-between border-t border-white/10 pt-4">
- <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-300">Open</span>
+ <div className="relative z-10 mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
+ <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Open PDF</span>
  <div className="flex items-center gap-2">
   {isDeleteAllowed(paper) && (
     <button
     onClick={(e) => handleDeletePaper(paper, e)}
-    className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-white/10 bg-white/10 text-slate-300 transition-all hover:border-rose-300/30 hover:bg-rose-500/20 hover:text-rose-200"
+    className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 transition-all hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600"
     title="Delete Paper"
    >
     <i className="fa-regular fa-trash-can text-xs"></i>
    </button>
   )}
-  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white text-slate-900 shadow-sm transition-all group-hover:bg-sky-100">
+  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-900 bg-slate-900 text-white shadow-sm transition-all group-hover:bg-blue-700 group-hover:border-blue-700">
   <i className="fa-solid fa-arrow-right"></i>
   </div>
  </div>

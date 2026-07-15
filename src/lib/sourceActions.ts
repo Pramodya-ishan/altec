@@ -18,16 +18,31 @@ export async function openFirebaseStoragePdf(storagePath: string) {
 }
 
 export async function openProtectedApiPdf(apiUrl: string) {
-  const token = await getAuthTokenOrThrow();
-
-  const res = await fetch(resolveApiUrl(apiUrl), {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`
-    }
-  });
+  // Reserve the tab while this call is still inside the user's click event.
+  // Opening it only after the authenticated fetch lets popup blockers discard
+  // the PDF, which previously looked like a failed source link.
+  const previewWindow = window.open('', '_blank');
+  if (previewWindow) {
+    previewWindow.document.title = 'Opening PDF…';
+    previewWindow.document.body.innerHTML = '<p style="font:14px system-ui;padding:24px;color:#475569">Opening PDF…</p>';
+  }
+  let token: string;
+  let res: Response;
+  try {
+    token = await getAuthTokenOrThrow();
+    res = await fetch(resolveApiUrl(apiUrl), {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+  } catch (error) {
+    previewWindow?.close();
+    throw error;
+  }
 
   if (!res.ok) {
+    previewWindow?.close();
     const text = await res.text().catch(() => "");
     throw new Error(`PDF_OPEN_FAILED_${res.status}: ${text}`);
   }
@@ -44,7 +59,12 @@ export async function openProtectedApiPdf(apiUrl: string) {
     new Blob([blob], { type: "application/pdf" })
   );
 
-  window.open(blobUrl, "_blank", "noopener,noreferrer");
+  if (previewWindow) {
+    previewWindow.opener = null;
+    previewWindow.location.replace(blobUrl);
+  } else {
+    window.open(blobUrl, "_blank", "noopener,noreferrer");
+  }
 
   setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
 }

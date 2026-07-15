@@ -74,7 +74,7 @@ if (typeof window !== 'undefined') {
 
 const APP_VERSION = import.meta.env.VITE_APP_VERSION || Date.now().toString();
 if (import.meta.env.DEV) {
-  console.info(`[APP_VERSION] Booting Clora X version ${APP_VERSION}`);
+  console.info(`[APP_VERSION] Booting Tec A/L version ${APP_VERSION}`);
 }
 
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {

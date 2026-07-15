@@ -89,7 +89,7 @@ export async function askDirectPdfQa(params: {
     if (signal) {
       signal.addEventListener("abort", () => backendController.abort(new Error("USER_CANCELLED")));
     }
-    const backendTimeout = setTimeout(() => backendController.abort(), 180000);
+    const backendTimeout = setTimeout(() => backendController.abort(), 90_000);
 
     let response;
     try {
@@ -102,7 +102,7 @@ export async function askDirectPdfQa(params: {
         signal: backendController.signal,
       });
     } catch (e: any) {
-      throw makeDirectQaError("DIRECT_QA_BACKEND_ERROR", source, { message: e.name === "AbortError" ? "Backend scan timed out (180s). Large PDF direct scan may take time. Reindex first for faster answers." : e.message });
+      throw makeDirectQaError("DIRECT_QA_BACKEND_ERROR", source, { message: e.name === "AbortError" ? "PDF answer request timed out. Reindex this source once, then retry." : e.message });
     } finally {
       clearTimeout(backendTimeout);
     }
@@ -118,9 +118,10 @@ export async function askDirectPdfQa(params: {
         });
       }
       const errorData = await response.json().catch(() => ({}));
-      throw makeDirectQaError("DIRECT_QA_BACKEND_ERROR", source, {
+      throw makeDirectQaError(errorData.errorCode || "DIRECT_QA_BACKEND_ERROR", source, {
         endpoint,
         status: response.status,
+        stage: errorData.stage,
         message: errorData.error || errorData.message || `Backend error: ${response.status}`
       });
     }

@@ -127,7 +127,7 @@ export default function PredictionPapers() {
               </div>
               <h3 className="text-xl font-bold text-indigo-900">How these papers are built</h3>
               <p className="text-indigo-700 text-sm leading-relaxed">
-                Our AI analyzes 15+ years of A/L past papers, current syllabus weights, and examiners' rotation patterns.
+                Review past-paper patterns, current syllabus weights, and topic coverage in one place.
                 It cross-references this with what hasn't appeared recently to build a revision paper that targets high-probability areas.
               </p>
               <ul className="space-y-2 pt-2">

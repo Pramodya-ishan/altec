@@ -224,12 +224,12 @@ function AppContent() {
   }, [currentSubject]);
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 relative">
+    <div className="min-h-screen bg-white font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-950 relative">
       <OnlineStatus />
       <ToastNotification />
       <AuthOverlay />
       <Sidebar />
-      <div className={cn("flex flex-col transition-all duration-300", isChatRoute ? "h-[100dvh] overflow-hidden bg-slate-50" : "min-h-screen bg-slate-50", isSidebarOpen ? "lg:pl-72" : "lg:pl-[72px] pl-0")}>
+      <div className={cn("flex flex-col bg-white transition-all duration-300", isChatRoute ? "h-[100dvh] overflow-hidden" : "min-h-screen", isSidebarOpen ? "lg:pl-72" : "lg:pl-[72px] pl-0")}>
         <TopNav />
         <main
           className={cn(

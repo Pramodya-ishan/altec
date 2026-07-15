@@ -1,5 +1,5 @@
 import { getApp, getApps, initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { browserLocalPersistence, getAuth, setPersistence } from 'firebase/auth';
 import { getFirestore, initializeFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { initializeAppCheck, ReCaptchaV3Provider, getToken } from 'firebase/app-check';
@@ -15,7 +15,15 @@ const firebaseConfig = {
   firestoreDatabaseId: import.meta.env.VITE_FIRESTORE_DATABASE_ID,
 };
 
-const activeConfig = (firebaseConfig.apiKey && firebaseConfig.apiKey.trim() !== "") ? firebaseConfig : localConfig;
+// Vercel projects often override only one or two public Firebase values.  Do
+// not replace the complete checked-in client config with a partial env object:
+// an undefined authDomain/appId makes Google sign-in appear to succeed and
+// then immediately return to the sign-in screen.
+const activeConfig = Object.fromEntries(
+  Object.entries({ ...localConfig, ...firebaseConfig }).filter(([, value]) =>
+    typeof value === 'string' ? value.trim().length > 0 : value != null
+  )
+) as typeof firebaseConfig;
 
 let firebaseApp: any = null;
 let db: any = null;
@@ -33,6 +41,11 @@ if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
     }, dbId);
 
     auth = getAuth(firebaseApp);
+    // Persist the Firebase user across page navigation, reloads and OAuth
+    // popup completion. Failure is non-fatal (for example, private browsing).
+    void setPersistence(auth, browserLocalPersistence).catch((error) => {
+      console.warn('Firebase local auth persistence is unavailable:', error);
+    });
     storage = getStorage(firebaseApp);
     storage.maxOperationRetryTime = 2000;
     storage.maxUploadRetryTime = 5000;

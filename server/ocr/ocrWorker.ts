@@ -3,9 +3,14 @@ import { checkOcrJobStatus } from "./cloudVisionOcr";
 import { finalizePipelineProcessing } from "../pdf/processingPipeline";
 
 export function startOcrWorker(intervalMs = 60000) {
-  if (process.env.NODE_ENV === "test") return;
+  if (
+    process.env.NODE_ENV === "test" ||
+    process.env.ENABLE_CLOUD_VISION_OCR !== "true"
+  ) {
+    return;
+  }
 
-  setInterval(async () => {
+  const timer = setInterval(async () => {
     try {
       const db = getAdminDb();
       const snapshot = await db.collection("ocr_jobs")
@@ -62,4 +67,8 @@ export function startOcrWorker(intervalMs = 60000) {
       console.error("[OCR Worker] Error in worker loop:", err);
     }
   }, intervalMs);
+
+  // The HTTP server owns the process lifecycle. A background status poll must
+  // never keep a local build, test, or graceful shutdown alive by itself.
+  timer.unref?.();
 }

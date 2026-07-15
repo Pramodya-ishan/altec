@@ -9,6 +9,7 @@ import "katex/dist/katex.min.css";
 import { normalizeMathMarkdown } from "../../utils/normalizeMathMarkdown";
 import { stripRawVisualBlocks } from "../../lib/ai/stripVisualBlocks";
 import { normalizeAnswerMarkdown } from "../../lib/markdown/normalizeAnswerMarkdown";
+import { openProtectedApiPdf } from "../../lib/sourceActions";
 
 interface MathMarkdownProps {
   content: string;
@@ -40,6 +41,26 @@ export const MathMarkdown = memo(function MathMarkdown({
           ],
         ]}
         components={{
+          a: ({ href, children, ...props }) => {
+            const protectedPdf = typeof href === 'string'
+              && /^\/api\/(?:rag\/sources|syllabus\/resources)\/[^/]+\/download(?:\?.*)?$/.test(href);
+            if (protectedPdf) {
+              return (
+                <a
+                  {...props}
+                  href={href}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void openProtectedApiPdf(href).catch((error) => console.error('Unable to open protected PDF:', error));
+                  }}
+                  className="cursor-pointer font-semibold text-slate-900 underline decoration-slate-300 underline-offset-4 hover:decoration-slate-900"
+                >
+                  {children}
+                </a>
+              );
+            }
+            return <a {...props} href={href} target="_blank" rel="noreferrer noopener">{children}</a>;
+          },
           p: ({ children }) => (
             <p className="ai-markdown__paragraph block">{children}</p>
           ),

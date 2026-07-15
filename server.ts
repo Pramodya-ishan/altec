@@ -25,6 +25,7 @@ import reportRoutes from "./server/routes/reportRoutes";
 import { ttsRoutes } from "./server/tts/routes";
 import { voiceRoutes } from "./server/voice/routes";
 import { videoRoutes } from "./server/video/routes";
+import { RPM_LIMIT, RPD_LIMIT, requestCountPM, requestCountPD } from "./server/ai/queue";
 
 import { globalLimiter, aiLimiter, adminLimiter } from "./server/utils/rateLimiter";
 
@@ -44,7 +45,7 @@ app.use((req, res, next) => {
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob: https://*.googleusercontent.com https://api.dicebear.com https://*.firebaseapp.com https://*.firebasestorage.app",
     `connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.firebaseapp.com https://*.run.app wss://*.run.app ${videoCdnOrigin}`.trim(),
-    `media-src 'self' blob: ${videoCdnOrigin}`.trim(),
+    `media-src 'self' blob: https://storage.googleapis.com https://*.googleapis.com https://*.firebasestorage.app ${videoCdnOrigin}`.trim(),
     "frame-src 'self' https://*.firebaseapp.com https://*.google.com https://accounts.google.com",
     "object-src 'none'",
     "frame-ancestors 'self' https://ai.studio https://*.google.com"
@@ -456,7 +457,13 @@ app.post("/api/admin/support/data", requireFirebaseUser, requireRole("admin"), a
 });
 
 app.get("/api/quota", async (req, res) => {
-  res.status(501).json({ ok: false, error: "not_implemented" });
+  res.json({
+    ok: true,
+    rpmUsed: requestCountPM,
+    rpmLimit: RPM_LIMIT,
+    rpdUsed: requestCountPD,
+    rpdLimit: RPD_LIMIT,
+  });
 });
 
 

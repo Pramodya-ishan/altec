@@ -957,13 +957,16 @@ export default function AdmissionPredictorView() {
               {/* RIGHT COLUMN: CHRONOLOGICAL PROGRESSION AREA CHART (7 columns) */}
               <div className="lg:col-span-7 space-y-6">
                 <div className="space-y-6 rounded-[1.8rem] border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                  <h2 className="flex items-center gap-2 text-sm font-black uppercase tracking-widest text-slate-500">
+                    <span className="h-4 w-1.5 rounded-full bg-blue-600" /> Z-score progression
+                  </h2>
                   <div className="w-full h-80 min-h-0 min-w-0">
                     {chartData.length === 0 ? (
                       <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
                         <div className="max-w-sm">
                           <LineChart className="mx-auto mb-3 h-7 w-7 text-slate-300" />
-                          <p className="text-sm font-bold text-slate-700">Your predictor history starts here</p>
-                          <p className="mt-1 text-xs leading-5 text-slate-500">Complete syllabus lessons and this chart will retain each real progress snapshot.</p>
+                          <p className="text-sm font-bold text-slate-700">Your history starts here</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">Complete lessons to record each progress update.</p>
                         </div>
                       </div>
                     ) : (

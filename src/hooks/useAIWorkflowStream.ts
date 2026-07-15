@@ -319,7 +319,6 @@ export function useAIWorkflowStream() {
                    setStatus({ stage: "error", label: "Source Error", message: errorMsg });
                    onToken?.(errorMsg);
                    setIsStreaming(false);
-                   doneReceived = true;
                   doneReceived = true;
                    onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: "DIRECT_QA_SOURCE_MISSING_STORAGE_PATH", sources: [{ id: sourceId }] });
                    return;
@@ -409,6 +408,8 @@ export function useAIWorkflowStream() {
                      userMsg = "AI client runtime configuration/import issue. Please check server console.";
                   } else if (result.found === false) {
                      userMsg = (result as any).message || result.reason || "PDF scan කළා. හැබැයි exact question text හම්බුණේ නැහැ. Reindex/OCR/page image අවශ්‍යයි.";
+                  } else if (result.errorCode === "DIRECT_QA_INDEX_REQUIRED") {
+                     userMsg = "මේ PDF එක විශාල නිසා full scan එක නවතා තිබෙනවා. PDF එක එක වරක් index කළ පසු ප්‍රශ්නවලට ඉක්මනින් පිළිතුරු ලැබේ.";
                   } else if (result.errorCode === "DIRECT_QA_FIREBASE_FETCH_FAILED" || result.errorCode === "ADMIN_STORAGE_DEGRADED_USE_CLIENT_HANDOFF") {
                      userMsg = "PDF source එක තියෙනවා, නමුත් Storage permission නිසා open/scan කරන්න බැහැ. Storage rules/App Check/login check කරන්න.";
                   }

@@ -36,10 +36,11 @@ export default defineConfig(() => {
              enabled: false
           },
           manifest: {
-             name: 'Clora X',
-             short_name: 'Clora X',
-             description: 'Sinhala-first A/L Technology AI tutor',
-             theme_color: '#2563eb',
+             name: 'Tec A/L',
+             short_name: 'Tec A/L',
+             description: 'Sri Lankan A/L Technology learning workspace',
+             theme_color: '#ffffff',
+             background_color: '#ffffff',
              icons: []
           }
        })
