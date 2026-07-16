@@ -18,7 +18,7 @@
     "validate:vercel-env": "node --import tsx scripts/validate-vercel-env.ts",
     "test": "npm run test:sources && npm run test:knowledge && npm run test:pdf-qa && npm run test:platform && npm run test:security && npm run test:video",
     "test:sources": "node --import tsx src/shared/source-registry/__tests__/source.test.ts && node --import tsx src/shared/__tests__/zscore.test.ts && node --import tsx src/lib/markdown/__tests__/normalizeAnswerMarkdown.test.ts && node --import tsx server/sources/__tests__/run-repo-tests.ts",
-    "test:knowledge": "node --import tsx server/knowledge/__tests__/lessonResolver.test.ts",
+    "test:knowledge": "node --import tsx server/knowledge/__tests__/lessonResolver.test.ts && node --import tsx server/knowledge/__tests__/paperRoutingRegression.test.ts",
     "test:security": "node --import tsx scripts/run-security-tests.ts",
     "test:video": "node --import tsx server/video/__tests__/run-video-tests.ts",
     "start": "node dist/server.cjs",

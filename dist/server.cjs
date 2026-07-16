@@ -1864,7 +1864,7 @@ var init_memoryExtractor = __esm({
 
 // server/knowledge/lessonResolver.ts
 function normalizeLessonText(value) {
-  return String(value || "").normalize("NFKC").toLowerCase().replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return String(value || "").normalize("NFKC").toLowerCase().replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim();
 }
 function meaningfulTokens(value) {
   return normalizeLessonText(value).split(/\s+/).filter((token) => token.length > 1 && !FILLER_WORDS.has(token));
@@ -2002,12 +2002,42 @@ __export(knowledgeRouter_exports, {
 function parseDeterministicIntent(prompt, activeSubject) {
   const lower = prompt.toLowerCase();
   const lessonReference = resolveLessonReference(prompt);
+  const isPredictionRequest = /\b(?:guess|guessing|prediction|predict|likely|forecast)\b|අනුමාන|අපේක්ෂිත|පුරෝකථන/i.test(lower);
+  const isExamPrediction = isPredictionRequest && (lower.includes("paper") || lower.includes("mcq") || lower.includes("essay") || lower.includes("\u0DC0\u0DD2\u0DB7\u0DCF\u0D9C") || lower.includes("\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 \u0DB4\u0DAD\u0DCA\u200D\u0DBB") || /\b20\d{2}\b/.test(lower));
+  if (isExamPrediction) {
+    let predictionSubject;
+    if (/\bsft\b|science for technology|තාක්ෂණවේදය සඳහා විද්(?:‍ය|ය)ාව/i.test(lower)) predictionSubject = "SFT";
+    else if (/\bict\b|information and communication|තොරතුරු හා සන්නිවේදන/i.test(lower)) predictionSubject = "ICT";
+    else if (/\bet\b|engineering technology|ඉංජිනේරු තාක්ෂණවේදය/i.test(lower)) predictionSubject = "ET";
+    else if (["SFT", "ET", "ICT"].includes(String(activeSubject || "").toUpperCase())) predictionSubject = String(activeSubject).toUpperCase();
+    return {
+      mode: "past_paper_analysis",
+      entities: {
+        subject: predictionSubject,
+        year: lower.match(/\b(20\d{2})\b/)?.[1],
+        paperType: lower.includes("mcq") ? "mcq" : lower.includes("essay") ? "essay" : "unknown",
+        needsClarification: !predictionSubject,
+        clarificationQuestion: !predictionSubject ? "2026 prediction \u0D91\u0D9A \u0DC4\u0DAF\u0DB1\u0DCA\u0DB1 subject \u0D91\u0D9A \u0D9A\u0DD2\u0DBA\u0DB1\u0DCA\u0DB1: SFT, ET, \u0DB1\u0DD0\u0DAD\u0DCA\u0DB1\u0DB8\u0DCA ICT?" : void 0
+      },
+      answerHints: {
+        mustUseRag: true,
+        mustUseGoogleSearch: false,
+        mustUseUrlContext: false,
+        mustAskClarification: !predictionSubject
+      }
+    };
+  }
   const isPdfInventory = lower.includes("give all pdfs") || lower.includes("all pdfs") || lower.includes("mage pdf") || lower.includes("thiyena pdf") || lower.includes("firebase eke") || lower.includes("uploaded pdfs") || lower.includes("past papers list") || lower.includes("syllabus pdf") || lower.includes("paper structure pdf") || lower.includes("pdf list") || lower.includes("\u0DB4\u0DD3\u0DA9\u0DD3\u0D91\u0DC6\u0DCA \u0DBD\u0DD2\u0DC3\u0DCA\u0DA7\u0DCA") || lower.includes("\u0DB4\u0DD3\u0DA9\u0DD3\u0D91\u0DC6\u0DCA \u0DA7\u0DD2\u0D9A") || lower.includes("tika denna") || lower.includes("tika ko");
   if (isPdfInventory) {
+    let inventorySubject;
+    if (/\bsft\b|science for technology|තාක්ෂණවේදය සඳහා විද්(?:‍ය|ය)ාව/i.test(lower)) inventorySubject = "SFT";
+    else if (/\bict\b|information and communication|තොරතුරු හා සන්නිවේදන/i.test(lower)) inventorySubject = "ICT";
+    else if (/\bet\b|engineering technology|ඉංජිනේරු තාක්ෂණවේදය/i.test(lower)) inventorySubject = "ET";
+    else if (["SFT", "ET", "ICT"].includes(String(activeSubject || "").toUpperCase())) inventorySubject = String(activeSubject).toUpperCase();
     return {
       mode: "pdf_inventory_request",
       entities: {
-        subject: activeSubject
+        subject: inventorySubject
       },
       answerHints: {
         mustUseRag: true,
@@ -2084,10 +2114,13 @@ function parseDeterministicIntent(prompt, activeSubject) {
   }
   let questionNo = void 0;
   const mcqMatch = lower.match(/\bmcq\s*[-_]?\s*(\d+)\b/);
+  const numberBeforeMcqMatch = lower.match(/\b(\d{1,2})\s*(?:(?:වෙනි|වැනි|weni|th|st|nd|rd)\s*)?mcq\b/i);
   const qMatch = lower.match(/\b(?:q|question)\s*[-_]?\s*(\d+)\b/);
   const sinhalaNoMatch = lower.match(/\b(\d+)\s*(?:වෙනි|වැනි|th|st|nd|rd)\b/i);
   if (mcqMatch) {
     questionNo = parseInt(mcqMatch[1]).toString();
+  } else if (numberBeforeMcqMatch) {
+    questionNo = parseInt(numberBeforeMcqMatch[1]).toString();
   } else if (qMatch) {
     questionNo = parseInt(qMatch[1]).toString();
   } else if (sinhalaNoMatch) {
@@ -2212,10 +2245,10 @@ async function routeKnowledgeRequest({
       entities: deterministic.entities,
       contextBlocks: [],
       answerHints: {
-        mustUseGoogleSearch: deterministic.mode === "web_search",
-        mustUseUrlContext: false,
-        mustUseRag: true,
-        mustAskClarification: false
+        mustUseGoogleSearch: deterministic.answerHints?.mustUseGoogleSearch ?? deterministic.mode === "web_search",
+        mustUseUrlContext: deterministic.answerHints?.mustUseUrlContext ?? false,
+        mustUseRag: deterministic.answerHints?.mustUseRag ?? true,
+        mustAskClarification: deterministic.answerHints?.mustAskClarification ?? false
       }
     };
   }
@@ -2380,9 +2413,76 @@ var init_knowledgeRouter = __esm({
 var sourceInventoryService_exports = {};
 __export(sourceInventoryService_exports, {
   computeIndexStatus: () => computeIndexStatus,
+  extractTitleYear: () => extractTitleYear,
   getSourceInventory: () => getSourceInventory,
+  inferResourceType: () => inferResourceType,
+  inferSubject: () => inferSubject,
   invalidateInventoryCache: () => invalidateInventoryCache
 });
+function extractTitleYear(...values) {
+  for (const value of values) {
+    const match = String(value || "").match(/\b(20\d{2})\b/);
+    if (match) return match[1];
+  }
+  return "";
+}
+function inferSubject(...values) {
+  const text = values.map((value) => String(value || "")).join(" ");
+  if (/\b(?:SFT|SCIENCE\s+FOR\s+TECHNOLOGY|67\s*S(?:\s|[-_/])*I{1,2})\b|තාක්ෂණවේදය\s+සඳහා\s+විද්(?:‍ය|ය)ාව/iu.test(text)) return "SFT";
+  if (/\b(?:ICT|INFORMATION\s+(?:AND|&)\s+COMMUNICATION\s+TECHNOLOGY)\b|තොරතුරු\s+හා\s+සන්නිවේදන/iu.test(text)) return "ICT";
+  if (/\b(?:ET|ENGINEERING\s+TECHNOLOGY)\b|ඉංජිනේරු\s+තාක්ෂණවේදය/iu.test(text)) return "ET";
+  return "";
+}
+function inferResourceType(src) {
+  const explicit = String(src.resourceType || src.sourceType || "").trim().toLowerCase();
+  const text = `${src.title || ""} ${src.fileName || ""} ${src.storagePath || ""}`.toLowerCase();
+  if (explicit === "marking" || explicit === "marking_scheme") return "marking_scheme";
+  if (/marking[ _-]*scheme|\bfull\s*sm\b|\banswers?\b|පිළිතුරු\s*පත්‍ර|ලකුණු\s*සම්මුතිය/.test(text)) return "marking_scheme";
+  if (explicit === "paper_structure" || /paper[ _-]*structure|ප්‍රශ්න\s*පත්‍ර\s*ව්‍යුහ/.test(text)) return "paper_structure";
+  if (explicit === "syllabus" || /\bsyllabus\b|විෂය\s*නිර්දේශ/.test(text)) return "syllabus";
+  if (explicit === "past_paper" || /past[ _-]*paper|official[ _-]*paper|\b(?:sft|et|ict)\s*paper\b|විභාග\s*ප්‍රශ්න\s*පත්‍ර/.test(text)) return "past_paper";
+  if (explicit === "image" || explicit === "image_upload") return explicit;
+  return explicit || "uploaded_pdf";
+}
+function normalizedUrl(value) {
+  return String(value || "").trim();
+}
+function canonicalSourceKey(src) {
+  const title = String(src.title || src.fileName || "").toLowerCase().replace(/\.pdf$/i, "").replace(/\(\d+\)/g, "").replace(/[^a-z0-9\u0d80-\u0dff]+/g, " ").trim();
+  if (title.length >= 6 && (src.subject || src.year || src.resourceType !== "uploaded_pdf")) {
+    return `meta:${src.subject || ""}:${src.year || ""}:${src.resourceType || ""}:${title}`;
+  }
+  const storage = String(src.storagePath || "").replace(/^gs:\/\/[^/]+\//, "").toLowerCase();
+  if (storage) return `storage:${storage}`;
+  const downloadUrl = normalizedUrl(src.downloadUrl || src.firebaseDownloadUrl || src.url).replace(/[?&]token=[^&]+/i, "").toLowerCase();
+  if (downloadUrl) return `url:${downloadUrl}`;
+  return `meta:${src.subject || ""}:${src.year || ""}:${src.resourceType || ""}:${title}`;
+}
+function sourceQuality(src) {
+  return (src.storagePath ? 40 : 0) + (src.downloadUrl || src.url ? 25 : 0) + (Number(src.chunkCount || 0) > 0 ? 20 : 0) + (src.visibility === "official" || src.sourceScope === "official" ? 15 : 0) + (src.subject ? 5 : 0) + (src.year ? 5 : 0);
+}
+function mergeSources(left, right) {
+  const primary = sourceQuality(right) > sourceQuality(left) ? right : left;
+  const secondary = primary === right ? left : right;
+  return {
+    ...secondary,
+    ...primary,
+    id: primary.id || secondary.id,
+    sourceId: primary.sourceId || primary.id || secondary.sourceId || secondary.id,
+    title: primary.title || secondary.title,
+    fileName: primary.fileName || secondary.fileName,
+    storagePath: primary.storagePath || secondary.storagePath || null,
+    downloadUrl: primary.downloadUrl || secondary.downloadUrl || null,
+    firebaseDownloadUrl: primary.firebaseDownloadUrl || secondary.firebaseDownloadUrl || null,
+    url: primary.url || secondary.url || null,
+    chunkCount: Math.max(Number(left.chunkCount || 0), Number(right.chunkCount || 0)),
+    tags: [.../* @__PURE__ */ new Set([...Array.isArray(left.tags) ? left.tags : [], ...Array.isArray(right.tags) ? right.tags : []])],
+    duplicateSourceIds: [...new Set([
+      ...Array.isArray(left.duplicateSourceIds) ? left.duplicateSourceIds : [left.sourceId || left.id],
+      ...Array.isArray(right.duplicateSourceIds) ? right.duplicateSourceIds : [right.sourceId || right.id]
+    ].filter(Boolean))]
+  };
+}
 function lessonFromStoragePath(storagePath) {
   const path5 = String(storagePath || "").replace(/^gs:\/\/[^/]+\//, "");
   const parts = path5.split("/").filter(Boolean);
@@ -2444,23 +2544,25 @@ async function getSourceInventory(params) {
   const subjectQuery = subject ? String(subject).toUpperCase() : null;
   const yearQuery = year ? String(year) : null;
   const typeQuery = resourceType ? String(resourceType).toLowerCase() : null;
-  const allSources = [];
-  const sourceIds = /* @__PURE__ */ new Set();
+  const canonicalSources = /* @__PURE__ */ new Map();
   function addSource(src) {
     if (!src) return;
     const sId = src.sourceId || src.id;
     if (!sId) return;
-    if (sourceIds.has(sId)) return;
-    sourceIds.add(sId);
-    const normSubject = String(src.subject || "").trim().toUpperCase();
-    const normYear = String(src.year || "").trim();
-    const normResourceType = String(src.resourceType || src.sourceType || "").trim().toLowerCase();
+    const title = src.title || src.fileName || "Untitled PDF";
+    const fileName = src.fileName || src.title || "untitled.pdf";
+    const explicitSubject = String(src.subject || "").trim().toUpperCase();
+    const normSubject = (["SFT", "ET", "ICT"].includes(explicitSubject) ? explicitSubject : "") || inferSubject(title, fileName, src.storagePath, src.tags);
+    const titleYear = extractTitleYear(title, fileName, src.storagePath);
+    const explicitYear = String(src.year || "").trim();
+    const normYear = titleYear || explicitYear;
+    const normResourceType = inferResourceType(src);
     const normSourceScope = String(src.sourceScope || "").trim().toLowerCase();
     if (subjectQuery && normSubject !== subjectQuery) return;
     if (yearQuery && normYear !== yearQuery) return;
     if (typeQuery && normResourceType !== typeQuery) return;
     const isOwner = src.ownerUid === uid;
-    const isPublic = ["official", "shared", "public"].includes(src.visibility);
+    const isPublic = ["official", "shared", "public"].includes(String(src.visibility || "").toLowerCase()) || ["official", "shared", "public"].includes(normSourceScope);
     if (!isOwner && !isPublic && !isAdmin) return;
     const calcStatus = computeIndexStatus({
       chunkCount: Number(src.chunkCount || 0),
@@ -2471,17 +2573,21 @@ async function getSourceInventory(params) {
     });
     const hasLegacyTextLayer = String(src.textEncoding || "").startsWith("legacy_");
     const normalizedNeedsOcr = !hasLegacyTextLayer && src.needsOcr === true;
-    allSources.push({
+    const normalized = {
       id: sId,
       sourceId: sId,
-      title: src.title || src.fileName || "Untitled PDF",
-      fileName: src.fileName || src.title || "untitled.pdf",
+      title,
+      fileName,
       subject: normSubject || null,
       lesson: src.lesson || src.topic || lessonFromStoragePath(src.storagePath) || null,
       year: normYear || null,
+      metadataYear: explicitYear || null,
       resourceType: normResourceType || "uploaded_pdf",
       sourceScope: normSourceScope || null,
       storagePath: src.storagePath || null,
+      downloadUrl: src.downloadUrl || src.firebaseDownloadUrl || null,
+      firebaseDownloadUrl: src.firebaseDownloadUrl || src.downloadUrl || null,
+      url: src.url || src.downloadUrl || src.firebaseDownloadUrl || null,
       ownerUid: src.ownerUid || null,
       chunkCount: Number(src.chunkCount || 0),
       needsOcr: normalizedNeedsOcr,
@@ -2492,18 +2598,28 @@ async function getSourceInventory(params) {
       sourceType: src.sourceType || normResourceType || null,
       tags: Array.isArray(src.tags) ? src.tags : [],
       textIndexed: Number(src.chunkCount || 0) > 0 && !normalizedNeedsOcr,
-      createdAt: src.createdAt || null
-    });
+      createdAt: src.createdAt || null,
+      duplicateSourceIds: [sId]
+    };
+    const key = canonicalSourceKey(normalized);
+    const existing = canonicalSources.get(key);
+    canonicalSources.set(key, existing ? mergeSources(existing, normalized) : normalized);
   }
   syllabusDocs.forEach((doc) => {
     addSource({ ...doc, resourceType: "syllabus", sourceScope: "owner_syllabus" });
   });
   ppDocs.forEach((doc) => {
-    addSource(doc);
+    addSource({
+      ...doc,
+      resourceType: inferResourceType(doc) === "uploaded_pdf" ? "past_paper" : inferResourceType(doc),
+      sourceScope: doc.sourceScope || "official",
+      visibility: doc.visibility || "official"
+    });
   });
   ragDocs.forEach((doc) => {
     addSource(doc);
   });
+  const allSources = [...canonicalSources.values()];
   const groups = {
     pastPapers: [],
     markingSchemes: [],
@@ -2529,6 +2645,11 @@ async function getSourceInventory(params) {
       groups.uploadedPdfs.push(src);
     }
   });
+  const sortByYearAndTitle = (a, b) => {
+    const yearDiff = Number(b.year || 0) - Number(a.year || 0);
+    return yearDiff || String(a.title || "").localeCompare(String(b.title || ""));
+  };
+  Object.values(groups).forEach((list) => list.sort(sortByYearAndTitle));
   const result = {
     groups,
     total: allSources.length,
@@ -3327,9 +3448,12 @@ function detectOfficialPaperCandidate(prompt, activeSubject) {
   else if (promptLower.includes("essay") || promptLower.includes("\u0DBB\u0DA0\u0DB1\u0DCF")) questionType = "Essay";
   let questionNo = null;
   const mcqNoMatch = prompt.match(/\bmcq\s*[-_]?\s*(\d+)\b/i);
+  const numberBeforeMcqMatch = prompt.match(/\b(\d{1,2})\s*(?:(?:වෙනි|වැනි|weni|th|st|nd|rd)\s*)?mcq\b/i);
   const qNoMatch = prompt.match(/(?:question|q|ප්‍රශ්න|ප්‍රශ්නය|අංක|no)\s*(\d+)/i) || prompt.match(/\b(\d+)\s*(?:වෙනි|වැනි|th|st|nd|rd)\b/i) || prompt.match(/\b(?:පළවෙනි|පළමු|දෙවෙනි|දෙවන|තුන්වෙනි|හතරවෙනි|පස්වෙනි|හයවෙනි|හත්වෙනි|අටවෙනි|නවවෙනි|දහවෙනි|first|second|third)\b/i);
   if (mcqNoMatch) {
     questionNo = mcqNoMatch[1];
+  } else if (numberBeforeMcqMatch) {
+    questionNo = numberBeforeMcqMatch[1];
   } else if (qNoMatch) {
     let val = qNoMatch[1] || qNoMatch[0].toLowerCase();
     if (val.includes("\u0DB4\u0DC5\u0DC0\u0DD9\u0DB1\u0DD2") || val.includes("\u0DB4\u0DC5\u0DB8\u0DD4") || val.includes("first")) questionNo = "1";
@@ -3399,7 +3523,7 @@ __export(sourceResolver_exports, {
   resolveStrictSource: () => resolveStrictSource
 });
 function getSourceScore(src, params) {
-  const { year, subject, activeSourceId, prompt } = params;
+  const { year, subject, activeSourceId, prompt, expectedResourceType } = params;
   const promptLower = prompt.toLowerCase();
   let score = 0;
   const srcId = src.sourceId || src.id;
@@ -3408,6 +3532,7 @@ function getSourceScore(src, params) {
   const srcYearStr = src.year ? String(src.year) : src.title.match(/\b(20\d{2})\b/)?.[1] || null;
   if (activeSourceId && srcId === activeSourceId) score += 100;
   if (src.storagePath) score += 50;
+  else if (src.downloadUrl || src.firebaseDownloadUrl || src.url) score += 35;
   if (subject) {
     if (srcNormSub === subject) {
       score += 100;
@@ -3426,6 +3551,11 @@ function getSourceScore(src, params) {
   if (isPastPaper) score += 80;
   const isMarking = src.resourceType === "marking_scheme" || textToScan.includes("marking") || textToScan.includes("\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DD4");
   if (isMarking) score += 60;
+  if (expectedResourceType === "past_paper") {
+    score += isPastPaper && !isMarking ? 120 : -180;
+  } else if (expectedResourceType === "marking_scheme") {
+    score += isMarking ? 140 : -180;
+  }
   const isPaperQuestion = promptLower.includes("paper") || promptLower.includes("mcq") || year && !promptLower.includes("lesson");
   if (isPaperQuestion) {
     const isTute = textToScan.includes("tute") || textToScan.includes("lesson") || textToScan.includes("revision") || textToScan.includes("\u0DB4\u0DCF\u0DA9\u0DB8");
@@ -3963,30 +4093,6 @@ var init_assistantText = __esm({
   }
 });
 
-// server/ai/cancellation.ts
-function registerRequest(requestId) {
-  const controller = new AbortController();
-  cancellationRegistry.set(requestId, controller);
-  return controller;
-}
-function cancelRequest(requestId) {
-  const controller = cancellationRegistry.get(requestId);
-  if (controller) {
-    controller.abort(new Error("USER_CANCELLED"));
-    cancellationRegistry.delete(requestId);
-  }
-}
-function unregisterRequest(requestId) {
-  cancellationRegistry.delete(requestId);
-}
-var cancellationRegistry;
-var init_cancellation = __esm({
-  "server/ai/cancellation.ts"() {
-    "use strict";
-    cancellationRegistry = /* @__PURE__ */ new Map();
-  }
-});
-
 // server/ai-core/memory/chatSanitizer.ts
 var chatSanitizer_exports = {};
 __export(chatSanitizer_exports, {
@@ -4022,6 +4128,314 @@ function sanitizeSource(source) {
 var init_chatSanitizer = __esm({
   "server/ai-core/memory/chatSanitizer.ts"() {
     "use strict";
+  }
+});
+
+// server/ai-core/quiz/paperMcqQuiz.ts
+var paperMcqQuiz_exports = {};
+__export(paperMcqQuiz_exports, {
+  attachPaperMcqQuizQuestion: () => attachPaperMcqQuizQuestion,
+  beginPaperMcqQuiz: () => beginPaperMcqQuiz,
+  detectPaperMcqQuizStart: () => detectPaperMcqQuizStart,
+  evaluatePaperMcqQuizAnswer: () => evaluatePaperMcqQuizAnswer,
+  formatPaperMcqQuizQuestion: () => formatPaperMcqQuizQuestion,
+  getActivePaperMcqQuiz: () => getActivePaperMcqQuiz,
+  parsePaperMcqQuizAction: () => parsePaperMcqQuizAction
+});
+function normalizeSubjectText(value) {
+  const text = value.toUpperCase();
+  if (/\bSFT\b|SCIENCE\s+FOR\s+TECHNOLOGY|තාක්ෂණවේදය\s+සඳහා\s+විද්‍යාව/i.test(text)) return "SFT";
+  if (/\bET\b|ENGINEERING\s+TECHNOLOGY|ඉංජිනේරු\s+තාක්ෂණවේදය/i.test(text)) return "ET";
+  if (/\bICT\b|INFORMATION\s+(?:AND|&)\s+COMMUNICATION\s+TECHNOLOGY|තොරතුරු\s+හා\s+සන්නිවේදන/i.test(text)) return "ICT";
+  return null;
+}
+function detectPaperMcqQuizStart(prompt, activeSubject) {
+  const text = normalizeSinhalaUnicode(prompt).trim();
+  const lower = text.toLowerCase();
+  const year = text.match(/\b(20\d{2})\b/)?.[1] || null;
+  const subject = normalizeSubjectText(text) || normalizeSubjectText(String(activeSubject || ""));
+  const hasMcq = /\bmcq\b|බහුවරණ/i.test(text);
+  const hasQuizFlow = /one\s*by\s*one|එකින්\s*එක|එක\s*එක|පිළිවෙළින්|wrdina|වැරදි|error\s*(?:log|book)|quiz/i.test(lower);
+  const range = text.match(/\b([1-9]|[1-4]\d|50)\s*(?:සිට|ඉඳන්|ඉදන්|idn|indn|to|through|[-–—])\s*([1-9]|[1-4]\d|50)\b/i);
+  if (!year || !subject || !hasMcq || !hasQuizFlow || !range) return null;
+  const startQuestionNo = Number(range[1]);
+  const endQuestionNo = Number(range[2]);
+  if (startQuestionNo < 1 || endQuestionNo > 50 || startQuestionNo > endQuestionNo) return null;
+  return { isQuizStart: true, year, subject, startQuestionNo, endQuestionNo };
+}
+function comparable(value) {
+  return normalizeSinhalaUnicode(value).toLowerCase().replace(/^\s*(?:\(\s*[1-5]\s*\)|[1-5][.)])\s*/, "").replace(/[\s*_#>`~\-–—:;,.!?()[\]{}|/\\]+/g, " ").trim();
+}
+function parsePaperMcqQuizAction(prompt, session) {
+  const text = normalizeSinhalaUnicode(prompt).trim();
+  const lower = text.toLowerCase();
+  if (/^(?:stop|end|quit|cancel|නවත්වන්න|අවසන්|ඇති|එපා)$/i.test(lower)) return { kind: "stop" };
+  if (/^(?:skip|pass|next|මඟහරින්න|පසුව|ඊළඟ)$/i.test(lower)) return { kind: "skip" };
+  const numeric = text.match(/^\s*(?:(?:answer|option|ans|පිළිතුර)\s*[:=-]?\s*)?[\[(]?([1-5])[\])\].]?\s*$/i);
+  if (numeric) return { kind: "answer", optionNo: numeric[1] };
+  const answerText = comparable(text);
+  if (answerText.length >= 2 && Array.isArray(session.options)) {
+    const matches = session.options.map((option, index) => ({ optionNo: String(index + 1), text: comparable(option) })).filter((item) => item.text && (item.text === answerText || item.text.includes(answerText) || answerText.includes(item.text)));
+    if (matches.length === 1) return { kind: "answer", optionNo: matches[0].optionNo };
+  }
+  return { kind: "invalid" };
+}
+async function getActivePaperMcqQuiz(uid) {
+  const state = await getConversationState(uid);
+  return state.quizSession?.active ? state.quizSession : null;
+}
+async function beginPaperMcqQuiz(params) {
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const quizSession = {
+    active: true,
+    sourceId: params.sourceId,
+    storagePath: params.storagePath || null,
+    downloadUrl: params.downloadUrl || null,
+    title: params.title || null,
+    year: params.year,
+    subject: params.subject,
+    questionType: "MCQ",
+    startQuestionNo: params.startQuestionNo,
+    endQuestionNo: params.endQuestionNo,
+    currentQuestionNo: params.startQuestionNo,
+    awaitingAnswer: false,
+    expectedOptionNo: null,
+    expectedOptionText: null,
+    questionText: null,
+    options: [],
+    explanationSinhala: null,
+    lesson: null,
+    pageNumber: null,
+    correctCount: 0,
+    wrongCount: 0,
+    skippedCount: 0,
+    answeredCount: 0,
+    startedAt: now,
+    updatedAt: now
+  };
+  await updateConversationState(params.uid, {
+    selectedSourceId: params.sourceId,
+    currentQuestionIndex: params.startQuestionNo,
+    lastIntent: "paper_mcq_quiz",
+    quizSession
+  });
+  return quizSession;
+}
+function stripOptionPrefix(value, optionNo) {
+  let text = normalizeSinhalaUnicode(value).trim();
+  if (optionNo) {
+    const escaped = optionNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    text = text.replace(new RegExp(`^\\s*(?:\\(\\s*${escaped}\\s*\\)|${escaped}[.)])\\s*`), "");
+  }
+  return text.trim();
+}
+async function attachPaperMcqQuizQuestion(params) {
+  const state = await getConversationState(params.uid);
+  const current = state.quizSession;
+  if (!current?.active || current.sourceId !== params.sourceId || current.currentQuestionNo !== params.questionNo) {
+    return null;
+  }
+  const next = {
+    ...current,
+    awaitingAnswer: true,
+    expectedOptionNo: params.optionNo,
+    expectedOptionText: stripOptionPrefix(params.optionText || params.options[Number(params.optionNo) - 1] || "", params.optionNo),
+    questionText: normalizeSinhalaUnicode(params.questionText).trim(),
+    options: params.options.map((option) => normalizeSinhalaUnicode(option).trim()),
+    explanationSinhala: params.explanationSinhala ? cleanAssistantResponse(params.explanationSinhala) : null,
+    lesson: params.lesson ? normalizeSinhalaUnicode(params.lesson).trim() : null,
+    pageNumber: params.pageNumber ?? null,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await updateConversationState(params.uid, {
+    currentQuestionIndex: params.questionNo,
+    quizSession: next
+  });
+  return next;
+}
+function mistakeDocId(session) {
+  const base = `${session.sourceId}_MCQ_${session.currentQuestionNo}`.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 180);
+  return base || `mcq_${session.currentQuestionNo}`;
+}
+async function saveWrongMcqAttempt(uid, session, selectedOptionNo) {
+  const db = getAdminDb();
+  const ref = db.collection("users").doc(uid).collection("mistake_notebook").doc(mistakeDocId(session));
+  const now = /* @__PURE__ */ new Date();
+  const nextRevision = new Date(now);
+  nextRevision.setDate(nextRevision.getDate() + 1);
+  const selectedText = stripOptionPrefix(session.options?.[Number(selectedOptionNo) - 1] || "", selectedOptionNo);
+  const correctText = stripOptionPrefix(session.expectedOptionText || session.options?.[Number(session.expectedOptionNo || "0") - 1] || "", session.expectedOptionNo);
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
+    const existing = snapshot.exists ? snapshot.data() || {} : {};
+    const sameErrorCount = Number(existing.sameErrorCount || 0) + 1;
+    transaction.set(ref, removeUndefinedDeep({
+      uid,
+      subject: session.subject,
+      lesson: session.lesson || `${session.year} ${session.subject} Past Paper MCQ`,
+      errorText: `Q${session.currentQuestionNo}: ${session.questionText || ""}
+
+Student answer: (${selectedOptionNo}) ${selectedText}
+Correct answer: (${session.expectedOptionNo}) ${correctText}`.trim(),
+      questionText: session.questionText || "",
+      options: session.options || [],
+      studentAnswer: selectedOptionNo,
+      studentAnswerText: selectedText || null,
+      correctAnswer: session.expectedOptionNo,
+      correctAnswerText: correctText || null,
+      explanationSinhala: session.explanationSinhala || null,
+      sourceId: session.sourceId,
+      sourceTitle: session.title || null,
+      pageNumber: session.pageNumber ?? null,
+      year: session.year,
+      questionNo: session.currentQuestionNo,
+      questionType: "MCQ",
+      errorReason: `Selected option ${selectedOptionNo} instead of ${session.expectedOptionNo}.`,
+      sameErrorCount,
+      lastStudentAnswer: selectedOptionNo,
+      lastAttemptAt: now.toISOString(),
+      retryDate: nextRevision.toISOString(),
+      nextRevisionAt: nextRevision.toISOString(),
+      repeatCount: Number(existing.repeatCount || 0),
+      mastered: false,
+      createdAt: existing.createdAt || now.toISOString(),
+      updatedAt: now.toISOString(),
+      autoSavedFromQuiz: true
+    }), { merge: true });
+  });
+  return ref.id;
+}
+async function evaluatePaperMcqQuizAnswer(params) {
+  const { uid, session, action } = params;
+  if (!session.awaitingAnswer || !session.expectedOptionNo) {
+    return {
+      kind: "not_ready",
+      message: "\u0DC0\u0DAD\u0DCA\u0DB8\u0DB1\u0DCA MCQ \u0D91\u0D9A \u0DAD\u0DC0\u0DB8 load \u0DC0\u0DD9\u0DBD\u0DCF \u0DB1\u0DD0\u0DC4\u0DD0. \u0D91\u0DB8 \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA \u0DB1\u0DD0\u0DC0\u0DAD load \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.",
+      session
+    };
+  }
+  if (action.kind === "stop") {
+    const closed = { ...session, active: false, awaitingAnswer: false, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    await updateConversationState(uid, { quizSession: closed, lastIntent: "paper_mcq_quiz_stopped" });
+    return { kind: "stopped", session: closed };
+  }
+  if (action.kind === "invalid") {
+    return {
+      kind: "invalid",
+      message: `\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB \u0DBD\u0DD9\u0DC3 1, 2, 3, 4 \u0DC4\u0DDD 5 \u0DBA\u0DC0\u0DB1\u0DCA\u0DB1. Skip \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8\u0DA7 \u201Cskip\u201D, \u0D85\u0DC0\u0DC3\u0DB1\u0DCA \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8\u0DA7 \u201Cstop\u201D \u0DBA\u0DC0\u0DB1\u0DCA\u0DB1.`,
+      session
+    };
+  }
+  const selectedOptionNo = action.kind === "skip" ? null : action.optionNo;
+  const isCorrect = selectedOptionNo === session.expectedOptionNo;
+  let mistakeId = null;
+  if (selectedOptionNo && !isCorrect) {
+    mistakeId = await saveWrongMcqAttempt(uid, session, selectedOptionNo);
+  }
+  const completedNo = session.currentQuestionNo;
+  const nextQuestionNo = completedNo + 1;
+  const finished = nextQuestionNo > session.endQuestionNo;
+  const updated = {
+    ...session,
+    active: !finished,
+    currentQuestionNo: finished ? completedNo : nextQuestionNo,
+    awaitingAnswer: false,
+    expectedOptionNo: null,
+    expectedOptionText: null,
+    questionText: null,
+    options: [],
+    explanationSinhala: null,
+    lesson: null,
+    pageNumber: null,
+    correctCount: session.correctCount + (isCorrect ? 1 : 0),
+    wrongCount: session.wrongCount + (selectedOptionNo && !isCorrect ? 1 : 0),
+    skippedCount: session.skippedCount + (action.kind === "skip" ? 1 : 0),
+    answeredCount: session.answeredCount + (selectedOptionNo ? 1 : 0),
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  await updateConversationState(uid, {
+    currentQuestionIndex: finished ? null : nextQuestionNo,
+    lastIntent: finished ? "paper_mcq_quiz_completed" : "paper_mcq_quiz",
+    quizSession: updated
+  });
+  const correctText = stripOptionPrefix(session.expectedOptionText || "", session.expectedOptionNo);
+  const explanation = cleanAssistantResponse(session.explanationSinhala || "");
+  let feedback;
+  if (action.kind === "skip") {
+    feedback = `\u23ED\uFE0F **Q${completedNo} \u0DB8\u0D9F\u0DC4\u0DD0\u0DBB\u0DD2\u0DBA\u0DCF.**
+
+**\u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB:** (${session.expectedOptionNo})${correctText ? ` ${correctText}` : ""}`;
+  } else if (isCorrect) {
+    feedback = `\u2705 **\u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2\u0DBA\u0DD2 \u2014 (${session.expectedOptionNo})${correctText ? ` ${correctText}` : ""}**`;
+  } else {
+    feedback = `\u274C **\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2\u0DBA\u0DD2. \u0D94\u0DB6\u0DDA \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB: (${selectedOptionNo})**
+
+**\u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB:** (${session.expectedOptionNo})${correctText ? ` ${correctText}` : ""}
+
+\u{1F4CC} \u0DB8\u0DD9\u0DB8 \u0DC0\u0DD0\u0DBB\u0DD0\u0DAF\u0DCA\u0DAF Error Log \u0D91\u0D9A\u0DA7 \u0DC3\u0DCA\u0DC0\u0DBA\u0D82\u0D9A\u0DCA\u200D\u0DBB\u0DD3\u0DBA\u0DC0 \u0DC3\u0DD4\u0DBB\u0DD0\u0D9A\u0DD4\u0DAB\u0DCF.`;
+  }
+  if (explanation) feedback += `
+
+${explanation}`;
+  return {
+    kind: finished ? "finished" : "continue",
+    isCorrect,
+    selectedOptionNo,
+    correctOptionNo: session.expectedOptionNo,
+    feedback,
+    mistakeId,
+    nextQuestionNo: finished ? null : nextQuestionNo,
+    session: updated
+  };
+}
+function formatPaperMcqQuizQuestion(params) {
+  const questionText = normalizeSinhalaUnicode(params.questionText).trim();
+  const options = Array.isArray(params.options) ? params.options.map((option) => normalizeSinhalaUnicode(option).trim()).filter(Boolean) : [];
+  const optionLines = options.map((option, index) => {
+    const clean = option.replace(/^\s*(?:\(\s*[1-5]\s*\)|[1-5][.)])\s*/, "");
+    return `(${index + 1}) ${clean}`;
+  });
+  const progress = params.startQuestionNo === 1 && params.endQuestionNo === 50 ? `${params.questionNo}/50` : `${params.questionNo} (${params.startQuestionNo}\u2013${params.endQuestionNo})`;
+  const blocks = [
+    params.feedbackPrefix ? cleanAssistantResponse(params.feedbackPrefix) : "",
+    `### ${params.year} ${params.subject} MCQ ${progress}`,
+    questionText,
+    optionLines.join("\n"),
+    `**\u0D94\u0DB6\u0DDA \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB \u0DBD\u0DD9\u0DC3 1\u20135 \u0D85\u0DAD\u0DBB \u0D85\u0D82\u0D9A\u0DBA \u0DB4\u0DB8\u0DAB\u0D9A\u0DCA \u0DBA\u0DC0\u0DB1\u0DCA\u0DB1.**`
+  ].filter(Boolean);
+  return cleanAssistantResponse(blocks.join("\n\n"));
+}
+var init_paperMcqQuiz = __esm({
+  "server/ai-core/quiz/paperMcqQuiz.ts"() {
+    "use strict";
+    init_admin();
+    init_conversationState();
+    init_assistantText();
+    init_chatSanitizer();
+  }
+});
+
+// server/ai/cancellation.ts
+function registerRequest(requestId) {
+  const controller = new AbortController();
+  cancellationRegistry.set(requestId, controller);
+  return controller;
+}
+function cancelRequest(requestId) {
+  const controller = cancellationRegistry.get(requestId);
+  if (controller) {
+    controller.abort(new Error("USER_CANCELLED"));
+    cancellationRegistry.delete(requestId);
+  }
+}
+function unregisterRequest(requestId) {
+  cancellationRegistry.delete(requestId);
+}
+var cancellationRegistry;
+var init_cancellation = __esm({
+  "server/ai/cancellation.ts"() {
+    "use strict";
+    cancellationRegistry = /* @__PURE__ */ new Map();
   }
 });
 
@@ -5237,15 +5651,28 @@ var init_evidenceRetriever = __esm({
 // shared/text/paperAnswer.ts
 var paperAnswer_exports = {};
 __export(paperAnswer_exports, {
-  formatPaperQuestionAnswer: () => formatPaperQuestionAnswer
+  formatPaperQuestionAnswer: () => formatPaperQuestionAnswer,
+  formatPaperQuizQuestion: () => formatPaperQuizQuestion
 });
+function stripLeadingOptionMarker(value, optionNo) {
+  let text = cleanAssistantResponse(value).trim();
+  if (!text) return "";
+  if (optionNo) {
+    const escaped = optionNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    text = text.replace(new RegExp(`^\\s*(?:\\(\\s*${escaped}\\s*\\)|${escaped}[.)])\\s*`), "");
+  }
+  return text.trim();
+}
+function collapseRepeatedAnswerMarker(value) {
+  return value.replace(/^\s*\(\s*([1-5])\s*\)\s*\(\s*\1\s*\)\s*/, "($1) ").trim();
+}
 function formatPaperQuestionAnswer(params) {
   const questionText = normalizeSinhalaUnicode(params.questionText).trim();
   const options = Array.isArray(params.options) ? params.options.map((value) => normalizeSinhalaUnicode(value).trim()).filter(Boolean) : [];
   const solved = params.solvedAnswer || null;
   const optionNo = String(solved?.optionNo || "").replace(/\D/g, "");
   const officialAnswer = cleanAssistantResponse(params.officialAnswer).trim();
-  const optionText = cleanAssistantResponse(solved?.optionText).trim();
+  const optionText = stripLeadingOptionMarker(solved?.optionText, optionNo || null);
   const explanation = cleanAssistantResponse(solved?.explanationSinhala || params.explanationSinhala).trim();
   const whyOthersWrong = Array.isArray(solved?.whyOthersWrong) ? solved.whyOthersWrong.map((value) => cleanAssistantResponse(value)).filter(Boolean) : [];
   const blocks = [];
@@ -5253,7 +5680,7 @@ function formatPaperQuestionAnswer(params) {
     blocks.push(questionText);
     if (options.length > 0) blocks.push(options.join("\n"));
   }
-  const answerText = officialAnswer || [optionNo ? `(${optionNo})` : "", optionText].filter(Boolean).join(" ").trim();
+  const answerText = collapseRepeatedAnswerMarker(officialAnswer || [optionNo ? `(${optionNo})` : "", optionText].filter(Boolean).join(" ").trim());
   if (answerText) blocks.push(`**\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB:** ${answerText}`);
   if (explanation) blocks.push(explanation);
   if (params.includeWhyOthersWrong !== false && whyOthersWrong.length > 0) {
@@ -5261,6 +5688,23 @@ function formatPaperQuestionAnswer(params) {
 ${whyOthersWrong.map((reason) => `- ${reason}`).join("\n")}`);
   }
   return cleanAssistantResponse(blocks.join("\n\n"));
+}
+function formatPaperQuizQuestion(params) {
+  const questionText = normalizeSinhalaUnicode(params.questionText).trim();
+  const options = Array.isArray(params.options) ? params.options.map((value) => normalizeSinhalaUnicode(value).trim()).filter(Boolean) : [];
+  const optionLines = options.map((option, index) => {
+    const clean = option.replace(/^\s*(?:\(\s*[1-5]\s*\)|[1-5][.)])\s*/, "");
+    return `(${index + 1}) ${clean}`;
+  });
+  const progress = params.startQuestionNo === 1 && params.endQuestionNo === 50 ? `${params.questionNo}/50` : `${params.questionNo} (${params.startQuestionNo}\u2013${params.endQuestionNo})`;
+  const feedback = cleanAssistantResponse(params.feedbackPrefix).trim();
+  return cleanAssistantResponse([
+    feedback,
+    `### ${params.year} ${params.subject} MCQ ${progress}`,
+    questionText,
+    optionLines.join("\n"),
+    "**\u0D94\u0DB6\u0DDA \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB \u0DBD\u0DD9\u0DC3 1\u20135 \u0D85\u0DAD\u0DBB \u0D85\u0D82\u0D9A\u0DBA \u0DB4\u0DB8\u0DAB\u0D9A\u0DCA \u0DBA\u0DC0\u0DB1\u0DCA\u0DB1.**"
+  ].filter(Boolean).join("\n\n"));
 }
 var init_paperAnswer = __esm({
   "shared/text/paperAnswer.ts"() {
@@ -5330,6 +5774,147 @@ var init_webPdfSearch = __esm({
   "server/ai/webPdfSearch.ts"() {
     "use strict";
     init_googleSearchGrounding();
+  }
+});
+
+// server/knowledge/predictionEvidence.ts
+var predictionEvidence_exports = {};
+__export(predictionEvidence_exports, {
+  retrievePastPaperAnalysisEvidence: () => retrievePastPaperAnalysisEvidence
+});
+function numericYear(value) {
+  const parsed = Number(String(value || "").match(/\b(20\d{2})\b/)?.[1] || value || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+function compact(value, max = 260) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+function sourcePayload(source, usedInAnswer) {
+  return {
+    id: source.sourceId || source.id,
+    sourceId: source.sourceId || source.id,
+    title: source.title,
+    year: source.year,
+    subject: source.subject,
+    resourceType: source.resourceType,
+    storagePath: source.storagePath,
+    downloadUrl: source.downloadUrl,
+    url: source.url || source.downloadUrl || `/api/rag/sources/${source.sourceId || source.id}/download`,
+    sourceType: source.resourceType,
+    badge: source.resourceType === "marking_scheme" ? "Marking Scheme" : source.resourceType === "past_paper" ? "Past Paper" : source.resourceType === "syllabus" ? "Syllabus" : "Reference",
+    usedInAnswer
+  };
+}
+async function retrievePastPaperAnalysisEvidence(params) {
+  const { uid, subject, isAdmin } = params;
+  const targetYear = numericYear(params.targetYear) || 2026;
+  const db = getAdminDb();
+  const inventory = await getSourceInventory({ uid, subject, isAdmin });
+  const relevantSources = [
+    ...inventory.groups.pastPapers,
+    ...inventory.groups.markingSchemes,
+    ...inventory.groups.syllabus,
+    ...inventory.groups.paperStructure
+  ].filter((source) => {
+    const year = numericYear(source.year || source.title);
+    return !year || year < targetYear;
+  });
+  const sourceById = /* @__PURE__ */ new Map();
+  for (const source of relevantSources) {
+    sourceById.set(String(source.sourceId || source.id), source);
+    for (const duplicateId of source.duplicateSourceIds || []) {
+      sourceById.set(String(duplicateId), source);
+    }
+  }
+  const questionSnap = await db.collection("exam_question_index").where("subject", "==", subject).get().catch(() => ({ docs: [] }));
+  const indexedQuestions = questionSnap.docs.map((document) => ({ id: document.id, ...document.data() })).filter((question) => {
+    const year = numericYear(question.year);
+    const sourceKnown = !question.sourceId || sourceById.has(String(question.sourceId));
+    return sourceKnown && (!year || year < targetYear);
+  }).sort((a, b) => numericYear(a.year) - numericYear(b.year) || Number(a.questionNo || 0) - Number(b.questionNo || 0));
+  const usedSourceIds = /* @__PURE__ */ new Set();
+  let contextText = "";
+  let evidenceMode = "metadata_only";
+  if (indexedQuestions.length > 0) {
+    evidenceMode = "question_index";
+    const frequency = /* @__PURE__ */ new Map();
+    const byType = /* @__PURE__ */ new Map();
+    const lastAsked = /* @__PURE__ */ new Map();
+    for (const question of indexedQuestions) {
+      const lesson = compact(question.lesson || question.subtopic || question.concept || "Unclassified", 90);
+      const type = String(question.questionType || question.paperType || "Unknown");
+      const year = numericYear(question.year);
+      frequency.set(lesson, (frequency.get(lesson) || 0) + 1);
+      byType.set(type, (byType.get(type) || 0) + 1);
+      if (year > (lastAsked.get(lesson) || 0)) lastAsked.set(lesson, year);
+    }
+    const frequencyLines = [...frequency.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60).map(([lesson, count]) => `${lesson} | frequency=${count} | lastAsked=${lastAsked.get(lesson) || "unknown"}`);
+    const typeLines = [...byType.entries()].sort((a, b) => b[1] - a[1]).map(([type, count]) => `${type}=${count}`);
+    const records = [...indexedQuestions].sort((a, b) => numericYear(b.year) - numericYear(a.year) || Number(a.questionNo || 0) - Number(b.questionNo || 0)).slice(0, 120).map((question) => {
+      if (question.sourceId) usedSourceIds.add(String(question.sourceId));
+      return [
+        question.year || "year?",
+        question.questionType || question.paperType || "question",
+        `Q${question.questionNo || "?"}${question.partNo ? `(${question.partNo})` : ""}`,
+        question.lesson || "lesson?",
+        question.subtopic || question.concept || "topic?",
+        question.marks != null ? `${question.marks} marks` : "",
+        compact(question.questionText, 180)
+      ].filter(Boolean).join(" | ");
+    });
+    contextText = `
+[PREDICTION DATASET: EXAM QUESTION INDEX]
+[QUESTION TYPE COUNTS]
+${typeLines.join("\n")}
+[LESSON FREQUENCY + RECENCY]
+${frequencyLines.join("\n")}
+[RECENT QUESTION SAMPLE]
+${records.join("\n")}
+`;
+  } else {
+    const chunkLines = [];
+    for (const source of relevantSources.slice(0, 24)) {
+      const sourceId = String(source.sourceId || source.id);
+      const chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get().catch(() => ({ docs: [] }));
+      const chunks = chunksSnap.docs.map((document) => document.data()).sort((a, b) => Number(a.chunkIndex || 0) - Number(b.chunkIndex || 0)).slice(0, 3);
+      if (chunks.length === 0) continue;
+      usedSourceIds.add(sourceId);
+      for (const chunk of chunks) {
+        chunkLines.push(`${source.year || "Year N/A"} | ${source.title} | page ${chunk.pageNumber || "?"} | ${compact(chunk.text, 520)}`);
+      }
+    }
+    if (chunkLines.length > 0) {
+      evidenceMode = "rag_chunks";
+      contextText = `
+[PREDICTION DATASET: INDEXED PDF CHUNKS]
+${chunkLines.join("\n")}
+`;
+    }
+  }
+  const sourceYears = [...new Set(relevantSources.map((source) => numericYear(source.year || source.title)).filter(Boolean))].sort();
+  const sources = relevantSources.filter((source) => usedSourceIds.size === 0 || usedSourceIds.has(String(source.sourceId || source.id)) || (source.duplicateSourceIds || []).some((id) => usedSourceIds.has(String(id)))).slice(0, 30).map((source) => sourcePayload(source, true));
+  const stats = {
+    subject,
+    targetYear,
+    uniqueRelevantPdfs: relevantSources.length,
+    pastPapers: inventory.groups.pastPapers.filter((source) => !numericYear(source.year) || numericYear(source.year) < targetYear).length,
+    markingSchemes: inventory.groups.markingSchemes.filter((source) => !numericYear(source.year) || numericYear(source.year) < targetYear).length,
+    indexedQuestions: indexedQuestions.length,
+    yearsCovered: sourceYears,
+    evidenceMode
+  };
+  contextText = `
+[PREDICTION COVERAGE]
+${JSON.stringify(stats)}
+${contextText}
+`;
+  return { contextText, sources, stats, hasEvidence: evidenceMode !== "metadata_only" };
+}
+var init_predictionEvidence = __esm({
+  "server/knowledge/predictionEvidence.ts"() {
+    "use strict";
+    init_admin();
+    init_sourceInventoryService();
   }
 });
 
@@ -5476,12 +6061,140 @@ async function aiRespondStream(req, res) {
   try {
     const { prompt, activeSubject, mode: requestedMode = "auto", history = [], image, attachments } = req.body;
     const user = req.user;
+    const quizStartIntent = detectPaperMcqQuizStart(prompt, activeSubject);
+    const activePaperQuiz = quizStartIntent ? null : await safeCall("getActivePaperMcqQuiz", () => getActivePaperMcqQuiz(user.uid), null, res);
+    if (activePaperQuiz) {
+      const action = parsePaperMcqQuizAction(prompt, activePaperQuiz);
+      const evaluation = await safeCall(
+        "evaluatePaperMcqQuizAnswer",
+        () => evaluatePaperMcqQuizAnswer({ uid: user.uid, session: activePaperQuiz, action }),
+        { kind: "invalid", message: "\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB \u0DBD\u0DD9\u0DC3 1, 2, 3, 4 \u0DC4\u0DDD 5 \u0DBA\u0DC0\u0DB1\u0DCA\u0DB1.", session: activePaperQuiz },
+        res
+      );
+      if (evaluation.kind === "invalid" || evaluation.kind === "not_ready") {
+        emitSse(res, "token", { text: evaluation.message });
+        const chatRes2 = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: evaluation.message,
+          mode: "paper_mcq_quiz",
+          subject: activePaperQuiz.subject
+        });
+        trace.completed = true;
+        trace.chatSaved = chatRes2.chatSaved;
+        trace.messageId = chatRes2.messageId;
+        emitSse(res, "done", { ok: true, completed: true, requestId, chatSaved: chatRes2.chatSaved, messageId: chatRes2.messageId || null });
+        trace.doneSent = true;
+        return;
+      }
+      if (evaluation.kind === "stopped") {
+        const stoppedText = `Quiz \u0D91\u0D9A \u0DB1\u0DC0\u0DAD\u0DCF \u0D87\u0DAD.
+
+**\u0DB4\u0DCA\u200D\u0DBB\u0DAD\u0DD2\u0DB5\u0DBD\u0DBA:** \u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 ${evaluation.session.correctCount} \xB7 \u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 ${evaluation.session.wrongCount} \xB7 \u0DB8\u0D9F\u0DC4\u0DD0\u0DBB\u0DD3\u0DB8\u0DCA ${evaluation.session.skippedCount}`;
+        emitSse(res, "token", { text: stoppedText });
+        const chatRes2 = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: stoppedText,
+          mode: "paper_mcq_quiz",
+          subject: activePaperQuiz.subject
+        });
+        trace.completed = true;
+        trace.chatSaved = chatRes2.chatSaved;
+        trace.messageId = chatRes2.messageId;
+        emitSse(res, "done", { ok: true, completed: true, requestId, chatSaved: chatRes2.chatSaved, messageId: chatRes2.messageId || null });
+        trace.doneSent = true;
+        return;
+      }
+      if (evaluation.kind === "finished") {
+        const summary = `${evaluation.feedback}
+
+---
+
+### Quiz \u0D85\u0DC0\u0DC3\u0DB1\u0DCA
+
+**\u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2:** ${evaluation.session.correctCount}  
+**\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2:** ${evaluation.session.wrongCount}  
+**\u0DB8\u0D9F\u0DC4\u0DD0\u0DBB\u0DD3\u0DB8\u0DCA:** ${evaluation.session.skippedCount}  
+**\u0DBD\u0D9A\u0DD4\u0DAB:** ${evaluation.session.correctCount}/${evaluation.session.endQuestionNo - evaluation.session.startQuestionNo + 1}`;
+        emitSse(res, "token", { text: summary });
+        const chatRes2 = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: summary,
+          mode: "paper_mcq_quiz",
+          subject: activePaperQuiz.subject
+        });
+        trace.completed = true;
+        trace.chatSaved = chatRes2.chatSaved;
+        trace.messageId = chatRes2.messageId;
+        emitSse(res, "done", { ok: true, completed: true, requestId, chatSaved: chatRes2.chatSaved, messageId: chatRes2.messageId || null });
+        trace.doneSent = true;
+        return;
+      }
+      if (evaluation.kind === "continue" && evaluation.nextQuestionNo) {
+        const source = {
+          id: activePaperQuiz.sourceId,
+          sourceId: activePaperQuiz.sourceId,
+          storagePath: activePaperQuiz.storagePath || null,
+          downloadUrl: activePaperQuiz.downloadUrl || null,
+          url: activePaperQuiz.downloadUrl || null,
+          title: activePaperQuiz.title || `${activePaperQuiz.year} ${activePaperQuiz.subject} Paper`,
+          subject: activePaperQuiz.subject,
+          year: activePaperQuiz.year,
+          badge: "Official Source"
+        };
+        emitSse(res, "sources", { sources: [source] });
+        emitSse(res, "direct_pdf_handoff_required", {
+          sourceId: activePaperQuiz.sourceId,
+          storagePath: activePaperQuiz.storagePath || null,
+          downloadUrl: activePaperQuiz.downloadUrl || null,
+          title: source.title,
+          subject: activePaperQuiz.subject,
+          year: activePaperQuiz.year,
+          questionNo: String(evaluation.nextQuestionNo),
+          questionType: "MCQ",
+          prompt: `${activePaperQuiz.year} ${activePaperQuiz.subject} MCQ ${evaluation.nextQuestionNo}`,
+          scanMode: "full_paper",
+          interactionMode: "quiz_question",
+          quizStartQuestionNo: activePaperQuiz.startQuestionNo,
+          quizEndQuestionNo: activePaperQuiz.endQuestionNo,
+          quizFeedback: evaluation.feedback,
+          reason: "PAPER_MCQ_QUIZ_NEXT",
+          message: `MCQ ${evaluation.nextQuestionNo} load \u0D9A\u0DBB\u0DB8\u0DD2\u0DB1\u0DCA \u0DB4\u0DC0\u0DAD\u0DD3.`
+        });
+        emitSse(res, "done", {
+          ok: true,
+          completed: false,
+          pending: true,
+          requestId,
+          finishReason: "pending_direct_pdf_qa",
+          canContinue: true,
+          needsClientFile: false,
+          sources: [source]
+        });
+        trace.doneSent = true;
+        return;
+      }
+    }
     const { trackAIUsage: trackAIUsage2 } = await Promise.resolve().then(() => (init_usageTracker(), usageTracker_exports));
     let allSources = [];
     emitSse(res, "status", { step: "started", message: "Starting stream..." });
     emitSse(res, "status", { label: "Thinking" });
     const { detectOfficialPaperCandidate: detectOfficialPaperCandidate2 } = await Promise.resolve().then(() => (init_paperQuestionParser(), paperQuestionParser_exports));
-    const paperIntent = detectOfficialPaperCandidate2(prompt, activeSubject);
+    const detectedPaperIntent = detectOfficialPaperCandidate2(prompt, activeSubject);
+    let paperIntent = quizStartIntent ? {
+      ...detectedPaperIntent,
+      isOfficialPaperCandidate: true,
+      year: quizStartIntent.year,
+      subject: quizStartIntent.subject,
+      questionNo: String(quizStartIntent.startQuestionNo),
+      questionType: "MCQ",
+      needsSubjectClarification: false
+    } : detectedPaperIntent;
     if (paperIntent.isOfficialPaperCandidate && paperIntent.needsSubjectClarification) {
       const msg = `\u0DB8\u0DDA ${paperIntent.year} paper \u0D91\u0D9A\u0DDA subject \u0D91\u0D9A \u0DB8\u0DDC\u0D9A\u0D9A\u0DCA\u0DAF? (SFT / ET / ICT)`;
       emitSse(res, "token", { text: msg });
@@ -5533,8 +6246,50 @@ async function aiRespondStream(req, res) {
       console.log(`[OFFICIAL_PAPER_GATE] Converted normal_chat -> paper_question_qa`);
       route.mode = "paper_question_qa";
     }
-    const policy = resolveAnswerPolicy(prompt, route, activeSubject, attachments);
     const activeConversationState = await getConversationState(user.uid);
+    const lowerPrompt = prompt.toLowerCase();
+    const isRecheckRequest = [
+      "recheck",
+      "check again",
+      "verify again",
+      "\u0DB1\u0DD0\u0DC0\u0DAD \u0DB6\u0DBD\u0DB1\u0DCA\u0DB1",
+      "\u0DB1\u0DD0\u0DC0\u0DAD \u0DB4\u0DBB\u0DD3\u0D9A\u0DCA\u0DC2\u0DCF",
+      "\u0D86\u0DBA\u0DD9\u0DAD\u0DCA \u0DB6\u0DBD\u0DB1\u0DCA\u0DB1",
+      "\u0D86\u0DBA\u0DD9 \u0DB6\u0DBD\u0DB1\u0DCA\u0DB1"
+    ].some((phrase) => lowerPrompt.includes(phrase));
+    if (!paperIntent.isOfficialPaperCandidate && isRecheckRequest && activeConversationState.selectedQuestionId) {
+      const { getSourceInventory: getSourceInventory2 } = await Promise.resolve().then(() => (init_sourceInventoryService(), sourceInventoryService_exports));
+      const isAdminUser2 = user.roles?.includes("admin") || user.admin === true;
+      const inventory = await safeCall(
+        "getSourceInventoryForRecheck",
+        () => getSourceInventory2({ uid: user.uid, subject: activeConversationState.activeSubject, isAdmin: isAdminUser2 }),
+        { all: [] },
+        res
+      );
+      const selectedId = activeConversationState.selectedSourceId || activeConversationState.activeSourceIds[0];
+      const selectedSource = (inventory.all || []).find((source) => {
+        const ids = [source.id, source.sourceId, ...source.duplicateSourceIds || []].map(String);
+        return selectedId && ids.includes(String(selectedId));
+      });
+      if (selectedSource) {
+        paperIntent = {
+          isOfficialPaperCandidate: true,
+          year: selectedSource.year,
+          subject: selectedSource.subject || activeConversationState.activeSubject || activeSubject || "SFT",
+          questionNo: String(activeConversationState.selectedQuestionId).replace(/^Q/i, ""),
+          questionType: "MCQ",
+          needsSubjectClarification: false
+        };
+        route.mode = "paper_question_qa";
+        route.entities.year = paperIntent.year;
+        route.entities.subject = paperIntent.subject;
+        route.entities.questionNo = paperIntent.questionNo;
+        route.entities.questionType = paperIntent.questionType;
+        route.entities.activeSourceId = selectedSource.id || selectedSource.sourceId;
+        route.answerHints.mustUseRag = true;
+      }
+    }
+    const policy = resolveAnswerPolicy(prompt, route, activeSubject, attachments);
     const evidence = await retrieveEvidence(user.uid, prompt, route, policy, activeConversationState);
     if (evidence.selectedSource) {
       route.entities.activeSourceId = evidence.selectedSource.id;
@@ -5557,8 +6312,7 @@ async function aiRespondStream(req, res) {
       route.answerHints.mustUseGoogleSearch = false;
       route.answerHints.mustUseUrlContext = false;
     }
-    const lowerPrompt = prompt.toLowerCase();
-    const correctionPhrases = ["oka fake", "werdi", "weradi", "oka newe", "\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2\u0DBA\u0DD2", "\u0D95\u0D9A \u0DB6\u0DDC\u0DBB\u0DD4", "oka boru", "not correct", "fake", "wrong", "boru", "boru kiynn epa", "boru dewal", "\u0DB6\u0DDC\u0DBB\u0DD4", "\u0DB8\u0DDA\u0D9A \u0DB6\u0DDC\u0DBB\u0DD4", "\u0DB1\u0DD1", "not this"];
+    const correctionPhrases = ["recheck", "check again", "verify again", "oka fake", "werdi", "weradi", "oka newe", "\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2\u0DBA\u0DD2", "\u0D95\u0D9A \u0DB6\u0DDC\u0DBB\u0DD4", "oka boru", "not correct", "fake", "wrong", "boru", "boru kiynn epa", "boru dewal", "\u0DB6\u0DDC\u0DBB\u0DD4", "\u0DB8\u0DDA\u0D9A \u0DB6\u0DDC\u0DBB\u0DD4", "\u0DB1\u0DD1", "not this"];
     const isCorrection = correctionPhrases.some((p) => lowerPrompt.includes(p));
     const lastMsg = history && history.length > 0 ? history[history.length - 1] : null;
     const lastPaperInfo = lastMsg?.metadata?.paperInfo || lastMsg?.paperInfo;
@@ -5616,8 +6370,8 @@ async function aiRespondStream(req, res) {
     if (activeConversationState.selectedSourceId && selectedPdfQuestion) {
       const { getSourceInventory: getSourceInventory2 } = await Promise.resolve().then(() => (init_sourceInventoryService(), sourceInventoryService_exports));
       const selectedSubject = evidence.subject || activeConversationState.activeSubject || activeSubject || "SFT";
-      const isAdminUser = user.roles?.includes("admin") || user.admin === true;
-      const inventory = await getSourceInventory2({ uid: user.uid, subject: selectedSubject, isAdmin: isAdminUser });
+      const isAdminUser2 = user.roles?.includes("admin") || user.admin === true;
+      const inventory = await getSourceInventory2({ uid: user.uid, subject: selectedSubject, isAdmin: isAdminUser2 });
       const availableSources = [
         ...inventory.groups.pastPapers,
         ...inventory.groups.markingSchemes,
@@ -5631,7 +6385,7 @@ async function aiRespondStream(req, res) {
       });
       if (selectedSource) {
         const sourceId = selectedSource.sourceId || selectedSource.id;
-        const sourcePayload = {
+        const sourcePayload2 = {
           ...selectedSource,
           id: sourceId,
           sourceId,
@@ -5648,7 +6402,7 @@ async function aiRespondStream(req, res) {
           allowGeneratedContent: false,
           lastIntent: "selected_resource_discussion"
         });
-        emitSse(res, "sources", { sources: [sourcePayload] });
+        emitSse(res, "sources", { sources: [sourcePayload2] });
         emitSse(res, "direct_pdf_handoff_required", {
           sourceId,
           storagePath: selectedSource.storagePath,
@@ -5670,7 +6424,7 @@ async function aiRespondStream(req, res) {
           finishReason: "pending_direct_pdf_qa",
           reason: "SELECTED_PDF_QUESTION_FOLLOWUP",
           canContinue: true,
-          sources: [sourcePayload],
+          sources: [sourcePayload2],
           paperInfo: {
             sourceId,
             questionNo: selectedPdfQuestion.questionNo,
@@ -5884,83 +6638,49 @@ async function aiRespondStream(req, res) {
       const uploadedList = groups.uploadedPdfs;
       const sseSources = allSources2.map((s) => ({
         id: s.id,
+        sourceId: s.sourceId || s.id,
         title: s.title,
-        url: s.url || `/api/rag/sources/${s.id}/download`,
+        url: s.url || s.downloadUrl || `/api/rag/sources/${s.id}/download`,
+        downloadUrl: s.downloadUrl || s.url || null,
         storagePath: s.storagePath,
-        badge: s.resourceType === "past_paper" ? "Past Paper" : s.resourceType === "marking_scheme" ? "Marking Scheme" : "PDF Store",
+        badge: s.resourceType === "past_paper" ? "Past Paper" : s.resourceType === "marking_scheme" ? "Marking Scheme" : s.resourceType === "syllabus" ? "Syllabus" : s.resourceType === "paper_structure" ? "Paper Structure" : "Uploaded PDF",
         confidence: 1,
         sourceType: s.resourceType,
         sourceScope: s.sourceScope
       }));
       emitSse(res, "sources", { sources: sseSources });
-      let answer = `\u{1F4DA} **\u0DB8\u0DB8 \u0DC3\u0DDC\u0DBA\u0DCF\u0D9C\u0DAD\u0DCA PDF \u0DC3\u0DC4 \u0DB4\u0DCA\u200D\u0DBB\u0DB7\u0DC0\u0DBA\u0DB1\u0DCA (Sources) \u0DB8\u0DD9\u0DB1\u0DCA\u0DB1:**
+      let answer = `### PDF Library
 
 `;
-      let count = 1;
-      if (pastPapers.length > 0) {
-        answer += `\u{1F3DB}\uFE0F **Past Papers**
+      answer += `Duplicate copies merge \u0D9A\u0DBB\u0DBD\u0DCF **unique sources ${allSources2.length}\u0D9A\u0DCA** \u0DC4\u0DB8\u0DD4 \u0DC0\u0DD4\u0DAB\u0DCF.
+
 `;
-        pastPapers.forEach((p) => {
-          answer += `${count++}. **${p.title}** (${p.year || "Year N/A"}) - [Open](${p.url || `/api/rag/sources/${p.id}/download`})
+      answer += `- Past Papers: **${pastPapers.length}**
 `;
-        });
+      answer += `- Marking Schemes: **${markingSchemes.length}**
+`;
+      answer += `- Syllabus: **${syllabusList.length}**
+`;
+      answer += `- Paper Structure: **${paperStructureList.length}**
+`;
+      answer += `- Uploaded PDFs: **${uploadedList.length}**
+`;
+      if (imagesList.length > 0) answer += `- Images: **${imagesList.length}**
+`;
+      const recentPapers = pastPapers.slice(0, 8);
+      if (recentPapers.length > 0) {
         answer += `
+**Recent papers**
 `;
-      }
-      if (markingSchemes.length > 0) {
-        answer += `\u{1F4DD} **Marking Schemes**
-`;
-        markingSchemes.forEach((p) => {
-          answer += `${count++}. **${p.title}** (${p.year || "Year N/A"}) - [Open](${p.url || `/api/rag/sources/${p.id}/download`})
-`;
-        });
-        answer += `
-`;
-      }
-      if (syllabusList.length > 0) {
-        answer += `\u{1F4D6} **Syllabus Library**
-`;
-        syllabusList.forEach((p) => {
-          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})
-`;
-        });
-        answer += `
-`;
-      }
-      if (paperStructureList.length > 0) {
-        answer += `\u{1F4D0} **Paper Structure**
-`;
-        paperStructureList.forEach((p) => {
-          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})
-`;
-        });
-        answer += `
-`;
-      }
-      if (uploadedList.length > 0) {
-        answer += `\u{1F4E4} **Uploaded PDFs**
-`;
-        uploadedList.forEach((p) => {
-          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})
-`;
-        });
-        answer += `
-`;
-      }
-      if (imagesList.length > 0) {
-        answer += `\u{1F5BC}\uFE0F **Images**
-`;
-        imagesList.forEach((p) => {
-          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})
-`;
-        });
+        answer += recentPapers.map((paper) => `- ${paper.year || "Year N/A"} \xB7 ${paper.title}`).join("\n");
         answer += `
 `;
       }
       if (allSources2.length === 0) {
         answer = `\u274C Firebase \u0D91\u0D9A\u0DDA PDFs \u0DAD\u0DC0\u0DB8 \u0DC4\u0DB8\u0DCA\u0DB6\u0DD4\u0DAB\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0. Upload \u0D9A\u0DC5\u0DCF \u0DB1\u0DB8\u0DCA index/reload \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.`;
       } else {
-        answer += `\u{1F4A1} \u0DB8\u0DD9\u0DB8 \u0D95\u0DB1\u0DD1\u0DB8 PDF \u0D91\u0D9A\u0D9A\u0DCA \u0DB8\u0DAD \u0D9A\u0DCA\u0DBD\u0DD2\u0D9A\u0DCA \u0D9A\u0DBB \u0D91\u0DBA \u0D9A\u0DD2\u0DBA\u0DC0\u0DD2\u0DBA \u0DC4\u0DD0\u0D9A. \u0D91\u0DB8\u0DD9\u0DB1\u0DCA\u0DB8 \u0D91\u0DB8 \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1 \u0DB4\u0DAD\u0DCA\u200D\u0DBB\u0DC0\u0DBD\u0DD2\u0DB1\u0DCA \u0D95\u0DB1\u0DD1\u0DB8 \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA\u0D9A\u0DCA \u0DB8\u0D9C\u0DD9\u0DB1\u0DCA \u0DC0\u0DD2\u0DB8\u0DC3\u0DB1\u0DCA\u0DB1!`;
+        answer += `
+\u0DB4\u0DC4\u0DC5 source cards \u0DC0\u0DBD\u0DD2\u0DB1\u0DCA \u0D95\u0DB1\u0DD1\u0DB8 PDF \u0D91\u0D9A open \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1. Paper question \u0D91\u0D9A\u0D9A\u0DCA \u0D85\u0DC4\u0DB1 \u0DC0\u0DD2\u0DA7 system \u0D91\u0D9A \u0D92 PDF \u0D91\u0D9A direct scan \u0D9A\u0DBB\u0DBA\u0DD2.`;
       }
       emitSse(res, "token", { text: stripRawVisualBlocks(answer) });
       trace.lastEvent = "token";
@@ -5995,14 +6715,15 @@ async function aiRespondStream(req, res) {
         let resolution = { sources: [], paperSource: null };
         const { resolveStrictSource: resolveStrictSource2 } = await Promise.resolve().then(() => (init_sourceResolver(), sourceResolver_exports));
         const { getSourceInventory: getSourceInventory2 } = await Promise.resolve().then(() => (init_sourceInventoryService(), sourceInventoryService_exports));
-        const isAdminUser = user.roles?.includes("admin") || user.admin === true;
-        const inventory = await getSourceInventory2({ uid: user.uid, subject: requestedSubject, isAdmin: isAdminUser });
+        const isAdminUser2 = user.roles?.includes("admin") || user.admin === true;
+        const inventory = await getSourceInventory2({ uid: user.uid, subject: requestedSubject, isAdmin: isAdminUser2 });
         const allAvailableSources = [...inventory.groups.pastPapers, ...inventory.groups.markingSchemes, ...inventory.groups.syllabus, ...inventory.groups.uploadedPdfs];
         const strictRes = resolveStrictSource2(allAvailableSources, {
           year: requestedYear,
           subject: requestedSubject,
-          activeSourceId: null,
-          prompt
+          activeSourceId: route.entities.activeSourceId || activeConversationState.selectedSourceId,
+          prompt,
+          expectedResourceType: route.mode === "marking_scheme_request" ? "marking_scheme" : "past_paper"
         });
         if (strictRes.sourceLocked && strictRes.selectedSource) {
           console.log(`[AI_CORE] Source Locked: ${strictRes.selectedSource.title}`);
@@ -6010,7 +6731,8 @@ async function aiRespondStream(req, res) {
           allSources = [{
             sourceId: paperSource.id || paperSource.sourceId,
             title: paperSource.title,
-            url: paperSource.url || null,
+            url: paperSource.url || paperSource.downloadUrl || null,
+            downloadUrl: paperSource.downloadUrl || paperSource.url || null,
             storagePath: paperSource.storagePath || null,
             badge: "Official Source",
             year: paperSource.year,
@@ -6050,12 +6772,80 @@ async function aiRespondStream(req, res) {
         }
         if (paperSource) {
           if (!allSources.find((s) => s.id === paperSource.id)) {
-            allSources.push({ sourceId: paperSource.id, title: paperSource.title, url: paperSource.url, storagePath: paperSource.storagePath, badge: "Locked Source" });
+            allSources.push({
+              sourceId: paperSource.id,
+              title: paperSource.title,
+              url: paperSource.url || paperSource.downloadUrl,
+              downloadUrl: paperSource.downloadUrl || paperSource.url,
+              storagePath: paperSource.storagePath,
+              badge: "Locked Source"
+            });
           }
           emitSse(res, "sources", { sources: allSources });
+          await updateConversationState(user.uid, {
+            activeSubject: requestedSubject,
+            activeSourceIds: [paperSource.id || paperSource.sourceId],
+            selectedSourceId: paperSource.id || paperSource.sourceId,
+            selectedQuestionId: requestedQuestionNo ? String(requestedQuestionNo) : null,
+            currentQuestionIndex: requestedQuestionNo ? Number(requestedQuestionNo) : null,
+            requestedResourceType: route.mode === "marking_scheme_request" ? "marking_scheme" : "past_paper",
+            evidenceMode: "strict",
+            allowGeneratedContent: false,
+            lastIntent: route.mode
+          });
         }
         const hasPaperSource = !!paperSource;
         const questionId = paperSource?.id && requestedQuestionNo ? `${paperSource.id}_${paperIntent.questionType || "MCQ"}_${requestedQuestionNo}`.replace(/\//g, "_") : null;
+        if (hasPaperSource && quizStartIntent && route.mode !== "pdf_link_request") {
+          const sourceId = paperSource.id || paperSource.sourceId;
+          const storagePath = paperSource.storagePath || null;
+          const downloadUrl = paperSource.downloadUrl || paperSource.url || null;
+          const title = paperSource.title || `${quizStartIntent.year} ${quizStartIntent.subject} Paper`;
+          await beginPaperMcqQuiz({
+            uid: user.uid,
+            sourceId,
+            storagePath,
+            downloadUrl,
+            title,
+            year: quizStartIntent.year,
+            subject: quizStartIntent.subject,
+            startQuestionNo: quizStartIntent.startQuestionNo,
+            endQuestionNo: quizStartIntent.endQuestionNo
+          });
+          emitSse(res, "direct_pdf_handoff_required", {
+            sourceId,
+            storagePath,
+            downloadUrl,
+            title,
+            subject: quizStartIntent.subject,
+            year: quizStartIntent.year,
+            questionNo: String(quizStartIntent.startQuestionNo),
+            questionType: "MCQ",
+            prompt: `${quizStartIntent.year} ${quizStartIntent.subject} MCQ ${quizStartIntent.startQuestionNo}`,
+            scanMode: "full_paper",
+            interactionMode: "quiz_question",
+            quizStartQuestionNo: quizStartIntent.startQuestionNo,
+            quizEndQuestionNo: quizStartIntent.endQuestionNo,
+            quizFeedback: `### Quiz \u0D86\u0DBB\u0DB8\u0DCA\u0DB7\u0DBA\u0DD2
+
+\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DD4 Error Log \u0D91\u0D9A\u0DA7 \u0DC3\u0DCA\u0DC0\u0DBA\u0D82\u0D9A\u0DCA\u200D\u0DBB\u0DD3\u0DBA\u0DC0 \u0DC3\u0DD4\u0DBB\u0DD0\u0D9A\u0DDA.`,
+            reason: "PAPER_MCQ_QUIZ_START",
+            message: `MCQ ${quizStartIntent.startQuestionNo} load \u0D9A\u0DBB\u0DB8\u0DD2\u0DB1\u0DCA \u0DB4\u0DC0\u0DAD\u0DD3.`
+          });
+          emitSse(res, "done", {
+            ok: true,
+            completed: false,
+            pending: true,
+            requestId,
+            finishReason: "pending_direct_pdf_qa",
+            reason: "PAPER_MCQ_QUIZ_START",
+            canContinue: true,
+            needsClientFile: false,
+            sources: allSources.length > 0 ? allSources : [paperSource]
+          });
+          trace.doneSent = true;
+          return;
+        }
         if (hasPaperSource && route.mode !== "pdf_link_request") {
           const { retrieveEvidenceForPaperQuestion: retrieveEvidenceForPaperQuestion2 } = await Promise.resolve().then(() => (init_evidenceRetriever(), evidenceRetriever_exports));
           if (questionId) {
@@ -6260,6 +7050,69 @@ async function aiRespondStream(req, res) {
     let contextBlocksText = "";
     let hasExactQuestionText = false;
     let needsOcr = false;
+    if (route.mode === "past_paper_analysis") {
+      const predictionSubject = route.entities.subject || activeSubject;
+      if (!predictionSubject) {
+        const clarification = "2026 prediction \u0D91\u0D9A \u0DC4\u0DAF\u0DB1\u0DCA\u0DB1 subject \u0D91\u0D9A \u0D9A\u0DD2\u0DBA\u0DB1\u0DCA\u0DB1: SFT, ET, \u0DB1\u0DD0\u0DAD\u0DCA\u0DB1\u0DB8\u0DCA ICT?";
+        emitSse(res, "token", { text: clarification });
+        const chatRes2 = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: clarification,
+          mode: route.mode,
+          subject: activeSubject
+        });
+        trace.completed = true;
+        trace.chatSaved = chatRes2.chatSaved;
+        trace.messageId = chatRes2.messageId;
+        emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes2.messageId || null, chatSaved: chatRes2.chatSaved, sources: [] });
+        trace.doneSent = true;
+        return;
+      }
+      emitSse(res, "status", { step: "exam_intelligence", status: "searching", message: "Past papers \u0DC3\u0DC4 marking schemes combine \u0D9A\u0DBB\u0DB8\u0DD2\u0DB1\u0DCA..." });
+      const { retrievePastPaperAnalysisEvidence: retrievePastPaperAnalysisEvidence2 } = await Promise.resolve().then(() => (init_predictionEvidence(), predictionEvidence_exports));
+      const isAdminUser2 = user.roles?.includes("admin") || user.admin === true;
+      const predictionEvidence = await safeCall(
+        "retrievePastPaperAnalysisEvidence",
+        () => retrievePastPaperAnalysisEvidence2({
+          uid: user.uid,
+          subject: predictionSubject,
+          targetYear: route.entities.year || "2026",
+          isAdmin: isAdminUser2
+        }),
+        { contextText: "", sources: [], stats: null, hasEvidence: false },
+        res
+      );
+      contextBlocksText += predictionEvidence.contextText || "";
+      allSources.push(...predictionEvidence.sources || []);
+      route.answerHints.mustUseRag = false;
+      if (!predictionEvidence.hasEvidence) {
+        const noIndexMessage = `**${predictionSubject}** \u0DC3\u0DB3\u0DC4\u0DCF PDFs \u0DC4\u0DB8\u0DD4 \u0DC0\u0DD4\u0DAB\u0DCF, \u0DB1\u0DB8\u0DD4\u0DAD\u0DCA prediction analysis \u0DC3\u0DB3\u0DC4\u0DCF searchable question index \u0DAD\u0DC0\u0DB8 \u0DC3\u0DD6\u0DAF\u0DCF\u0DB1\u0DB8\u0DCA \u0DB1\u0DD0\u0DC4\u0DD0. PDFs reindex/build exam index \u0D9A\u0DC5 \u0DB4\u0DC3\u0DD4 \u0DC3\u0DD2\u0DBA\u0DBD\u0DD4 papers \u0D91\u0D9A\u0DA7 \u0DB7\u0DCF\u0DC0\u0DD2\u0DAD \u0D9A\u0DBB evidence-based prediction \u0D91\u0D9A \u0DBD\u0DB6\u0DCF \u0DAF\u0DD9\u0DB1\u0DCA\u0DB1 \u0DB4\u0DD4\u0DC5\u0DD4\u0DC0\u0DB1\u0DCA.`;
+        emitSse(res, "prediction_index_required", {
+          subject: predictionSubject,
+          targetYear: route.entities.year || "2026",
+          stats: predictionEvidence.stats,
+          sources: predictionEvidence.sources
+        });
+        emitSse(res, "token", { text: noIndexMessage });
+        const chatRes2 = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: noIndexMessage,
+          mode: route.mode,
+          subject: predictionSubject,
+          sources: predictionEvidence.sources
+        });
+        trace.completed = true;
+        trace.chatSaved = chatRes2.chatSaved;
+        trace.messageId = chatRes2.messageId;
+        emitSse(res, "done", { ok: false, completed: true, requestId, finishReason: "prediction_index_required", messageId: chatRes2.messageId || null, chatSaved: chatRes2.chatSaved, sources: predictionEvidence.sources });
+        trace.doneSent = true;
+        return;
+      }
+    }
     if (route.mode === "uploaded_pdf_question_qa") {
       emitSse(res, "status", { step: "rag", status: "searching" });
       const retrieveResult = await safeCall("retrieveUploadedPdfQuestion", () => retrieveUploadedPdfQuestion({
@@ -6315,7 +7168,7 @@ ${c.text}
         });
       }
     }
-    if (requestedMode === "deep_search" || route.mode !== "uploaded_pdf_question_qa" && (route.answerHints.mustUseRag || route.mode === "normal_chat" || hasUploadedPdf)) {
+    if (requestedMode === "deep_search" || route.mode !== "uploaded_pdf_question_qa" && route.mode !== "past_paper_analysis" && (route.answerHints.mustUseRag || route.mode === "normal_chat" || hasUploadedPdf)) {
       emitSse(res, "status", { step: "rag", status: "searching" });
       const retrieveResult = await safeCall("retrieveRelevantKnowledge", () => retrieveRelevantKnowledge({
         query: prompt,
@@ -6416,7 +7269,7 @@ ${uRes.answer}
     };
     const ai9 = getAIClient();
     let aiTask = "normal_chat";
-    if (["paper_question_qa", "marking_scheme_request", "lesson_marks_intent", "zscore_prediction", "uploaded_pdf_question_qa", "tutor_explanation"].includes(route.mode) || image) {
+    if (["paper_question_qa", "marking_scheme_request", "lesson_marks_intent", "zscore_prediction", "past_paper_analysis", "uploaded_pdf_question_qa", "tutor_explanation"].includes(route.mode) || image) {
       aiTask = image ? "image_understanding" : "final_answer";
     }
     if (paperIntent.isOfficialPaperCandidate && route.mode === "paper_question_qa" && !hasExactQuestionText) {
@@ -6981,6 +7834,7 @@ var init_respondStream = __esm({
     init_lessonResolver();
     init_selectedPdfFollowup();
     init_assistantText();
+    init_paperMcqQuiz();
     init_cancellation();
     lastStreamTraces = [];
   }
@@ -7386,7 +8240,10 @@ RULES:
 - ${visualOnly ? "Locate the exact requested question in the attached QUESTION PDF. Ignore any corrupted embedded text layer and read the rendered glyphs and diagram." : "Do not change the supplied question meaning."}
 - Do not create a new question.
 - Choose exactly one option (1, 2, 3, 4, or 5).
-- Explain the logic clearly in Sinhala.
+- Explain the decisive rule or fact clearly in Sinhala.
+- Keep optionText as the selected option text only; do not prefix it with \u201C(1)\u201D, \u201C1.\u201D, or another option number.
+- Do not invent detailed classifications or facts about distractors. Populate whyOthersWrong only for alternatives that can be rejected directly from the supplied question or the attached syllabus; otherwise return an empty array.
+- If a place name, species name, technical term, or OCR transcription is uncertain, do not assign it a speculative category. State only the verified distinction needed to select the answer.
 - ${hasQuestionPdf ? "The attached QUESTION PDF is authoritative visual evidence. Inspect its diagram, labels, arrows and relative positions before solving." : "No question-page image/PDF is attached; only use the extracted evidence supplied below."}
 - ${hasReferencePdf ? `Use the attached ${referenceLabel || "official syllabus PDF"} as the primary theory reference. Never claim that it contains the question itself.` : "No syllabus PDF is attached. Do not claim that one was used."}
 - Never repeat legacy-font/mojibake text in the answer. Write Sinhala only as Unicode Sinhala.
@@ -7407,7 +8264,7 @@ Return JSON:
   "optionText": "text of the selected option",
   "formulaOrRule": "any formula or rule used",
   "explanationSinhala": "clear explanation in Sinhala",
-  "whyOthersWrong": ["reason 1", "reason 2"],
+  "whyOthersWrong": [],
   "confidence": 0.0-1.0,
   "answerStatus": "ai_solved_from_extracted_question",
   "syllabusEvidence": "relevant syllabus topic/principle or null",
@@ -8670,7 +9527,7 @@ function logEnvConfig() {
 // server.ts
 init_client();
 init_admin();
-var import_express14 = __toESM(require("express"), 1);
+var import_express16 = __toESM(require("express"), 1);
 var import_cors = __toESM(require("cors"), 1);
 var import_path2 = __toESM(require("path"), 1);
 var import_fs3 = __toESM(require("fs"), 1);
@@ -12039,6 +12896,243 @@ function detectLessonForChunk(text, subject) {
   return null;
 }
 
+// server/platform/documentIntelligence.ts
+var import_node_crypto2 = __toESM(require("node:crypto"), 1);
+var clamp01 = (value) => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
+function normalize(value) {
+  return String(value || "").normalize("NFKC").replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/[_\-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function cleanupResourceTitle(value) {
+  const withoutExtension = normalize(value).replace(/\.(pdf|docx?|pptx?|txt|jpg|jpeg|png)$/i, "").replace(/\b(?:copy|final|new|edited|scan|scanned|compressed)\b/gi, "").replace(/\b[0-9a-f]{16,}\b/gi, "").replace(/[()[\]{}]+/g, " ").replace(/\s+/g, " ").trim();
+  return withoutExtension || "Untitled resource";
+}
+function detectSubject(combined, explicit) {
+  const explicitNormalized = normalize(explicit).toUpperCase();
+  if (["SFT", "ET", "ICT"].includes(explicitNormalized))
+    return explicitNormalized;
+  const value = combined.toLowerCase();
+  if (/\b(?:sft|science for technology|67\s*s)\b/i.test(combined) || value.includes("\u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA \u0DC3\u0DB3\u0DC4\u0DCF \u0DC0\u0DD2\u0DAF\u0DCA\u200D\u0DBA\u0DCF\u0DC0"))
+    return "SFT";
+  if (/\b(?:engineering technology|et|65\s*e)\b/i.test(combined) || value.includes("\u0D89\u0D82\u0DA2\u0DD2\u0DB1\u0DDA\u0DBB\u0DD4 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DC0\u0DDA\u0DAF\u0DBA"))
+    return "ET";
+  if (/\b(?:ict|information and communication technology|66\s*i)\b/i.test(
+    combined
+  ) || value.includes("\u0DAD\u0DDC\u0DBB\u0DAD\u0DD4\u0DBB\u0DD4 \u0DC4\u0DCF \u0DC3\u0DB1\u0DCA\u0DB1\u0DD2\u0DC0\u0DDA\u0DAF\u0DB1 \u0DAD\u0DCF\u0D9A\u0DCA\u0DC2\u0DAB\u0DBA"))
+    return "ICT";
+  return "UNKNOWN";
+}
+function detectYear(combined, explicit) {
+  const explicitYear = String(explicit || "").match(/\b(20\d{2})\b/)?.[1];
+  if (explicitYear) return explicitYear;
+  return combined.match(/\b(20\d{2})\b/)?.[1] || null;
+}
+function detectMedium(text) {
+  if (!text.trim()) return "Unknown";
+  const letters = [...text].filter((char) => /\p{L}/u.test(char));
+  if (letters.length === 0) return "Unknown";
+  const sinhala = letters.filter(
+    (char) => /[\u0D80-\u0DFF]/u.test(char)
+  ).length;
+  const latin = letters.filter((char) => /[A-Za-z]/.test(char)).length;
+  const siRatio = sinhala / letters.length;
+  const enRatio = latin / letters.length;
+  if (siRatio >= 0.55 && enRatio < 0.25) return "Sinhala";
+  if (enRatio >= 0.55 && siRatio < 0.25) return "English";
+  if (siRatio >= 0.15 && enRatio >= 0.15) return "Mixed";
+  return siRatio > enRatio ? "Sinhala" : enRatio > siRatio ? "English" : "Unknown";
+}
+function detectPaperKind(combined, resourceType) {
+  const value = combined.toLowerCase();
+  const explicit = normalize(resourceType).toLowerCase();
+  if (/marking\s*scheme|answer\s*scheme|scheme|පිළිතුරු\s*පත්‍ර|ලකුණු\s*දීමේ/.test(
+    value
+  ) || explicit.includes("marking"))
+    return "marking_scheme";
+  if (/syllabus|විෂය\s*නිර්දේශ/.test(value) || explicit.includes("syllabus"))
+    return "syllabus";
+  if (/model\s*paper|guess\s*paper|අනුමාන\s*ප්‍රශ්න|ආදර්ශ\s*ප්‍රශ්න/.test(
+    value
+  ) || explicit.includes("model"))
+    return "model_paper";
+  if (/question\s*bank|mcq\s*bank|ප්‍රශ්න\s*බැංකු/.test(value) || explicit.includes("question_bank"))
+    return "question_bank";
+  if (/past\s*paper|g\.c\.e|advanced\s*level|අධ්‍යයන\s*පොදු\s*සහතික|විභාගය/.test(
+    value
+  ) || explicit.includes("past_paper"))
+    return "past_paper";
+  if (/lesson|note|tutorial|tute|පාඩම|සටහන්/.test(value) || explicit.includes("note"))
+    return "lesson_note";
+  return "unknown";
+}
+function detectQuestionType(text) {
+  const value = text.toLowerCase();
+  const hasMcq = /\(1\)[\s\S]{0,500}\(2\)/.test(text) || /\bmcq\b/.test(value) || /බහුවරණ/.test(value);
+  const hasStructured = /structured|ව්‍යුහගත|කෙටි\s*පිළිතුරු/.test(value);
+  const hasEssay = /essay|රචනා|b\s*කොටස|c\s*කොටස|d\s*කොටස/.test(value);
+  const matches = [hasMcq, hasStructured, hasEssay].filter(Boolean).length;
+  if (matches > 1) return "Mixed";
+  if (hasMcq) return "MCQ";
+  if (hasStructured) return "Structured";
+  if (hasEssay) return "Essay";
+  return "Unknown";
+}
+function detectTeacherName(combined) {
+  const patterns = [
+    /(?:teacher|sir|miss|mr\.?|mrs\.?)\s*[:\-]?\s*([A-Z][A-Za-z .]{2,50})/i,
+    /(?:ගුරු|සර්|මිස්|මහතා|මහත්මිය)\s*[:\-]?\s*([\u0D80-\u0DFFA-Za-z .]{2,50})/u
+  ];
+  for (const pattern of patterns) {
+    const match = combined.match(pattern)?.[1]?.trim();
+    if (match) return match.replace(/\s+/g, " ").slice(0, 60);
+  }
+  return null;
+}
+function classifyDocumentMetadata(input) {
+  const cleanedTitle = cleanupResourceTitle(input.title || input.fileName);
+  const textSample = normalize(input.text).slice(0, 2e4);
+  const combined = normalize(
+    [
+      input.fileName,
+      input.title,
+      input.resourceType,
+      input.subject,
+      input.year,
+      textSample
+    ].filter(Boolean).join(" ")
+  );
+  const evidence = [];
+  const warnings = [];
+  const subject = detectSubject(combined, input.subject);
+  const year = detectYear(combined, input.year);
+  const medium = detectMedium(textSample || combined);
+  const paperKind = detectPaperKind(combined, input.resourceType);
+  const questionType = detectQuestionType(textSample || combined);
+  const teacherName = detectTeacherName(combined);
+  if (subject !== "UNKNOWN") evidence.push(`subject:${subject}`);
+  else warnings.push("Subject could not be detected confidently.");
+  if (year) evidence.push(`year:${year}`);
+  else warnings.push("Exam/resource year could not be detected.");
+  if (medium !== "Unknown") evidence.push(`medium:${medium}`);
+  if (paperKind !== "unknown") evidence.push(`resource:${paperKind}`);
+  if (questionType !== "Unknown") evidence.push(`questionType:${questionType}`);
+  if (teacherName) evidence.push(`teacher:${teacherName}`);
+  const detectedFields = [
+    subject !== "UNKNOWN",
+    Boolean(year),
+    medium !== "Unknown",
+    paperKind !== "unknown",
+    questionType !== "Unknown"
+  ];
+  const confidence = clamp01(
+    0.2 + detectedFields.filter(Boolean).length * 0.15 + (textSample.length > 300 ? 0.05 : 0)
+  );
+  return {
+    cleanedTitle,
+    subject,
+    year,
+    medium,
+    paperKind,
+    questionType,
+    teacherName,
+    confidence,
+    evidence,
+    warnings
+  };
+}
+function calculateDocumentQuality(input) {
+  const buffer = input.buffer;
+  const pages = input.pages || [];
+  const text = String(
+    input.text || pages.map((page) => page.text || "").join("\n\n")
+  );
+  const pageCount = pages.length;
+  const nonEmptyPageCount = pages.filter(
+    (page) => String(page.text || "").trim().length >= 20
+  ).length;
+  const textLength = text.length;
+  const averageCharactersPerPage = pageCount > 0 ? Math.round(textLength / pageCount) : textLength;
+  const validPdfHeader = buffer.subarray(0, 5).toString("ascii") === "%PDF-";
+  const hasEofMarker = buffer.subarray(Math.max(0, buffer.length - 2048)).toString("latin1").includes("%%EOF");
+  const unicodeSinhalaCount = (text.match(/[\u0D80-\u0DFF]/g) || []).length;
+  const replacementCount = (text.match(/\uFFFD/g) || []).length;
+  const controlCount = (text.match(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g) || []).length;
+  const unicodeSinhalaRatio = textLength > 0 ? unicodeSinhalaCount / textLength : 0;
+  const replacementCharacterRatio = textLength > 0 ? replacementCount / textLength : 0;
+  const controlCharacterRatio = textLength > 0 ? controlCount / textLength : 0;
+  const ocrConfidence = clamp01(Number(input.ocrConfidence ?? 1));
+  const lowConfidencePages = pages.filter((page) => {
+    const pageText = String(page.text || "").trim();
+    const confidence = page.conversionConfidence == null ? ocrConfidence : clamp01(Number(page.conversionConfidence));
+    return pageText.length < 40 || confidence < 0.72;
+  }).map((page, index) => Number(page.pageNumber || index + 1));
+  const pageCoverage = pageCount > 0 ? nonEmptyPageCount / pageCount : textLength > 100 ? 1 : 0;
+  const textDensity = clamp01(averageCharactersPerPage / 900);
+  const characterHealth = clamp01(
+    1 - replacementCharacterRatio * 8 - controlCharacterRatio * 12
+  );
+  const structureHealth = (validPdfHeader ? 0.6 : 0) + (hasEofMarker ? 0.4 : 0);
+  const completenessScore = clamp01(
+    pageCoverage * 0.3 + textDensity * 0.2 + characterHealth * 0.2 + ocrConfidence * 0.2 + structureHealth * 0.1
+  );
+  const warnings = [];
+  if (!validPdfHeader)
+    warnings.push("File header is not a valid PDF signature.");
+  if (!hasEofMarker)
+    warnings.push("PDF EOF marker was not found; the file may be truncated.");
+  if (pageCount === 0) warnings.push("No pages were extracted.");
+  if (pageCoverage < 0.7)
+    warnings.push(
+      "A significant number of pages contain little or no searchable text."
+    );
+  if (replacementCharacterRatio > 0.02)
+    warnings.push("Extracted text contains many replacement characters.");
+  if (ocrConfidence < 0.75)
+    warnings.push("OCR confidence is low and should be reviewed.");
+  if (lowConfidencePages.length > 0)
+    warnings.push(
+      `${lowConfidencePages.length} page(s) require OCR/text review.`
+    );
+  const corruptionRisk = !validPdfHeader || completenessScore < 0.35 ? "high" : !hasEofMarker || completenessScore < 0.68 ? "medium" : "low";
+  return {
+    fileFingerprint: import_node_crypto2.default.createHash("sha256").update(buffer).digest("hex"),
+    fileSizeBytes: buffer.length,
+    validPdfHeader,
+    hasEofMarker,
+    pageCount,
+    nonEmptyPageCount,
+    textLength,
+    averageCharactersPerPage,
+    unicodeSinhalaRatio,
+    replacementCharacterRatio,
+    controlCharacterRatio,
+    ocrConfidence,
+    completenessScore,
+    corruptionRisk,
+    needsHumanReview: corruptionRisk !== "low" || lowConfidencePages.length > 0 || ocrConfidence < 0.75,
+    lowConfidencePages,
+    warnings
+  };
+}
+function calculateTextOnlyQuality(params) {
+  const syntheticPdf = Buffer.from(`%PDF-1.7
+${params.fingerprintSeed || "text-only-finalization"}
+%%EOF`);
+  const report = calculateDocumentQuality({
+    buffer: syntheticPdf,
+    text: params.text,
+    pages: params.pages,
+    ocrConfidence: params.ocrConfidence
+  });
+  return {
+    ...report,
+    fileFingerprint: import_node_crypto2.default.createHash("sha256").update(params.fingerprintSeed || "").update(params.text).digest("hex"),
+    warnings: [
+      ...report.warnings,
+      "Original source buffer was unavailable during background finalization; duplicate fingerprint is text-derived."
+    ]
+  };
+}
+
 // server/pdf/processingPipeline.ts
 async function processUploadedPdf(params) {
   let {
@@ -12056,7 +13150,9 @@ async function processUploadedPdf(params) {
     buffer,
     forceOcr = false
   } = params;
-  console.log(`Starting PDF processing pipeline for sourceId: ${sourceId}, title: "${title}", forceOcr: ${forceOcr}`);
+  console.log(
+    `Starting PDF processing pipeline for sourceId: ${sourceId}, title: "${title}", forceOcr: ${forceOcr}`
+  );
   const db = getAdminDb();
   const sourceRef = db.collection("rag_sources").doc(sourceId);
   try {
@@ -12064,11 +13160,18 @@ async function processUploadedPdf(params) {
       if (!storagePath) {
         throw new Error("Either buffer or storagePath must be provided.");
       }
-      console.log(`Downloading PDF from ${storagePath} for sourceId: ${sourceId}`);
+      console.log(
+        `Downloading PDF from ${storagePath} for sourceId: ${sourceId}`
+      );
       const bucket = getAdminBucket();
       const file = bucket.file(storagePath);
       const [downloaded] = await file.download();
       buffer = downloaded;
+    }
+    if (buffer.subarray(0, 5).toString("ascii") !== "%PDF-") {
+      throw new Error(
+        "INVALID_PDF_SIGNATURE: The uploaded file is not a valid PDF document."
+      );
     }
     let pages = [];
     let fullText = "";
@@ -12133,14 +13236,18 @@ async function processUploadedPdf(params) {
       needsOcr = false;
       needsLegacyConversion = false;
       triggerOcr = Boolean(forceOcr);
-      console.log(`Legacy Sinhala text layer detected. Keeping ${textLength} extracted characters without OCR.`);
+      console.log(
+        `Legacy Sinhala text layer detected. Keeping ${textLength} extracted characters without OCR.`
+      );
     }
     if (triggerOcr) {
       needsOcr = true;
       const isCloudVisionEnabled = process.env.ENABLE_CLOUD_VISION_OCR === "true";
       const ocrErrors = [];
       if (isCloudVisionEnabled) {
-        console.log(`Triggering Cloud Vision OCR fallback for sourceId: ${sourceId}...`);
+        console.log(
+          `Triggering Cloud Vision OCR fallback for sourceId: ${sourceId}...`
+        );
         try {
           const ocrResponse = await runCloudVisionPdfOcr({
             sourceId,
@@ -12157,26 +13264,32 @@ async function processUploadedPdf(params) {
               textIndexed: false,
               updatedAt: (/* @__PURE__ */ new Date()).toISOString()
             };
-            await sourceRef.set({
-              sourceId,
-              ownerUid: uid,
-              storagePath,
-              fileName,
-              title,
-              subject: normalizeSubject4(subject || ""),
-              resourceType,
-              sourceType: sourceType || resourceType,
-              sourceScope,
-              ...metaUpdate
-            }, { merge: true });
-            if (sourceScope === "past_paper") {
-              await db.collection("past_papers").doc(sourceId).set({
-                id: sourceId,
+            await sourceRef.set(
+              {
                 sourceId,
                 ownerUid: uid,
+                storagePath,
+                fileName,
+                title,
+                subject: normalizeSubject4(subject || ""),
+                resourceType,
+                sourceType: sourceType || resourceType,
                 sourceScope,
                 ...metaUpdate
-              }, { merge: true }).catch(() => {
+              },
+              { merge: true }
+            );
+            if (sourceScope === "past_paper") {
+              await db.collection("past_papers").doc(sourceId).set(
+                {
+                  id: sourceId,
+                  sourceId,
+                  ownerUid: uid,
+                  sourceScope,
+                  ...metaUpdate
+                },
+                { merge: true }
+              ).catch(() => {
               });
             }
             return {
@@ -12205,7 +13318,10 @@ async function processUploadedPdf(params) {
             needsLegacyConversion = false;
           }
         } catch (ocrErr) {
-          console.error("Cloud Vision OCR operation failed; trying Gemini PDF OCR:", ocrErr);
+          console.error(
+            "Cloud Vision OCR operation failed; trying Gemini PDF OCR:",
+            ocrErr
+          );
           ocrErrors.push(`Cloud Vision: ${ocrErr?.message || String(ocrErr)}`);
         }
       }
@@ -12225,7 +13341,9 @@ async function processUploadedPdf(params) {
           ocrConfidence = 0.85;
           needsOcr = false;
           needsLegacyConversion = false;
-          console.log(`Gemini PDF OCR completed successfully. Extracted ${pages.length} pages.`);
+          console.log(
+            `Gemini PDF OCR completed successfully. Extracted ${pages.length} pages.`
+          );
         } catch (ocrErr) {
           console.error("Gemini PDF OCR operation failed:", ocrErr);
           ocrErrors.push(`Gemini: ${ocrErr?.message || String(ocrErr)}`);
@@ -12273,6 +13391,23 @@ async function processUploadedPdf(params) {
         extractionMethod: "none"
       };
     }
+    const documentMetadata = classifyDocumentMetadata({
+      fileName,
+      title,
+      subject,
+      year,
+      resourceType,
+      text: fullText
+    });
+    const qualityReport = calculateDocumentQuality({
+      buffer,
+      text: fullText,
+      pages,
+      ocrConfidence
+    });
+    title = documentMetadata.cleanedTitle || title;
+    subject = documentMetadata.subject !== "UNKNOWN" ? documentMetadata.subject : subject;
+    year = documentMetadata.year || year;
     const finalizeResult = await finalizePipelineProcessing({
       uid,
       sourceId,
@@ -12290,7 +13425,9 @@ async function processUploadedPdf(params) {
       textEncoding,
       ocrConfidence,
       needsOcr,
-      needsLegacyConversion
+      needsLegacyConversion,
+      documentMetadata,
+      qualityReport
     });
     return {
       ok: true,
@@ -12301,7 +13438,10 @@ async function processUploadedPdf(params) {
       extractionMethod
     };
   } catch (err) {
-    console.error(`Unhandled error in processUploadedPdf pipeline for ${sourceId}:`, err);
+    console.error(
+      `Unhandled error in processUploadedPdf pipeline for ${sourceId}:`,
+      err
+    );
     await finalizeFailedProcessing({
       sourceId,
       sourceScope,
@@ -12340,8 +13480,25 @@ async function finalizePipelineProcessing(params) {
     textEncoding,
     ocrConfidence,
     needsOcr,
-    needsLegacyConversion
+    needsLegacyConversion,
+    documentMetadata,
+    qualityReport
   } = params;
+  const effectiveDocumentMetadata = documentMetadata ?? classifyDocumentMetadata({
+    fileName,
+    title,
+    subject,
+    year,
+    resourceType,
+    text: pages.map((page) => page.text || "").join("\n\n")
+  });
+  const effectiveQualityReport = qualityReport ?? calculateTextOnlyQuality({
+    text: pages.map((page) => page.text || "").join("\n\n"),
+    pages,
+    ocrConfidence,
+    fingerprintSeed: `${sourceId}:${storagePath}`
+  });
+  const trustedSource = String(sourceScope) === "official";
   const db = getAdminDb();
   const bulkWriter = db.bulkWriter();
   const rag_chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
@@ -12392,14 +13549,14 @@ async function finalizePipelineProcessing(params) {
         conversionApplied: p.conversionApplied || false,
         ocrConfidence,
         chunkIndex: chunkCount++,
-        title,
+        title: effectiveDocumentMetadata.cleanedTitle || title,
         fileName,
         subject: normalizedSubjectKey,
         lesson: detectedLesson,
         resourceType,
         sourceType: sourceType || resourceType,
-        year: year ? String(year) : null,
-        medium: "Sinhala",
+        year: effectiveDocumentMetadata.year || (year ? String(year) : null),
+        medium: effectiveDocumentMetadata.medium === "Unknown" ? "Mixed" : effectiveDocumentMetadata.medium,
         tags: [title, subject].filter(Boolean),
         sourceScope,
         visibility: sourceScope === "official" ? "official" : "private",
@@ -12413,7 +13570,9 @@ async function finalizePipelineProcessing(params) {
       }
     }
   }
-  console.log(`Generating separate readable Sinhala text PDF (HTML companion) for sourceId: ${sourceId}...`);
+  console.log(
+    `Generating separate readable Sinhala text PDF (HTML companion) for sourceId: ${sourceId}...`
+  );
   const textPdfResponse = await generateSinhalaTextPdf({
     uid,
     sourceId,
@@ -12447,28 +13606,23 @@ async function finalizePipelineProcessing(params) {
     ocrTextStoragePath: textPdfResponse.ocrTextStoragePath,
     ocrTextPdfStatus: textPdfResponse.ocrTextPdfStatus,
     lesson: lesson?.trim() || null,
+    detectedMetadata: effectiveDocumentMetadata,
+    fileFingerprint: effectiveQualityReport.fileFingerprint,
+    documentQuality: effectiveQualityReport,
+    indexedTextCompleteness: effectiveQualityReport.completenessScore,
+    needsTextReview: effectiveQualityReport.needsHumanReview,
+    lowConfidencePages: effectiveQualityReport.lowConfidencePages,
     processedAt: (/* @__PURE__ */ new Date()).toISOString(),
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   await bulkWriter.close();
-  console.log(`Committed ${chunkCount} chunks to Firestore for source: ${sourceId}`);
-  await db.collection("rag_sources").doc(sourceId).set({
-    sourceId,
-    ownerUid: uid,
-    storagePath,
-    fileName,
-    title,
-    subject: normalizedSubjectKey,
-    year: year ? String(year) : null,
-    resourceType,
-    sourceType: sourceType || resourceType,
-    sourceScope,
-    visibility: sourceScope === "official" ? "official" : "private",
-    ...metaUpdate
-  }, { merge: true });
-  if (sourceScope === "past_paper") {
-    await db.collection("past_papers").doc(sourceId).set({
-      id: sourceId,
+  console.log(
+    `Committed ${chunkCount} chunks to Firestore for source: ${sourceId}`
+  );
+  const duplicateSnap = await db.collection("rag_sources").where("fileFingerprint", "==", effectiveQualityReport.fileFingerprint).limit(3).get().catch(() => null);
+  const duplicateOfSourceId = duplicateSnap?.docs.map((doc) => doc.id).find((id) => id !== sourceId) || null;
+  await db.collection("rag_sources").doc(sourceId).set(
+    {
       sourceId,
       ownerUid: uid,
       storagePath,
@@ -12479,25 +13633,57 @@ async function finalizePipelineProcessing(params) {
       resourceType,
       sourceType: sourceType || resourceType,
       sourceScope,
+      visibility: sourceScope === "official" ? "official" : "private",
+      isDuplicate: Boolean(duplicateOfSourceId),
+      duplicateOfSourceId,
+      trustedSource,
       ...metaUpdate
-    }, { merge: true }).catch(() => {
+    },
+    { merge: true }
+  );
+  if (sourceScope === "past_paper") {
+    await db.collection("past_papers").doc(sourceId).set(
+      {
+        id: sourceId,
+        sourceId,
+        ownerUid: uid,
+        storagePath,
+        fileName,
+        title,
+        subject: normalizedSubjectKey,
+        year: year ? String(year) : null,
+        resourceType,
+        sourceType: sourceType || resourceType,
+        sourceScope,
+        isDuplicate: Boolean(duplicateOfSourceId),
+        duplicateOfSourceId,
+        trustedSource,
+        ...metaUpdate
+      },
+      { merge: true }
+    ).catch(() => {
     });
   } else if (sourceScope === "owner_syllabus") {
-    await db.collection("users").doc(uid).collection("syllabus_resources").doc(sourceId).set({
-      id: sourceId,
-      sourceId,
-      ownerUid: uid,
-      storagePath,
-      fileName,
-      title,
-      subject: normalizedSubjectKey,
-      year: year ? String(year) : null,
-      resourceType,
-      sourceType: sourceType || resourceType,
-      sourceScope,
-      status: finalIndexStatus,
-      ...metaUpdate
-    }, { merge: true }).catch(() => {
+    await db.collection("users").doc(uid).collection("syllabus_resources").doc(sourceId).set(
+      {
+        id: sourceId,
+        sourceId,
+        ownerUid: uid,
+        storagePath,
+        fileName,
+        title,
+        subject: normalizedSubjectKey,
+        year: year ? String(year) : null,
+        resourceType,
+        sourceType: sourceType || resourceType,
+        sourceScope,
+        status: finalIndexStatus,
+        isDuplicate: Boolean(duplicateOfSourceId),
+        duplicateOfSourceId,
+        ...metaUpdate
+      },
+      { merge: true }
+    ).catch(() => {
     });
   }
   invalidateInventoryCache(uid);
@@ -12508,7 +13694,15 @@ async function finalizePipelineProcessing(params) {
   };
 }
 async function finalizeFailedProcessing(params) {
-  const { sourceId, sourceScope, uid, errorMsg, needsOcr, needsLegacyConversion, status } = params;
+  const {
+    sourceId,
+    sourceScope,
+    uid,
+    errorMsg,
+    needsOcr,
+    needsLegacyConversion,
+    status
+  } = params;
   const db = getAdminDb();
   const metaUpdate = {
     chunkCount: 0,
@@ -12520,31 +13714,40 @@ async function finalizeFailedProcessing(params) {
     needsLegacyConversion,
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
-  await db.collection("rag_sources").doc(sourceId).set({
-    sourceId,
-    ownerUid: uid,
-    sourceScope,
-    ...metaUpdate
-  }, { merge: true }).catch(() => {
+  await db.collection("rag_sources").doc(sourceId).set(
+    {
+      sourceId,
+      ownerUid: uid,
+      sourceScope,
+      ...metaUpdate
+    },
+    { merge: true }
+  ).catch(() => {
   });
   if (sourceScope === "past_paper") {
-    await db.collection("past_papers").doc(sourceId).set({
-      id: sourceId,
-      sourceId,
-      ownerUid: uid,
-      sourceScope,
-      ...metaUpdate
-    }, { merge: true }).catch(() => {
+    await db.collection("past_papers").doc(sourceId).set(
+      {
+        id: sourceId,
+        sourceId,
+        ownerUid: uid,
+        sourceScope,
+        ...metaUpdate
+      },
+      { merge: true }
+    ).catch(() => {
     });
   } else if (sourceScope === "owner_syllabus") {
-    await db.collection("users").doc(uid).collection("syllabus_resources").doc(sourceId).set({
-      id: sourceId,
-      sourceId,
-      ownerUid: uid,
-      sourceScope,
-      status,
-      ...metaUpdate
-    }, { merge: true }).catch(() => {
+    await db.collection("users").doc(uid).collection("syllabus_resources").doc(sourceId).set(
+      {
+        id: sourceId,
+        sourceId,
+        ownerUid: uid,
+        sourceScope,
+        status,
+        ...metaUpdate
+      },
+      { merge: true }
+    ).catch(() => {
     });
   }
   invalidateInventoryCache(uid);
@@ -12744,11 +13947,13 @@ async function resolveDirectQaSource(user, sourceId, submittedPath, submittedDow
   ]);
   const sourceSnapshot = snapshots.find((snapshot) => snapshot?.exists);
   const source = sourceSnapshot?.data?.() || null;
-  const path5 = storageObjectPath2(source?.storagePath || submittedPath);
+  const path5 = storageObjectPath2(
+    source?.storagePath || submittedPath || source?.downloadUrl || source?.firebaseDownloadUrl || source?.url || submittedDownloadUrl
+  );
   if (!path5) throw Object.assign(new Error("PDF source has no valid storage path."), { status: 400, code: "DIRECT_QA_SOURCE_PATH_INVALID" });
   const roles = Array.isArray(user?.roles) ? user.roles : [];
   const privileged = user?.admin === true || roles.some((role) => ["admin", "content_editor", "ops"].includes(role));
-  const visible = ["public", "official", "shared"].includes(String(source?.visibility || ""));
+  const visible = ["public", "official", "shared"].includes(String(source?.visibility || "").toLowerCase()) || ["public", "official", "shared"].includes(String(source?.sourceScope || "").toLowerCase());
   const owned = source?.ownerUid === user.uid || canUseStoragePath(user, path5);
   if (!privileged && !visible && !owned) {
     throw Object.assign(new Error("You do not have access to this PDF source."), { status: 403, code: "DIRECT_QA_SOURCE_FORBIDDEN" });
@@ -12757,7 +13962,7 @@ async function resolveDirectQaSource(user, sourceId, submittedPath, submittedDow
     submittedDownloadUrl || source?.downloadUrl || source?.url,
     path5
   );
-  return { source, path: path5, downloadUrl };
+  return { source: { ...source || {}, storagePath: path5 }, path: path5, downloadUrl };
 }
 pdfRoutes.post("/process-uploaded", requireNonAnonymousUser, import_express5.default.json(), async (req, res) => {
   try {
@@ -13041,9 +14246,23 @@ function directQaHttpError(error) {
 }
 pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload2.single("file"), async (req, res) => {
   try {
-    const { sourceId, storagePath, downloadUrl, prompt, questionId, questionNo, questionType, subject, year, scanMode } = req.body;
-    console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}, scanMode: ${scanMode || "full_paper"}`);
-    const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}`;
+    const {
+      sourceId,
+      storagePath,
+      downloadUrl,
+      prompt,
+      questionId,
+      questionNo,
+      questionType,
+      subject,
+      year,
+      scanMode,
+      interactionMode,
+      quizStartQuestionNo,
+      quizEndQuestionNo
+    } = req.body;
+    console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}, scanMode: ${scanMode || "full_paper"}, interactionMode: ${interactionMode || "answer"}`);
+    const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}:${interactionMode || "answer"}`;
     const cooldownUntil = failedDirectQaCooldown.get(idempotencyKey);
     if (cooldownUntil && Date.now() < cooldownUntil || isAiBillingCircuitOpen()) {
       return res.status(429).json({
@@ -13212,6 +14431,61 @@ pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload2.single("file"
             stage: result2.stage || "MODEL_CALL",
             reason: isRequire ? "AI client runtime error: require is not defined" : isRateLimit ? "AI rate limit hit. Please retry in a moment." : result2.reason || "Question evidence not found in PDF.",
             error: result2.error
+          };
+        }
+        if (interactionMode === "quiz_question") {
+          const solved = result2.answer?.solvedAnswer || null;
+          const officialText = String(result2.answer?.officialAnswer || "").trim();
+          const officialNo = officialText.match(/(?:^|\()\s*([1-5])\s*(?:\)|[.)]|$)/)?.[1] || null;
+          const optionNo = String(solved?.optionNo || officialNo || "").trim();
+          if (!/^[1-5]$/.test(optionNo)) {
+            return {
+              ok: false,
+              found: false,
+              errorCode: "MCQ_SOLVER_EMPTY",
+              stage: "QUIZ_ANSWER_PREPARATION",
+              reason: "The question was extracted, but its correct option could not be stored safely for quiz evaluation."
+            };
+          }
+          const { attachPaperMcqQuizQuestion: attachPaperMcqQuizQuestion2 } = await Promise.resolve().then(() => (init_paperMcqQuiz(), paperMcqQuiz_exports));
+          const quizState = await attachPaperMcqQuizQuestion2({
+            uid: req.user.uid,
+            sourceId,
+            year: year || "unknown",
+            subject: subject || "unknown",
+            questionNo: Number(questionNo),
+            pageNumber: result2.sourceEvidence?.pageNumber ?? null,
+            questionText: result2.sourceEvidence.questionText,
+            options: Array.isArray(result2.sourceEvidence.options) ? result2.sourceEvidence.options : [],
+            optionNo,
+            optionText: solved?.optionText || null,
+            explanationSinhala: solved?.explanationSinhala || result2.answer?.explanationSinhala || null,
+            lesson: result2.answer?.lesson || null
+          });
+          if (!quizState) {
+            return {
+              ok: false,
+              found: false,
+              errorCode: "QUIZ_SESSION_STALE",
+              stage: "QUIZ_STATE",
+              reason: "The active quiz changed before this question finished loading."
+            };
+          }
+          return {
+            ok: true,
+            found: true,
+            sourceEvidence: result2.sourceEvidence,
+            quiz: {
+              interactionMode: "quiz_question",
+              questionNo: Number(questionNo),
+              startQuestionNo: Number(quizStartQuestionNo || quizState.startQuestionNo),
+              endQuestionNo: Number(quizEndQuestionNo || quizState.endQuestionNo),
+              year: quizState.year,
+              subject: quizState.subject
+            },
+            answer: { quizQuestion: true },
+            confidence: result2.confidence,
+            reason: result2.reason
           };
         }
         return {
@@ -14044,11 +15318,5167 @@ router3.post("/student-weekly", async (req, res) => {
 });
 var reportRoutes_default = router3;
 
-// server/tts/routes.ts
+// server/routes/learningRoutes.ts
 var import_express9 = require("express");
 init_admin();
+
+// server/learning/learningEngine.ts
+var clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+function normalizeComparableText(value) {
+  return String(value || "").normalize("NFKC").toLowerCase().replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/ප්ර/g, "\u0DB4\u0DCA\u200D\u0DBB").replace(/ක්ර/g, "\u0D9A\u0DCA\u200D\u0DBB").replace(/ත්ර/g, "\u0DAD\u0DCA\u200D\u0DBB").replace(/ද්ර/g, "\u0DAF\u0DCA\u200D\u0DBB").replace(/ශ්ර/g, "\u0DC1\u0DCA\u200D\u0DBB").replace(/[^\p{L}\p{M}\p{N}.+\-*/=]+/gu, " ").replace(/\s+/g, " ").trim();
+}
+function tokenSet(value) {
+  return new Set(normalizeComparableText(value).split(" ").filter((token) => token.length > 1));
+}
+function textSimilarity(a, b) {
+  const left = tokenSet(a);
+  const right = tokenSet(b);
+  if (left.size === 0 || right.size === 0) return 0;
+  let intersection = 0;
+  for (const token of left) if (right.has(token)) intersection += 1;
+  return intersection / Math.max(1, Math.min(left.size, right.size));
+}
+function addDays(date, days) {
+  return new Date(date.getTime() + days * 864e5);
+}
+function analyseLearningAttempt(input) {
+  const confidence = clamp(Number(input.confidence ?? 0.5), 0, 1);
+  const responseTimeMs = Math.max(0, Number(input.responseTimeMs || 0));
+  const previousErrorCount = Math.max(0, Number(input.previousErrorCount || 0));
+  const difficulty = clamp(Number(input.difficulty ?? 0.5), 0, 1);
+  const working = normalizeComparableText(input.working);
+  const mistakeTypes = [];
+  const recommendations = [];
+  const guessed = Boolean(
+    !input.correct && confidence >= 0.75 || input.correct && confidence <= 0.25 || responseTimeMs > 0 && responseTimeMs < 2500 && String(input.questionType).toUpperCase() === "MCQ"
+  );
+  if (!input.correct) {
+    if (guessed) mistakeTypes.push("guessing");
+    if (input.expectedUnit && normalizeComparableText(input.expectedUnit) !== normalizeComparableText(input.submittedUnit)) {
+      mistakeTypes.push("unit_conversion");
+      recommendations.push("\u0D92\u0D9A\u0D9A\u0DBA \u0DC0\u0DD9\u0DB1\u0DB8 \u0DB4\u0DBB\u0DD3\u0D9A\u0DCA\u0DC2\u0DCF \u0D9A\u0DBB \u0D85\u0DC0\u0DC3\u0DB1\u0DCA \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0DA7 \u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 SI \u0D92\u0D9A\u0D9A\u0DBA \u0DBD\u0DD2\u0DBA\u0DB1\u0DCA\u0DB1.");
+    }
+    if (input.expectedSignificantFigures != null && input.submittedSignificantFigures != null && input.expectedSignificantFigures !== input.submittedSignificantFigures) {
+      mistakeTypes.push("significant_figures");
+      recommendations.push("\u0D85\u0DC0\u0DC3\u0DCF\u0DB1 \u0D85\u0D9C\u0DBA \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA\u0DDA \u0D89\u0DBD\u0DCA\u0DBD\u0DCF \u0D87\u0DAD\u0DD2 significant figures \u0D9C\u0DAB\u0DB1\u0DA7 \u0DC0\u0DA7 \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.");
+    }
+    if (/\b(?:f|ma|v|u|s|t|p|e|q)\s*=/.test(working) && /(?:wrong formula|formula error|සූත්‍ර)/.test(working)) {
+      mistakeTypes.push("formula_misuse");
+    } else if (String(input.questionType).toLowerCase().includes("calculation") || /[=+\-*/]/.test(working)) {
+      mistakeTypes.push("calculation_step");
+    } else if (String(input.questionType).toLowerCase().includes("essay") || String(input.questionType).toLowerCase().includes("structured")) {
+      mistakeTypes.push("answer_structure");
+    } else if (!guessed) {
+      mistakeTypes.push("concept_misconception");
+    }
+  } else if (guessed) {
+    mistakeTypes.push("guessing");
+    recommendations.push("\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB \u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 \u0DC0\u0DD4\u0DC0\u0DAD\u0DCA \u0DC0\u0DD2\u0DC1\u0DCA\u0DC0\u0DCF\u0DC3\u0DBA \u0D85\u0DA9\u0DD4\u0DBA\u0DD2. \u0D91\u0D9A\u0DB8 concept \u0D91\u0D9A\u0DDA \u0DAD\u0DC0\u0DAD\u0DCA \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA\u0D9A\u0DCA \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.");
+  }
+  if (mistakeTypes.length === 0 && !input.correct) mistakeTypes.push("unknown");
+  const quality = input.correct ? confidence >= 0.7 ? 5 : confidence >= 0.4 ? 4 : 3 : confidence <= 0.35 ? 2 : 1;
+  const oldEase = clamp(2.5 - previousErrorCount * 0.12, 1.3, 2.5);
+  const easeFactor = clamp(oldEase + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)), 1.3, 2.7);
+  const baseIntervals = input.correct ? [1, 3, 7, 14, 30, 60] : [1, 1, 2, 4, 7, 14];
+  const intervalIndex = clamp(previousErrorCount, 0, baseIntervals.length - 1);
+  const intervalDays = Math.max(1, Math.round(baseIntervals[intervalIndex] * (input.correct ? easeFactor / 2.2 : 1)));
+  const now = input.now || /* @__PURE__ */ new Date();
+  if (!input.correct && recommendations.length === 0) {
+    recommendations.push("\u0DC0\u0DD0\u0DBB\u0DAF\u0DD4\u0DAB\u0DD4 concept \u0D91\u0D9A \u0DB8\u0DD2\u0DB1\u0DD2\u0DAD\u0DCA\u0DAD\u0DD4 10\u0D9A\u0DCA recall \u0D9A\u0DBB \u0DC3\u0DB8\u0DCF\u0DB1 MCQ \u0DAF\u0DD9\u0D9A\u0D9A\u0DCA \u0DB1\u0DD0\u0DC0\u0DAD \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.");
+  }
+  if (input.correct && !guessed) recommendations.push("\u0DB8\u0DA7\u0DCA\u0DA7\u0DB8 \u0DBB\u0DB3\u0DC0\u0DCF \u0D9C\u0DD0\u0DB1\u0DD3\u0DB8\u0DA7 \u0D8A\u0DC5\u0D9F review \u0D91\u0D9A\u0DDA \u0DC0\u0DA9\u0DCF \u0D85\u0DB8\u0DCF\u0DBB\u0DD4 \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA\u0D9A\u0DCA \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.");
+  return {
+    mistakeTypes: [...new Set(mistakeTypes)],
+    guessed,
+    masteryDelta: input.correct ? guessed ? 2 : Math.round(6 + difficulty * 4) : -Math.round(5 + confidence * 5),
+    difficultyAdjustment: input.correct && confidence >= 0.7 ? 1 : !input.correct ? -1 : 0,
+    nextReviewAt: addDays(now, intervalDays).toISOString(),
+    intervalDays,
+    easeFactor: Number(easeFactor.toFixed(2)),
+    recommendations
+  };
+}
+function buildRevisionPlan(items, options = {}) {
+  const days = clamp(Math.round(options.days || 7), 1, 60);
+  const dailyMinutes = clamp(Math.round(options.dailyMinutes || 120), 20, 900);
+  const startDate = options.startDate || /* @__PURE__ */ new Date();
+  const examDate = options.examDate || null;
+  const ranked = [...items].map((item) => ({
+    ...item,
+    weaknessScore: clamp(Number(item.weaknessScore || 0), 0, 100),
+    estimatedMinutes: clamp(Math.round(item.estimatedMinutes || 25), 10, 90)
+  })).sort((a, b) => {
+    const aDue = a.nextReviewAt && new Date(a.nextReviewAt).getTime() <= startDate.getTime() ? 20 : 0;
+    const bDue = b.nextReviewAt && new Date(b.nextReviewAt).getTime() <= startDate.getTime() ? 20 : 0;
+    return b.weaknessScore + bDue + Number(b.errorCount || 0) * 3 - (a.weaknessScore + aDue + Number(a.errorCount || 0) * 3);
+  });
+  if (ranked.length === 0) return [];
+  const result = [];
+  let cursor = 0;
+  for (let day = 0; day < days; day += 1) {
+    const date = addDays(startDate, day);
+    const tasks = [];
+    let used = 0;
+    let guard = 0;
+    while (used < dailyMinutes && guard < ranked.length * 3) {
+      const item = ranked[cursor % ranked.length];
+      cursor += 1;
+      guard += 1;
+      const remaining = dailyMinutes - used;
+      if (remaining < 10) break;
+      const minutes = Math.min(item.estimatedMinutes || 25, remaining);
+      const isExamNear = examDate ? (examDate.getTime() - date.getTime()) / 864e5 <= 3 : false;
+      const activity = isExamNear ? "mock" : item.weaknessScore >= 75 ? "practice" : day % 3 === 2 ? "recall" : "review";
+      tasks.push({
+        id: item.id,
+        subject: item.subject,
+        lesson: item.lesson,
+        minutes,
+        activity,
+        reason: item.weaknessScore >= 70 ? `Weakness ${item.weaknessScore}% \u0DC3\u0DC4 \u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 ${item.errorCount || 0}` : "Scheduled spaced-repetition review"
+      });
+      used += minutes;
+    }
+    result.push({ day: day + 1, date: date.toISOString().slice(0, 10), totalMinutes: used, tasks });
+  }
+  return result;
+}
+function gradeAnswer(input) {
+  const student = normalizeComparableText(input.studentAnswer);
+  const model = normalizeComparableText(input.modelAnswer);
+  const points = input.markingPoints.map((point) => typeof point === "string" ? { text: point, marks: void 0, alternatives: [] } : { text: point.text, marks: point.marks, alternatives: point.alternatives || [] });
+  const defaultPointMarks = points.length > 0 ? input.maxMarks / points.length : 0;
+  const matchedPoints = [];
+  const missingPoints = [];
+  const alternativeMatches = [];
+  let awarded = 0;
+  for (const point of points) {
+    const mainSimilarity = textSimilarity(student, point.text);
+    const matchedAlternative = point.alternatives.find((alternative) => textSimilarity(student, alternative) >= 0.55);
+    const matched = mainSimilarity >= 0.5 || Boolean(matchedAlternative);
+    if (matched) {
+      matchedPoints.push(point.text);
+      if (matchedAlternative) alternativeMatches.push(matchedAlternative);
+      awarded += point.marks ?? defaultPointMarks;
+    } else {
+      missingPoints.push(point.text);
+    }
+  }
+  if (points.length > 0 && awarded === 0 && model && textSimilarity(student, model) >= 0.45) {
+    awarded = Math.min(input.maxMarks * 0.25, defaultPointMarks);
+  }
+  const issues = [];
+  if (input.expectedUnit && normalizeComparableText(input.expectedUnit) !== normalizeComparableText(input.submittedUnit)) {
+    issues.push({ type: "unit_conversion", message: `Expected unit: ${input.expectedUnit}` });
+    awarded = Math.max(0, awarded - Math.min(1, input.maxMarks * 0.1));
+  }
+  if (input.expectedSignificantFigures != null && input.submittedSignificantFigures != null && input.expectedSignificantFigures !== input.submittedSignificantFigures) {
+    issues.push({ type: "significant_figures", message: `Use ${input.expectedSignificantFigures} significant figures.` });
+    awarded = Math.max(0, awarded - Math.min(1, input.maxMarks * 0.1));
+  }
+  if (student.length < 20 && input.maxMarks >= 5) {
+    issues.push({ type: "answer_structure", message: "Answer is too short for the allocated marks." });
+  }
+  const awardedMarks = Number(clamp(awarded, 0, input.maxMarks).toFixed(2));
+  const feedback = [];
+  if (matchedPoints.length) feedback.push(`Matched ${matchedPoints.length}/${points.length} marking points.`);
+  if (missingPoints.length) feedback.push("Missing marking points are shown for targeted correction.");
+  if (!issues.length && awardedMarks === input.maxMarks) feedback.push("All supplied marking points are present.");
+  return {
+    awardedMarks,
+    maxMarks: input.maxMarks,
+    percentage: input.maxMarks > 0 ? Math.round(awardedMarks / input.maxMarks * 100) : 0,
+    matchedPoints,
+    missingPoints,
+    alternativeMatches,
+    issues,
+    feedback
+  };
+}
+
+// server/routes/learningRoutes.ts
+var router4 = (0, import_express9.Router)();
+function safeString(value, max = 4e3) {
+  return String(value || "").trim().slice(0, max);
+}
+router4.post("/attempts", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const body = req.body || {};
+    const input = {
+      subject: safeString(body.subject, 20).toUpperCase(),
+      lesson: safeString(body.lesson, 180),
+      questionId: safeString(body.questionId, 220) || null,
+      questionType: safeString(body.questionType, 40) || "MCQ",
+      correct: Boolean(body.correct),
+      selectedAnswer: safeString(body.selectedAnswer, 1e3) || null,
+      correctAnswer: safeString(body.correctAnswer, 1e3) || null,
+      responseTimeMs: Number(body.responseTimeMs || 0),
+      confidence: body.confidence == null ? null : Number(body.confidence),
+      working: safeString(body.working, 8e3) || null,
+      expectedUnit: safeString(body.expectedUnit, 50) || null,
+      submittedUnit: safeString(body.submittedUnit, 50) || null,
+      expectedSignificantFigures: body.expectedSignificantFigures == null ? null : Number(body.expectedSignificantFigures),
+      submittedSignificantFigures: body.submittedSignificantFigures == null ? null : Number(body.submittedSignificantFigures),
+      previousErrorCount: Number(body.previousErrorCount || 0),
+      difficulty: body.difficulty == null ? null : Number(body.difficulty)
+    };
+    if (!input.subject || !input.lesson) {
+      return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "subject and lesson are required" });
+    }
+    const analysis = analyseLearningAttempt(input);
+    const db = getAdminDb();
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const attemptRef = db.collection("users").doc(user.uid).collection("answer_history").doc();
+    await attemptRef.set({
+      id: attemptRef.id,
+      uid: user.uid,
+      ...input,
+      ...analysis,
+      createdAt: now,
+      updatedAt: now
+    });
+    if (!input.correct) {
+      const mistakeKey = `${input.subject}:${input.questionId || input.lesson}`.replace(/[^A-Za-z0-9:_-]/g, "_").slice(0, 300);
+      const mistakeRef = db.collection("users").doc(user.uid).collection("mistake_notebook").doc(mistakeKey);
+      const existing = await mistakeRef.get();
+      const previous = existing.exists ? existing.data() || {} : {};
+      await mistakeRef.set({
+        id: mistakeKey,
+        uid: user.uid,
+        subject: input.subject,
+        lesson: input.lesson,
+        questionId: input.questionId,
+        questionType: input.questionType,
+        studentAnswer: input.selectedAnswer,
+        correctAnswer: input.correctAnswer,
+        mistakeTypes: analysis.mistakeTypes,
+        guessed: analysis.guessed,
+        sameErrorCount: Number(previous.sameErrorCount || previous.repeatCount || 0) + 1,
+        intervalDays: analysis.intervalDays,
+        easeFactor: analysis.easeFactor,
+        nextReviewAt: analysis.nextReviewAt,
+        lastAttemptAt: now,
+        mastered: false,
+        createdAt: previous.createdAt || now,
+        updatedAt: now
+      }, { merge: true });
+    }
+    return res.json({ ok: true, attemptId: attemptRef.id, analysis });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "ATTEMPT_SAVE_FAILED", message: error.message });
+  }
+});
+router4.get("/revision-queue", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const subject = safeString(req.query.subject, 20).toUpperCase();
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit || 30)));
+    const snap = await getAdminDb().collection("users").doc(user.uid).collection("mistake_notebook").orderBy("updatedAt", "desc").limit(250).get();
+    const now = Date.now();
+    const items = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((item) => !subject || String(item.subject || "").toUpperCase() === subject).map((item) => ({
+      ...item,
+      due: !item.nextReviewAt || new Date(item.nextReviewAt).getTime() <= now,
+      priorityScore: Math.min(100, Number(item.sameErrorCount || item.repeatCount || 1) * 15 + (item.mastered ? 0 : 30))
+    })).sort((a, b) => Number(b.due) - Number(a.due) || b.priorityScore - a.priorityScore).slice(0, limit);
+    return res.json({ ok: true, items, total: items.length });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "REVISION_QUEUE_FAILED", message: error.message });
+  }
+});
+router4.post("/revision-plan", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const db = getAdminDb();
+    const snap = await db.collection("users").doc(user.uid).collection("mistake_notebook").limit(300).get();
+    const items = snap.docs.map((doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        subject: String(data.subject || "SFT"),
+        lesson: String(data.lesson || "Unknown lesson"),
+        weaknessScore: Math.min(100, 35 + Number(data.sameErrorCount || data.repeatCount || 1) * 12),
+        errorCount: Number(data.sameErrorCount || data.repeatCount || 1),
+        lastAttemptAt: data.lastAttemptAt || data.updatedAt || null,
+        nextReviewAt: data.nextReviewAt || null,
+        estimatedMinutes: Number(data.estimatedMinutes || 25)
+      };
+    });
+    const days = Number(req.body?.days || 7);
+    const dailyMinutes = Number(req.body?.dailyMinutes || 120);
+    const examDate = req.body?.examDate ? new Date(req.body.examDate) : null;
+    const plan = buildRevisionPlan(items, { days, dailyMinutes, examDate });
+    const planRef = db.collection("users").doc(user.uid).collection("revision_plans").doc();
+    await planRef.set({ id: planRef.id, days, dailyMinutes, examDate: examDate?.toISOString() || null, plan, createdAt: (/* @__PURE__ */ new Date()).toISOString() });
+    return res.json({ ok: true, planId: planRef.id, plan });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "REVISION_PLAN_FAILED", message: error.message });
+  }
+});
+router4.post("/grade", async (req, res) => {
+  try {
+    await requireUser(req);
+    const body = req.body || {};
+    if (!Array.isArray(body.markingPoints) || !Number.isFinite(Number(body.maxMarks))) {
+      return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "markingPoints and maxMarks are required" });
+    }
+    const result = gradeAnswer({
+      studentAnswer: safeString(body.studentAnswer, 3e4),
+      modelAnswer: safeString(body.modelAnswer, 3e4) || null,
+      markingPoints: body.markingPoints,
+      maxMarks: Number(body.maxMarks),
+      expectedUnit: safeString(body.expectedUnit, 50) || null,
+      submittedUnit: safeString(body.submittedUnit, 50) || null,
+      expectedSignificantFigures: body.expectedSignificantFigures == null ? null : Number(body.expectedSignificantFigures),
+      submittedSignificantFigures: body.submittedSignificantFigures == null ? null : Number(body.submittedSignificantFigures)
+    });
+    return res.json({ ok: true, result });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "ANSWER_GRADING_FAILED", message: error.message });
+  }
+});
+router4.get("/daily-quiz", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const subject = safeString(req.query.subject || "SFT", 20).toUpperCase();
+    const db = getAdminDb();
+    const mistakesSnap = await db.collection("users").doc(user.uid).collection("mistake_notebook").limit(100).get();
+    const weakLessons = [...new Set(mistakesSnap.docs.map((doc) => String(doc.data().lesson || "")).filter(Boolean))].slice(0, 5);
+    let query = db.collection("exam_question_index").where("subject", "==", subject).where("questionType", "==", "MCQ").limit(30);
+    const questionSnap = await query.get();
+    const questions = questionSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() })).sort((a, b) => Number(weakLessons.includes(String(b.lesson))) - Number(weakLessons.includes(String(a.lesson)))).slice(0, 5).map((question) => ({
+      id: question.id,
+      questionNo: question.questionNo,
+      questionText: question.questionText,
+      options: question.options || [],
+      lesson: question.lesson,
+      pageNumber: question.pageNumber || null,
+      sourceId: question.sourceId
+      // Do not expose the correct answer before submission.
+    }));
+    return res.json({ ok: true, subject, weakLessons, questions });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "DAILY_QUIZ_FAILED", message: error.message });
+  }
+});
+router4.post("/bookmarks", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const body = req.body || {};
+    const questionId = safeString(body.questionId, 300);
+    if (!questionId) return res.status(400).json({ ok: false, message: "questionId is required" });
+    const ref = getAdminDb().collection("users").doc(user.uid).collection("question_bookmarks").doc(questionId.replace(/[^A-Za-z0-9:_-]/g, "_"));
+    await ref.set({
+      id: ref.id,
+      uid: user.uid,
+      questionId,
+      sourceId: safeString(body.sourceId, 300) || null,
+      subject: safeString(body.subject, 20).toUpperCase() || null,
+      lesson: safeString(body.lesson, 180) || null,
+      difficult: Boolean(body.difficult),
+      note: safeString(body.note, 2e3) || null,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      createdAt: body.createdAt || (/* @__PURE__ */ new Date()).toISOString()
+    }, { merge: true });
+    return res.json({ ok: true, id: ref.id });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "BOOKMARK_SAVE_FAILED", message: error.message });
+  }
+});
+var learningRoutes_default = router4;
+
+// server/platform/routes.ts
+var import_express10 = require("express");
+init_admin();
+
+// shared/platform/featureCatalog.ts
+var FEATURE_CATEGORY_LABELS = {
+  ai_learning: "AI \u0DC3\u0DC4 learning",
+  auth_data: "Authentication, data \u0DC3\u0DC4 profiles",
+  performance_reliability: "Performance \u0DC3\u0DC4 reliability",
+  ui_ux: "UI/UX \u0DC3\u0DC4 responsive design",
+  files_media: "Files, PDFs \u0DC3\u0DC4 video",
+  security_quality: "Security, DevOps, SEO \u0DC3\u0DC4 quality"
+};
+var PLATFORM_FEATURES = [
+  {
+    "id": 1,
+    "category": "ai_learning",
+    "title": "PDF \u0D91\u0D9A\u0DDA Q1, Q2 \u0DC0\u0D9C\u0DDA question-number lookup.",
+    "key": "feature_001",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 2,
+    "category": "ai_learning",
+    "title": "Previous message \u0D91\u0D9A\u0DDA selected PDF \u0D91\u0D9A conversation memory \u0D91\u0D9A\u0DDA \u0DAD\u0DB6\u0DCF\u0D9C\u0DD0\u0DB1\u0DD3\u0DB8.",
+    "key": "feature_002",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 3,
+    "category": "ai_learning",
+    "title": "Lesson name Sinhala/English/Singlish \u0DC0\u0DBD\u0DD2\u0DB1\u0DCA resolve \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_003",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 4,
+    "category": "ai_learning",
+    "title": "\u201C\u0DAD\u0DBB\u0DBD\u201D, \u201Ctharala\u201D, \u201Cfluids\u201D \u0D91\u0D9A\u0DB8 lesson \u0D91\u0D9A\u0D9A\u0DCA \u0DBD\u0DD9\u0DC3 \u0DC4\u0DB3\u0DD4\u0DB1\u0DCF\u0D9C\u0DD0\u0DB1\u0DD3\u0DB8.",
+    "key": "feature_004",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 5,
+    "category": "ai_learning",
+    "title": "Uploaded PDFs \u0DC3\u0DD2\u0DBA\u0DBD\u0DCA\u0DBD automatic indexing \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_005",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 6,
+    "category": "ai_learning",
+    "title": "Indexing status \u0D91\u0D9A real time \u0DB4\u0DD9\u0DB1\u0DCA\u0DC0\u0DD3\u0DB8.",
+    "key": "feature_006",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 7,
+    "category": "ai_learning",
+    "title": "Failed indexing \u0DC3\u0DB3\u0DC4\u0DCF automatic retry.",
+    "key": "feature_007",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 8,
+    "category": "ai_learning",
+    "title": "Scanned PDFs \u0DC3\u0DB3\u0DC4\u0DCF OCR fallback.",
+    "key": "feature_008",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 9,
+    "category": "ai_learning",
+    "title": "Sinhala OCR confidence scoring.",
+    "key": "feature_009",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 10,
+    "category": "ai_learning",
+    "title": "Low-confidence OCR text user review \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8\u0DA7 \u0DBD\u0DB6\u0DCF\u0DAF\u0DD3\u0DB8.",
+    "key": "feature_010",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 11,
+    "category": "ai_learning",
+    "title": "PDF page-number citations.",
+    "key": "feature_011",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 12,
+    "category": "ai_learning",
+    "title": "Answer \u0D91\u0D9A \u0DC3\u0DB8\u0D9F source page preview.",
+    "key": "feature_012",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 13,
+    "category": "ai_learning",
+    "title": "Exact source quote highlighting.",
+    "key": "feature_013",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 14,
+    "category": "ai_learning",
+    "title": "Fabricated questions \u0DC3\u0DC4 answers \u0D85\u0DC0\u0DC4\u0DD2\u0DBB \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_014",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 15,
+    "category": "ai_learning",
+    "title": "Source \u0D91\u0D9A\u0DDA \u0DB1\u0DD0\u0DAD\u0DD2 facts \u0DAF\u0DD9\u0DB1 \u0DC0\u0DD2\u0DA7 clear warning.",
+    "key": "feature_015",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 16,
+    "category": "ai_learning",
+    "title": "Answer confidence indicator.",
+    "key": "feature_016",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 17,
+    "category": "ai_learning",
+    "title": "Multiple PDFs \u0D91\u0D9A\u0DC0\u0DBB search \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_017",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 18,
+    "category": "ai_learning",
+    "title": "Lesson container \u0D91\u0D9A\u0DDA \u0DC3\u0DD2\u0DBA\u0DBD\u0DD4 resources combine \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_018",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 19,
+    "category": "ai_learning",
+    "title": "Past paper \u0DC3\u0DC4 marking scheme automatically pair \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_019",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 20,
+    "category": "ai_learning",
+    "title": "Question paper year/type detection.",
+    "key": "feature_020",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 21,
+    "category": "ai_learning",
+    "title": "MCQ/Structured/Essay automatic classification.",
+    "key": "feature_021",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 22,
+    "category": "ai_learning",
+    "title": "Question number extraction.",
+    "key": "feature_022",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 23,
+    "category": "ai_learning",
+    "title": "Marking scheme answer extraction.",
+    "key": "feature_023",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 24,
+    "category": "ai_learning",
+    "title": "Diagram-based question detection.",
+    "key": "feature_024",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 25,
+    "category": "ai_learning",
+    "title": "Table extraction.",
+    "key": "feature_025",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 26,
+    "category": "ai_learning",
+    "title": "Equation extraction.",
+    "key": "feature_026",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 27,
+    "category": "ai_learning",
+    "title": "Sinhala mathematical text normalization.",
+    "key": "feature_027",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 28,
+    "category": "ai_learning",
+    "title": "Image-only page understanding.",
+    "key": "feature_028",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 29,
+    "category": "ai_learning",
+    "title": "PDF duplicate detection.",
+    "key": "feature_029",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 30,
+    "category": "ai_learning",
+    "title": "Bad/corrupt PDF detection.",
+    "key": "feature_030",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 31,
+    "category": "ai_learning",
+    "title": "Indexed text completeness report.",
+    "key": "feature_031",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 32,
+    "category": "ai_learning",
+    "title": "PDF page rotation correction.",
+    "key": "feature_032",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 33,
+    "category": "ai_learning",
+    "title": "Handwritten note OCR.",
+    "key": "feature_033",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 34,
+    "category": "ai_learning",
+    "title": "Mixed Sinhala-English OCR.",
+    "key": "feature_034",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 35,
+    "category": "ai_learning",
+    "title": "Resource title automatic cleanup.",
+    "key": "feature_035",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 36,
+    "category": "ai_learning",
+    "title": "File name \u0DC0\u0DD9\u0DB1\u0DD4\u0DC0\u0DA7 lesson-friendly title generation.",
+    "key": "feature_036",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 37,
+    "category": "ai_learning",
+    "title": "Teacher name extraction.",
+    "key": "feature_037",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 38,
+    "category": "ai_learning",
+    "title": "Exam year extraction.",
+    "key": "feature_038",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 39,
+    "category": "ai_learning",
+    "title": "Subject detection: SFT/ET/ICT.",
+    "key": "feature_039",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 40,
+    "category": "ai_learning",
+    "title": "Medium detection: Sinhala/English.",
+    "key": "feature_040",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 41,
+    "category": "ai_learning",
+    "title": "Paper vs marking scheme detection.",
+    "key": "feature_041",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 42,
+    "category": "ai_learning",
+    "title": "Lesson-level semantic search.",
+    "key": "feature_042",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 43,
+    "category": "ai_learning",
+    "title": "Keyword search fallback.",
+    "key": "feature_043",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 44,
+    "category": "ai_learning",
+    "title": "Exact phrase search.",
+    "key": "feature_044",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 45,
+    "category": "ai_learning",
+    "title": "Source relevance ranking.",
+    "key": "feature_045",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 46,
+    "category": "ai_learning",
+    "title": "Outdated source warning.",
+    "key": "feature_046",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 47,
+    "category": "ai_learning",
+    "title": "Duplicate source merging.",
+    "key": "feature_047",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 48,
+    "category": "ai_learning",
+    "title": "Admin source verification.",
+    "key": "feature_048",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 49,
+    "category": "ai_learning",
+    "title": "Trusted-source badges.",
+    "key": "feature_049",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 50,
+    "category": "ai_learning",
+    "title": "AI answer audit trail.",
+    "key": "feature_050",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 51,
+    "category": "ai_learning",
+    "title": "Student weak-lesson detection.",
+    "key": "feature_051",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 52,
+    "category": "ai_learning",
+    "title": "Mastered-lesson detection.",
+    "key": "feature_052",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 53,
+    "category": "ai_learning",
+    "title": "Personalized revision plan.",
+    "key": "feature_053",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 54,
+    "category": "ai_learning",
+    "title": "Daily lesson recommendation.",
+    "key": "feature_054",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 55,
+    "category": "ai_learning",
+    "title": "Upcoming exam countdown plan.",
+    "key": "feature_055",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 56,
+    "category": "ai_learning",
+    "title": "Student marks-based difficulty adjustment.",
+    "key": "feature_056",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 57,
+    "category": "ai_learning",
+    "title": "Beginner/intermediate/advanced answer modes.",
+    "key": "feature_057",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 58,
+    "category": "ai_learning",
+    "title": "Short/normal/detailed answer length controls.",
+    "key": "feature_058",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 59,
+    "category": "ai_learning",
+    "title": "Sinhala/English/Singlish response selector.",
+    "key": "feature_059",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 60,
+    "category": "ai_learning",
+    "title": "Teacher-style explanation selector.",
+    "key": "feature_060",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 61,
+    "category": "ai_learning",
+    "title": "Step-by-step calculation mode.",
+    "key": "feature_061",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 62,
+    "category": "ai_learning",
+    "title": "Hint-only mode.",
+    "key": "feature_062",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 63,
+    "category": "ai_learning",
+    "title": "Socratic tutoring mode.",
+    "key": "feature_063",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 64,
+    "category": "ai_learning",
+    "title": "\u201CDon\u2019t reveal answer yet\u201D mode.",
+    "key": "feature_064",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 65,
+    "category": "ai_learning",
+    "title": "Formula-first explanation.",
+    "key": "feature_065",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 66,
+    "category": "ai_learning",
+    "title": "Diagram-first explanation.",
+    "key": "feature_066",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 67,
+    "category": "ai_learning",
+    "title": "Example-first explanation.",
+    "key": "feature_067",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 68,
+    "category": "ai_learning",
+    "title": "Common-mistake explanation.",
+    "key": "feature_068",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 69,
+    "category": "ai_learning",
+    "title": "Exam marking-point explanation.",
+    "key": "feature_069",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 70,
+    "category": "ai_learning",
+    "title": "Time-saving exam technique suggestions.",
+    "key": "feature_070",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 71,
+    "category": "ai_learning",
+    "title": "Student\u2019s previous mistakes automatically use \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_071",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 72,
+    "category": "ai_learning",
+    "title": "Similar past-paper question recommendation.",
+    "key": "feature_072",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 73,
+    "category": "ai_learning",
+    "title": "Spaced-repetition scheduling.",
+    "key": "feature_073",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 74,
+    "category": "ai_learning",
+    "title": "Forgotten-topic reminders.",
+    "key": "feature_074",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 75,
+    "category": "ai_learning",
+    "title": "Daily five-question quiz.",
+    "key": "feature_075",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 76,
+    "category": "ai_learning",
+    "title": "Weekly progress quiz.",
+    "key": "feature_076",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 77,
+    "category": "ai_learning",
+    "title": "Lesson completion quiz.",
+    "key": "feature_077",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 78,
+    "category": "ai_learning",
+    "title": "Adaptive question difficulty.",
+    "key": "feature_078",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 79,
+    "category": "ai_learning",
+    "title": "Wrong answer follow-up question.",
+    "key": "feature_079",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 80,
+    "category": "ai_learning",
+    "title": "Correct answer deeper challenge.",
+    "key": "feature_080",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 81,
+    "category": "ai_learning",
+    "title": "Student confidence input.",
+    "key": "feature_081",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 82,
+    "category": "ai_learning",
+    "title": "Guessing detection.",
+    "key": "feature_082",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 83,
+    "category": "ai_learning",
+    "title": "Concept misconception detection.",
+    "key": "feature_083",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 84,
+    "category": "ai_learning",
+    "title": "Formula misuse detection.",
+    "key": "feature_084",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 85,
+    "category": "ai_learning",
+    "title": "Unit-conversion mistake detection.",
+    "key": "feature_085",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 86,
+    "category": "ai_learning",
+    "title": "Calculation-step validation.",
+    "key": "feature_086",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 87,
+    "category": "ai_learning",
+    "title": "Answer structure feedback.",
+    "key": "feature_087",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 88,
+    "category": "ai_learning",
+    "title": "Essay paragraph feedback.",
+    "key": "feature_088",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 89,
+    "category": "ai_learning",
+    "title": "Mark allocation prediction.",
+    "key": "feature_089",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 90,
+    "category": "ai_learning",
+    "title": "Estimated score per response.",
+    "key": "feature_090",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 91,
+    "category": "ai_learning",
+    "title": "PDF \u0D91\u0D9A\u0DD9\u0DB1\u0DCA exact quiz generation.",
+    "key": "feature_091",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 92,
+    "category": "ai_learning",
+    "title": "Marking scheme grounded quiz evaluation.",
+    "key": "feature_092",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 93,
+    "category": "ai_learning",
+    "title": "MCQ distractor explanations.",
+    "key": "feature_093",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 94,
+    "category": "ai_learning",
+    "title": "Timed MCQ mode.",
+    "key": "feature_094",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 95,
+    "category": "ai_learning",
+    "title": "Structured essay practice mode.",
+    "key": "feature_095",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 96,
+    "category": "ai_learning",
+    "title": "Full-paper simulation.",
+    "key": "feature_096",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 97,
+    "category": "ai_learning",
+    "title": "Automatic paper timer.",
+    "key": "feature_097",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 98,
+    "category": "ai_learning",
+    "title": "Section-specific timer.",
+    "key": "feature_098",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 99,
+    "category": "ai_learning",
+    "title": "Answer submission history.",
+    "key": "feature_099",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 100,
+    "category": "ai_learning",
+    "title": "AI marking rubric.",
+    "key": "feature_100",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 101,
+    "category": "ai_learning",
+    "title": "Partial marks calculation.",
+    "key": "feature_101",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 102,
+    "category": "ai_learning",
+    "title": "Missing marking points display.",
+    "key": "feature_102",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 103,
+    "category": "ai_learning",
+    "title": "Model-answer comparison.",
+    "key": "feature_103",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 104,
+    "category": "ai_learning",
+    "title": "Student answer vs marking scheme diff.",
+    "key": "feature_104",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 105,
+    "category": "ai_learning",
+    "title": "Handwritten answer image marking.",
+    "key": "feature_105",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 106,
+    "category": "ai_learning",
+    "title": "Essay image OCR and evaluation.",
+    "key": "feature_106",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 107,
+    "category": "ai_learning",
+    "title": "Diagram marking.",
+    "key": "feature_107",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 108,
+    "category": "ai_learning",
+    "title": "Graph marking.",
+    "key": "feature_108",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 109,
+    "category": "ai_learning",
+    "title": "Formula validation.",
+    "key": "feature_109",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 110,
+    "category": "ai_learning",
+    "title": "Significant-figure validation.",
+    "key": "feature_110",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 111,
+    "category": "ai_learning",
+    "title": "Units validation.",
+    "key": "feature_111",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 112,
+    "category": "ai_learning",
+    "title": "Sinhala spelling-tolerant marking.",
+    "key": "feature_112",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 113,
+    "category": "ai_learning",
+    "title": "Alternative correct-answer support.",
+    "key": "feature_113",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 114,
+    "category": "ai_learning",
+    "title": "Teacher review override.",
+    "key": "feature_114",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 115,
+    "category": "ai_learning",
+    "title": "Re-mark request feature.",
+    "key": "feature_115",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 116,
+    "category": "ai_learning",
+    "title": "Question bookmark.",
+    "key": "feature_116",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 117,
+    "category": "ai_learning",
+    "title": "Difficult-question collection.",
+    "key": "feature_117",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 118,
+    "category": "ai_learning",
+    "title": "Automatically generated flashcards.",
+    "key": "feature_118",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 119,
+    "category": "ai_learning",
+    "title": "Formula flashcards.",
+    "key": "feature_119",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 120,
+    "category": "ai_learning",
+    "title": "Diagram flashcards.",
+    "key": "feature_120",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 121,
+    "category": "ai_learning",
+    "title": "Lesson summary generation.",
+    "key": "feature_121",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 122,
+    "category": "ai_learning",
+    "title": "One-page revision sheet.",
+    "key": "feature_122",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 123,
+    "category": "ai_learning",
+    "title": "Formula sheet generation.",
+    "key": "feature_123",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 124,
+    "category": "ai_learning",
+    "title": "Last-minute revision mode.",
+    "key": "feature_124",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 125,
+    "category": "ai_learning",
+    "title": "Audio lesson summaries.",
+    "key": "feature_125",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 126,
+    "category": "ai_learning",
+    "title": "Sinhala text-to-speech.",
+    "key": "feature_126",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 127,
+    "category": "ai_learning",
+    "title": "Playback-speed controls.",
+    "key": "feature_127",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 128,
+    "category": "ai_learning",
+    "title": "AI voice question reading.",
+    "key": "feature_128",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 129,
+    "category": "ai_learning",
+    "title": "Speech-to-text questions.",
+    "key": "feature_129",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 130,
+    "category": "ai_learning",
+    "title": "Voice answer practice.",
+    "key": "feature_130",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 131,
+    "category": "ai_learning",
+    "title": "Pronunciation-tolerant Singlish input.",
+    "key": "feature_131",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 132,
+    "category": "ai_learning",
+    "title": "Uploaded image explanation.",
+    "key": "feature_132",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 133,
+    "category": "ai_learning",
+    "title": "Screenshot error diagnosis.",
+    "key": "feature_133",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 134,
+    "category": "ai_learning",
+    "title": "Console-log explanation.",
+    "key": "feature_134",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 135,
+    "category": "ai_learning",
+    "title": "Code-error troubleshooting for ICT.",
+    "key": "feature_135",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 136,
+    "category": "ai_learning",
+    "title": "Circuit image analysis for ET.",
+    "key": "feature_136",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 137,
+    "category": "ai_learning",
+    "title": "Experimental setup image analysis.",
+    "key": "feature_137",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 138,
+    "category": "ai_learning",
+    "title": "Graph image analysis.",
+    "key": "feature_138",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 139,
+    "category": "ai_learning",
+    "title": "Table image analysis.",
+    "key": "feature_139",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 140,
+    "category": "ai_learning",
+    "title": "Chemical/physics symbol recognition.",
+    "key": "feature_140",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 141,
+    "category": "ai_learning",
+    "title": "Interactive formula calculator.",
+    "key": "feature_141",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 142,
+    "category": "ai_learning",
+    "title": "Unit converter.",
+    "key": "feature_142",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 143,
+    "category": "ai_learning",
+    "title": "Scientific notation helper.",
+    "key": "feature_143",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 144,
+    "category": "ai_learning",
+    "title": "Graph plotting tool.",
+    "key": "feature_144",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 145,
+    "category": "ai_learning",
+    "title": "Circuit truth-table generator.",
+    "key": "feature_145",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 146,
+    "category": "ai_learning",
+    "title": "Database query practice tool.",
+    "key": "feature_146",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 147,
+    "category": "ai_learning",
+    "title": "Python code runner sandbox.",
+    "key": "feature_147",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 148,
+    "category": "ai_learning",
+    "title": "Lesson-specific AI tools.",
+    "key": "feature_148",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 149,
+    "category": "ai_learning",
+    "title": "Tool-use result citations.",
+    "key": "feature_149",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 150,
+    "category": "ai_learning",
+    "title": "AI conversation export.",
+    "key": "feature_150",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/ai-core",
+      "server/knowledge",
+      "server/pdf",
+      "server/learning",
+      "src/components/views/CloraXView.tsx"
+    ]
+  },
+  {
+    "id": 151,
+    "category": "auth_data",
+    "title": "Popup login \u0DC0\u0DD9\u0DB1\u0DD4\u0DC0\u0DA7 reliable redirect fallback.",
+    "key": "feature_151",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 152,
+    "category": "auth_data",
+    "title": "Redirect result \u0D91\u0D9A page boot \u0DC0\u0DD9\u0DAF\u0DCA\u0DAF\u0DD3 process \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_152",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 153,
+    "category": "auth_data",
+    "title": "Anonymous Firebase users disable \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_153",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 154,
+    "category": "auth_data",
+    "title": "Auth-loading timeout and retry.",
+    "key": "feature_154",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 155,
+    "category": "auth_data",
+    "title": "Offline login-state recovery.",
+    "key": "feature_155",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 156,
+    "category": "auth_data",
+    "title": "Duplicate login requests prevent \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_156",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 157,
+    "category": "auth_data",
+    "title": "API session creation retry.",
+    "key": "feature_157",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 158,
+    "category": "auth_data",
+    "title": "Expired token automatic refresh.",
+    "key": "feature_158",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 159,
+    "category": "auth_data",
+    "title": "Cross-tab login synchronization.",
+    "key": "feature_159",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 160,
+    "category": "auth_data",
+    "title": "Logout all devices.",
+    "key": "feature_160",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 161,
+    "category": "auth_data",
+    "title": "Session-device list.",
+    "key": "feature_161",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 162,
+    "category": "auth_data",
+    "title": "Suspicious-login alert.",
+    "key": "feature_162",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 163,
+    "category": "auth_data",
+    "title": "Google profile image fallback.",
+    "key": "feature_163",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 164,
+    "category": "auth_data",
+    "title": "Profile image caching.",
+    "key": "feature_164",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 165,
+    "category": "auth_data",
+    "title": "Broken-avatar fallback.",
+    "key": "feature_165",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 166,
+    "category": "auth_data",
+    "title": "Profile data progressive loading.",
+    "key": "feature_166",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 167,
+    "category": "auth_data",
+    "title": "Page-specific data fetching.",
+    "key": "feature_167",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 168,
+    "category": "auth_data",
+    "title": "Duplicate Firestore reads prevent \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_168",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 169,
+    "category": "auth_data",
+    "title": "SWR/React Query caching.",
+    "key": "feature_169",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 170,
+    "category": "auth_data",
+    "title": "Optimistic profile updates.",
+    "key": "feature_170",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 171,
+    "category": "auth_data",
+    "title": "User-data schema validation.",
+    "key": "feature_171",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 172,
+    "category": "auth_data",
+    "title": "Firestore undefined values sanitize \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_172",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 173,
+    "category": "auth_data",
+    "title": "Server-side user ownership checks.",
+    "key": "feature_173",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 174,
+    "category": "auth_data",
+    "title": "Email-path \u0DC0\u0DD9\u0DB1\u0DD4\u0DC0\u0DA7 UID-based documents.",
+    "key": "feature_174",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 175,
+    "category": "auth_data",
+    "title": "Old email-based data migration.",
+    "key": "feature_175",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 176,
+    "category": "auth_data",
+    "title": "Admin role via Firebase custom claims.",
+    "key": "feature_176",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 177,
+    "category": "auth_data",
+    "title": "Content-editor role.",
+    "key": "feature_177",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 178,
+    "category": "auth_data",
+    "title": "Account deletion flow.",
+    "key": "feature_178",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 179,
+    "category": "auth_data",
+    "title": "Data export flow.",
+    "key": "feature_179",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 180,
+    "category": "auth_data",
+    "title": "Privacy settings.",
+    "key": "feature_180",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server/auth",
+      "server/firebase",
+      "server/utils/authGuards.ts",
+      "src/context/AppContext.tsx"
+    ]
+  },
+  {
+    "id": 181,
+    "category": "performance_reliability",
+    "title": "Large route bundles code-split \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_181",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 182,
+    "category": "performance_reliability",
+    "title": "Chart libraries lazy-load \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_182",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 183,
+    "category": "performance_reliability",
+    "title": "PDF.js only when needed load \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_183",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 184,
+    "category": "performance_reliability",
+    "title": "Video player lazy-load \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_184",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 185,
+    "category": "performance_reliability",
+    "title": "Admin dashboard separate chunk.",
+    "key": "feature_185",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 186,
+    "category": "performance_reliability",
+    "title": "AI page separate chunk.",
+    "key": "feature_186",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 187,
+    "category": "performance_reliability",
+    "title": "Route prefetch on hover.",
+    "key": "feature_187",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 188,
+    "category": "performance_reliability",
+    "title": "Critical CSS optimization.",
+    "key": "feature_188",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 189,
+    "category": "performance_reliability",
+    "title": "Unused CSS removal.",
+    "key": "feature_189",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 190,
+    "category": "performance_reliability",
+    "title": "Image WebP/AVIF conversion.",
+    "key": "feature_190",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 191,
+    "category": "performance_reliability",
+    "title": "Responsive image sizes.",
+    "key": "feature_191",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 192,
+    "category": "performance_reliability",
+    "title": "Long-term asset caching.",
+    "key": "feature_192",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 193,
+    "category": "performance_reliability",
+    "title": "Profile image CDN caching.",
+    "key": "feature_193",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 194,
+    "category": "performance_reliability",
+    "title": "API response compression.",
+    "key": "feature_194",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 195,
+    "category": "performance_reliability",
+    "title": "Firestore query pagination.",
+    "key": "feature_195",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 196,
+    "category": "performance_reliability",
+    "title": "Notifications pagination.",
+    "key": "feature_196",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 197,
+    "category": "performance_reliability",
+    "title": "Chat history pagination.",
+    "key": "feature_197",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 198,
+    "category": "performance_reliability",
+    "title": "Past-paper infinite scrolling.",
+    "key": "feature_198",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 199,
+    "category": "performance_reliability",
+    "title": "Search input debouncing.",
+    "key": "feature_199",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 200,
+    "category": "performance_reliability",
+    "title": "Duplicate API-call cancellation.",
+    "key": "feature_200",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 201,
+    "category": "performance_reliability",
+    "title": "Request timeout handling.",
+    "key": "feature_201",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 202,
+    "category": "performance_reliability",
+    "title": "Exponential retry.",
+    "key": "feature_202",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 203,
+    "category": "performance_reliability",
+    "title": "Retry-After support.",
+    "key": "feature_203",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 204,
+    "category": "performance_reliability",
+    "title": "Circuit breaker for AI providers.",
+    "key": "feature_204",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 205,
+    "category": "performance_reliability",
+    "title": "Gemini/OpenAI provider fallback.",
+    "key": "feature_205",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 206,
+    "category": "performance_reliability",
+    "title": "Model-health cache.",
+    "key": "feature_206",
+    "state": "foundation",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 207,
+    "category": "performance_reliability",
+    "title": "Server cold-start reduction.",
+    "key": "feature_207",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 208,
+    "category": "performance_reliability",
+    "title": "Heavy imports dynamic-load \u0D9A\u0DD2\u0DBB\u0DD3\u0DB8.",
+    "key": "feature_208",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 209,
+    "category": "performance_reliability",
+    "title": "Background OCR queue.",
+    "key": "feature_209",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 210,
+    "category": "performance_reliability",
+    "title": "Background video-processing queue.",
+    "key": "feature_210",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 211,
+    "category": "performance_reliability",
+    "title": "Resumable upload recovery.",
+    "key": "feature_211",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 212,
+    "category": "performance_reliability",
+    "title": "Upload pause/resume.",
+    "key": "feature_212",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 213,
+    "category": "performance_reliability",
+    "title": "Network reconnect continuation.",
+    "key": "feature_213",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 214,
+    "category": "performance_reliability",
+    "title": "Offline draft saving.",
+    "key": "feature_214",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 215,
+    "category": "performance_reliability",
+    "title": "Service worker update prompt.",
+    "key": "feature_215",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 216,
+    "category": "performance_reliability",
+    "title": "Stale asset-version recovery.",
+    "key": "feature_216",
+    "state": "available",
+    "priority": "medium",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 217,
+    "category": "performance_reliability",
+    "title": "Dynamic-import failure auto reload.",
+    "key": "feature_217",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 218,
+    "category": "performance_reliability",
+    "title": "Error boundary per route.",
+    "key": "feature_218",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 219,
+    "category": "performance_reliability",
+    "title": "Health dashboard.",
+    "key": "feature_219",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 220,
+    "category": "performance_reliability",
+    "title": "Automated synthetic monitoring.",
+    "key": "feature_220",
+    "state": "planned",
+    "priority": "medium",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/lib/api.ts",
+      "server/utils/retry.ts",
+      "server/ai/aiCircuitBreaker.ts",
+      "server/pdf/processingPipeline.ts"
+    ]
+  },
+  {
+    "id": 221,
+    "category": "ui_ux",
+    "title": "Single consistent white design system.",
+    "key": "feature_221",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 222,
+    "category": "ui_ux",
+    "title": "Unified color tokens.",
+    "key": "feature_222",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 223,
+    "category": "ui_ux",
+    "title": "Unified spacing scale.",
+    "key": "feature_223",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 224,
+    "category": "ui_ux",
+    "title": "Unified border radius.",
+    "key": "feature_224",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 225,
+    "category": "ui_ux",
+    "title": "Unified shadow system.",
+    "key": "feature_225",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 226,
+    "category": "ui_ux",
+    "title": "Consistent typography hierarchy.",
+    "key": "feature_226",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 227,
+    "category": "ui_ux",
+    "title": "Sinhala-compatible font stack.",
+    "key": "feature_227",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 228,
+    "category": "ui_ux",
+    "title": "Dark navy only for primary actions.",
+    "key": "feature_228",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 229,
+    "category": "ui_ux",
+    "title": "Green only for completed states.",
+    "key": "feature_229",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 230,
+    "category": "ui_ux",
+    "title": "Red only for errors/destructive actions.",
+    "key": "feature_230",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 231,
+    "category": "ui_ux",
+    "title": "Consistent button heights.",
+    "key": "feature_231",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 232,
+    "category": "ui_ux",
+    "title": "Consistent form field heights.",
+    "key": "feature_232",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 233,
+    "category": "ui_ux",
+    "title": "Clear hover states.",
+    "key": "feature_233",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 234,
+    "category": "ui_ux",
+    "title": "Clear keyboard-focus states.",
+    "key": "feature_234",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 235,
+    "category": "ui_ux",
+    "title": "Smooth page transitions.",
+    "key": "feature_235",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 236,
+    "category": "ui_ux",
+    "title": "Route-specific skeletons.",
+    "key": "feature_236",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 237,
+    "category": "ui_ux",
+    "title": "Skeleton dimensions match final content.",
+    "key": "feature_237",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 238,
+    "category": "ui_ux",
+    "title": "Avoid full-page spinner after initial load.",
+    "key": "feature_238",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 239,
+    "category": "ui_ux",
+    "title": "Preserve previous page data during tab switching.",
+    "key": "feature_239",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 240,
+    "category": "ui_ux",
+    "title": "Empty-state illustrations without \u201CAI-generated\u201D appearance.",
+    "key": "feature_240",
+    "state": "planned",
+    "priority": "normal",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 241,
+    "category": "ui_ux",
+    "title": "Sidebar tooltips when collapsed.",
+    "key": "feature_241",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 242,
+    "category": "ui_ux",
+    "title": "Sidebar active-item indicator.",
+    "key": "feature_242",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 243,
+    "category": "ui_ux",
+    "title": "Mobile bottom navigation.",
+    "key": "feature_243",
+    "state": "planned",
+    "priority": "normal",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 244,
+    "category": "ui_ux",
+    "title": "Mobile safe-area support.",
+    "key": "feature_244",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 245,
+    "category": "ui_ux",
+    "title": "Keyboard-open viewport handling.",
+    "key": "feature_245",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 246,
+    "category": "ui_ux",
+    "title": "Chat composer attach to keyboard.",
+    "key": "feature_246",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 247,
+    "category": "ui_ux",
+    "title": "Auto-growing textarea with maximum height.",
+    "key": "feature_247",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 248,
+    "category": "ui_ux",
+    "title": "Mobile composer smaller padding.",
+    "key": "feature_248",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 249,
+    "category": "ui_ux",
+    "title": "Scroll-to-latest button.",
+    "key": "feature_249",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 250,
+    "category": "ui_ux",
+    "title": "Restore chat scroll position.",
+    "key": "feature_250",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 251,
+    "category": "ui_ux",
+    "title": "Prevent horizontal mobile overflow.",
+    "key": "feature_251",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 252,
+    "category": "ui_ux",
+    "title": "Modal height use `dvh`.",
+    "key": "feature_252",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 253,
+    "category": "ui_ux",
+    "title": "Modal body independent scrolling.",
+    "key": "feature_253",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 254,
+    "category": "ui_ux",
+    "title": "Sticky modal header.",
+    "key": "feature_254",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 255,
+    "category": "ui_ux",
+    "title": "Sticky modal actions.",
+    "key": "feature_255",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 256,
+    "category": "ui_ux",
+    "title": "Responsive paper cards.",
+    "key": "feature_256",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 257,
+    "category": "ui_ux",
+    "title": "Responsive charts.",
+    "key": "feature_257",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 258,
+    "category": "ui_ux",
+    "title": "Accessible chart summaries.",
+    "key": "feature_258",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 259,
+    "category": "ui_ux",
+    "title": "Reduced-motion setting.",
+    "key": "feature_259",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 260,
+    "category": "ui_ux",
+    "title": "Custom lightweight scrollbar.",
+    "key": "feature_260",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "src/App.tsx",
+      "src/styles/clora-design.css",
+      "src/components/ui",
+      "src/pages/FeatureCenter.tsx"
+    ]
+  },
+  {
+    "id": 261,
+    "category": "files_media",
+    "title": "Simple file-row UI without fake previews.",
+    "key": "feature_261",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 262,
+    "category": "files_media",
+    "title": "Clear file-type icon.",
+    "key": "feature_262",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 263,
+    "category": "files_media",
+    "title": "Human-readable file size.",
+    "key": "feature_263",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 264,
+    "category": "files_media",
+    "title": "Open/download actions grouped consistently.",
+    "key": "feature_264",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 265,
+    "category": "files_media",
+    "title": "Upload percentage.",
+    "key": "feature_265",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 266,
+    "category": "files_media",
+    "title": "Uploaded size/full size.",
+    "key": "feature_266",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 267,
+    "category": "files_media",
+    "title": "Remaining size.",
+    "key": "feature_267",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 268,
+    "category": "files_media",
+    "title": "Upload speed.",
+    "key": "feature_268",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 269,
+    "category": "files_media",
+    "title": "ETA.",
+    "key": "feature_269",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 270,
+    "category": "files_media",
+    "title": "Cancel and retry.",
+    "key": "feature_270",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 271,
+    "category": "files_media",
+    "title": "Uploaded video persistent database record.",
+    "key": "feature_271",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 272,
+    "category": "files_media",
+    "title": "Video processing state machine.",
+    "key": "feature_272",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 273,
+    "category": "files_media",
+    "title": "Processing failure reason.",
+    "key": "feature_273",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 274,
+    "category": "files_media",
+    "title": "HLS adaptive-quality generation.",
+    "key": "feature_274",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 275,
+    "category": "files_media",
+    "title": "Quality selector.",
+    "key": "feature_275",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 276,
+    "category": "files_media",
+    "title": "Short-lived playback sessions.",
+    "key": "feature_276",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 277,
+    "category": "files_media",
+    "title": "Signed segment URLs/cookies.",
+    "key": "feature_277",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 278,
+    "category": "files_media",
+    "title": "Per-user visible watermark.",
+    "key": "feature_278",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 279,
+    "category": "files_media",
+    "title": "Disable raw MP4 production fallback.",
+    "key": "feature_279",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 280,
+    "category": "files_media",
+    "title": "Existing videos secure-HLS reprocessing tool.",
+    "key": "feature_280",
+    "state": "available",
+    "priority": "normal",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server/pdf",
+      "server/video",
+      "src/components/video/SecureVideoPlayer.tsx",
+      "src/components/views/SyllabusLibraryView.tsx"
+    ]
+  },
+  {
+    "id": 281,
+    "category": "security_quality",
+    "title": "Revoke exposed Firebase service-account key.",
+    "key": "feature_281",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 282,
+    "category": "security_quality",
+    "title": "Use one server credential JSON variable.",
+    "key": "feature_282",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 283,
+    "category": "security_quality",
+    "title": "Secret-format validation without exposing values.",
+    "key": "feature_283",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 284,
+    "category": "security_quality",
+    "title": "Firebase App Check enforcement.",
+    "key": "feature_284",
+    "state": "foundation",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 285,
+    "category": "security_quality",
+    "title": "Firestore rules automated tests.",
+    "key": "feature_285",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 286,
+    "category": "security_quality",
+    "title": "Storage rules automated tests.",
+    "key": "feature_286",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 287,
+    "category": "security_quality",
+    "title": "Rate limit by UID and IP.",
+    "key": "feature_287",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 288,
+    "category": "security_quality",
+    "title": "Upload MIME/signature validation.",
+    "key": "feature_288",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 289,
+    "category": "security_quality",
+    "title": "Antivirus/malware scanning.",
+    "key": "feature_289",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 290,
+    "category": "security_quality",
+    "title": "CSP and security headers.",
+    "key": "feature_290",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 291,
+    "category": "security_quality",
+    "title": "Dependency vulnerability updates.",
+    "key": "feature_291",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 292,
+    "category": "security_quality",
+    "title": "Automated unit tests on every PR.",
+    "key": "feature_292",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 293,
+    "category": "security_quality",
+    "title": "Authentication E2E tests.",
+    "key": "feature_293",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 294,
+    "category": "security_quality",
+    "title": "PDF-QA E2E tests.",
+    "key": "feature_294",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 295,
+    "category": "security_quality",
+    "title": "Video upload/playback E2E tests.",
+    "key": "feature_295",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 296,
+    "category": "security_quality",
+    "title": "Structured logs with request IDs.",
+    "key": "feature_296",
+    "state": "available",
+    "priority": "high",
+    "defaultEnabled": true,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 297,
+    "category": "security_quality",
+    "title": "Google SEO landing pages by year/subject/lesson.",
+    "key": "feature_297",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 298,
+    "category": "security_quality",
+    "title": "Sinhala/English/Singlish keyword metadata.",
+    "key": "feature_298",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 299,
+    "category": "security_quality",
+    "title": "Sitemap, canonical URL and structured-data generation.",
+    "key": "feature_299",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  },
+  {
+    "id": 300,
+    "category": "security_quality",
+    "title": "Core Web Vitals, error-rate and learning-outcome analytics.",
+    "key": "feature_300",
+    "state": "planned",
+    "priority": "high",
+    "defaultEnabled": false,
+    "implementationRefs": [
+      "server.ts",
+      "server/utils",
+      "firestore.rules",
+      "scripts",
+      "docs/security"
+    ]
+  }
+];
+function summarizeFeatureCatalog(features = PLATFORM_FEATURES) {
+  const byState = { available: 0, foundation: 0, planned: 0 };
+  const byCategory = Object.fromEntries(
+    Object.keys(FEATURE_CATEGORY_LABELS).map((category) => [category, { total: 0, available: 0, foundation: 0, planned: 0 }])
+  );
+  for (const feature of features) {
+    byState[feature.state] += 1;
+    byCategory[feature.category].total += 1;
+    byCategory[feature.category][feature.state] += 1;
+  }
+  return {
+    total: features.length,
+    byState,
+    byCategory,
+    productionReadyPercent: Math.round(byState.available / Math.max(features.length, 1) * 100),
+    integratedPercent: Math.round((byState.available + byState.foundation) / Math.max(features.length, 1) * 100)
+  };
+}
+
+// server/platform/routes.ts
+var router5 = (0, import_express10.Router)();
+function isAdminUser(user) {
+  const roles = Array.isArray(user?.roles) ? user.roles : [];
+  return Boolean(user?.admin || roles.includes("admin") || roles.includes("ops"));
+}
+router5.get("/capabilities", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const category = String(req.query.category || "");
+    const state = String(req.query.state || "");
+    const query = String(req.query.q || "").trim().toLowerCase();
+    const admin = isAdminUser(user);
+    let features = PLATFORM_FEATURES;
+    if (category && category in FEATURE_CATEGORY_LABELS) features = features.filter((feature) => feature.category === category);
+    if (["available", "foundation", "planned"].includes(state)) features = features.filter((feature) => feature.state === state);
+    if (query) features = features.filter((feature) => `${feature.id} ${feature.title} ${feature.key}`.toLowerCase().includes(query));
+    const visibleFeatures = features.map((feature) => admin ? feature : { ...feature, implementationRefs: [] });
+    return res.json({
+      ok: true,
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      admin,
+      categoryLabels: FEATURE_CATEGORY_LABELS,
+      summary: summarizeFeatureCatalog(PLATFORM_FEATURES),
+      filteredSummary: summarizeFeatureCatalog(features),
+      features: visibleFeatures
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "CAPABILITY_CATALOG_FAILED", message: error.message });
+  }
+});
+router5.get("/health", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const admin = isAdminUser(user);
+    const services = {
+      firebaseAdmin: Boolean(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || process.env.FIREBASE_CLIENT_EMAIL),
+      firebaseAppCheck: process.env.ENABLE_FIREBASE_APP_CHECK === "true",
+      cloudVisionOcr: process.env.ENABLE_CLOUD_VISION_OCR === "true",
+      geminiPdfOcr: Boolean(process.env.GEMINI_PDF_QA_MODEL || process.env.GEMINI_DEFAULT_MODEL),
+      googleSearchGrounding: process.env.ENABLE_GOOGLE_SEARCH_GROUNDING === "true",
+      secureVideoHls: Boolean(process.env.VIDEO_CDN_BASE_URL && process.env.VIDEO_SIGNING_KEY),
+      tts: process.env.ENABLE_TTS === "true",
+      liveVoice: process.env.ENABLE_GEMINI_LIVE === "true"
+    };
+    const configured = Object.values(services).filter(Boolean).length;
+    return res.json({
+      ok: true,
+      status: configured >= 4 ? "operational" : "degraded",
+      checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      services,
+      catalog: summarizeFeatureCatalog(),
+      admin
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "PLATFORM_HEALTH_FAILED", message: error.message });
+  }
+});
+router5.get("/source-review-queue", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    if (!isAdminUser(user)) return res.status(403).json({ ok: false, code: "FORBIDDEN", message: "Admin access is required." });
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit || 50)));
+    const snap = await getAdminDb().collection("rag_sources").orderBy("updatedAt", "desc").limit(250).get();
+    const sources = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((source) => source.needsTextReview || source.indexStatus === "needs_ocr" || source.documentQuality?.corruptionRisk !== "low").slice(0, limit).map((source) => ({
+      id: source.id,
+      title: source.title || source.fileName,
+      subject: source.subject || null,
+      year: source.year || null,
+      indexStatus: source.indexStatus || null,
+      needsTextReview: Boolean(source.needsTextReview),
+      lowConfidencePages: source.lowConfidencePages || [],
+      documentQuality: source.documentQuality || null,
+      duplicateOfSourceId: source.duplicateOfSourceId || null,
+      updatedAt: source.updatedAt || null
+    }));
+    return res.json({ ok: true, sources, total: sources.length });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "SOURCE_REVIEW_QUEUE_FAILED", message: error.message });
+  }
+});
+var routes_default = router5;
+
+// server/tts/routes.ts
+var import_express11 = require("express");
+init_admin();
 var import_crypto2 = __toESM(require("crypto"), 1);
-var ttsRoutes = (0, import_express9.Router)();
+var ttsRoutes = (0, import_express11.Router)();
 var TTS_MAX_CHARS = parseInt(process.env.TTS_MAX_CHARS || "4500", 10);
 var DAILY_TTS_LIMIT_PER_USER = 20;
 function createTextHash(text, language, voice) {
@@ -14147,7 +20577,7 @@ ttsRoutes.post("/generate", async (req, res) => {
 });
 
 // server/voice/routes.ts
-var import_express10 = require("express");
+var import_express12 = require("express");
 init_admin();
 
 // server/ai/pdfIntentDetector.ts
@@ -14202,7 +20632,7 @@ function detectPdfIntent(text) {
 init_retrieve();
 init_modelRouter();
 var import_crypto3 = __toESM(require("crypto"), 1);
-var voiceRoutes = (0, import_express10.Router)();
+var voiceRoutes = (0, import_express12.Router)();
 voiceRoutes.post("/live-turn", async (req, res) => {
   try {
     const user = await requireUser(req);
@@ -14300,12 +20730,12 @@ Question: ${transcript}` : transcript,
 });
 
 // server/video/routes.ts
-var import_node_crypto3 = __toESM(require("node:crypto"), 1);
-var import_express11 = __toESM(require("express"), 1);
+var import_node_crypto4 = __toESM(require("node:crypto"), 1);
+var import_express13 = __toESM(require("express"), 1);
 init_admin();
 
 // server/video/videoService.ts
-var import_node_crypto2 = __toESM(require("node:crypto"), 1);
+var import_node_crypto3 = __toESM(require("node:crypto"), 1);
 var import_app_check = require("firebase-admin/app-check");
 init_admin();
 var QUALITY_LADDER = [
@@ -14498,7 +20928,7 @@ function createSignedPlaybackCookie(video) {
   const prefix = `${env.VIDEO_CDN_BASE_URL}/videos/${video.id}/versions/${video.version}/hls/`;
   const expires = Math.floor(Date.now() / 1e3) + env.VIDEO_COOKIE_TTL_SECONDS;
   const policy = `URLPrefix=${base64Url(prefix)}:Expires=${expires}:KeyName=${env.VIDEO_CDN_KEY_NAME}`;
-  const signature = import_node_crypto2.default.createHmac("sha1", decodeSigningKey(env.VIDEO_CDN_SIGNING_KEY)).update(policy).digest();
+  const signature = import_node_crypto3.default.createHmac("sha1", decodeSigningKey(env.VIDEO_CDN_SIGNING_KEY)).update(policy).digest();
   return {
     cookieValue: `${policy}:Signature=${base64Url(signature)}`,
     manifestUrl: `${prefix}master.m3u8`,
@@ -14528,7 +20958,7 @@ function canUserPlayVideo(video, user) {
 
 // server/video/routes.ts
 init_chatSanitizer();
-var videoRoutes = import_express11.default.Router();
+var videoRoutes = import_express13.default.Router();
 var VIDEO_MIME_TYPES = /* @__PURE__ */ new Set(["video/mp4", "video/quicktime", "video/webm", "application/octet-stream"]);
 function publicVideo(video) {
   const { inputBucket, inputObjectPath, transcoderJobName, ...safe } = video;
@@ -14947,7 +21377,7 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
       userId: user.uid,
       videoId: video.id,
       deviceId: String(req.header("X-Device-ID") || "unknown").slice(0, 160),
-      userAgentHash: import_node_crypto3.default.createHash("sha256").update(String(req.header("user-agent") || "unknown")).digest("hex"),
+      userAgentHash: import_node_crypto4.default.createHash("sha256").update(String(req.header("user-agent") || "unknown")).digest("hex"),
       createdAt: new Date(now).toISOString(),
       lastHeartbeatAt: new Date(now).toISOString(),
       expiresAt: new Date(expiresAtMs).toISOString(),
@@ -15099,6 +21529,106 @@ var adminLimiter = buildRateLimiter({
   }
 });
 
+// server/utils/requestContext.ts
+var import_node_crypto5 = __toESM(require("node:crypto"), 1);
+
+// server/utils/logger.ts
+function redactString(str) {
+  if (!str) return str;
+  let redacted = str;
+  redacted = redacted.replace(/Bearer\s+[a-zA-Z0-9_\-\.]+/ig, "Bearer [REDACTED]");
+  redacted = redacted.replace(/[a-zA-Z0-9_\-\.]+@[a-zA-Z0-9_\-\.]+\.[a-zA-Z]{2,}/g, "[EMAIL_REDACTED]");
+  redacted = redacted.replace(/AIzaSy[a-zA-Z0-9_\-]{33}/g, "AIzaSy[REDACTED]");
+  return redacted;
+}
+function redactObject(obj) {
+  if (!obj) return obj;
+  if (typeof obj === "string") {
+    return redactString(obj);
+  }
+  if (Array.isArray(obj)) {
+    return obj.map((item) => redactObject(item));
+  }
+  if (typeof obj === "object") {
+    const result = {};
+    for (const key of Object.keys(obj)) {
+      const lowerKey = key.toLowerCase();
+      const isSensitive = [
+        "authorization",
+        "cookie",
+        "token",
+        "key",
+        "secret",
+        "password",
+        "private",
+        "email",
+        "prompt",
+        "text",
+        "body",
+        "ocr",
+        "payload",
+        "credential",
+        "cert",
+        "url",
+        "signedurl",
+        "private_key"
+      ].some((k) => lowerKey.includes(k));
+      if (isSensitive) {
+        result[key] = "[REDACTED]";
+      } else {
+        result[key] = redactObject(obj[key]);
+      }
+    }
+    return result;
+  }
+  return obj;
+}
+var logger = {
+  info(message, meta) {
+    console.log(`[INFO] ${message}`, meta ? JSON.stringify(redactObject(meta)) : "");
+  },
+  warn(message, meta) {
+    console.warn(`[WARN] ${message}`, meta ? JSON.stringify(redactObject(meta)) : "");
+  },
+  error(message, error, meta) {
+    const redactedMeta = meta ? redactObject(meta) : {};
+    let errorMsg = error;
+    if (error instanceof Error) {
+      errorMsg = {
+        message: redactString(error.message),
+        name: error.name,
+        stack: error.stack ? redactString(error.stack).split("\n").slice(0, 3).join("\n") : void 0
+      };
+    } else {
+      errorMsg = redactObject(error);
+    }
+    console.error(`[ERROR] ${message}`, { error: errorMsg, ...redactedMeta });
+  }
+};
+
+// server/utils/requestContext.ts
+function requestContextMiddleware(req, res, next) {
+  const incoming = String(req.headers["x-request-id"] || "").trim();
+  const requestId = /^[A-Za-z0-9._:-]{8,120}$/.test(incoming) ? incoming : import_node_crypto5.default.randomUUID();
+  const startedAt = Date.now();
+  req.requestId = requestId;
+  req.requestStartedAt = startedAt;
+  res.setHeader("X-Request-ID", requestId);
+  res.on("finish", () => {
+    const durationMs = Date.now() - startedAt;
+    if (res.statusCode >= 400 || process.env.DEBUG_API === "true") {
+      logger.info("request_completed", {
+        requestId,
+        method: req.method,
+        path: req.originalUrl.split("?")[0],
+        status: res.statusCode,
+        durationMs
+      });
+    }
+  });
+  next();
+}
+
 // server.ts
 init_admin();
 init_sourceInventoryService();
@@ -15211,7 +21741,7 @@ function startOcrWorker(intervalMs = 6e4) {
 }
 
 // server/ai-core/routes.ts
-var import_express12 = require("express");
+var import_express14 = require("express");
 
 // server/ai-core/study/mockForecast.ts
 init_admin();
@@ -15449,8 +21979,8 @@ async function generateStudentWeeklyReport(uid) {
 
 // server/ai-core/routes.ts
 init_admin();
-var router4 = (0, import_express12.Router)();
-router4.get("/student/diagnosis", async (req, res) => {
+var router6 = (0, import_express14.Router)();
+router6.get("/student/diagnosis", async (req, res) => {
   try {
     const user = await requireUser(req);
     const { subject } = req.query;
@@ -15461,7 +21991,7 @@ router4.get("/student/diagnosis", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.post("/study/war-plan", async (req, res) => {
+router6.post("/study/war-plan", async (req, res) => {
   try {
     const user = await requireUser(req);
     const result = await generateWarPlan({ ...req.body, uid: user.uid });
@@ -15470,7 +22000,7 @@ router4.post("/study/war-plan", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.post("/study/mock-result", async (req, res) => {
+router6.post("/study/mock-result", async (req, res) => {
   try {
     const user = await requireUser(req);
     const result = await updateStudentForecast(user.uid);
@@ -15479,7 +22009,7 @@ router4.post("/study/mock-result", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.get("/mistakes", async (req, res) => {
+router6.get("/mistakes", async (req, res) => {
   try {
     const user = await requireUser(req);
     const result = await getTodayRetries(user.uid);
@@ -15488,7 +22018,7 @@ router4.get("/mistakes", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.post("/mistakes", async (req, res) => {
+router6.post("/mistakes", async (req, res) => {
   try {
     const user = await requireUser(req);
     const result = await addMistake(user.uid, req.body);
@@ -15497,7 +22027,7 @@ router4.post("/mistakes", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.post("/exam-intel/build-index", async (req, res) => {
+router6.post("/exam-intel/build-index", async (req, res) => {
   try {
     const result = await buildExamIndex();
     res.json(result);
@@ -15505,7 +22035,7 @@ router4.post("/exam-intel/build-index", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.get("/exam-intel/report", async (req, res) => {
+router6.get("/exam-intel/report", async (req, res) => {
   try {
     const { subject } = req.query;
     const result = await buildPatternReport(String(subject));
@@ -15514,7 +22044,7 @@ router4.get("/exam-intel/report", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.get("/exam-intel/probability", async (req, res) => {
+router6.get("/exam-intel/probability", async (req, res) => {
   try {
     const { subject } = req.query;
     const result = await rankTopicProbability(String(subject));
@@ -15523,7 +22053,7 @@ router4.get("/exam-intel/probability", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.get("/exam-intel/unasked", async (req, res) => {
+router6.get("/exam-intel/unasked", async (req, res) => {
   try {
     const { subject } = req.query;
     const result = await detectUnaskedTopics(String(subject));
@@ -15532,7 +22062,7 @@ router4.get("/exam-intel/unasked", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.post("/exam-intel/predicted-paper", async (req, res) => {
+router6.post("/exam-intel/predicted-paper", async (req, res) => {
   try {
     const user = await requireUser(req);
     const result = await generatePredictedPaper({ ...req.body, uid: user.uid });
@@ -15541,7 +22071,7 @@ router4.post("/exam-intel/predicted-paper", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.post("/reports/student-weekly", async (req, res) => {
+router6.post("/reports/student-weekly", async (req, res) => {
   try {
     const user = await requireUser(req);
     const result = await generateStudentWeeklyReport(user.uid);
@@ -15550,7 +22080,7 @@ router4.post("/reports/student-weekly", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-router4.post("/admin/repair-data", requireFirebaseUser, requireRole("admin"), async (req, res) => {
+router6.post("/admin/repair-data", requireFirebaseUser, requireRole("admin"), async (req, res) => {
   try {
     const { getAdminDb: getAdminDb2 } = await Promise.resolve().then(() => (init_admin(), admin_exports));
     const db = getAdminDb2();
@@ -15573,18 +22103,18 @@ router4.post("/admin/repair-data", requireFirebaseUser, requireRole("admin"), as
     res.status(500).json({ error: err.message });
   }
 });
-var routes_default = router4;
+var routes_default2 = router6;
 
 // server/realtime/routes.ts
-var import_express13 = require("express");
+var import_express15 = require("express");
 init_config();
 var requireUser2 = async (req) => {
   const user = await verifyAndExtractUser(req);
   if (!user) throw new Error("Unauthorized");
   return user;
 };
-var router5 = (0, import_express13.Router)();
-router5.get("/status", (req, res) => {
+var router7 = (0, import_express15.Router)();
+router7.get("/status", (req, res) => {
   const cfg = getRealtimeConfig();
   res.json({
     ok: true,
@@ -15598,7 +22128,7 @@ router5.get("/status", (req, res) => {
     missing: cfg.missing
   });
 });
-router5.get("/self-test", async (req, res) => {
+router7.get("/self-test", async (req, res) => {
   try {
     const cfg = getRealtimeConfig();
     if (!cfg.enabled) {
@@ -15616,7 +22146,7 @@ router5.get("/self-test", async (req, res) => {
     res.json({ ok: false, code: "TEST_FAILED", message: err.message });
   }
 });
-router5.post("/session", async (req, res) => {
+router7.post("/session", async (req, res) => {
   try {
     await requireUser2(req);
     const cfg = getRealtimeConfig();
@@ -15733,8 +22263,8 @@ If user mentions PDF, paper, question, Q1, MCQ, essay, structured, marking schem
     res.status(500).json({ ok: false, error: error.message });
   }
 });
-var routes_default2 = router5;
-router5.post("/tool-result", async (req, res) => {
+var routes_default3 = router7;
+router7.post("/tool-result", async (req, res) => {
   try {
     const user = await requireUser2(req);
     const { toolName, arguments: args, chatId, activeSubject, activeSourceId, recentAttachmentIds } = req.body;
@@ -15765,9 +22295,9 @@ router5.post("/tool-result", async (req, res) => {
 init_client();
 
 // server/utils/errorHandler.ts
-var import_node_crypto4 = __toESM(require("node:crypto"), 1);
+var import_node_crypto6 = __toESM(require("node:crypto"), 1);
 function globalErrorHandler(err, req, res, next) {
-  const requestId = import_node_crypto4.default.randomUUID?.() || Math.random().toString(36).substring(2, 15);
+  const requestId = import_node_crypto6.default.randomUUID?.() || Math.random().toString(36).substring(2, 15);
   console.error(`[ERROR] RequestId: ${requestId} | Path: ${req.path} | Error:`, err);
   let status = 500;
   let code = "INTERNAL_ERROR";
@@ -15847,7 +22377,8 @@ function globalErrorHandler(err, req, res, next) {
 logEnvConfig();
 prepareGoogleCredentials();
 getAdminApp();
-var app = (0, import_express14.default)();
+var app = (0, import_express16.default)();
+app.use(requestContextMiddleware);
 var PORT2 = env.PORT;
 var videoCdnOrigin = (() => {
   try {
@@ -15909,7 +22440,7 @@ app.use((0, import_cors.default)({
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Firebase-AppCheck", "X-Device-ID"]
 }));
-app.use(import_express14.default.json({ limit: `${env.MAX_BODY_LIMIT_MB}mb` }));
+app.use(import_express16.default.json({ limit: `${env.MAX_BODY_LIMIT_MB}mb` }));
 app.use("/api", globalLimiter);
 app.get("/api/firebase/init", (_req, res) => {
   res.setHeader("Cache-Control", "public, max-age=300, s-maxage=300");
@@ -15928,6 +22459,8 @@ app.use("/api/pdf", pdfRoutes);
 app.use("/api/exam-intel", examIntelRoutes_default);
 app.use("/api/student", studentRoutes_default);
 app.use("/api/reports", reportRoutes_default);
+app.use("/api/learning", learningRoutes_default);
+app.use("/api/platform", routes_default);
 app.use("/api/tts", ttsRoutes);
 app.use("/api/voice", voiceRoutes);
 app.use("/api", videoRoutes);
@@ -16230,9 +22763,9 @@ app.get("/api/past-papers/local/:id", async (req, res) => {
 app.get("/api/cookies", (req, res) => res.json({}));
 app.use("/api/auth", authRoutes);
 startOcrWorker();
-app.use("/api", routes_default);
+app.use("/api", routes_default2);
 app.use(["/api/ai", "/api"], aiRoutes);
-app.use("/api/realtime", routes_default2);
+app.use("/api/realtime", routes_default3);
 app.post("/api/profile/target-zscore", async (req, res) => {
   try {
     const user = await requireUser(req);
@@ -16334,7 +22867,7 @@ if (process.env.NODE_ENV !== "production") {
   });
 } else {
   const distPath = import_path2.default.join(process.cwd(), "dist");
-  app.use(import_express14.default.static(distPath));
+  app.use(import_express16.default.static(distPath));
   app.get("/assets/*", (req, res) => {
     res.status(404).type("text/plain").send("Static asset not found");
   });

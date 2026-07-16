@@ -309,7 +309,7 @@ export async function aiRespondStream(req: any, res: any) {
     // 1. Route Request
     const { detectOfficialPaperCandidate } = await import("../ai-core/intent/paperQuestionParser");
     const detectedPaperIntent = detectOfficialPaperCandidate(prompt, activeSubject);
-    const paperIntent = quizStartIntent
+    let paperIntent = quizStartIntent
       ? {
           ...detectedPaperIntent,
           isOfficialPaperCandidate: true,
@@ -374,8 +374,47 @@ export async function aiRespondStream(req: any, res: any) {
       route.mode = "paper_question_qa";
     }
 
-    const policy = resolveAnswerPolicy(prompt, route, activeSubject, attachments);
     const activeConversationState = await getConversationState(user.uid);
+    const lowerPrompt = prompt.toLowerCase();
+    const isRecheckRequest = [
+      "recheck", "check again", "verify again", "නැවත බලන්න", "නැවත පරීක්ෂා", "ආයෙත් බලන්න", "ආයෙ බලන්න"
+    ].some((phrase) => lowerPrompt.includes(phrase));
+
+    if (!paperIntent.isOfficialPaperCandidate && isRecheckRequest && activeConversationState.selectedQuestionId) {
+      const { getSourceInventory } = await import("../sources/sourceInventoryService");
+      const isAdminUser = user.roles?.includes("admin") || user.admin === true;
+      const inventory = await safeCall(
+        "getSourceInventoryForRecheck",
+        () => getSourceInventory({ uid: user.uid, subject: activeConversationState.activeSubject, isAdmin: isAdminUser }),
+        { all: [] } as any,
+        res,
+      );
+      const selectedId = activeConversationState.selectedSourceId || activeConversationState.activeSourceIds[0];
+      const selectedSource = (inventory.all || []).find((source: any) => {
+        const ids = [source.id, source.sourceId, ...(source.duplicateSourceIds || [])].map(String);
+        return selectedId && ids.includes(String(selectedId));
+      });
+
+      if (selectedSource) {
+        paperIntent = {
+          isOfficialPaperCandidate: true,
+          year: selectedSource.year,
+          subject: selectedSource.subject || activeConversationState.activeSubject || activeSubject || "SFT",
+          questionNo: String(activeConversationState.selectedQuestionId).replace(/^Q/i, ""),
+          questionType: "MCQ",
+          needsSubjectClarification: false,
+        } as any;
+        route.mode = "paper_question_qa";
+        route.entities.year = paperIntent.year;
+        route.entities.subject = paperIntent.subject;
+        route.entities.questionNo = paperIntent.questionNo;
+        route.entities.questionType = paperIntent.questionType;
+        route.entities.activeSourceId = selectedSource.id || selectedSource.sourceId;
+        route.answerHints.mustUseRag = true;
+      }
+    }
+
+    const policy = resolveAnswerPolicy(prompt, route, activeSubject, attachments);
     const evidence = await retrieveEvidence(user.uid, prompt, route, policy, activeConversationState);
     // REMOVED: Early evidence apology block (Finding 026)
     if (evidence.selectedSource) {
@@ -403,8 +442,7 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     // [FIX 8] Correction Phrase Detection (e.g., "oka fake")
-    const lowerPrompt = prompt.toLowerCase();
-    const correctionPhrases = ["oka fake", "werdi", "weradi", "oka newe", "වැරදියි", "ඕක බොරු", "oka boru", "not correct", "fake", "wrong", "boru", "boru kiynn epa", "boru dewal", "බොරු", "මේක බොරු", "නෑ", "not this"];
+    const correctionPhrases = ["recheck", "check again", "verify again", "oka fake", "werdi", "weradi", "oka newe", "වැරදියි", "ඕක බොරු", "oka boru", "not correct", "fake", "wrong", "boru", "boru kiynn epa", "boru dewal", "බොරු", "මේක බොරු", "නෑ", "not this"];
     const isCorrection = correctionPhrases.some(p => lowerPrompt.includes(p));
 
 
@@ -747,10 +785,20 @@ export async function aiRespondStream(req: any, res: any) {
 
       const sseSources = allSources.map(s => ({
         id: s.id,
+        sourceId: s.sourceId || s.id,
         title: s.title,
-        url: s.url || `/api/rag/sources/${s.id}/download`,
+        url: s.url || s.downloadUrl || `/api/rag/sources/${s.id}/download`,
+        downloadUrl: s.downloadUrl || s.url || null,
         storagePath: s.storagePath,
-        badge: s.resourceType === "past_paper" ? "Past Paper" : s.resourceType === "marking_scheme" ? "Marking Scheme" : "PDF Store",
+        badge: s.resourceType === "past_paper"
+          ? "Past Paper"
+          : s.resourceType === "marking_scheme"
+            ? "Marking Scheme"
+            : s.resourceType === "syllabus"
+              ? "Syllabus"
+              : s.resourceType === "paper_structure"
+                ? "Paper Structure"
+                : "Uploaded PDF",
         confidence: 1.0,
         sourceType: s.resourceType,
         sourceScope: s.sourceScope
@@ -758,61 +806,26 @@ export async function aiRespondStream(req: any, res: any) {
 
       emitSse(res, "sources", { sources: sseSources });
 
-      let answer = `📚 **මම සොයාගත් PDF සහ ප්‍රභවයන් (Sources) මෙන්න:**\n\n`;
-      let count = 1;
+      let answer = `### PDF Library\n\n`;
+      answer += `Duplicate copies merge කරලා **unique sources ${allSources.length}ක්** හමු වුණා.\n\n`;
+      answer += `- Past Papers: **${pastPapers.length}**\n`;
+      answer += `- Marking Schemes: **${markingSchemes.length}**\n`;
+      answer += `- Syllabus: **${syllabusList.length}**\n`;
+      answer += `- Paper Structure: **${paperStructureList.length}**\n`;
+      answer += `- Uploaded PDFs: **${uploadedList.length}**\n`;
+      if (imagesList.length > 0) answer += `- Images: **${imagesList.length}**\n`;
 
-      if (pastPapers.length > 0) {
-        answer += `🏛️ **Past Papers**\n`;
-        pastPapers.forEach((p: any) => {
-          answer += `${count++}. **${p.title}** (${p.year || "Year N/A"}) - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
-        });
-        answer += `\n`;
-      }
-
-      if (markingSchemes.length > 0) {
-        answer += `📝 **Marking Schemes**\n`;
-        markingSchemes.forEach((p: any) => {
-          answer += `${count++}. **${p.title}** (${p.year || "Year N/A"}) - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
-        });
-        answer += `\n`;
-      }
-
-      if (syllabusList.length > 0) {
-        answer += `📖 **Syllabus Library**\n`;
-        syllabusList.forEach((p: any) => {
-          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
-        });
-        answer += `\n`;
-      }
-
-      if (paperStructureList.length > 0) {
-        answer += `📐 **Paper Structure**\n`;
-        paperStructureList.forEach((p: any) => {
-          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
-        });
-        answer += `\n`;
-      }
-
-      if (uploadedList.length > 0) {
-        answer += `📤 **Uploaded PDFs**\n`;
-        uploadedList.forEach((p: any) => {
-          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
-        });
-        answer += `\n`;
-      }
-
-      if (imagesList.length > 0) {
-        answer += `🖼️ **Images**\n`;
-        imagesList.forEach((p: any) => {
-          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
-        });
+      const recentPapers = pastPapers.slice(0, 8);
+      if (recentPapers.length > 0) {
+        answer += `\n**Recent papers**\n`;
+        answer += recentPapers.map((paper: any) => `- ${paper.year || "Year N/A"} · ${paper.title}`).join("\n");
         answer += `\n`;
       }
 
       if (allSources.length === 0) {
         answer = `❌ Firebase එකේ PDFs තවම හම්බුණේ නැහැ. Upload කළා නම් index/reload කරන්න.`;
       } else {
-        answer += `💡 මෙම ඕනෑම PDF එකක් මත ක්ලික් කර එය කියවිය හැක. එමෙන්ම එම ප්‍රශ්න පත්‍රවලින් ඕනෑම ප්‍රශ්නයක් මගෙන් විමසන්න!`;
+        answer += `\nපහළ source cards වලින් ඕනෑම PDF එක open කරන්න. Paper question එකක් අහන විට system එක ඒ PDF එක direct scan කරයි.`;
       }
 
       emitSse(res, "token", { text: stripRawVisualBlocks(answer) });
@@ -863,8 +876,9 @@ export async function aiRespondStream(req: any, res: any) {
         const strictRes = resolveStrictSource(allAvailableSources, {
           year: requestedYear,
           subject: requestedSubject,
-          activeSourceId: null,
-          prompt
+          activeSourceId: route.entities.activeSourceId || activeConversationState.selectedSourceId,
+          prompt,
+          expectedResourceType: route.mode === "marking_scheme_request" ? "marking_scheme" : "past_paper",
         });
 
         if (strictRes.sourceLocked && strictRes.selectedSource) {
@@ -874,7 +888,8 @@ export async function aiRespondStream(req: any, res: any) {
            allSources = [{
              sourceId: paperSource.id || paperSource.sourceId,
              title: paperSource.title,
-             url: paperSource.url || null,
+             url: paperSource.url || paperSource.downloadUrl || null,
+             downloadUrl: paperSource.downloadUrl || paperSource.url || null,
              storagePath: paperSource.storagePath || null,
              badge: "Official Source",
              year: paperSource.year,
@@ -918,9 +933,27 @@ export async function aiRespondStream(req: any, res: any) {
 
         if (paperSource) {
           if (!allSources.find((s: any) => s.id === paperSource.id)) {
-            allSources.push({ sourceId: paperSource.id, title: paperSource.title, url: paperSource.url, storagePath: paperSource.storagePath, badge: "Locked Source" });
+            allSources.push({
+              sourceId: paperSource.id,
+              title: paperSource.title,
+              url: paperSource.url || paperSource.downloadUrl,
+              downloadUrl: paperSource.downloadUrl || paperSource.url,
+              storagePath: paperSource.storagePath,
+              badge: "Locked Source"
+            });
           }
           emitSse(res, "sources", { sources: allSources });
+          await updateConversationState(user.uid, {
+            activeSubject: requestedSubject,
+            activeSourceIds: [paperSource.id || paperSource.sourceId],
+            selectedSourceId: paperSource.id || paperSource.sourceId,
+            selectedQuestionId: requestedQuestionNo ? String(requestedQuestionNo) : null,
+            currentQuestionIndex: requestedQuestionNo ? Number(requestedQuestionNo) : null,
+            requestedResourceType: route.mode === "marking_scheme_request" ? "marking_scheme" : "past_paper",
+            evidenceMode: "strict",
+            allowGeneratedContent: false,
+            lastIntent: route.mode,
+          });
         }
         const hasPaperSource = !!paperSource;
         const questionId = (paperSource?.id && requestedQuestionNo) ? `${paperSource.id}_${paperIntent.questionType || 'MCQ'}_${requestedQuestionNo}`.replace(/\//g, "_") : null;
@@ -1206,6 +1239,76 @@ export async function aiRespondStream(req: any, res: any) {
     let hasExactQuestionText = false;
     let needsOcr = false;
 
+    // Multi-PDF exam prediction/trend analysis. This is deliberately separate
+    // from lesson filename lookup: the user is asking to combine all relevant
+    // papers, marking schemes, syllabus and paper-structure evidence.
+    if (route.mode === "past_paper_analysis") {
+      const predictionSubject = (route.entities.subject || activeSubject) as "SFT" | "ET" | "ICT" | undefined;
+      if (!predictionSubject) {
+        const clarification = "2026 prediction එක හදන්න subject එක කියන්න: SFT, ET, නැත්නම් ICT?";
+        emitSse(res, "token", { text: clarification });
+        const chatRes = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: clarification,
+          mode: route.mode,
+          subject: activeSubject,
+        });
+        trace.completed = true;
+        trace.chatSaved = chatRes.chatSaved;
+        trace.messageId = chatRes.messageId;
+        emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: [] });
+        trace.doneSent = true;
+        return;
+      }
+
+      emitSse(res, "status", { step: "exam_intelligence", status: "searching", message: "Past papers සහ marking schemes combine කරමින්..." });
+      const { retrievePastPaperAnalysisEvidence } = await import("../knowledge/predictionEvidence");
+      const isAdminUser = user.roles?.includes("admin") || user.admin === true;
+      const predictionEvidence = await safeCall(
+        "retrievePastPaperAnalysisEvidence",
+        () => retrievePastPaperAnalysisEvidence({
+          uid: user.uid,
+          subject: predictionSubject,
+          targetYear: route.entities.year || "2026",
+          isAdmin: isAdminUser,
+        }),
+        { contextText: "", sources: [], stats: null, hasEvidence: false } as any,
+        res,
+      );
+
+      contextBlocksText += predictionEvidence.contextText || "";
+      allSources.push(...(predictionEvidence.sources || []));
+      route.answerHints.mustUseRag = false;
+
+      if (!predictionEvidence.hasEvidence) {
+        const noIndexMessage = `**${predictionSubject}** සඳහා PDFs හමු වුණා, නමුත් prediction analysis සඳහා searchable question index තවම සූදානම් නැහැ. PDFs reindex/build exam index කළ පසු සියලු papers එකට භාවිත කර evidence-based prediction එක ලබා දෙන්න පුළුවන්.`;
+        emitSse(res, "prediction_index_required", {
+          subject: predictionSubject,
+          targetYear: route.entities.year || "2026",
+          stats: predictionEvidence.stats,
+          sources: predictionEvidence.sources,
+        });
+        emitSse(res, "token", { text: noIndexMessage });
+        const chatRes = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: noIndexMessage,
+          mode: route.mode,
+          subject: predictionSubject,
+          sources: predictionEvidence.sources,
+        });
+        trace.completed = true;
+        trace.chatSaved = chatRes.chatSaved;
+        trace.messageId = chatRes.messageId;
+        emitSse(res, "done", { ok: false, completed: true, requestId, finishReason: "prediction_index_required", messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: predictionEvidence.sources });
+        trace.doneSent = true;
+        return;
+      }
+    }
+
     // 2.5 Targeted Uploaded PDF QA Flow
     if (route.mode === "uploaded_pdf_question_qa") {
       emitSse(res, "status", { step: "rag", status: "searching" });
@@ -1266,7 +1369,7 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     // 3. RAG Search
-    if (requestedMode === "deep_search" || (route.mode !== "uploaded_pdf_question_qa" && (route.answerHints.mustUseRag || route.mode === "normal_chat" || hasUploadedPdf))) {
+    if (requestedMode === "deep_search" || (route.mode !== "uploaded_pdf_question_qa" && route.mode !== "past_paper_analysis" && (route.answerHints.mustUseRag || route.mode === "normal_chat" || hasUploadedPdf))) {
       emitSse(res, "status", { step: "rag", status: "searching" });
       const retrieveResult: any = await safeCall("retrieveRelevantKnowledge", () => retrieveRelevantKnowledge({
         query: prompt,
@@ -1373,7 +1476,7 @@ export async function aiRespondStream(req: any, res: any) {
     // Final prompt setup
     const ai = getAIClient();
     let aiTask: AITask = "normal_chat";
-    if (["paper_question_qa", "marking_scheme_request", "lesson_marks_intent", "zscore_prediction", "uploaded_pdf_question_qa", "tutor_explanation"].includes(route.mode) || image) {
+    if (["paper_question_qa", "marking_scheme_request", "lesson_marks_intent", "zscore_prediction", "past_paper_analysis", "uploaded_pdf_question_qa", "tutor_explanation"].includes(route.mode) || image) {
       aiTask = image ? "image_understanding" : "final_answer";
     }
 

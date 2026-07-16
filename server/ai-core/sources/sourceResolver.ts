@@ -1,7 +1,13 @@
 import { normalizeSubject } from "./sourceNormalizer";
 
-export function getSourceScore(src: any, params: { year?: string | null, subject?: string | null, activeSourceId?: string | null, prompt: string }) {
-  const { year, subject, activeSourceId, prompt } = params;
+export function getSourceScore(src: any, params: {
+  year?: string | null;
+  subject?: string | null;
+  activeSourceId?: string | null;
+  prompt: string;
+  expectedResourceType?: "past_paper" | "marking_scheme" | null;
+}) {
+  const { year, subject, activeSourceId, prompt, expectedResourceType } = params;
   const promptLower = prompt.toLowerCase();
   let score = 0;
 
@@ -13,8 +19,9 @@ export function getSourceScore(src: any, params: { year?: string | null, subject
   // +100 active source
   if (activeSourceId && srcId === activeSourceId) score += 100;
 
-  // +50 storagePath exists
+  // A source can be read from its Storage path or a verified Firebase URL.
   if (src.storagePath) score += 50;
+  else if (src.downloadUrl || src.firebaseDownloadUrl || src.url) score += 35;
 
   // SUBJECT MATCHING
   if (subject) {
@@ -41,6 +48,12 @@ export function getSourceScore(src: any, params: { year?: string | null, subject
   const isMarking = src.resourceType === "marking_scheme" || textToScan.includes("marking") || textToScan.includes("පිළිතුරු");
   if (isMarking) score += 60;
 
+  if (expectedResourceType === "past_paper") {
+    score += isPastPaper && !isMarking ? 120 : -180;
+  } else if (expectedResourceType === "marking_scheme") {
+    score += isMarking ? 140 : -180;
+  }
+
   // PENALIZE TUTES FOR PAPER QUESTIONS
   const isPaperQuestion = promptLower.includes("paper") || promptLower.includes("mcq") || (year && !promptLower.includes("lesson"));
   if (isPaperQuestion) {
@@ -51,7 +64,13 @@ export function getSourceScore(src: any, params: { year?: string | null, subject
   return score;
 }
 
-export function resolveStrictSource(sources: any[], params: { year?: string | null, subject?: string | null, activeSourceId?: string | null, prompt: string }) {
+export function resolveStrictSource(sources: any[], params: {
+  year?: string | null;
+  subject?: string | null;
+  activeSourceId?: string | null;
+  prompt: string;
+  expectedResourceType?: "past_paper" | "marking_scheme" | null;
+}) {
   const allScored = sources.map(s => ({
     source: s,
     score: getSourceScore(s, params)

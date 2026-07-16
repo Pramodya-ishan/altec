@@ -78,17 +78,18 @@ export async function askDirectPdfQa(params: {
     interactionMode = "answer", quizStartQuestionNo, quizEndQuestionNo, quizFeedback, onProgress, signal
   } = params;
 
-  if (!source.storagePath) {
+  const sourceLocation = source.storagePath || source.downloadUrl || source.url;
+  if (!sourceLocation) {
     return {
       ok: false,
-      errorCode: "DIRECT_QA_SOURCE_MISSING_STORAGE_PATH",
-      error: "Source missing storagePath for direct PDF reading."
+      errorCode: "DIRECT_QA_SOURCE_LOCATION_MISSING",
+      error: "Source missing storage path/download URL for direct PDF reading."
     };
   }
 
   try {
     // 1. Normalize PDF path
-    const normalized = normalizeStoragePath(source.storagePath);
+    const normalized = normalizeStoragePath(sourceLocation);
 
     // 2. Send the verified source identity plus a short-lived/persistent
     // Firebase download URL. The browser does not download the PDF (so Storage

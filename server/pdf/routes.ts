@@ -51,12 +51,20 @@ async function resolveDirectQaSource(user: any, sourceId: string, submittedPath:
   ]);
   const sourceSnapshot = snapshots.find((snapshot: any) => snapshot?.exists) as any;
   const source = sourceSnapshot?.data?.() || null;
-  const path = storageObjectPath(source?.storagePath || submittedPath);
+  const path = storageObjectPath(
+    source?.storagePath
+    || submittedPath
+    || source?.downloadUrl
+    || source?.firebaseDownloadUrl
+    || source?.url
+    || submittedDownloadUrl,
+  );
   if (!path) throw Object.assign(new Error("PDF source has no valid storage path."), { status: 400, code: "DIRECT_QA_SOURCE_PATH_INVALID" });
 
   const roles = Array.isArray(user?.roles) ? user.roles : [];
   const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
-  const visible = ["public", "official", "shared"].includes(String(source?.visibility || ""));
+  const visible = ["public", "official", "shared"].includes(String(source?.visibility || "").toLowerCase())
+    || ["public", "official", "shared"].includes(String(source?.sourceScope || "").toLowerCase());
   const owned = source?.ownerUid === user.uid || canUseStoragePath(user, path);
   if (!privileged && !visible && !owned) {
     throw Object.assign(new Error("You do not have access to this PDF source."), { status: 403, code: "DIRECT_QA_SOURCE_FORBIDDEN" });
@@ -65,7 +73,7 @@ async function resolveDirectQaSource(user: any, sourceId: string, submittedPath:
     submittedDownloadUrl || source?.downloadUrl || source?.url,
     path,
   );
-  return { source, path, downloadUrl };
+  return { source: { ...(source || {}), storagePath: path }, path, downloadUrl };
 }
 
 // 1. Process uploaded PDF immediately after upload

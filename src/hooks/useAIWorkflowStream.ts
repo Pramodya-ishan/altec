@@ -322,20 +322,20 @@ export function useAIWorkflowStream() {
 
             void (async () => {
               try {
-                if (!storagePath) {
-                   const errorMsg = "PDF source එක තියෙනවා, නමුත් Storage path නැති නිසා open/scan කරන්න බැහැ.";
+                if (!storagePath && !downloadUrl) {
+                   const errorMsg = "PDF source එක තියෙනවා, නමුත් Storage path/download URL දෙකම නැති නිසා scan කරන්න බැහැ.";
                    if (import.meta.env.DEV) console.error("[DirectPDFQA] Error:", errorMsg);
                    setStatus({ stage: "error", label: "Source Error", message: errorMsg });
                    setAnswer(errorMsg);
                    onReplace?.(errorMsg);
                    setIsStreaming(false);
                    doneReceived = true;
-                   onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: "DIRECT_QA_SOURCE_MISSING_STORAGE_PATH", sources: [{ id: sourceId }] });
+                   onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: "DIRECT_QA_SOURCE_LOCATION_MISSING", sources: [{ id: sourceId }] });
                    return;
                 }
 
                 const result = await askDirectPdfQa({
-                  source: { id: sourceId, storagePath, downloadUrl, title, subject, year, fileName: `${sourceId}.pdf` },
+                  source: { id: sourceId, storagePath, downloadUrl, url: downloadUrl, title, subject, year, fileName: `${sourceId}.pdf` },
                   prompt: data.prompt || data.question || "",
                   questionId: data.questionId,
                   questionNo,
