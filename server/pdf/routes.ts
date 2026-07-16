@@ -402,10 +402,13 @@ function directQaHttpError(error: any) {
 
 pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload.single("file"), async (req: any, res) => {
   try {
-    const { sourceId, storagePath, downloadUrl, prompt, questionId, questionNo, questionType, subject, year, scanMode } = req.body;
-    console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}, scanMode: ${scanMode || "full_paper"}`);
+    const {
+      sourceId, storagePath, downloadUrl, prompt, questionId, questionNo, questionType, subject, year, scanMode,
+      interactionMode, quizStartQuestionNo, quizEndQuestionNo
+    } = req.body;
+    console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}, scanMode: ${scanMode || "full_paper"}, interactionMode: ${interactionMode || "answer"}`);
 
-    const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}`;
+    const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}:${interactionMode || "answer"}`;
 
     const cooldownUntil = failedDirectQaCooldown.get(idempotencyKey);
     if ((cooldownUntil && Date.now() < cooldownUntil) || isAiBillingCircuitOpen()) {
@@ -596,6 +599,65 @@ pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload.single("file")
             error: result.error
           };
         }
+        if (interactionMode === "quiz_question") {
+          const solved = result.answer?.solvedAnswer || null;
+          const officialText = String(result.answer?.officialAnswer || "").trim();
+          const officialNo = officialText.match(/(?:^|\()\s*([1-5])\s*(?:\)|[.)]|$)/)?.[1] || null;
+          const optionNo = String(solved?.optionNo || officialNo || "").trim();
+          if (!/^[1-5]$/.test(optionNo)) {
+            return {
+              ok: false,
+              found: false,
+              errorCode: "MCQ_SOLVER_EMPTY",
+              stage: "QUIZ_ANSWER_PREPARATION",
+              reason: "The question was extracted, but its correct option could not be stored safely for quiz evaluation.",
+            };
+          }
+
+          const { attachPaperMcqQuizQuestion } = await import("../ai-core/quiz/paperMcqQuiz");
+          const quizState = await attachPaperMcqQuizQuestion({
+            uid: req.user.uid,
+            sourceId,
+            year: year || "unknown",
+            subject: subject || "unknown",
+            questionNo: Number(questionNo),
+            pageNumber: result.sourceEvidence?.pageNumber ?? null,
+            questionText: result.sourceEvidence.questionText,
+            options: Array.isArray(result.sourceEvidence.options) ? result.sourceEvidence.options : [],
+            optionNo,
+            optionText: solved?.optionText || null,
+            explanationSinhala: solved?.explanationSinhala || result.answer?.explanationSinhala || null,
+            lesson: result.answer?.lesson || null,
+          });
+
+          if (!quizState) {
+            return {
+              ok: false,
+              found: false,
+              errorCode: "QUIZ_SESSION_STALE",
+              stage: "QUIZ_STATE",
+              reason: "The active quiz changed before this question finished loading.",
+            };
+          }
+
+          return {
+            ok: true,
+            found: true,
+            sourceEvidence: result.sourceEvidence,
+            quiz: {
+              interactionMode: "quiz_question",
+              questionNo: Number(questionNo),
+              startQuestionNo: Number(quizStartQuestionNo || quizState.startQuestionNo),
+              endQuestionNo: Number(quizEndQuestionNo || quizState.endQuestionNo),
+              year: quizState.year,
+              subject: quizState.subject,
+            },
+            answer: { quizQuestion: true },
+            confidence: result.confidence,
+            reason: result.reason,
+          };
+        }
+
         return {
           ok: true,
           ...result

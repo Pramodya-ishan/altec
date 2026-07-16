@@ -344,6 +344,10 @@ export function useAIWorkflowStream() {
                   subject,
                   year,
                   scanMode: data.scanMode === "targeted" ? "targeted" : "full_paper",
+                  interactionMode: data.interactionMode === "quiz_question" ? "quiz_question" : "answer",
+                  quizStartQuestionNo: Number(data.quizStartQuestionNo || 0) || undefined,
+                  quizEndQuestionNo: Number(data.quizEndQuestionNo || 0) || undefined,
+                  quizFeedback: typeof data.quizFeedback === "string" ? data.quizFeedback : undefined,
                   onProgress: (step, payload) => {
                     if (step === "fetching") {
                       setStatus({
@@ -365,10 +369,11 @@ export function useAIWorkflowStream() {
                         message: "සම්පූර්ණ paper එක OCR/text scan කර නිවැරදි ප්‍රශ්නය වෙන් කරමින් පවතී..."
                       });
                     } else if (step === "generating") {
+                      const isQuizQuestion = data.interactionMode === "quiz_question";
                       setStatus({
                         stage: "processing",
-                        label: "Generating Answer",
-                        message: "ප්‍රශ්නයට පිළිතුර සකස් කරමින් පවතී..."
+                        label: isQuizQuestion ? "Preparing Question" : "Generating Answer",
+                        message: isQuizQuestion ? "ඊළඟ MCQ එක සකස් කරමින් පවතී..." : "ප්‍රශ්නයට පිළිතුර සකස් කරමින් පවතී..."
                       });
                     }
                   }

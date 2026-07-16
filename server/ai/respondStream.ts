@@ -23,6 +23,7 @@ import { scoreSource } from "../sources/sourceScoring";
 import { isLessonEvidenceMode } from "../knowledge/lessonResolver";
 import { parseSelectedPdfQuestionFollowup } from "./selectedPdfFollowup";
 import { cleanAssistantResponse } from "../../shared/text/assistantText";
+import { detectPaperMcqQuizStart, getActivePaperMcqQuiz, parsePaperMcqQuizAction, evaluatePaperMcqQuizAnswer, beginPaperMcqQuiz } from "../ai-core/quiz/paperMcqQuiz";
 
 interface StreamTrace {
   requestId: string;
@@ -199,6 +200,104 @@ export async function aiRespondStream(req: any, res: any) {
     const { prompt, activeSubject, mode: requestedMode = "auto", history = [], image, attachments } = req.body;
     const user = req.user;
 
+    const quizStartIntent = detectPaperMcqQuizStart(prompt, activeSubject);
+    const activePaperQuiz = quizStartIntent
+      ? null
+      : await safeCall("getActivePaperMcqQuiz", () => getActivePaperMcqQuiz(user.uid), null, res);
+
+    if (activePaperQuiz) {
+      const action = parsePaperMcqQuizAction(prompt, activePaperQuiz);
+      const evaluation = await safeCall(
+        "evaluatePaperMcqQuizAnswer",
+        () => evaluatePaperMcqQuizAnswer({ uid: user.uid, session: activePaperQuiz, action }),
+        { kind: "invalid", message: "පිළිතුර ලෙස 1, 2, 3, 4 හෝ 5 යවන්න.", session: activePaperQuiz } as any,
+        res,
+      );
+
+      if (evaluation.kind === "invalid" || evaluation.kind === "not_ready") {
+        emitSse(res, "token", { text: evaluation.message });
+        const chatRes = await saveFinalChat({
+          uid: user.uid, email: user.email, userText: prompt, assistantText: evaluation.message,
+          mode: "paper_mcq_quiz", subject: activePaperQuiz.subject,
+        });
+        trace.completed = true;
+        trace.chatSaved = chatRes.chatSaved;
+        trace.messageId = chatRes.messageId;
+        emitSse(res, "done", { ok: true, completed: true, requestId, chatSaved: chatRes.chatSaved, messageId: chatRes.messageId || null });
+        trace.doneSent = true;
+        return;
+      }
+
+      if (evaluation.kind === "stopped") {
+        const stoppedText = `Quiz එක නවතා ඇත.\n\n**ප්‍රතිඵලය:** නිවැරදි ${evaluation.session.correctCount} · වැරදි ${evaluation.session.wrongCount} · මඟහැරීම් ${evaluation.session.skippedCount}`;
+        emitSse(res, "token", { text: stoppedText });
+        const chatRes = await saveFinalChat({
+          uid: user.uid, email: user.email, userText: prompt, assistantText: stoppedText,
+          mode: "paper_mcq_quiz", subject: activePaperQuiz.subject,
+        });
+        trace.completed = true;
+        trace.chatSaved = chatRes.chatSaved;
+        trace.messageId = chatRes.messageId;
+        emitSse(res, "done", { ok: true, completed: true, requestId, chatSaved: chatRes.chatSaved, messageId: chatRes.messageId || null });
+        trace.doneSent = true;
+        return;
+      }
+
+      if (evaluation.kind === "finished") {
+        const summary = `${evaluation.feedback}\n\n---\n\n### Quiz අවසන්\n\n**නිවැරදි:** ${evaluation.session.correctCount}  \n**වැරදි:** ${evaluation.session.wrongCount}  \n**මඟහැරීම්:** ${evaluation.session.skippedCount}  \n**ලකුණ:** ${evaluation.session.correctCount}/${evaluation.session.endQuestionNo - evaluation.session.startQuestionNo + 1}`;
+        emitSse(res, "token", { text: summary });
+        const chatRes = await saveFinalChat({
+          uid: user.uid, email: user.email, userText: prompt, assistantText: summary,
+          mode: "paper_mcq_quiz", subject: activePaperQuiz.subject,
+        });
+        trace.completed = true;
+        trace.chatSaved = chatRes.chatSaved;
+        trace.messageId = chatRes.messageId;
+        emitSse(res, "done", { ok: true, completed: true, requestId, chatSaved: chatRes.chatSaved, messageId: chatRes.messageId || null });
+        trace.doneSent = true;
+        return;
+      }
+
+      if (evaluation.kind === "continue" && evaluation.nextQuestionNo) {
+        const source = {
+          id: activePaperQuiz.sourceId,
+          sourceId: activePaperQuiz.sourceId,
+          storagePath: activePaperQuiz.storagePath || null,
+          downloadUrl: activePaperQuiz.downloadUrl || null,
+          url: activePaperQuiz.downloadUrl || null,
+          title: activePaperQuiz.title || `${activePaperQuiz.year} ${activePaperQuiz.subject} Paper`,
+          subject: activePaperQuiz.subject,
+          year: activePaperQuiz.year,
+          badge: "Official Source",
+        };
+        emitSse(res, "sources", { sources: [source] });
+        emitSse(res, "direct_pdf_handoff_required", {
+          sourceId: activePaperQuiz.sourceId,
+          storagePath: activePaperQuiz.storagePath || null,
+          downloadUrl: activePaperQuiz.downloadUrl || null,
+          title: source.title,
+          subject: activePaperQuiz.subject,
+          year: activePaperQuiz.year,
+          questionNo: String(evaluation.nextQuestionNo),
+          questionType: "MCQ",
+          prompt: `${activePaperQuiz.year} ${activePaperQuiz.subject} MCQ ${evaluation.nextQuestionNo}`,
+          scanMode: "full_paper",
+          interactionMode: "quiz_question",
+          quizStartQuestionNo: activePaperQuiz.startQuestionNo,
+          quizEndQuestionNo: activePaperQuiz.endQuestionNo,
+          quizFeedback: evaluation.feedback,
+          reason: "PAPER_MCQ_QUIZ_NEXT",
+          message: `MCQ ${evaluation.nextQuestionNo} load කරමින් පවතී.`,
+        });
+        emitSse(res, "done", {
+          ok: true, completed: false, pending: true, requestId,
+          finishReason: "pending_direct_pdf_qa", canContinue: true, needsClientFile: false, sources: [source],
+        });
+        trace.doneSent = true;
+        return;
+      }
+    }
+
     // Check Daily Safety Limit Guardrails (REMOVED)
     const { trackAIUsage } = await import("../cost/usageTracker");
 
@@ -209,7 +308,18 @@ export async function aiRespondStream(req: any, res: any) {
 
     // 1. Route Request
     const { detectOfficialPaperCandidate } = await import("../ai-core/intent/paperQuestionParser");
-    const paperIntent = detectOfficialPaperCandidate(prompt, activeSubject);
+    const detectedPaperIntent = detectOfficialPaperCandidate(prompt, activeSubject);
+    const paperIntent = quizStartIntent
+      ? {
+          ...detectedPaperIntent,
+          isOfficialPaperCandidate: true,
+          year: quizStartIntent.year,
+          subject: quizStartIntent.subject,
+          questionNo: String(quizStartIntent.startQuestionNo),
+          questionType: "MCQ",
+          needsSubjectClarification: false,
+        }
+      : detectedPaperIntent;
 
     // Check if it's an official paper candidate but subject is missing
     if (paperIntent.isOfficialPaperCandidate && paperIntent.needsSubjectClarification) {
@@ -814,6 +924,58 @@ export async function aiRespondStream(req: any, res: any) {
         }
         const hasPaperSource = !!paperSource;
         const questionId = (paperSource?.id && requestedQuestionNo) ? `${paperSource.id}_${paperIntent.questionType || 'MCQ'}_${requestedQuestionNo}`.replace(/\//g, "_") : null;
+
+        if (hasPaperSource && quizStartIntent && route.mode !== "pdf_link_request") {
+          const sourceId = paperSource.id || paperSource.sourceId;
+          const storagePath = paperSource.storagePath || null;
+          const downloadUrl = paperSource.downloadUrl || paperSource.url || null;
+          const title = paperSource.title || `${quizStartIntent.year} ${quizStartIntent.subject} Paper`;
+
+          await beginPaperMcqQuiz({
+            uid: user.uid,
+            sourceId,
+            storagePath,
+            downloadUrl,
+            title,
+            year: quizStartIntent.year,
+            subject: quizStartIntent.subject,
+            startQuestionNo: quizStartIntent.startQuestionNo,
+            endQuestionNo: quizStartIntent.endQuestionNo,
+          });
+
+          emitSse(res, "direct_pdf_handoff_required", {
+            sourceId,
+            storagePath,
+            downloadUrl,
+            title,
+            subject: quizStartIntent.subject,
+            year: quizStartIntent.year,
+            questionNo: String(quizStartIntent.startQuestionNo),
+            questionType: "MCQ",
+            prompt: `${quizStartIntent.year} ${quizStartIntent.subject} MCQ ${quizStartIntent.startQuestionNo}`,
+            scanMode: "full_paper",
+            interactionMode: "quiz_question",
+            quizStartQuestionNo: quizStartIntent.startQuestionNo,
+            quizEndQuestionNo: quizStartIntent.endQuestionNo,
+            quizFeedback: `### Quiz ආරම්භයි\n\nවැරදි පිළිතුරු Error Log එකට ස්වයංක්‍රීයව සුරැකේ.`,
+            reason: "PAPER_MCQ_QUIZ_START",
+            message: `MCQ ${quizStartIntent.startQuestionNo} load කරමින් පවතී.`,
+          });
+
+          emitSse(res, "done", {
+            ok: true,
+            completed: false,
+            pending: true,
+            requestId,
+            finishReason: "pending_direct_pdf_qa",
+            reason: "PAPER_MCQ_QUIZ_START",
+            canContinue: true,
+            needsClientFile: false,
+            sources: allSources.length > 0 ? allSources : [paperSource],
+          });
+          trace.doneSent = true;
+          return;
+        }
 
         if (hasPaperSource && route.mode !== "pdf_link_request") {
           const { retrieveEvidenceForPaperQuestion } = await import("../ai-core/evidence/evidenceRetriever");

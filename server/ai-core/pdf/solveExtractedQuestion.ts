@@ -56,7 +56,10 @@ RULES:
 - ${visualOnly ? "Locate the exact requested question in the attached QUESTION PDF. Ignore any corrupted embedded text layer and read the rendered glyphs and diagram." : "Do not change the supplied question meaning."}
 - Do not create a new question.
 - Choose exactly one option (1, 2, 3, 4, or 5).
-- Explain the logic clearly in Sinhala.
+- Explain the decisive rule or fact clearly in Sinhala.
+- Keep optionText as the selected option text only; do not prefix it with “(1)”, “1.”, or another option number.
+- Do not invent detailed classifications or facts about distractors. Populate whyOthersWrong only for alternatives that can be rejected directly from the supplied question or the attached syllabus; otherwise return an empty array.
+- If a place name, species name, technical term, or OCR transcription is uncertain, do not assign it a speculative category. State only the verified distinction needed to select the answer.
 - ${hasQuestionPdf ? "The attached QUESTION PDF is authoritative visual evidence. Inspect its diagram, labels, arrows and relative positions before solving." : "No question-page image/PDF is attached; only use the extracted evidence supplied below."}
 - ${hasReferencePdf ? `Use the attached ${referenceLabel || "official syllabus PDF"} as the primary theory reference. Never claim that it contains the question itself.` : "No syllabus PDF is attached. Do not claim that one was used."}
 - Never repeat legacy-font/mojibake text in the answer. Write Sinhala only as Unicode Sinhala.
@@ -78,7 +81,7 @@ Return JSON:
   "optionText": "text of the selected option",
   "formulaOrRule": "any formula or rule used",
   "explanationSinhala": "clear explanation in Sinhala",
-  "whyOthersWrong": ["reason 1", "reason 2"],
+  "whyOthersWrong": [],
   "confidence": 0.0-1.0,
   "answerStatus": "ai_solved_from_extracted_question",
   "syllabusEvidence": "relevant syllabus topic/principle or null",

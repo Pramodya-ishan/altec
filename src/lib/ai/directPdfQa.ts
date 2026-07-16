@@ -4,7 +4,7 @@ import { apiFetch } from "../api";
 import { getDownloadURL, ref } from "firebase/storage";
 import { storage } from "../firebase";
 import { cleanAssistantResponse, normalizeSinhalaUnicode } from "../../../shared/text/assistantText";
-import { formatPaperQuestionAnswer } from "../../../shared/text/paperAnswer";
+import { formatPaperQuestionAnswer, formatPaperQuizQuestion } from "../../../shared/text/paperAnswer";
 
 export type DirectPdfQaResult = {
   ok: boolean;
@@ -24,6 +24,14 @@ export type DirectPdfQaResult = {
   explanationSinhala?: string;
   reason?: string;
   sourceEvidence?: any;
+  quiz?: {
+    interactionMode?: string;
+    questionNo?: number;
+    startQuestionNo?: number;
+    endQuestionNo?: number;
+    year?: string;
+    subject?: string;
+  };
 };
 
 function looksLikeLegacySinhalaGarbage(value: unknown) {
@@ -58,10 +66,17 @@ export async function askDirectPdfQa(params: {
   subject?: string;
   year?: string;
   scanMode?: "full_paper" | "targeted";
+  interactionMode?: "answer" | "quiz_question";
+  quizStartQuestionNo?: number;
+  quizEndQuestionNo?: number;
+  quizFeedback?: string;
   signal?: AbortSignal;
   onProgress?: (step: "fetching" | "uploading" | "scanning" | "generating", payload?: any) => void;
 }): Promise<DirectPdfQaResult> {
-  const { source, prompt, questionId, questionNo, questionType, subject, year, scanMode = "full_paper", onProgress, signal } = params;
+  const {
+    source, prompt, questionId, questionNo, questionType, subject, year, scanMode = "full_paper",
+    interactionMode = "answer", quizStartQuestionNo, quizEndQuestionNo, quizFeedback, onProgress, signal
+  } = params;
 
   if (!source.storagePath) {
     return {
@@ -104,6 +119,9 @@ export async function askDirectPdfQa(params: {
     if (subject || source.subject) formData.append("subject", subject || source.subject);
     if (year || source.year) formData.append("year", String(year || source.year));
     formData.append("scanMode", scanMode);
+    formData.append("interactionMode", interactionMode);
+    if (quizStartQuestionNo) formData.append("quizStartQuestionNo", String(quizStartQuestionNo));
+    if (quizEndQuestionNo) formData.append("quizEndQuestionNo", String(quizEndQuestionNo));
 
     // 3. POST to backend
     const endpoint = getLargeEndpointUrl("/api/pdf/direct-qa-file");
@@ -188,8 +206,34 @@ export async function askDirectPdfQa(params: {
 
     onProgress?.("generating");
     const result = await response.json();
-    // Transform verified structured evidence into one compact question-and-answer reply.
-    if (result.ok && result.answer && typeof result.answer === 'object') {
+    // Transform verified structured evidence into either a quiz question or a compact answer.
+    if (result.ok && interactionMode === "quiz_question") {
+      const { questionText, options } = result.sourceEvidence || {};
+      const readableEvidence = !looksLikeLegacySinhalaGarbage(questionText)
+        && Array.isArray(options)
+        && options.length >= 4
+        && !options.some(looksLikeLegacySinhalaGarbage);
+      if (!readableEvidence) {
+        return {
+          ok: false,
+          found: false,
+          errorCode: "EXACT_QUESTION_EVIDENCE_MISSING",
+          stage: "QUIZ_QUESTION_VALIDATION",
+          error: "The exact MCQ could not be displayed safely.",
+        };
+      }
+      const quiz = result.quiz || {};
+      result.answer = formatPaperQuizQuestion({
+        year: String(quiz.year || year || source.year || ""),
+        subject: String(quiz.subject || subject || source.subject || ""),
+        questionNo: Number(quiz.questionNo || questionNo || 1),
+        startQuestionNo: Number(quiz.startQuestionNo || quizStartQuestionNo || questionNo || 1),
+        endQuestionNo: Number(quiz.endQuestionNo || quizEndQuestionNo || questionNo || 1),
+        questionText,
+        options,
+        feedbackPrefix: quizFeedback || "",
+      });
+    } else if (result.ok && result.answer && typeof result.answer === 'object') {
       const { officialAnswer, solvedAnswer, explanationSinhala } = result.answer;
       const { questionText, options } = result.sourceEvidence || {};
       const readableEvidence = !looksLikeLegacySinhalaGarbage(questionText)

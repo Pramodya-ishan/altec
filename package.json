@@ -25,7 +25,7 @@
     "preview": "node dist/server.cjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test:pdf-qa": "node --import tsx server/ai-core/pdf/__tests__/questionExtractor.test.ts"
+    "test:pdf-qa": "node --import tsx server/ai-core/pdf/__tests__/questionExtractor.test.ts && node --import tsx server/ai-core/quiz/paperMcqQuiz.test.ts"
   },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
