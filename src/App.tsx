@@ -24,6 +24,7 @@ const ExamIntelligence = lazy(() => import('./pages/ExamIntelligence.tsx'));
 const PredictionPapers = lazy(() => import('./pages/PredictionPapers.tsx'));
 const MistakeNotebook = lazy(() => import('./pages/MistakeNotebook.tsx'));
 const PdfIntelAdmin = lazy(() => import('./pages/PdfIntelAdmin.tsx'));
+const FeatureCenter = lazy(() => import('./pages/FeatureCenter.tsx'));
 
 import { AddPaperMarksModal } from './components/modals/AddPaperMarksModal';
 import { NotesModal } from './components/modals/NotesModal';
@@ -304,6 +305,7 @@ function AppContent() {
                       <Route path="/prediction-papers" element={<PredictionPapers />} />
                       <Route path="/mistake-notebook" element={<MistakeNotebook />} />
                       <Route path="/pdf-intel-admin" element={<PdfIntelAdmin />} />
+                      <Route path="/feature-center" element={<FeatureCenter />} />
                       <Route path="/focus-todo" element={<Navigate to="/paper-structure" replace />} />
                       <Route path="*" element={<NotFoundView />} />
                     </Routes>

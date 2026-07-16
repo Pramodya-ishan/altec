@@ -10,6 +10,7 @@ import {
   GraduationCap, 
   BookOpen, 
   ShieldAlert,
+  ListChecks,
   Menu,
   ChevronUp
 } from 'lucide-react';
@@ -36,6 +37,7 @@ export function Sidebar() {
   if (isAdminUser) {
     menuItems.push({ id: 'pdf-sources', label: 'PDF Intelligence', icon: FileText } as any);
     menuItems.push({ id: 'admin-dashboard', label: 'Admin Dashboard', icon: ShieldAlert } as any);
+    menuItems.push({ id: 'feature-center', label: 'Feature Center', icon: ListChecks } as any);
   }
 
   return (

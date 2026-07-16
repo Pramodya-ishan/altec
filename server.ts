@@ -20,6 +20,8 @@ import { pdfRoutes } from "./server/pdf/routes";
 import examIntelRoutes from "./server/routes/examIntelRoutes";
 import studentRoutes from "./server/routes/studentRoutes";
 import reportRoutes from "./server/routes/reportRoutes";
+import learningRoutes from "./server/routes/learningRoutes";
+import platformRoutes from "./server/platform/routes";
 
 
 import { ttsRoutes } from "./server/tts/routes";
@@ -27,8 +29,10 @@ import { voiceRoutes } from "./server/voice/routes";
 import { videoRoutes } from "./server/video/routes";
 
 import { globalLimiter, aiLimiter, adminLimiter } from "./server/utils/rateLimiter";
+import { requestContextMiddleware } from "./server/utils/requestContext";
 
 const app = express();
+app.use(requestContextMiddleware);
 const PORT = env.PORT;
 const videoCdnOrigin = (() => {
   try { return env.VIDEO_CDN_BASE_URL ? new URL(env.VIDEO_CDN_BASE_URL).origin : ""; }
@@ -132,6 +136,8 @@ app.use("/api/pdf", pdfRoutes);
 app.use("/api/exam-intel", examIntelRoutes);
 app.use("/api/student", studentRoutes);
 app.use("/api/reports", reportRoutes);
+app.use("/api/learning", learningRoutes);
+app.use("/api/platform", platformRoutes);
 app.use("/api/tts", ttsRoutes);
 app.use("/api/voice", voiceRoutes);
 app.use("/api", videoRoutes);
