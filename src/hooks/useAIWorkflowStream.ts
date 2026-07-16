@@ -343,6 +343,7 @@ export function useAIWorkflowStream() {
                   questionType,
                   subject,
                   year,
+                  scanMode: data.scanMode === "targeted" ? "targeted" : "full_paper",
                   onProgress: (step, payload) => {
                     if (step === "fetching") {
                       setStatus({
@@ -360,8 +361,8 @@ export function useAIWorkflowStream() {
                     } else if (step === "scanning") {
                       setStatus({
                         stage: "processing",
-                        label: "Scanning Question",
-                        message: "ප්‍රශ්නයට අදාළ කොටස් PDF ගොනුවෙන් scan කරමින් පවතී..."
+                        label: "Scanning Full Paper",
+                        message: "සම්පූර්ණ paper එක OCR/text scan කර නිවැරදි ප්‍රශ්නය වෙන් කරමින් පවතී..."
                       });
                     } else if (step === "generating") {
                       setStatus({

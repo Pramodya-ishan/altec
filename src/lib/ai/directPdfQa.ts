@@ -1,10 +1,10 @@
-import { stripRawVisualBlocks } from "./stripVisualBlocks";
 import { normalizeStoragePath } from "./normalizeStoragePath";
 import { getLargeEndpointUrl } from "../apiBase";
 import { apiFetch } from "../api";
 import { getDownloadURL, ref } from "firebase/storage";
 import { storage } from "../firebase";
 import { cleanAssistantResponse, normalizeSinhalaUnicode } from "../../../shared/text/assistantText";
+import { formatPaperQuestionAnswer } from "../../../shared/text/paperAnswer";
 
 export type DirectPdfQaResult = {
   ok: boolean;
@@ -57,10 +57,11 @@ export async function askDirectPdfQa(params: {
   questionType?: string;
   subject?: string;
   year?: string;
+  scanMode?: "full_paper" | "targeted";
   signal?: AbortSignal;
   onProgress?: (step: "fetching" | "uploading" | "scanning" | "generating", payload?: any) => void;
 }): Promise<DirectPdfQaResult> {
-  const { source, prompt, questionId, questionNo, questionType, subject, year, onProgress, signal } = params;
+  const { source, prompt, questionId, questionNo, questionType, subject, year, scanMode = "full_paper", onProgress, signal } = params;
 
   if (!source.storagePath) {
     return {
@@ -102,6 +103,7 @@ export async function askDirectPdfQa(params: {
     formData.append("questionType", questionType || "MCQ");
     if (subject || source.subject) formData.append("subject", subject || source.subject);
     if (year || source.year) formData.append("year", String(year || source.year));
+    formData.append("scanMode", scanMode);
 
     // 3. POST to backend
     const endpoint = getLargeEndpointUrl("/api/pdf/direct-qa-file");
@@ -186,57 +188,32 @@ export async function askDirectPdfQa(params: {
 
     onProgress?.("generating");
     const result = await response.json();
-    // Transform structured output to text if needed
+    // Transform verified structured evidence into one compact question-and-answer reply.
     if (result.ok && result.answer && typeof result.answer === 'object') {
-       const { officialAnswer, solvedAnswer, explanationSinhala } = result.answer;
-       const { questionText, options } = result.sourceEvidence || {};
-       const readableEvidence = !looksLikeLegacySinhalaGarbage(questionText)
-         && !(Array.isArray(options) && options.some(looksLikeLegacySinhalaGarbage));
+      const { officialAnswer, solvedAnswer, explanationSinhala } = result.answer;
+      const { questionText, options } = result.sourceEvidence || {};
+      const readableEvidence = !looksLikeLegacySinhalaGarbage(questionText)
+        && !(Array.isArray(options) && options.some(looksLikeLegacySinhalaGarbage));
 
-       let text = "";
+      if (!officialAnswer && !solvedAnswer) {
+        return {
+          ok: false,
+          found: false,
+          errorCode: "MCQ_SOLVER_EMPTY",
+          stage: "ANSWER_VALIDATION",
+          error: readableEvidence
+            ? "The question was located, but no validated answer option was returned."
+            : "The PDF visual could not be transcribed safely.",
+        };
+      }
 
-       let finalAnswerText = "";
-       let answerStatus = "Unknown";
-       let explanation = explanationSinhala;
-       let whyOthersWrong = [];
-
-       if (officialAnswer) {
-         finalAnswerText = officialAnswer;
-         answerStatus = "Official marking scheme verified";
-       } else if (solvedAnswer) {
-         const optNo = solvedAnswer.optionNo ? `(${solvedAnswer.optionNo}) ` : "";
-         finalAnswerText = `${optNo}${solvedAnswer.optionText || ""}`;
-         answerStatus = "AI-derived from exact PDF evidence";
-         explanation = solvedAnswer.explanationSinhala || explanation;
-         whyOthersWrong = solvedAnswer.whyOthersWrong || [];
-       } else {
-         return {
-           ok: false,
-           found: false,
-           errorCode: "MCQ_SOLVER_EMPTY",
-           stage: "ANSWER_VALIDATION",
-           error: readableEvidence
-             ? "The question was located, but no validated answer option was returned."
-             : "The PDF visual could not be transcribed safely.",
-         };
-       }
-
-       if (finalAnswerText) {
-         text += `**පිළිතුර:** ${stripRawVisualBlocks(finalAnswerText)}\n\n`;
-       }
-
-       if (explanation) {
-         text += `${stripRawVisualBlocks(explanation)}\n\n`;
-       }
-
-       if (whyOthersWrong && whyOthersWrong.length > 0) {
-         text += `**අනෙක් විකල්ප නොගැළපෙන්නේ ඇයි?**\n\n`;
-         text += whyOthersWrong.map((reason: string) => `- ${stripRawVisualBlocks(reason)}`).join('\n') + "\n\n";
-       }
-
-       if (answerStatus === "Official marking scheme verified") text += `_Marking scheme එකෙන් තහවුරු කළ පිළිතුර._\n`;
-
-       result.answer = cleanAssistantResponse(text);
+      result.answer = formatPaperQuestionAnswer({
+        questionText,
+        options,
+        officialAnswer,
+        solvedAnswer,
+        explanationSinhala,
+      });
     }
 
     if (typeof result.answer === "string") result.answer = cleanAssistantResponse(result.answer);

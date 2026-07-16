@@ -238,6 +238,9 @@ function shouldUseVertex() {
   if (configuredMode === "false") return false;
   return !process.env.GEMINI_API_KEY;
 }
+function isVertexAiEnabled() {
+  return shouldUseVertex();
+}
 function prepareGoogleCredentials() {
   const serviceAccount = getGoogleServiceAccountFromEnvironment();
   if (serviceAccount && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
@@ -364,9 +367,17 @@ function getConfiguredAdminEmails() {
     [process.env.ADMIN_EMAILS, process.env.SYLLABUS_OWNER_EMAIL].filter(Boolean).join(",").split(",").map(normalizeEmail).filter(Boolean)
   );
 }
-function applyConfiguredAdminRoles(email, emailVerified, currentRoles) {
+function getConfiguredAdminUids() {
+  return new Set(
+    String(process.env.ADMIN_UIDS || "").split(",").map((value) => value.trim()).filter(Boolean)
+  );
+}
+function applyConfiguredAdminRoles(email, emailVerified, currentRoles, uid) {
   const normalizedEmail = normalizeEmail(email);
-  const isConfiguredAdmin = emailVerified && normalizedEmail.length > 0 && getConfiguredAdminEmails().has(normalizedEmail);
+  const normalizedUid = typeof uid === "string" ? uid.trim() : "";
+  const configuredByUid = normalizedUid.length > 0 && getConfiguredAdminUids().has(normalizedUid);
+  const configuredByEmail = emailVerified && normalizedEmail.length > 0 && getConfiguredAdminEmails().has(normalizedEmail);
+  const isConfiguredAdmin = configuredByUid || configuredByEmail;
   if (!isConfiguredAdmin) {
     return [...new Set(currentRoles)];
   }
@@ -582,7 +593,8 @@ async function verifyFirebaseToken(authHeader) {
     roles = applyConfiguredAdminRoles(
       decodedToken.email,
       decodedToken.email_verified === true,
-      roles
+      roles,
+      decodedToken.uid
     );
     if (roles.includes("admin")) {
       admin = true;
@@ -1001,13 +1013,6 @@ async function syncUserFromFirestore(email) {
     console.error(`Failed to restore user ${cleanEmail} from Firestore REST:`, err);
   }
 }
-function encrypt(text) {
-  const iv = import_crypto.default.randomBytes(16);
-  const cipher = import_crypto.default.createCipheriv("aes-256-cbc", Buffer.from(ENCRYPTION_KEY), iv);
-  let encrypted = cipher.update(text);
-  encrypted = Buffer.concat([encrypted, cipher.final()]);
-  return iv.toString("hex") + ":" + encrypted.toString("hex");
-}
 function decrypt(text) {
   try {
     const textParts = text.split(":");
@@ -1041,31 +1046,6 @@ function readUser(email) {
     return JSON.parse(jsonStr);
   } catch (e) {
     return { data: null, history: [], cookies: null, profile: null, notifications: [] };
-  }
-}
-function writeUser(email, userData) {
-  if (!import_fs2.default.existsSync(DB_DIR)) import_fs2.default.mkdirSync(DB_DIR, { recursive: true });
-  const file = getUserFile(email);
-  const jsonStr = JSON.stringify(userData);
-  const encrypted = encrypt(jsonStr);
-  const zipped = import_zlib.default.gzipSync(encrypted);
-  import_fs2.default.writeFileSync(file, zipped);
-  if (email && email.includes("@") && apiKey) {
-    const cleanEmail = email.trim().toLowerCase();
-    const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents/backups/${encodeURIComponent(cleanEmail)}?updateMask.fieldPaths=userData&updateMask.fieldPaths=updatedAt&key=${apiKey}`;
-    const payload = {
-      fields: {
-        userData: { stringValue: encrypted },
-        updatedAt: { stringValue: (/* @__PURE__ */ new Date()).toISOString() }
-      }
-    };
-    fetch(url, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).catch((err) => {
-      console.error("Failed to backup user data to Firestore REST API:", err);
-    });
   }
 }
 var import_fs2, import_path, import_crypto, import_zlib, isVercel, DB_DIR, rawKey, ENCRYPTION_KEY, SOURCE_DIR, projectId, databaseId, apiKey;
@@ -2570,13 +2550,6 @@ var init_sourceInventoryService = __esm({
 });
 
 // server/knowledge/retrieve.ts
-var retrieve_exports = {};
-__export(retrieve_exports, {
-  checkBadTextQuality: () => checkBadTextQuality,
-  retrieveExactPaperQuestion: () => retrieveExactPaperQuestion,
-  retrieveRelevantKnowledge: () => retrieveRelevantKnowledge,
-  retrieveUploadedPdfQuestion: () => retrieveUploadedPdfQuestion
-});
 async function retrieveRelevantKnowledge({
   query,
   uid,
@@ -3058,6 +3031,7 @@ async function retrieveExactPaperQuestion({
     return {
       source: null,
       chunks: [],
+      allChunks: [],
       hasExactQuestionText: false,
       badTextQuality: false,
       needsOcr: false,
@@ -3065,19 +3039,19 @@ async function retrieveExactPaperQuestion({
       reason: "Source details not found in library."
     };
   }
-  const chunkCount = Number(sourceData.chunkCount || 0);
   const hasLegacyTextLayer = String(sourceData.textEncoding || "").startsWith("legacy_");
   const needsOcr = !hasLegacyTextLayer && (sourceData.needsOcr === true || sourceData.indexStatus === "needs_ocr");
   const needsLegacyConversion = sourceData.needsLegacyConversion === true || sourceData.indexStatus === "needs_legacy_conversion";
-  if (needsOcr || chunkCount === 0) {
+  if (needsOcr) {
     return {
       source: sourceData,
       chunks: [],
+      allChunks: [],
       hasExactQuestionText: false,
-      badTextQuality: false,
+      badTextQuality: hasLegacyTextLayer,
       needsOcr,
       needsLegacyConversion,
-      reason: needsOcr ? "This source has no searchable text layer." : "No searchable chunks are indexed; use direct PDF reading."
+      reason: "This source has no searchable text layer."
     };
   }
   let chunks = [];
@@ -3089,7 +3063,7 @@ async function retrieveExactPaperQuestion({
   }
   let matchedChunks = [];
   let hasExactQuestionText = false;
-  let badTextQuality = false;
+  let badTextQuality = hasLegacyTextLayer;
   const numOnly = questionNo ? questionNo.replace(/\D/g, "") : "";
   if (numOnly) {
     const patterns = [
@@ -3116,6 +3090,24 @@ async function retrieveExactPaperQuestion({
       if (allGarbage) {
         badTextQuality = true;
       }
+      const orderedChunks = [...chunks].sort(
+        (a, b) => Number(a.chunkIndex || 0) - Number(b.chunkIndex || 0)
+      );
+      const selectedIds = new Set(matchedChunks.map((chunk) => String(chunk.id || chunk.chunkIndex)));
+      for (const matched of [...matchedChunks]) {
+        const index = orderedChunks.findIndex(
+          (chunk) => String(chunk.id || chunk.chunkIndex) === String(matched.id || matched.chunkIndex)
+        );
+        if (index < 0) continue;
+        for (let offset = -2; offset <= 2; offset += 1) {
+          const neighbour = orderedChunks[index + offset];
+          if (!neighbour) continue;
+          const key = String(neighbour.id || neighbour.chunkIndex);
+          if (selectedIds.has(key)) continue;
+          selectedIds.add(key);
+          matchedChunks.push(neighbour);
+        }
+      }
     }
   } else {
     matchedChunks = chunks.slice(0, 5);
@@ -3132,6 +3124,7 @@ async function retrieveExactPaperQuestion({
       ...sourceData
     },
     chunks: matchedChunks,
+    allChunks: chunks,
     hasExactQuestionText,
     badTextQuality,
     needsOcr,
@@ -3580,8 +3573,8 @@ function getModelForTask(task) {
       };
     case "direct_pdf_solve":
       return {
-        primary: process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
-        fallback: "gemini-3.5-flash"
+        primary: process.env.GEMINI_PDF_QA_MODEL || process.env.GEMINI_VISION_MODEL || "gemini-2.5-flash",
+        fallback: process.env.GEMINI_PDF_QA_FALLBACK || "gemini-2.5-flash"
       };
     case "final_answer":
       return {
@@ -3906,6 +3899,66 @@ function scoreSource(source, request) {
 }
 var init_sourceScoring = __esm({
   "server/sources/sourceScoring.ts"() {
+    "use strict";
+  }
+});
+
+// server/ai/selectedPdfFollowup.ts
+function parseSelectedPdfQuestionFollowup(prompt) {
+  const text = String(prompt || "").trim().toLowerCase();
+  if (!text || text.length > 80) return null;
+  const explicit = text.match(/\b(?:mcq|q|question|prashna|prasna)\s*[-:#]?\s*0*(\d{1,3})\b/i);
+  const ordinal = text.match(/\b0*(\d{1,3})(?:st|nd|rd|th)\b/i);
+  const numericOnly = text.match(/^0*(\d{1,3})$/);
+  const sinhalaOrdinal = text.match(/(?:^|\s)0*(\d{1,3})\s*(?:වෙනි|වැනි)(?:\s|$)/);
+  const firstWord = text.match(/(?:^|\s)(?:first|පළමු)(?:\s+(?:mcq|q|question|ප්‍රශ්නය))?(?:\s|$)/i);
+  const match = explicit || ordinal || numericOnly || sinhalaOrdinal;
+  if (firstWord && !match) {
+    return {
+      questionNo: "1",
+      questionType: /essay|structured|රචනා/i.test(text) ? "ESSAY" : "MCQ"
+    };
+  }
+  if (!match) return null;
+  const questionNo = String(Number(match[1]));
+  if (!questionNo || questionNo === "0") return null;
+  return {
+    questionNo,
+    questionType: /essay|structured|රචනා/i.test(text) ? "ESSAY" : "MCQ"
+  };
+}
+var init_selectedPdfFollowup = __esm({
+  "server/ai/selectedPdfFollowup.ts"() {
+    "use strict";
+  }
+});
+
+// shared/text/assistantText.ts
+function normalizeSinhalaUnicode(value) {
+  return String(value ?? "").normalize("NFC").replace(/\u0DCA[\u200C\uFEFF]+(?=[\u0DBA\u0DBB])/g, "\u0DCA\u200D").replace(/\u0DCA(?!\u200D)(?=[\u0DBA\u0DBB])/g, "\u0DCA\u200D").replace(/\u0DCA\u200D{2,}/g, "\u0DCA\u200D").replace(/(^|[\s\n])\u0DCA+(?=[\u0D80-\u0DFF])/g, "$1").replace(/([\u0D80-\u0DFF])\uFEFF(?=[\u0D80-\u0DFF])/g, "$1");
+}
+function normalizeComparable(value) {
+  return value.toLowerCase().replace(/[*_#>`~\-–—:;,.!?()[\]{}|]/g, " ").replace(/\s+/g, " ").trim();
+}
+function removeRepeatedParagraphs(value) {
+  const blocks = value.split(/\n{2,}/);
+  const seen = /* @__PURE__ */ new Set();
+  const kept = [];
+  for (const block of blocks) {
+    const key = normalizeComparable(block);
+    if (key.length >= 80 && seen.has(key)) continue;
+    if (key.length >= 80) seen.add(key);
+    kept.push(block.trim());
+  }
+  return kept.filter(Boolean).join("\n\n");
+}
+function cleanAssistantResponse(value) {
+  let text = normalizeSinhalaUnicode(value).replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "").replace(/^\s*(?:#{1,6}\s*)?(?:\*\*|__|_)?(?:reasoning|chain of thought|thought process|internal reasoning)(?:\*\*|__|_)?\s*(?:[:,\-–—]\s*)?/gim, "").replace(/^\s*(?:\*\*|__)?source(?:s)?(?:\*\*|__)?\s*:\s*.*$/gim, "").replace(/^\s*exact pdf evidence\s*.*$/gim, "").replace(/^\s*_{1,2}reasoning_{1,2}\s*(?:[:,\-–—]\s*)?/gim, "").replace(/\n{3,}/g, "\n\n").trim();
+  text = removeRepeatedParagraphs(text);
+  return text.replace(/\n{3,}/g, "\n\n").trim();
+}
+var init_assistantText = __esm({
+  "shared/text/assistantText.ts"() {
     "use strict";
   }
 });
@@ -5165,7 +5218,9 @@ async function retrieveEvidenceForPaperQuestion(params) {
   if (cacheSnap.exists) {
     const data = cacheSnap.data();
     const gate = validateQuestionEvidence(data, { year, subject, questionNo, questionType });
-    if (gate.ok) {
+    const method = String(data.extractionMethod || "");
+    const fullPaperVerified = data.fullPaperScan === true || ["gemini_direct_pdf_qa", "gemini_targeted_legacy_page", "full_paper_ocr_scan", "full_paper_index_scan"].includes(method);
+    if (gate.ok && Number(data.evidenceVersion || 0) >= 4 && fullPaperVerified) {
       return { ok: true, evidence: data };
     }
   }
@@ -5179,85 +5234,38 @@ var init_evidenceRetriever = __esm({
   }
 });
 
-// server/ai/markingSchemeResolver.ts
-var markingSchemeResolver_exports = {};
-__export(markingSchemeResolver_exports, {
-  composeMarkingSchemeAnswer: () => composeMarkingSchemeAnswer
+// shared/text/paperAnswer.ts
+var paperAnswer_exports = {};
+__export(paperAnswer_exports, {
+  formatPaperQuestionAnswer: () => formatPaperQuestionAnswer
 });
-function composeMarkingSchemeAnswer(params) {
-  const {
-    subject,
-    year,
-    questionNo,
-    paperSource,
-    markingSchemeSource,
-    syllabusSource,
-    paperStructureSource,
-    questionText,
-    officialAnswer,
-    markSplit,
-    examTips,
-    isEstimated
-  } = params;
-  let composed = `### \u{1F4DD} ${year} ${subject.toUpperCase()} - ${questionNo.toUpperCase()}
-
-`;
-  composed += `\u{1F50D} **Source Status:**
-`;
-  composed += `- **Paper:** ${paperSource ? `Found/Imported (${paperSource.badge}) \u2705` : "Missing \u274C"}
-`;
-  composed += `- **Marking Scheme:** ${markingSchemeSource ? `Found/Imported (${markingSchemeSource.badge}) \u2705` : "Missing \u274C"}
-`;
-  composed += `- **Syllabus:** ${syllabusSource ? `Found (${syllabusSource.badge}) \u2705` : "Fallback static structure \u26A0\uFE0F"}
-`;
-  composed += `- **Paper Structure:** ${paperStructureSource ? `Found (${paperStructureSource.badge}) \u2705` : "Fallback static structure \u26A0\uFE0F"}
-
-`;
+function formatPaperQuestionAnswer(params) {
+  const questionText = normalizeSinhalaUnicode(params.questionText).trim();
+  const options = Array.isArray(params.options) ? params.options.map((value) => normalizeSinhalaUnicode(value).trim()).filter(Boolean) : [];
+  const solved = params.solvedAnswer || null;
+  const optionNo = String(solved?.optionNo || "").replace(/\D/g, "");
+  const officialAnswer = cleanAssistantResponse(params.officialAnswer).trim();
+  const optionText = cleanAssistantResponse(solved?.optionText).trim();
+  const explanation = cleanAssistantResponse(solved?.explanationSinhala || params.explanationSinhala).trim();
+  const whyOthersWrong = Array.isArray(solved?.whyOthersWrong) ? solved.whyOthersWrong.map((value) => cleanAssistantResponse(value)).filter(Boolean) : [];
+  const blocks = [];
   if (questionText) {
-    composed += `\u2753 **\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA (Question):**
-> ${questionText}
-
-`;
+    blocks.push(questionText);
+    if (options.length > 0) blocks.push(options.join("\n"));
   }
-  if (isEstimated) {
-    composed += `\u26A0\uFE0F *\u0DC3\u0DA7\u0DC4\u0DB1: \u0DB1\u0DD2\u0DBD Marking Scheme \u0D91\u0D9A\u0D9A\u0DCA \u0DB8\u0DD9\u0DB8 \u0DB4\u0DAF\u0DCA\u0DB0\u0DAD\u0DD2\u0DBA\u0DDA \u0DAF\u0DD0\u0DB1\u0DA7 \u0DB1\u0DDC\u0DB8\u0DD0\u0DAD\u0DD2 \u0DB1\u0DD2\u0DC3\u0DCF, \u0DB4\u0DC4\u0DAD \u0DAF\u0D9A\u0DCA\u0DC0\u0DCF \u0D87\u0DAD\u0DCA\u0DAD\u0DDA \u0DC0\u0DD2\u0DC2\u0DBA \u0DB1\u0DD2\u0DBB\u0DCA\u0DAF\u0DDA\u0DC1\u0DBA\u0DA7 \u0D85\u0DB1\u0DD4\u0DC0 \u0D85\u0DB4\u0DDA\u0D9A\u0DCA\u0DC2\u0DD2\u0DAD \u0D86\u0DAF\u0DBB\u0DCA\u0DC1 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB\u0D9A\u0DD2 (Estimated Answer).*
-
-`;
+  const answerText = officialAnswer || [optionNo ? `(${optionNo})` : "", optionText].filter(Boolean).join(" ").trim();
+  if (answerText) blocks.push(`**\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB:** ${answerText}`);
+  if (explanation) blocks.push(explanation);
+  if (params.includeWhyOthersWrong !== false && whyOthersWrong.length > 0) {
+    blocks.push(`**\u0D85\u0DB1\u0DD9\u0D9A\u0DCA \u0DC0\u0DD2\u0D9A\u0DBD\u0DCA\u0DB4 \u0DB1\u0DDC\u0D9C\u0DD0\u0DC5\u0DB4\u0DD9\u0DB1\u0DCA\u0DB1\u0DDA \u0D87\u0DBA\u0DD2?**
+${whyOthersWrong.map((reason) => `- ${reason}`).join("\n")}`);
   }
-  composed += `\u{1F3AF} **\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB (Answer):**
-${officialAnswer || "\u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB \u0DC3\u0D9A\u0DC3\u0DB8\u0DD2\u0DB1\u0DCA \u0DB4\u0DC0\u0DAD\u0DD3..."}
-
-`;
-  if (markSplit && markSplit.length > 0) {
-    composed += `\u{1F4CA} **\u0DBD\u0D9A\u0DD4\u0DAB\u0DD4 \u0DB6\u0DD9\u0DAF\u0DD3 \u0DBA\u0DB1 \u0D86\u0D9A\u0DCF\u0DBB\u0DBA (Mark Split):**
-`;
-    markSplit.forEach((item) => {
-      composed += `- **${item.part}**: ${item.marks}
-`;
-    });
-    composed += `
-`;
-  } else {
-    composed += `\u{1F4CA} **\u0DBD\u0D9A\u0DD4\u0DAB\u0DD4 \u0DB6\u0DD9\u0DAF\u0DD3 \u0DBA\u0DB1 \u0D86\u0D9A\u0DCF\u0DBB\u0DBA (Mark Split):**
-- (a) \u2014 **Estimated marks allocation**
-
-`;
-  }
-  if (examTips && examTips.length > 0) {
-    composed += `\u{1F4A1} **\u0DC0\u0DD2\u0DB7\u0DCF\u0D9C \u0D8B\u0DB4\u0DAF\u0DD9\u0DC3\u0DCA (Exam Tips):**
-`;
-    examTips.forEach((tip) => {
-      composed += `- ${tip}
-`;
-    });
-    composed += `
-`;
-  }
-  return composed;
+  return cleanAssistantResponse(blocks.join("\n\n"));
 }
-var init_markingSchemeResolver = __esm({
-  "server/ai/markingSchemeResolver.ts"() {
+var init_paperAnswer = __esm({
+  "shared/text/paperAnswer.ts"() {
     "use strict";
+    init_assistantText();
   }
 });
 
@@ -5570,8 +5578,7 @@ async function aiRespondStream(req, res) {
         year: lastPaperInfo.year,
         subject: lastPaperInfo.subject
       });
-      const correctionMsg = "\u26A0\uFE0F **Feedback Received:** \u0DC3\u0DCA\u0DAD\u0DD6\u0DAD\u0DD2\u0DBA\u0DD2! \u0DB8\u0DB8 \u0D91\u0DB8 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB \u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 \u0DBD\u0DD9\u0DC3 \u0DC3\u0DBD\u0D9A\u0DD4\u0DAB\u0DD4 \u0D9A\u0DBB Admin review \u0D91\u0D9A\u0DA7 \u0DBA\u0DDC\u0DB8\u0DD4 \u0D9A\u0DC5\u0DCF. \u0DB8\u0DB8 \u0DB1\u0DD0\u0DC0\u0DAD \u0DC0\u0DAD\u0DCF\u0DC0\u0D9A\u0DCA Direct PDF QA \u0DC4\u0DBB\u0DC4\u0DCF source \u0D91\u0D9A \u0DB4\u0DBB\u0DD3\u0D9A\u0DCA\u0DC2\u0DCF \u0D9A\u0DBB \u0DC3\u0DAD\u0DCA\u200D\u0DBA\u0DCF\u0DB4\u0DB1\u0DBA \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1\u0DB8\u0DCA.";
-      emitSse(res, "token", { text: correctionMsg });
+      emitSse(res, "status", { step: "correction", message: "Feedback saved. Rechecking the exact PDF evidence\u2026" });
       route.mode = "paper_question_qa";
       route.entities.year = lastPaperInfo.year;
       route.entities.subject = lastPaperInfo.subject;
@@ -5605,6 +5612,80 @@ async function aiRespondStream(req, res) {
       trace.lastEvent = "done";
       return;
     }
+    const selectedPdfQuestion = parseSelectedPdfQuestionFollowup(prompt);
+    if (activeConversationState.selectedSourceId && selectedPdfQuestion) {
+      const { getSourceInventory: getSourceInventory2 } = await Promise.resolve().then(() => (init_sourceInventoryService(), sourceInventoryService_exports));
+      const selectedSubject = evidence.subject || activeConversationState.activeSubject || activeSubject || "SFT";
+      const isAdminUser = user.roles?.includes("admin") || user.admin === true;
+      const inventory = await getSourceInventory2({ uid: user.uid, subject: selectedSubject, isAdmin: isAdminUser });
+      const availableSources = [
+        ...inventory.groups.pastPapers,
+        ...inventory.groups.markingSchemes,
+        ...inventory.groups.syllabus,
+        ...inventory.groups.uploadedPdfs,
+        ...inventory.groups.paperStructure
+      ];
+      const selectedSource = availableSources.find((source) => {
+        const id = String(source.sourceId || source.id || "");
+        return id === String(activeConversationState.selectedSourceId);
+      });
+      if (selectedSource) {
+        const sourceId = selectedSource.sourceId || selectedSource.id;
+        const sourcePayload = {
+          ...selectedSource,
+          id: sourceId,
+          sourceId,
+          url: selectedSource.url || `/api/rag/sources/${sourceId}/download`,
+          usedInAnswer: true
+        };
+        await updateConversationState(user.uid, {
+          activeSubject: selectedSubject,
+          activeSourceIds: [sourceId],
+          selectedSourceId: sourceId,
+          selectedQuestionId: selectedPdfQuestion.questionNo,
+          currentQuestionIndex: Number(selectedPdfQuestion.questionNo),
+          evidenceMode: "strict",
+          allowGeneratedContent: false,
+          lastIntent: "selected_resource_discussion"
+        });
+        emitSse(res, "sources", { sources: [sourcePayload] });
+        emitSse(res, "direct_pdf_handoff_required", {
+          sourceId,
+          storagePath: selectedSource.storagePath,
+          downloadUrl: selectedSource.downloadUrl || selectedSource.url,
+          title: selectedSource.title,
+          subject: selectedSubject,
+          year: selectedSource.year,
+          questionNo: selectedPdfQuestion.questionNo,
+          questionType: selectedPdfQuestion.questionType,
+          prompt,
+          reason: "SELECTED_PDF_QUESTION_FOLLOWUP",
+          message: "Selected PDF \u0D91\u0D9A\u0DD9\u0DB1\u0DCA exact question evidence \u0D91\u0D9A \u0DC3\u0DDC\u0DBA\u0DB8\u0DD2\u0DB1\u0DCA \u0DB4\u0DC0\u0DAD\u0DD3."
+        });
+        emitSse(res, "done", {
+          ok: true,
+          completed: false,
+          pending: true,
+          requestId,
+          finishReason: "pending_direct_pdf_qa",
+          reason: "SELECTED_PDF_QUESTION_FOLLOWUP",
+          canContinue: true,
+          sources: [sourcePayload],
+          paperInfo: {
+            sourceId,
+            questionNo: selectedPdfQuestion.questionNo,
+            year: selectedSource.year,
+            subject: selectedSubject,
+            questionType: selectedPdfQuestion.questionType,
+            prompt,
+            extractionMethod: "pending_direct_pdf_qa"
+          }
+        });
+        trace.doneSent = true;
+        trace.completed = false;
+        return;
+      }
+    }
     if (route.mode === "lesson_pdf_search") {
       const lessonName = route.entities.lesson || evidence.lessonIds[0] || "requested lesson";
       const lessonSources = (evidence.candidates || []).map((source) => {
@@ -5618,16 +5699,22 @@ async function aiRespondStream(req, res) {
           usedInAnswer: true
         };
       });
-      const answer = lessonSources.length > 0 ? [
-        `**${lessonName}** lesson \u0D91\u0D9A\u0DA7 match \u0DC0\u0DD9\u0DB1 saved PDF resource${lessonSources.length === 1 ? " \u0D91\u0D9A" : "s"}:`,
-        "",
-        ...lessonSources.map((source, index) => {
-          return `${index + 1}. [${source.title}](${source.url})`;
-        }),
-        "",
-        "\u0DB8\u0DD9\u0DBA saved lesson resources \u0DC0\u0DBD exact result \u0D91\u0D9A\u0DBA\u0DD2. Web candidate PDFs \u0DC4\u0DDD source \u0D91\u0D9A\u0DDA \u0DB1\u0DD0\u0DAD\u0DD2 exam details add \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0."
-      ].join("\n") : `**${lessonName}** lesson \u0D91\u0D9A\u0DA7 match \u0DC0\u0DD9\u0DB1 saved PDF resource \u0D91\u0D9A\u0D9A\u0DCA \u0DC4\u0DB8\u0DD4 \u0DC0\u0DD4\u0DAB\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0. Lesson resource \u0D91\u0D9A \u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 lesson name \u0D91\u0D9A \u0DBA\u0DA7\u0DAD\u0DDA upload \u0D9A\u0DBB index \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.`;
-      if (lessonSources.length > 0) emitSse(res, "sources", { sources: lessonSources });
+      const answer = lessonSources.length > 0 ? `\u201C${lessonSources[0].title}\u201D \u0DAD\u0DDD\u0DBB\u0DCF\u0D9C\u0DAD\u0DCA\u0DAD\u0DCF. \u0DAF\u0DD0\u0DB1\u0DCA \u201CQ1\u201D, \u201C4th MCQ\u201D \u0DC4\u0DDD \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA\u0DDA \u0D9A\u0DDC\u0DA7\u0DC3\u0D9A\u0DCA \u0D9A\u0DD2\u0DBA\u0DB1\u0DCA\u0DB1.` : `\u201C${lessonName}\u201D \u0DC3\u0DB3\u0DC4\u0DCF save \u0D9A\u0DBB\u0DB4\u0DD4 PDF \u0D91\u0D9A\u0D9A\u0DCA \u0DC4\u0DB8\u0DD4 \u0DC0\u0DD4\u0DAB\u0DDA \u0DB1\u0DD0\u0DC4\u0DD0.`;
+      if (lessonSources.length > 0) {
+        const selected = lessonSources[0];
+        await updateConversationState(user.uid, {
+          activeSubject: route.entities.subject || activeSubject || activeConversationState.activeSubject,
+          activeLessonIds: evidence.lessonIds.length > 0 ? evidence.lessonIds : activeConversationState.activeLessonIds,
+          activeSourceIds: lessonSources.map((source) => source.sourceId || source.id).filter(Boolean),
+          selectedSourceId: selected.sourceId || selected.id,
+          selectedQuestionId: null,
+          currentQuestionIndex: null,
+          evidenceMode: "strict",
+          allowGeneratedContent: false,
+          lastIntent: "lesson_pdf_search"
+        });
+        emitSse(res, "sources", { sources: lessonSources });
+      }
       emitSse(res, "token", { text: answer });
       const chatRes2 = await saveFinalChat({
         uid: user.uid,
@@ -5948,7 +6035,7 @@ async function aiRespondStream(req, res) {
             return;
           }
           const { resolveExamResources: resolveExamResources2 } = await Promise.resolve().then(() => (init_examResourceResolver(), examResourceResolver_exports));
-          const resolution2 = await safeCall("resolveExamResources", () => resolveExamResources2({
+          resolution = await safeCall("resolveExamResources", () => resolveExamResources2({
             prompt,
             uid: user.uid,
             subject: requestedSubject,
@@ -5956,8 +6043,8 @@ async function aiRespondStream(req, res) {
             resourceType: route.mode === "marking_scheme_request" ? "marking_scheme" : "past_paper",
             questionNo: requestedQuestionNo
           }), { sources: [] }, res);
-          paperSource = resolution2.paperSource;
-          resolution2.sources.forEach((s) => {
+          paperSource = resolution.paperSource;
+          resolution.sources.forEach((s) => {
             allSources.push({ id: s.id, title: s.title, url: s.url, storagePath: s.storagePath, badge: s.badge || "Verified" });
           });
         }
@@ -5970,7 +6057,6 @@ async function aiRespondStream(req, res) {
         const hasPaperSource = !!paperSource;
         const questionId = paperSource?.id && requestedQuestionNo ? `${paperSource.id}_${paperIntent.questionType || "MCQ"}_${requestedQuestionNo}`.replace(/\//g, "_") : null;
         if (hasPaperSource && route.mode !== "pdf_link_request") {
-          const db = getAdminDb();
           const { retrieveEvidenceForPaperQuestion: retrieveEvidenceForPaperQuestion2 } = await Promise.resolve().then(() => (init_evidenceRetriever(), evidenceRetriever_exports));
           if (questionId) {
             emitSse(res, "status", { step: "evidence_check", message: "Searching for verified evidence..." });
@@ -5981,18 +6067,23 @@ async function aiRespondStream(req, res) {
               year: requestedYear,
               subject: requestedSubject
             });
-            if (evidenceResult.ok && evidenceResult.evidence?.answer) {
-              const evidence2 = evidenceResult.evidence;
-              console.log(`[AI_RESPOND_STREAM] Evidence Found for ${questionId}`);
-              const methodLabel = evidence2.extractionMethod === "manual_verified" ? "Verified by Teacher" : "Found in PDF";
+            const cachedEvidence = evidenceResult.evidence;
+            const hasCachedAnswer = Boolean(
+              cachedEvidence?.answer || cachedEvidence?.officialAnswer || cachedEvidence?.solvedAnswer?.optionNo || cachedEvidence?.estimatedAnswer
+            );
+            if (evidenceResult.ok && cachedEvidence?.questionText && hasCachedAnswer) {
+              const evidence2 = cachedEvidence;
+              console.log(`[AI_RESPOND_STREAM] Full-paper evidence found for ${questionId}`);
+              const methodLabel = evidence2.extractionMethod === "manual_verified" ? "Verified by Teacher" : "Found in full paper scan";
               emitSse(res, "status", { step: "evidence", message: `${methodLabel}...` });
-              let finalAnswer = String(evidence2.answer || evidence2.officialAnswer || evidence2.estimatedAnswer || "Answer extracted from PDF.");
-              if (evidence2.explanationSinhala) {
-                finalAnswer += `
-
-\u{1F9E0} **Explanation:**
-${evidence2.explanationSinhala}`;
-              }
+              const { formatPaperQuestionAnswer: formatPaperQuestionAnswer2 } = await Promise.resolve().then(() => (init_paperAnswer(), paperAnswer_exports));
+              const finalAnswer = formatPaperQuestionAnswer2({
+                questionText: evidence2.questionText,
+                options: evidence2.options,
+                officialAnswer: evidence2.answer || evidence2.officialAnswer || evidence2.estimatedAnswer,
+                solvedAnswer: evidence2.solvedAnswer,
+                explanationSinhala: evidence2.explanationSinhala
+              });
               emitSse(res, "token", { text: stripRawVisualBlocks(finalAnswer) });
               trace.lastEvent = "token";
               const chatRes3 = await saveFinalChat({
@@ -6025,125 +6116,50 @@ ${evidence2.explanationSinhala}`;
               return;
             }
           }
-          let needsOcr2 = paperSource?.needsOcr === true || paperSource?.indexStatus === "needs_ocr";
-          let noChunks = Number(paperSource?.chunkCount || 0) === 0;
-          let badTextQuality = false;
-          let healthyChunks = [];
-          if (paperSource.id && !noChunks) {
-            try {
-              const { retrieveExactPaperQuestion: retrieveExactPaperQuestion2 } = await Promise.resolve().then(() => (init_retrieve(), retrieve_exports));
-              const exactResult = await retrieveExactPaperQuestion2({
-                uid: user.uid,
-                sourceId: paperSource.id,
-                subject: requestedSubject,
-                year: requestedYear,
-                questionNo: requestedQuestionNo
-              });
-              if (exactResult) {
-                if (exactResult.needsOcr || exactResult.chunks.length === 0) {
-                  noChunks = true;
-                }
-                if (exactResult.badTextQuality) {
-                  badTextQuality = true;
-                }
-                healthyChunks = exactResult.chunks;
-                if (requestedQuestionNo && paperIntent.isOfficialPaperCandidate) {
-                  const chunkText = (healthyChunks || []).map((c) => c.text).join("\n");
-                  const qNoMarker = new RegExp(`\\b${requestedQuestionNo}\\b`);
-                  const hasQuestionMarker = qNoMarker.test(chunkText);
-                  const hasOptions = /1\)|2\)|3\)|4\)|5\)/.test(chunkText) || /\(1\)|\(2\)|\(3\)|\(4\)|\(5\)/.test(chunkText);
-                  const isHealthy = hasQuestionMarker && (paperIntent.questionType === "MCQ" ? hasOptions : true);
-                  if (!isHealthy || chunkText.length < 50) {
-                    console.log(`[AI_CORE] Evidence Gate Failed for Chunks: ${paperSource.id} Q${requestedQuestionNo}`);
-                    badTextQuality = true;
-                  }
-                }
-              }
-            } catch (err) {
-              console.warn("Failed to retrieve exact paper question for quality checks:", err);
-            }
-          }
-          if (noChunks || badTextQuality || needsOcr2) {
-            console.log(`[AI_RESPOND_STREAM] Direct PDF QA required for ${paperSource.id}. Emitting event...`);
-            emitSse(res, "direct_pdf_handoff_required", {
+          console.log(`[AI_RESPOND_STREAM] Full-paper OCR scan required for ${paperSource.id}. Emitting event...`);
+          emitSse(res, "direct_pdf_handoff_required", {
+            sourceId: paperSource.id || paperSource.sourceId,
+            storagePath: paperSource.storagePath,
+            downloadUrl: paperSource.downloadUrl || paperSource.url,
+            title: paperSource.title,
+            subject: requestedSubject,
+            year: requestedYear,
+            questionNo: requestedQuestionNo,
+            questionType: paperIntent.questionType || "MCQ",
+            prompt,
+            scanMode: "full_paper",
+            reason: "FULL_PAPER_OCR_SCAN_REQUIRED",
+            message: "\u0DC3\u0DB8\u0DCA\u0DB4\u0DD6\u0DBB\u0DCA\u0DAB paper \u0D91\u0D9A scan \u0D9A\u0DBB \u0DB1\u0DD2\u0DC0\u0DD0\u0DBB\u0DAF\u0DD2 \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA \u0DC0\u0DD9\u0DB1\u0DCA \u0D9A\u0DBB\u0DB8\u0DD2\u0DB1\u0DCA \u0DB4\u0DC0\u0DAD\u0DD3."
+          });
+          emitSse(res, "done", {
+            ok: true,
+            completed: false,
+            pending: true,
+            requestId,
+            finishReason: "pending_direct_pdf_qa",
+            reason: "FULL_PAPER_OCR_SCAN_REQUIRED",
+            canContinue: true,
+            needsClientFile: false,
+            sources: allSources.length > 0 ? allSources : [paperSource],
+            paperInfo: {
               sourceId: paperSource.id || paperSource.sourceId,
-              storagePath: paperSource.storagePath,
-              title: paperSource.title,
-              subject: requestedSubject,
-              year: requestedYear,
               questionNo: requestedQuestionNo,
+              year: requestedYear,
+              subject: requestedSubject,
               questionType: paperIntent.questionType || "MCQ",
               prompt,
-              reason: "DIRECT_PDF_QA_SERVER_SCAN_REQUIRED",
-              message: "PDF source \u0D91\u0D9A secure server scan \u0D91\u0D9A\u0D9A\u0DA7 \u0DBA\u0DDC\u0DB8\u0DD4 \u0D9A\u0DBB\u0DB1\u0DC0\u0DCF."
-            });
-            emitSse(res, "done", {
-              ok: true,
-              completed: false,
-              pending: true,
-              requestId,
-              finishReason: "pending_direct_pdf_qa",
-              reason: "DIRECT_PDF_SERVER_SCAN_REQUIRED",
-              canContinue: true,
-              needsClientFile: false,
-              sources: allSources.length > 0 ? allSources : [paperSource],
-              paperInfo: {
-                sourceId: paperSource.id || paperSource.sourceId,
-                questionNo: requestedQuestionNo,
-                year: requestedYear,
-                subject: requestedSubject,
-                questionType: paperIntent.questionType || "MCQ",
-                prompt,
-                extractionMethod: "pending_direct_pdf_qa"
-              }
-            });
-            trace.doneSent = true;
-            trace.completed = false;
-            return;
-          } else if (strictRes && strictRes.sourceLocked) {
-            resolution.hasExactQuestionText = true;
-            resolution.bestTextBlocks = healthyChunks.map((c) => c.text);
-            resolution.paperSource = paperSource;
-          }
+              extractionMethod: "pending_full_paper_ocr_scan"
+            }
+          });
+          trace.doneSent = true;
+          trace.completed = false;
+          return;
         }
-        if (resolution.hasExactQuestionText || route.mode === "pdf_link_request" && resolution.hasPdfSource) {
-          emitSse(res, "status", { step: "standard_answer", message: "Composing Standard Exam Answer..." });
-          let composedAnswer = "";
-          if (route.mode === "pdf_link_request") {
-            const pSrc = resolution.paperSource;
-            composedAnswer = `\u2705 **\u0D94\u0DBA\u0DCF \u0DC4\u0DD9\u0DC0\u0DCA\u0DC0 PDF \u0D91\u0D9A \u0DC4\u0DB8\u0DD4 \u0DC0\u0DD4\u0DAB\u0DCF!**
-
-\u{1F4CC} **${pSrc?.title}**
-- **Subject:** ${requestedSubject}
-- **Year:** ${requestedYear}
-- **Source:** Local Verified Store \u{1F3DB}\uFE0F
-
-\u{1F4E5} **Download Link:** [\u0DB8\u0DAD \u0D9A\u0DCA\u0DBD\u0DD2\u0D9A\u0DCA \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1](${pSrc?.url || `/api/rag/sources/${pSrc?.id}/download`})
-
-\u0DB8\u0DD9\u0DB8 \u0DBD\u0DD2\u0DB1\u0DCA\u0D9A\u0DCA \u0D91\u0D9A \u0DB4\u0DD0\u0DBA 24 \u0DB4\u0DD4\u0DBB\u0DCF\u0DB8 \u0DC3\u0D9A\u0DCA\u200D\u0DBB\u0DD3\u0DBA\u0DC0 \u0DB4\u0DC0\u0DAD\u0DD2\u0DB1\u0DC0\u0DCF.`;
-          } else {
-            const { composeMarkingSchemeAnswer: composeMarkingSchemeAnswer2 } = await Promise.resolve().then(() => (init_markingSchemeResolver(), markingSchemeResolver_exports));
-            composedAnswer = composeMarkingSchemeAnswer2({
-              subject: requestedSubject,
-              year: requestedYear,
-              questionNo: requestedQuestionNo || "Q1",
-              paperSource: resolution.paperSource,
-              markingSchemeSource: resolution.markingSchemeSource,
-              syllabusSource: resolution.syllabusSource,
-              paperStructureSource: resolution.paperStructureSource,
-              questionText: `G.C.E. A/L ${requestedYear} ${requestedSubject} \u0DC0\u0DD2\u0DB7\u0DCF\u0D9C\u0DBA\u0DDA ${requestedQuestionNo || "Q1"} \u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA\u0DA7 \u0D85\u0DAF\u0DCF\u0DC5 \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB \u0DB8\u0DD9\u0DC3\u0DDA\u0DBA.`,
-              officialAnswer: resolution.bestTextBlocks.join("\n\n") || "\u0DB1\u0DD2\u0DBD \u0DBD\u0D9A\u0DD4\u0DAB\u0DD4 \u0DAF\u0DD3\u0DB8\u0DDA \u0DB4\u0DA7\u0DD2\u0DB4\u0DCF\u0DA7\u0DD2\u0DBA\u0DA7 \u0D85\u0DB1\u0DD4\u0D9A\u0DD6\u0DBD \u0DB4\u0DD2\u0DC5\u0DD2\u0DAD\u0DD4\u0DBB.",
-              isEstimated: !resolution.markingSchemeSource
-            });
-          }
-          if (resolution.paperSource && resolution.paperSource.ocrTextPdfStoragePath) {
-            composedAnswer = `\u{1F4A1} *Sinhala text PDF \u0D91\u0D9A\u0DAD\u0DCA generate \u0DC0\u0DD9\u0DBD\u0DCF \u0DAD\u0DD2\u0DBA\u0DD9\u0DB1\u0DC0\u0DCF. \u0D91\u0DAD\u0DB1\u0DD2\u0DB1\u0DCA indexed text \u0DB7\u0DCF\u0DC0\u0DD2\u0DAD\u0DCF \u0D9A\u0DBB\u0DB1\u0DC0\u0DCF.*
-
-` + composedAnswer;
-          }
-          emitSse(res, "token", { text: stripRawVisualBlocks(composedAnswer) });
+        if (route.mode === "pdf_link_request" && paperSource) {
+          const composedAnswer = `\u0DB8\u0DD9\u0DB1\u0DCA\u0DB1 **${paperSource.title || "PDF \u0D91\u0D9A"}**. \u0DB4\u0DC4\u0DC5 file card \u0D91\u0D9A\u0DD9\u0DB1\u0DCA \u0DC0\u0DD2\u0DC0\u0DD8\u0DAD \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1.`;
+          emitSse(res, "token", { text: composedAnswer });
           trace.lastEvent = "token";
-          let chatRes3 = await saveFinalChat({
+          const chatRes3 = await saveFinalChat({
             uid: user.uid,
             email: user.email,
             userText: prompt,
@@ -6152,12 +6168,19 @@ ${evidence2.explanationSinhala}`;
             subject: requestedSubject,
             sources: allSources
           });
-          if (chatRes3 && chatRes3.chatSaved) {
+          if (chatRes3?.chatSaved) {
             trace.chatSaved = true;
             trace.messageId = chatRes3.messageId;
           }
           trace.completed = true;
-          emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes3?.messageId || null, chatSaved: trace.chatSaved, sources: allSources });
+          emitSse(res, "done", {
+            ok: true,
+            completed: true,
+            requestId,
+            messageId: chatRes3?.messageId || null,
+            chatSaved: trace.chatSaved,
+            sources: allSources
+          });
           trace.doneSent = true;
           trace.lastEvent = "done";
           return;
@@ -6586,6 +6609,7 @@ ${mistakeImageSources.map((source) => {
       isInterrupted = true;
       emitSse(res, "error", { ok: false, error: "Stream interrupted", recoverable: true, code: "STREAM_INTERRUPTED", completed: false, incomplete: true });
     }
+    fullText = cleanAssistantResponse(fullText);
     try {
       const { trackAIUsage: trackAIUsage3 } = await Promise.resolve().then(() => (init_usageTracker(), usageTracker_exports));
       const inputTokens = Math.round((contextBlocksText.length + prompt.length + sysInstruction.length) / 3.8) + 100;
@@ -6719,7 +6743,7 @@ Do not include any other text or markdown formatting.`;
     }
     emitSse(res, "safe_summary", { items: summaryItems });
     trace.completed = !isInterrupted;
-    emitSse(res, "done", { ok: !isInterrupted, completed: !isInterrupted, incomplete: isInterrupted, requestId, messageId: chatRes?.messageId || null, chatSaved: trace.chatSaved, sources: allSources || [], finishReason: isInterrupted ? "interrupted" : "complete" });
+    emitSse(res, "done", { ok: !isInterrupted, completed: !isInterrupted, incomplete: isInterrupted, requestId, messageId: chatRes?.messageId || null, chatSaved: trace.chatSaved, sources: allSources || [], answer: fullText, finishReason: isInterrupted ? "interrupted" : "complete" });
     trace.doneSent = true;
     trace.lastEvent = "done";
   } catch (error) {
@@ -6955,6 +6979,8 @@ var init_respondStream = __esm({
     init_answerPolicy();
     init_sourceScoring();
     init_lessonResolver();
+    init_selectedPdfFollowup();
+    init_assistantText();
     init_cancellation();
     lastStreamTraces = [];
   }
@@ -7336,27 +7362,44 @@ __export(solveExtractedQuestion_exports, {
   solveExtractedMcqQuestion: () => solveExtractedMcqQuestion
 });
 async function solveExtractedMcqQuestion(params) {
-  const { questionText, options, subject, year, questionNo } = params;
-  const ai9 = getAIClient();
-  const modelName = AI_MODELS.pdf;
+  const {
+    questionText,
+    options,
+    subject,
+    year,
+    questionNo,
+    referencePdfBuffer,
+    referencePdfGcsUri,
+    referenceLabel,
+    questionPdfBuffer,
+    questionPdfGcsUri,
+    visualOnly = false
+  } = params;
+  const hasReferencePdf = Boolean(referencePdfBuffer || referencePdfGcsUri);
+  const hasQuestionPdf = Boolean(questionPdfBuffer || questionPdfGcsUri);
   const systemInstruction = `
 You are solving an already verified Sri Lankan A/L ${subject} MCQ.
 The question and options below were extracted from the official ${year} PDF.
 Choose the best answer.
 
 RULES:
-- Do not change the question text.
+- ${visualOnly ? "Locate the exact requested question in the attached QUESTION PDF. Ignore any corrupted embedded text layer and read the rendered glyphs and diagram." : "Do not change the supplied question meaning."}
 - Do not create a new question.
 - Choose exactly one option (1, 2, 3, 4, or 5).
 - Explain the logic clearly in Sinhala.
+- ${hasQuestionPdf ? "The attached QUESTION PDF is authoritative visual evidence. Inspect its diagram, labels, arrows and relative positions before solving." : "No question-page image/PDF is attached; only use the extracted evidence supplied below."}
+- ${hasReferencePdf ? `Use the attached ${referenceLabel || "official syllabus PDF"} as the primary theory reference. Never claim that it contains the question itself.` : "No syllabus PDF is attached. Do not claim that one was used."}
+- Never repeat legacy-font/mojibake text in the answer. Write Sinhala only as Unicode Sinhala.
+- Return a clean Unicode transcription of the exact question and all five options as questionUnicode/optionsUnicode.
+- If a diagram is required and is attached, read it. Return optionNo:null only when the required visual evidence is genuinely absent.
 - Return JSON only.
 `;
   const userPrompt = `
 Question Number: ${questionNo}
-Question Text: ${questionText}
+Question Text: ${visualOnly ? "[Read the exact question directly from the attached PDF visual.]" : questionText}
 
 Options:
-${options.map((opt, i) => `(${i + 1}) ${opt}`).join("\n")}
+${visualOnly ? "[Read every printed option directly from the attached PDF visual.]" : options.map((opt, i) => `(${i + 1}) ${opt}`).join("\n")}
 
 Return JSON:
 {
@@ -7366,36 +7409,284 @@ Return JSON:
   "explanationSinhala": "clear explanation in Sinhala",
   "whyOthersWrong": ["reason 1", "reason 2"],
   "confidence": 0.0-1.0,
-  "answerStatus": "ai_solved_from_extracted_question"
+  "answerStatus": "ai_solved_from_extracted_question",
+  "syllabusEvidence": "relevant syllabus topic/principle or null",
+  "usedSyllabus": ${hasReferencePdf ? "true" : "false"},
+  "questionUnicode": "clean Unicode transcription of the exact question",
+  "optionsUnicode": ["option 1", "option 2", "option 3", "option 4", "option 5"]
 }
 `;
-  try {
-    const response = await ai9.models.generateContent({
-      model: modelName,
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: userPrompt }]
-        }
-      ],
-      config: {
-        systemInstruction,
-        temperature: 0,
-        responseMimeType: "application/json"
+  const parseJsonResult = (text) => {
+    const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      const start = trimmed.indexOf("{");
+      const end = trimmed.lastIndexOf("}");
+      if (start < 0 || end <= start) return null;
+      try {
+        return JSON.parse(trimmed.slice(start, end + 1));
+      } catch {
+        return null;
       }
+    }
+  };
+  const attemptSolve = async (repairAttempt) => {
+    const parts = [];
+    if (questionPdfBuffer) {
+      parts.push({ text: "QUESTION PDF (use its rendered page and diagram as evidence):" });
+      parts.push({ inlineData: { mimeType: "application/pdf", data: questionPdfBuffer.toString("base64") } });
+    } else if (questionPdfGcsUri) {
+      parts.push({ text: "QUESTION PDF (use its rendered page and diagram as evidence):" });
+      parts.push({ fileData: { mimeType: "application/pdf", fileUri: questionPdfGcsUri } });
+    }
+    if (referencePdfBuffer) {
+      parts.push({ text: `THEORY REFERENCE (${referenceLabel || "official syllabus PDF"}):` });
+      parts.push({ inlineData: { mimeType: "application/pdf", data: referencePdfBuffer.toString("base64") } });
+    } else if (referencePdfGcsUri) {
+      parts.push({ text: `THEORY REFERENCE (${referenceLabel || "official syllabus PDF"}):` });
+      parts.push({ fileData: { mimeType: "application/pdf", fileUri: referencePdfGcsUri } });
+    }
+    parts.push({
+      text: repairAttempt ? `${userPrompt}
+This is a validation retry. Inspect the requested MCQ and its diagram again. You MUST select exactly one option 1-5 and return valid JSON; do not return null merely because the embedded Sinhala text layer is corrupted.` : userPrompt
     });
-    if (!response.text) return null;
-    const result = JSON.parse(response.text.trim());
-    return result;
-  } catch (err) {
-    console.error("[AI_CORE] MCQ Solver failed:", err);
-    return null;
-  }
+    let responseText = "";
+    try {
+      const { result: response } = await callGeminiWithFallback("direct_pdf_solve", {
+        model: AI_MODELS.pdf,
+        contents: [
+          {
+            role: "user",
+            parts
+          }
+        ],
+        config: {
+          systemInstruction,
+          temperature: 0,
+          responseMimeType: "application/json"
+        }
+      });
+      responseText = response.text || "";
+    } catch (error) {
+      console.warn(`[AI_CORE] MCQ solver ${repairAttempt ? "validation" : "primary"} attempt failed`, error);
+      return null;
+    }
+    if (!responseText) return null;
+    const result = parseJsonResult(responseText);
+    if (!result) return null;
+    const optionNo = String(result?.optionNo || "").trim();
+    if (!/^[1-5]$/.test(optionNo)) return null;
+    const questionUnicode = String(result?.questionUnicode || "").trim();
+    const optionsUnicode = Array.isArray(result?.optionsUnicode) ? result.optionsUnicode.map((value) => String(value || "").trim()).filter(Boolean) : [];
+    if (visualOnly && (questionUnicode.length < 12 || optionsUnicode.length < 4)) return null;
+    return {
+      ...result,
+      optionNo,
+      optionText: normalizeSinhalaUnicode(result?.optionText || optionsUnicode[Number(optionNo) - 1] || options[Number(optionNo) - 1] || "").trim(),
+      formulaOrRule: result?.formulaOrRule ? normalizeSinhalaUnicode(result.formulaOrRule).trim() : null,
+      explanationSinhala: result?.explanationSinhala ? cleanAssistantResponse(result.explanationSinhala) : null,
+      whyOthersWrong: Array.isArray(result?.whyOthersWrong) ? result.whyOthersWrong.map((value) => cleanAssistantResponse(value)).filter(Boolean) : null,
+      answerStatus: "ai_solved_from_extracted_question",
+      confidence: Math.max(0, Math.min(1, Number(result?.confidence || 0))),
+      questionUnicode: questionUnicode ? normalizeSinhalaUnicode(questionUnicode) : null,
+      optionsUnicode: optionsUnicode.length >= 4 ? optionsUnicode.map(normalizeSinhalaUnicode) : null,
+      syllabusEvidence: result?.syllabusEvidence ? cleanAssistantResponse(result.syllabusEvidence) : null
+    };
+  };
+  const first = await attemptSolve(false);
+  if (first) return first;
+  return await attemptSolve(true);
 }
 var init_solveExtractedQuestion = __esm({
   "server/ai-core/pdf/solveExtractedQuestion.ts"() {
     "use strict";
+    init_modelRouter();
     init_client();
+    init_assistantText();
+  }
+});
+
+// server/ai-core/pdf/questionExtractor.ts
+function normalizeQuestionNo(value) {
+  const match = String(value ?? "").match(/\d{1,3}/);
+  return match?.[0] ? String(Number(match[0])) : "";
+}
+function cleanOcrText(value) {
+  return normalizeSinhalaUnicode(value).replace(/\r\n?/g, "\n").replace(/[\u200B\u2060]/g, "").replace(/(^|[\s\n])\u0DCA+(?=[\u0D80-\u0DFF])/g, "$1").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+function mergeWithOverlap(current, next) {
+  if (!current) return next;
+  if (!next) return current;
+  if (current.includes(next)) return current;
+  if (next.includes(current)) return next;
+  const max = Math.min(260, current.length, next.length);
+  for (let overlap = max; overlap >= 24; overlap -= 1) {
+    if (current.slice(-overlap) === next.slice(0, overlap)) {
+      return `${current}${next.slice(overlap)}`;
+    }
+  }
+  return `${current}
+${next}`;
+}
+function rebuildFullPaperText(chunks) {
+  const ordered = [...chunks].filter((chunk) => String(chunk?.text || "").trim().length > 0).sort((a, b) => {
+    const pageA = Number(a.pageNumber || 0);
+    const pageB = Number(b.pageNumber || 0);
+    if (pageA !== pageB) return pageA - pageB;
+    return Number(a.chunkIndex || 0) - Number(b.chunkIndex || 0);
+  });
+  const pages = /* @__PURE__ */ new Map();
+  for (const chunk of ordered) {
+    const numericPage = Number(chunk.pageNumber || 0);
+    const pageNumber = Number.isFinite(numericPage) && numericPage > 0 ? numericPage : null;
+    const key = pageNumber === null ? "unknown" : String(pageNumber);
+    const text = cleanOcrText(chunk.text);
+    if (!text) continue;
+    const existing = pages.get(key);
+    pages.set(key, {
+      pageNumber,
+      text: existing ? mergeWithOverlap(existing.text, text) : text
+    });
+  }
+  return [...pages.values()].sort((a, b) => Number(a.pageNumber || 0) - Number(b.pageNumber || 0));
+}
+function markerPatterns(questionNo) {
+  const escaped = questionNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return [
+    new RegExp(`(?:^|\\n)\\s*(?:Q(?:uestion)?|MCQ)\\s*0*${escaped}\\s*(?:[.):-]|$)`, "i"),
+    new RegExp(`(?:^|\\n)\\s*0*${escaped}\\s*[.]\\s+`, "i"),
+    new RegExp(`(?:^|\\n)\\s*0*${escaped}\\s*[)]\\s+(?=[^\\n]{8,})`, "i"),
+    new RegExp(`(?:^|\\n)\\s*(?:\u0DB4\u0DCA\u200D\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA|\u0DB4\u0DCA\u0DBB\u0DC1\u0DCA\u0DB1\u0DBA)\\s*0*${escaped}\\s*(?:[.):-]|$)`, "i")
+  ];
+}
+function findMarker(text, questionNo, from = 0) {
+  let best = null;
+  const slice = text.slice(from);
+  for (const pattern of markerPatterns(questionNo)) {
+    const match = pattern.exec(slice);
+    if (!match) continue;
+    const index = from + match.index + (match[0].startsWith("\n") ? 1 : 0);
+    const length = match[0].length - (match[0].startsWith("\n") ? 1 : 0);
+    if (!best || index < best.index) best = { index, length };
+  }
+  return best;
+}
+function findNextQuestionBoundary(text, start, currentNo) {
+  const next = findMarker(text, String(currentNo + 1), start);
+  if (next) return next.index;
+  const tail = text.slice(start);
+  const generic = /(?:^|\n)\s*(\d{1,3})\.\s+/g;
+  let match;
+  while (match = generic.exec(tail)) {
+    const candidate = Number(match[1]);
+    if (candidate > currentNo && candidate <= currentNo + 4) {
+      return start + match.index + (match[0].startsWith("\n") ? 1 : 0);
+    }
+  }
+  return Math.min(text.length, start + 6500);
+}
+function splitMcqOptions(rawBlock) {
+  const normalized = cleanOcrText(rawBlock);
+  const optionPattern = /(?:^|\n|\s)(\([1-5]\)|[1-5]\))\s*/g;
+  const matches = [...normalized.matchAll(optionPattern)];
+  if (matches.length < 4) {
+    return { questionText: normalized, options: [] };
+  }
+  let sequenceStart = -1;
+  let sequence = [];
+  for (let i = 0; i < matches.length; i += 1) {
+    const number = Number(matches[i][1].replace(/\D/g, ""));
+    if (number !== 1) continue;
+    const candidate = [matches[i]];
+    let expected = 2;
+    for (let j = i + 1; j < matches.length && expected <= 5; j += 1) {
+      const nextNumber = Number(matches[j][1].replace(/\D/g, ""));
+      if (nextNumber === expected) {
+        candidate.push(matches[j]);
+        expected += 1;
+      } else if (nextNumber === 1) {
+        break;
+      }
+    }
+    if (candidate.length >= 4) {
+      sequenceStart = i;
+      sequence = candidate;
+      break;
+    }
+  }
+  if (sequenceStart < 0 || sequence.length < 4) {
+    return { questionText: normalized, options: [] };
+  }
+  const first = sequence[0];
+  const firstIndex = first.index ?? 0;
+  const questionText = cleanOcrText(normalized.slice(0, firstIndex));
+  const options = sequence.map((match, index) => {
+    const start = (match.index ?? 0) + match[0].length;
+    const end = index + 1 < sequence.length ? sequence[index + 1].index ?? normalized.length : normalized.length;
+    const label = match[1].replace(/\D/g, "");
+    return `(${label}) ${cleanOcrText(normalized.slice(start, end))}`.trim();
+  }).filter((option) => option.length > 4);
+  return { questionText, options };
+}
+function extractQuestionFromFullPaper(chunks, requestedQuestionNo, questionType = "MCQ") {
+  const questionNo = normalizeQuestionNo(requestedQuestionNo);
+  if (!questionNo) {
+    return {
+      found: false,
+      questionNo: "",
+      pageNumber: null,
+      questionText: null,
+      options: [],
+      rawBlock: null,
+      scanTextLength: 0,
+      reason: "QUESTION_NUMBER_MISSING"
+    };
+  }
+  const pages = rebuildFullPaperText(chunks);
+  const sections = [];
+  let fullText = "";
+  for (const page2 of pages) {
+    const prefix = fullText ? "\n\n" : "";
+    const start = fullText.length + prefix.length;
+    fullText += `${prefix}${page2.text}`;
+    sections.push({ pageNumber: page2.pageNumber, start, end: fullText.length, text: page2.text });
+  }
+  const marker = findMarker(fullText, questionNo);
+  if (!marker) {
+    return {
+      found: false,
+      questionNo,
+      pageNumber: null,
+      questionText: null,
+      options: [],
+      rawBlock: null,
+      scanTextLength: fullText.length,
+      reason: "QUESTION_MARKER_NOT_FOUND_IN_FULL_PAPER_SCAN"
+    };
+  }
+  const currentNo = Number(questionNo);
+  const end = findNextQuestionBoundary(fullText, marker.index + marker.length, currentNo);
+  const rawBlock = cleanOcrText(fullText.slice(marker.index, end));
+  const page = sections.find((section) => marker.index >= section.start && marker.index <= section.end)?.pageNumber ?? null;
+  const isMcq = String(questionType || "").toLowerCase().includes("mcq");
+  const parsed = isMcq ? splitMcqOptions(rawBlock) : { questionText: rawBlock, options: [] };
+  const hasRequiredEvidence = parsed.questionText.length >= 12 && (!isMcq || parsed.options.length >= 4);
+  return {
+    found: hasRequiredEvidence,
+    questionNo,
+    pageNumber: page,
+    questionText: hasRequiredEvidence ? parsed.questionText : null,
+    options: hasRequiredEvidence ? parsed.options : [],
+    rawBlock,
+    scanTextLength: fullText.length,
+    reason: hasRequiredEvidence ? "FULL_PAPER_OCR_SCAN_MATCH" : "QUESTION_BLOCK_INCOMPLETE_AFTER_FULL_SCAN"
+  };
+}
+var init_questionExtractor = __esm({
+  "server/ai-core/pdf/questionExtractor.ts"() {
+    "use strict";
+    init_assistantText();
   }
 });
 
@@ -7405,9 +7696,125 @@ __export(directPdfQa_exports, {
   askGeminiDirectPdfStructured: () => askGeminiDirectPdfStructured,
   askIndexedPdfQuestionStructured: () => askIndexedPdfQuestionStructured
 });
+function looksLikeLegacySinhalaGarbage(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  const sinhala = (text.match(/[\u0D80-\u0DFF]/g) || []).length;
+  const legacySignals = (text.match(/[ñú;=<>]|\b(?:fuu|iy|iys|l=|fkdie|mß|wd;;|T[123])\b/g) || []).length;
+  const latin = (text.match(/[A-Za-z]/g) || []).length;
+  return sinhala === 0 && legacySignals >= 2 && latin / Math.max(1, text.length) > 0.18;
+}
+function extractLeadingQuestionNumber(value) {
+  const text = normalizeSinhalaUnicode(value).trim();
+  const match = text.match(/^(?:#{1,6}\s*)?(?:question|q)?\s*0*(\d{1,3})\s*(?:[.)\]:-]|$)/i);
+  return match?.[1] ? String(Number(match[1])) : null;
+}
+function isQuestionNumberMismatch(questionText, requestedQuestionNo) {
+  const extracted = extractLeadingQuestionNumber(questionText);
+  const requestedMatch = String(requestedQuestionNo || "").match(/\d{1,3}/);
+  const requested = requestedMatch?.[0] ? String(Number(requestedMatch[0])) : null;
+  return Boolean(extracted && requested && extracted !== requested);
+}
+function sanitizeDirectQaResult(input) {
+  if (!input || typeof input !== "object") return input;
+  const result = { ...input };
+  if (result.sourceEvidence && typeof result.sourceEvidence === "object") {
+    result.sourceEvidence = {
+      ...result.sourceEvidence,
+      questionText: result.sourceEvidence.questionText ? normalizeSinhalaUnicode(result.sourceEvidence.questionText).trim() : result.sourceEvidence.questionText,
+      options: Array.isArray(result.sourceEvidence.options) ? result.sourceEvidence.options.map((value) => normalizeSinhalaUnicode(value).trim()).filter(Boolean) : result.sourceEvidence.options
+    };
+  }
+  if (result.answer && typeof result.answer === "object") {
+    const solved = result.answer.solvedAnswer && typeof result.answer.solvedAnswer === "object" ? {
+      ...result.answer.solvedAnswer,
+      optionText: result.answer.solvedAnswer.optionText ? normalizeSinhalaUnicode(result.answer.solvedAnswer.optionText).trim() : result.answer.solvedAnswer.optionText,
+      explanationSinhala: result.answer.solvedAnswer.explanationSinhala ? cleanAssistantResponse(result.answer.solvedAnswer.explanationSinhala) : result.answer.solvedAnswer.explanationSinhala,
+      whyOthersWrong: Array.isArray(result.answer.solvedAnswer.whyOthersWrong) ? result.answer.solvedAnswer.whyOthersWrong.map((value) => cleanAssistantResponse(value)).filter(Boolean) : result.answer.solvedAnswer.whyOthersWrong,
+      questionUnicode: result.answer.solvedAnswer.questionUnicode ? normalizeSinhalaUnicode(result.answer.solvedAnswer.questionUnicode).trim() : result.answer.solvedAnswer.questionUnicode,
+      optionsUnicode: Array.isArray(result.answer.solvedAnswer.optionsUnicode) ? result.answer.solvedAnswer.optionsUnicode.map((value) => normalizeSinhalaUnicode(value).trim()).filter(Boolean) : result.answer.solvedAnswer.optionsUnicode
+    } : result.answer.solvedAnswer;
+    result.answer = {
+      ...result.answer,
+      officialAnswer: result.answer.officialAnswer ? cleanAssistantResponse(result.answer.officialAnswer) : result.answer.officialAnswer,
+      estimatedAnswer: result.answer.estimatedAnswer ? cleanAssistantResponse(result.answer.estimatedAnswer) : result.answer.estimatedAnswer,
+      explanationSinhala: result.answer.explanationSinhala ? cleanAssistantResponse(result.answer.explanationSinhala) : result.answer.explanationSinhala,
+      lesson: result.answer.lesson ? normalizeSinhalaUnicode(result.answer.lesson).trim() : result.answer.lesson,
+      solvedAnswer: solved
+    };
+  }
+  return result;
+}
+function directQaCacheId(sourceId, questionType, questionNo) {
+  return `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
+}
+async function readVerifiedQuestionCache(params) {
+  try {
+    const snapshot = await getAdminDb().collection("pdf_question_cache").doc(directQaCacheId(params.sourceId, params.questionType, params.questionNo)).get();
+    if (!snapshot.exists) return null;
+    const cached = snapshot.data() || {};
+    const questionText = String(cached.questionText || "").trim();
+    const options = Array.isArray(cached.options) ? cached.options.map((value) => String(value).trim()).filter(Boolean) : [];
+    const isMcq = String(params.questionType).toLowerCase().includes("mcq");
+    const subjectMatches = !cached.subject || String(cached.subject).toUpperCase() === String(params.subject).toUpperCase();
+    const yearMatches = !cached.year || String(cached.year) === String(params.year) || params.year === "unknown";
+    const cachedHasLegacyGarbage = looksLikeLegacySinhalaGarbage(questionText) || options.some(looksLikeLegacySinhalaGarbage);
+    const hasVerifiedAnswer = Boolean(
+      params.allowOfficialAnswer && String(cached.officialAnswer || "").trim() || /^[1-5]$/.test(String(cached?.solvedAnswer?.optionNo || "").trim()) && String(cached?.solvedAnswer?.explanationSinhala || cached.explanationSinhala || "").trim()
+    );
+    const verified = Number(cached.evidenceVersion || 0) >= EVIDENCE_VERSION && cached.validationStatus !== "rejected" && subjectMatches && yearMatches && questionText.length >= 12 && !cachedHasLegacyGarbage && (!isMcq || options.length >= 4) && (!isMcq || hasVerifiedAnswer) && (!params.requiresSyllabusGrounding || cached.syllabusGrounded === true);
+    if (!verified) return null;
+    return sanitizeDirectQaResult({
+      ok: true,
+      found: true,
+      fromCache: true,
+      sourceEvidence: {
+        sourceId: params.sourceId,
+        pageNumber: Number.isFinite(Number(cached.pageNumber)) ? Number(cached.pageNumber) : null,
+        questionNo: params.questionNo,
+        questionText,
+        options: options.length > 0 ? options : null
+      },
+      answer: {
+        officialAnswer: params.allowOfficialAnswer ? cached.officialAnswer || null : null,
+        estimatedAnswer: cached.estimatedAnswer || null,
+        explanationSinhala: cached.explanationSinhala || null,
+        lesson: cached.lesson || null,
+        solvedAnswer: cached.solvedAnswer || null
+      },
+      confidence: Number(cached.confidence || 0),
+      reason: "VERIFIED_EVIDENCE_CACHE"
+    });
+  } catch (error) {
+    console.warn("[DirectPDFQA] Verified cache lookup skipped:", String(error?.message || error));
+    return null;
+  }
+}
 async function askGeminiDirectPdfStructured(params) {
-  const { sourceId, pdfBuffer, year, subject, questionType, questionNo, allowOfficialAnswer = false } = params;
+  const {
+    sourceId,
+    pdfBuffer = null,
+    pdfGcsUri = null,
+    year,
+    subject,
+    questionType,
+    questionNo,
+    allowOfficialAnswer = false,
+    syllabusPdfBuffer = null,
+    syllabusPdfGcsUri = null,
+    originalPageNumbers = []
+  } = params;
   const modelName = AI_MODELS.pdf;
+  const cached = await readVerifiedQuestionCache({
+    sourceId,
+    subject,
+    year,
+    questionType,
+    questionNo,
+    allowOfficialAnswer,
+    requiresSyllabusGrounding: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri)
+  });
+  if (cached) return cached;
   const systemInstruction = `You are an evidence-first Sri Lankan A/L exam PDF extractor.
 You are reading the exact locked PDF source.
 
@@ -7416,6 +7823,7 @@ Year: ${year}
 Subject: ${subject}
 Question Type: ${questionType}
 Question Number: ${questionNo}
+${originalPageNumbers.length > 0 ? `The attached subset pages map to original PDF pages: ${originalPageNumbers.join(", ")}.` : ""}
 
 STRICT RULES:
 1. First find the exact requested question in the PDF.
@@ -7428,6 +7836,9 @@ STRICT RULES:
 8. Do NOT create a similar or model question.
 9. Do NOT answer from syllabus or general memory.
 10. Do NOT fill answer.estimatedAnswer unless questionText exists.
+11. Read the rendered glyphs, diagrams, labels, arrows and geometry on the page\u2014not only the embedded text layer.
+12. If the PDF uses FM Abhaya or another legacy Sinhala font, TRANSCRIBE the visible Sinhala into proper Unicode Sinhala. Never return Latin/ASCII font codes such as "fuu", "m\xDF", "l=", "\xF1" or "\xFA".
+13. For a diagram-based MCQ, include the diagram's relevant relationships in questionText using a short bracketed Unicode description so the solver has all required evidence.
 
 Return JSON only:
 {
@@ -7448,12 +7859,10 @@ Return JSON only:
   "confidence": number,
   "reason": string
 }`;
-  const pdfPart = {
-    inlineData: {
-      mimeType: "application/pdf",
-      data: pdfBuffer.toString("base64")
-    }
-  };
+  if (!pdfBuffer && !pdfGcsUri) {
+    throw new Error("Direct PDF QA requires either PDF bytes or a verified Vertex GCS URI.");
+  }
+  const pdfPart = pdfBuffer ? { inlineData: { mimeType: "application/pdf", data: pdfBuffer.toString("base64") } } : { fileData: { mimeType: "application/pdf", fileUri: pdfGcsUri } };
   const userPrompt = `
 Requested:
 Year: ${year}
@@ -7461,6 +7870,7 @@ Subject: ${subject}
 Question Type: ${questionType}
 Question Number: ${questionNo}
 Source ID: ${sourceId}
+${originalPageNumbers.length > 0 ? `Subset page mapping (subset page 1 first): ${originalPageNumbers.join(", ")}` : ""}
 
 Return JSON with exact evidence. If not found, set found:false.
 `;
@@ -7484,20 +7894,71 @@ Return JSON with exact evidence. If not found, set found:false.
       throw new Error("Empty response from Gemini API");
     }
     let result = JSON.parse(response.text.trim());
+    if (originalPageNumbers.length > 0 && result?.sourceEvidence) {
+      const subsetPage = Number(result.sourceEvidence.pageNumber || 0);
+      result.sourceEvidence.pageNumber = subsetPage >= 1 ? originalPageNumbers[subsetPage - 1] || originalPageNumbers[0] : originalPageNumbers[0];
+    }
     if (!allowOfficialAnswer && result?.answer) {
       result.answer.officialAnswer = null;
     }
     if (result.answer?.explanationSinhala) {
       result.answer.explanationSinhala = stripRawVisualBlocks(result.answer.explanationSinhala);
     }
-    const qText = result?.sourceEvidence?.questionText;
-    const opts = result?.sourceEvidence?.options;
-    if (!result.found || !qText || qText.length < 20) {
+    let qText = result?.sourceEvidence?.questionText;
+    let opts = result?.sourceEvidence?.options;
+    let extractedOptions = Array.isArray(opts) ? opts : [];
+    let hasUnreadableLegacyText = looksLikeLegacySinhalaGarbage(qText) || extractedOptions.some(looksLikeLegacySinhalaGarbage);
+    if (questionType === "MCQ" && hasUnreadableLegacyText && (pdfBuffer || pdfGcsUri)) {
+      const visualSolved = await solveExtractedMcqQuestion({
+        questionText: "",
+        options: [],
+        subject,
+        year,
+        questionNo,
+        referencePdfBuffer: syllabusPdfBuffer,
+        referencePdfGcsUri: syllabusPdfGcsUri,
+        referenceLabel: "Sri Lankan A/L SFT syllabus PDF",
+        questionPdfBuffer: pdfBuffer,
+        questionPdfGcsUri: pdfGcsUri,
+        visualOnly: true
+      }).catch((error) => {
+        console.error("[DirectPDFQA] Visual legacy-font solver failed:", error);
+        return null;
+      });
+      if (visualSolved?.questionUnicode && visualSolved.optionsUnicode?.length && result?.sourceEvidence) {
+        result.sourceEvidence.questionText = visualSolved.questionUnicode;
+        result.sourceEvidence.options = visualSolved.optionsUnicode;
+        result.found = true;
+        result.reason = "VISUAL_LEGACY_FONT_TRANSCRIPTION";
+        result.answer = {
+          ...result.answer || {},
+          officialAnswer: null,
+          solvedAnswer: visualSolved,
+          explanationSinhala: visualSolved.explanationSinhala || null
+        };
+        result.confidence = Math.max(Number(result.confidence || 0), visualSolved.confidence);
+        qText = result.sourceEvidence.questionText;
+        opts = result.sourceEvidence.options;
+        extractedOptions = opts;
+        hasUnreadableLegacyText = false;
+      }
+    }
+    if (result.found && isQuestionNumberMismatch(qText, questionNo)) {
+      console.warn(`[DirectPDFQA] Rejected mismatched question text. Requested Q${questionNo}; extracted marker=${extractLeadingQuestionNumber(qText)}`);
+      result = {
+        ...result,
+        found: false,
+        reason: "QUESTION_NUMBER_MISMATCH",
+        answer: { officialAnswer: null, estimatedAnswer: null, explanationSinhala: null, lesson: null },
+        confidence: 0
+      };
+    }
+    if (!result.found || !qText || qText.length < 20 || hasUnreadableLegacyText) {
       console.log(`[DirectPDFQA] Extraction failed validation: found=${result.found}, textLength=${qText?.length || 0}`);
       result = {
         ...result,
         found: false,
-        reason: result.reason || "EXACT_QUESTION_TEXT_MISSING",
+        reason: hasUnreadableLegacyText ? "LEGACY_SINHALA_VISUAL_TRANSCRIPTION_REQUIRED" : result.reason || "EXACT_QUESTION_TEXT_MISSING",
         answer: {
           officialAnswer: null,
           estimatedAnswer: null,
@@ -7523,7 +7984,12 @@ Return JSON with exact evidence. If not found, set found:false.
           options: result.sourceEvidence.options,
           subject,
           year,
-          questionNo
+          questionNo,
+          referencePdfBuffer: syllabusPdfBuffer,
+          referencePdfGcsUri: syllabusPdfGcsUri,
+          referenceLabel: "Sri Lankan A/L SFT syllabus PDF",
+          questionPdfBuffer: pdfBuffer,
+          questionPdfGcsUri: pdfGcsUri
         });
         if (solved) {
           await trackAIUsage(uid, AI_MODELS.pdf, 500, 500, "solverCalls");
@@ -7539,9 +8005,20 @@ Return JSON with exact evidence. If not found, set found:false.
         console.error("[DirectPDFQA] Solver pass failed:", solveErr);
       }
     }
+    if (questionType === "MCQ" && result.found === true && !result.answer?.officialAnswer && !/^[1-5]$/.test(String(result.answer?.solvedAnswer?.optionNo || "").trim())) {
+      return {
+        ok: false,
+        found: false,
+        errorCode: "MCQ_SOLVER_EMPTY",
+        stage: "ANSWER_VALIDATION",
+        reason: "The exact MCQ was located, but the solver did not return one validated option.",
+        canRetry: true
+      };
+    }
+    result = sanitizeDirectQaResult(result);
     if (result.found && result.sourceEvidence?.questionText) {
       const db = getAdminDb();
-      const cacheId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
+      const cacheId = directQaCacheId(sourceId, questionType, questionNo);
       const cacheData = {
         sourceId,
         subject,
@@ -7551,8 +8028,10 @@ Return JSON with exact evidence. If not found, set found:false.
         ...result.sourceEvidence,
         ...result.answer,
         confidence: result.confidence,
-        extractionMethod: "gemini_direct_pdf_qa",
+        extractionMethod: originalPageNumbers.length > 0 ? "gemini_targeted_legacy_page" : "gemini_direct_pdf_qa",
         validationStatus: result.confidence > 0.8 ? "valid" : "needs_review",
+        evidenceVersion: EVIDENCE_VERSION,
+        syllabusGrounded: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri),
         updatedAt: (/* @__PURE__ */ new Date()).toISOString()
       };
       try {
@@ -7563,7 +8042,7 @@ Return JSON with exact evidence. If not found, set found:false.
         console.error("[AI_CORE] Failed to save PDF question cache:", cacheErr);
       }
     }
-    return { ok: true, ...result };
+    return sanitizeDirectQaResult({ ok: true, ...result });
   } catch (err) {
     console.error("[AI_CORE] Direct PDF QA JSON extraction failed:", err);
     const classified = err?.code === "AI_BILLING_EXHAUSTED" ? { code: "AI_BILLING_EXHAUSTED" } : classifyAiError(err);
@@ -7600,10 +8079,107 @@ async function askIndexedPdfQuestionStructured(params) {
     subject,
     questionType,
     questionNo,
-    allowOfficialAnswer = false
+    allowOfficialAnswer = false,
+    syllabusPdfBuffer = null,
+    syllabusPdfGcsUri = null
   } = params;
-  const ordered = [...chunks].sort((a, b) => Number(a.pageNumber || a.chunkIndex || 0) - Number(b.pageNumber || b.chunkIndex || 0)).map((chunk) => `[Page ${chunk.pageNumber || "?"}]
-${String(chunk.text || "").trim()}`).filter(Boolean).join("\n\n").slice(0, 7e4);
+  const cached = await readVerifiedQuestionCache({
+    sourceId,
+    subject,
+    year,
+    questionType,
+    questionNo,
+    allowOfficialAnswer,
+    requiresSyllabusGrounding: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri)
+  });
+  if (cached) return cached;
+  const isMcq = String(questionType).toLowerCase().includes("mcq");
+  const deterministicEvidence = extractQuestionFromFullPaper(chunks, questionNo, questionType);
+  if (deterministicEvidence.found && isMcq && !allowOfficialAnswer) {
+    const questionText = deterministicEvidence.questionText;
+    const options = deterministicEvidence.options;
+    const solved = await solveExtractedMcqQuestion({
+      questionText,
+      options,
+      subject,
+      year,
+      questionNo,
+      referencePdfBuffer: syllabusPdfBuffer,
+      referencePdfGcsUri: syllabusPdfGcsUri,
+      referenceLabel: "Sri Lankan A/L SFT syllabus PDF"
+    }).catch((error) => {
+      console.error("[DirectPDFQA] Full-paper OCR solver failed:", error);
+      return null;
+    });
+    if (!solved || !/^[1-5]$/.test(String(solved.optionNo || "").trim())) {
+      return {
+        ok: false,
+        found: false,
+        errorCode: "MCQ_SOLVER_EMPTY",
+        stage: "ANSWER_VALIDATION",
+        reason: "The exact MCQ was isolated from the full-paper OCR scan, but no validated option was produced.",
+        canRetry: true
+      };
+    }
+    const deterministicResult = sanitizeDirectQaResult({
+      ok: true,
+      found: true,
+      sourceEvidence: {
+        sourceId,
+        pageNumber: deterministicEvidence.pageNumber,
+        questionNo,
+        questionText,
+        options
+      },
+      answer: {
+        officialAnswer: null,
+        estimatedAnswer: null,
+        explanationSinhala: solved.explanationSinhala || null,
+        lesson: null,
+        solvedAnswer: solved
+      },
+      confidence: Math.max(0.9, Number(solved.confidence || 0)),
+      reason: deterministicEvidence.reason,
+      fullPaperScan: true,
+      scannedCharacters: deterministicEvidence.scanTextLength
+    });
+    const cacheId = directQaCacheId(sourceId, questionType, questionNo);
+    await getAdminDb().collection("pdf_question_cache").doc(cacheId).set(removeUndefinedDeep({
+      sourceId,
+      subject,
+      year,
+      questionType,
+      questionNo,
+      ...deterministicResult.sourceEvidence,
+      ...deterministicResult.answer,
+      confidence: deterministicResult.confidence,
+      extractionMethod: "full_paper_ocr_scan",
+      validationStatus: "valid",
+      evidenceVersion: EVIDENCE_VERSION,
+      syllabusGrounded: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri),
+      fullPaperScan: true,
+      scannedCharacters: deterministicEvidence.scanTextLength,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    }), { merge: true });
+    await trackAIUsage(uid, AI_MODELS.pdf, Math.ceil(deterministicEvidence.scanTextLength / 4), 500, "directPdfQaCalls");
+    return deterministicResult;
+  }
+  if (isMcq && !allowOfficialAnswer && !deterministicEvidence.found) {
+    return {
+      ok: false,
+      found: false,
+      errorCode: "FULL_PAPER_VISUAL_SCAN_REQUIRED",
+      stage: "FULL_PAPER_INDEX_SCAN",
+      reason: deterministicEvidence.reason,
+      message: "The full OCR/text index did not contain a safe, complete question boundary. Scan the original PDF pages visually.",
+      canRetry: true
+    };
+  }
+  const ordered = [...chunks].sort((a, b) => {
+    const pageDiff = Number(a.pageNumber || 0) - Number(b.pageNumber || 0);
+    return pageDiff || Number(a.chunkIndex || 0) - Number(b.chunkIndex || 0);
+  }).map((chunk) => `[Page ${chunk.pageNumber || "?"}]
+${String(chunk.text || "").trim()}`).filter(Boolean).join("\n\n").slice(0, 18e4);
   if (ordered.replace(/\s/g, "").length < 80) {
     return {
       ok: false,
@@ -7641,14 +8217,14 @@ Return {"found":boolean,"sourceEvidence":{"sourceId":"${sourceId}","pageNumber":
     const result = JSON.parse(String(response.text || "{}").trim());
     const questionText = String(result?.sourceEvidence?.questionText || "").trim();
     const options = Array.isArray(result?.sourceEvidence?.options) ? result.sourceEvidence.options.map((value) => String(value).trim()).filter(Boolean) : [];
-    const isMcq = String(questionType).toLowerCase().includes("mcq");
-    if (!result?.found || questionText.length < 12 || isMcq && options.length < 4) {
+    const numberMismatch = isQuestionNumberMismatch(questionText, questionNo);
+    if (!result?.found || numberMismatch || questionText.length < 12 || isMcq && options.length < 4) {
       return {
         ok: false,
         found: false,
-        errorCode: "EXACT_QUESTION_EVIDENCE_MISSING",
+        errorCode: numberMismatch ? "QUESTION_NUMBER_MISMATCH" : "EXACT_QUESTION_EVIDENCE_MISSING",
         stage: "INDEX_LOOKUP",
-        reason: "The exact question is not readable in the indexed PDF text."
+        reason: numberMismatch ? `The extracted question marker does not match requested question ${questionNo}.` : "The exact question is not readable in the indexed PDF text."
       };
     }
     if (!allowOfficialAnswer && result.answer) result.answer.officialAnswer = null;
@@ -7659,11 +8235,24 @@ Return {"found":boolean,"sourceEvidence":{"sourceId":"${sourceId}","pageNumber":
         options,
         subject,
         year,
-        questionNo
+        questionNo,
+        referencePdfBuffer: syllabusPdfBuffer,
+        referencePdfGcsUri: syllabusPdfGcsUri,
+        referenceLabel: "Sri Lankan A/L SFT syllabus PDF"
       }).catch(() => null);
       if (solved) result.answer.solvedAnswer = solved;
     }
-    const cacheId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
+    if (isMcq && !result.answer.officialAnswer && !/^[1-5]$/.test(String(result.answer?.solvedAnswer?.optionNo || "").trim())) {
+      return {
+        ok: false,
+        found: false,
+        errorCode: "MCQ_SOLVER_EMPTY",
+        stage: "ANSWER_VALIDATION",
+        reason: "The indexed question was found, but no validated MCQ option was produced.",
+        canRetry: true
+      };
+    }
+    const cacheId = directQaCacheId(sourceId, questionType, questionNo);
     await getAdminDb().collection("pdf_question_cache").doc(cacheId).set(removeUndefinedDeep({
       sourceId,
       subject,
@@ -7673,12 +8262,16 @@ Return {"found":boolean,"sourceEvidence":{"sourceId":"${sourceId}","pageNumber":
       ...result.sourceEvidence,
       ...result.answer,
       confidence: Number(result.confidence || 0),
-      extractionMethod: "indexed_pdf_text",
+      extractionMethod: "full_paper_index_scan",
       validationStatus: Number(result.confidence || 0) >= 0.8 ? "valid" : "needs_review",
+      evidenceVersion: EVIDENCE_VERSION,
+      syllabusGrounded: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri),
+      fullPaperScan: true,
+      scannedCharacters: ordered.length,
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     }), { merge: true });
     await trackAIUsage(uid, AI_MODELS.pdf, Math.ceil(ordered.length / 4), 500, "directPdfQaCalls");
-    return { ok: true, ...result };
+    return sanitizeDirectQaResult({ ok: true, ...result });
   } catch (error) {
     const classified = classifyAiError(error);
     return {
@@ -7690,6 +8283,7 @@ Return {"found":boolean,"sourceEvidence":{"sourceId":"${sourceId}","pageNumber":
     };
   }
 }
+var EVIDENCE_VERSION;
 var init_directPdfQa = __esm({
   "server/ai-core/pdf/directPdfQa.ts"() {
     "use strict";
@@ -7701,6 +8295,9 @@ var init_directPdfQa = __esm({
     init_solveExtractedQuestion();
     init_usageTracker();
     init_aiErrorClassifier();
+    init_assistantText();
+    init_questionExtractor();
+    EVIDENCE_VERSION = 4;
   }
 });
 
@@ -7978,7 +8575,7 @@ var RATE_LIMIT_UID_WINDOW_MS = validateNumber("RATE_LIMIT_UID_WINDOW_MS", 6e4, 1
 var RATE_LIMIT_UID_MAX = validateNumber("RATE_LIMIT_UID_MAX", 100, 1);
 var ENABLE_VIDEO = validateBoolean("ENABLE_VIDEO", true);
 var ENABLE_VIDEO_TRANSCODING = validateBoolean("ENABLE_VIDEO_TRANSCODING", false);
-var VIDEO_ALLOW_DIRECT_PLAYBACK = validateBoolean("VIDEO_ALLOW_DIRECT_PLAYBACK", NODE_ENV !== "production");
+var VIDEO_ALLOW_DIRECT_PLAYBACK = validateBoolean("VIDEO_ALLOW_DIRECT_PLAYBACK", true);
 var VIDEO_REQUIRE_APP_CHECK = validateBoolean("VIDEO_REQUIRE_APP_CHECK", false);
 var VIDEO_INPUT_BUCKET = validateOptional("VIDEO_INPUT_BUCKET", FIREBASE_STORAGE_BUCKET);
 var VIDEO_OUTPUT_BUCKET = validateOptional("VIDEO_OUTPUT_BUCKET", "");
@@ -9211,7 +9808,8 @@ async function verifyAndExtractUser(req) {
     roles = applyConfiguredAdminRoles(
       decodedToken.email,
       decodedToken.email_verified === true,
-      roles
+      roles,
+      decodedToken.uid
     );
     if (roles.includes("admin")) {
       admin = true;
@@ -9701,6 +10299,132 @@ async function extractPdfPagesWithGemini(buffer) {
   return pages;
 }
 
+// server/pdf/sourceBuffer.ts
+init_admin();
+init_retry();
+var DEFAULT_MAX_BYTES = 80 * 1024 * 1024;
+var DEFAULT_TIMEOUT_MS = 45e3;
+function configuredMaxBytes() {
+  const configured = Number(process.env.DIRECT_PDF_MAX_BYTES || 0);
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_MAX_BYTES;
+}
+function storageObjectPath(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("gs://")) return raw.replace(/^gs:\/\/[^/]+\//, "");
+  if (/^https:\/\//i.test(raw)) {
+    try {
+      const url = new URL(raw);
+      if (url.hostname === "firebasestorage.googleapis.com") {
+        const marker = "/o/";
+        const index = url.pathname.indexOf(marker);
+        return index >= 0 ? decodeURIComponent(url.pathname.slice(index + marker.length)) : "";
+      }
+      if (url.hostname === "storage.googleapis.com") {
+        const parts = url.pathname.replace(/^\/+/, "").split("/");
+        return decodeURIComponent(parts.slice(1).join("/"));
+      }
+    } catch {
+      return "";
+    }
+  }
+  return raw.replace(/^\/+/, "");
+}
+function storageBucketName(value) {
+  const raw = String(value || "").trim();
+  if (raw.startsWith("gs://")) {
+    return raw.slice(5).split("/")[0] || "";
+  }
+  if (/^https:\/\//i.test(raw)) {
+    try {
+      const url = new URL(raw);
+      if (url.hostname === "firebasestorage.googleapis.com") {
+        return decodeURIComponent(url.pathname.match(/\/v0\/b\/([^/]+)\/o\//)?.[1] || "");
+      }
+      if (url.hostname === "storage.googleapis.com") {
+        return decodeURIComponent(url.pathname.replace(/^\/+/, "").split("/")[0] || "");
+      }
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+function storageGsUri(value, fallbackPath) {
+  const path5 = storageObjectPath(value) || storageObjectPath(fallbackPath);
+  const bucket = storageBucketName(value) || String(process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET || "").trim();
+  if (!path5 || !bucket || !/^[a-z0-9._-]+$/i.test(bucket)) return "";
+  return `gs://${bucket}/${path5}`;
+}
+function validatedPdfDownloadUrl(value, expectedStoragePath) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:") return "";
+    if (!["firebasestorage.googleapis.com", "storage.googleapis.com"].includes(url.hostname)) return "";
+    if (storageObjectPath(raw) !== storageObjectPath(expectedStoragePath)) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+async function fetchPdfUrl(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: { Accept: "application/pdf,application/octet-stream;q=0.9,*/*;q=0.1" }
+    });
+    if (!response.ok) throw new Error(`Firebase download URL returned HTTP ${response.status}.`);
+    const declaredSize = Number(response.headers.get("content-length") || 0);
+    const maxBytes = configuredMaxBytes();
+    if (declaredSize > maxBytes) throw new Error(`PDF is larger than the ${Math.round(maxBytes / 1024 / 1024)} MB direct-read limit.`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length === 0 || bytes.length > maxBytes) throw new Error("PDF download was empty or exceeded the direct-read limit.");
+    if (bytes.subarray(0, 5).toString("ascii") !== "%PDF-") throw new Error("Storage response is not a PDF document.");
+    return bytes;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function loadPdfSourceBuffer(params) {
+  const { source, storagePath, submittedDownloadUrl } = params;
+  const candidateUrls = [
+    submittedDownloadUrl,
+    source?.downloadUrl,
+    source?.url,
+    source?.firebaseDownloadUrl
+  ].map((value) => validatedPdfDownloadUrl(value, storagePath)).filter(Boolean);
+  const failures = [];
+  for (const url of [...new Set(candidateUrls)]) {
+    try {
+      return { buffer: await fetchPdfUrl(url), method: "firebase_download_url" };
+    } catch (error2) {
+      failures.push(`token_url:${String(error2?.message || error2)}`);
+    }
+  }
+  try {
+    const bucket = getAdminBucket();
+    const file = bucket.file(storageObjectPath(storagePath));
+    const [bytes] = await retryGoogleAuthOperation("directPdfAdminDownload", async () => file.download());
+    if (!bytes?.length || bytes.subarray(0, 5).toString("ascii") !== "%PDF-") {
+      throw new Error("Admin Storage returned an empty or non-PDF object.");
+    }
+    if (bytes.length > configuredMaxBytes()) throw new Error("PDF exceeds the direct-read limit.");
+    return { buffer: bytes, method: "firebase_admin" };
+  } catch (error2) {
+    failures.push(`admin_storage:${String(error2?.message || error2)}`);
+  }
+  const error = new Error("The original PDF could not be read through its Firebase download URL or Admin Storage.");
+  error.code = "DIRECT_QA_SOURCE_DOWNLOAD_FAILED";
+  error.details = failures;
+  throw error;
+}
+
 // server/rag/routes.ts
 var ragRoutes = (0, import_express2.Router)();
 var upload = (0, import_multer.default)({ storage: import_multer.default.memoryStorage() });
@@ -9742,7 +10466,9 @@ ragRoutes.get("/sources/:sourceId/download", requireFirebaseUser, async (req, re
     if (!data || !data.storagePath) {
       return res.status(404).json({ ok: false, error: "Storage path not found" });
     }
-    if (data.ownerUid !== user.uid) {
+    const roles = Array.isArray(user?.roles) ? user.roles : [];
+    const privileged = user?.admin === true || roles.some((role) => ["admin", "content_editor", "ops"].includes(role));
+    if (data.ownerUid !== user.uid && !privileged) {
       return res.status(403).json({ ok: false, error: "Unauthorized access to source. Only the owner of the source document can download the file." });
     }
     const bucket = getAdminBucket();
@@ -9816,6 +10542,7 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req, res) => {
       sourceType,
       sourceScope,
       storagePath,
+      downloadUrl,
       chunkCount,
       needsOcr,
       createdAt,
@@ -9844,6 +10571,7 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req, res) => {
       sourceType: sourceType || resourceType || "past_paper",
       sourceScope: sourceScope || "past_paper",
       storagePath: storagePath || null,
+      downloadUrl: storagePath ? validatedPdfDownloadUrl(downloadUrl, storagePath) || existing.downloadUrl || null : null,
       ownerUid: req.user.uid,
       ownerEmail: req.user.email || "unknown",
       uploaded: true,
@@ -10029,7 +10757,7 @@ ragRoutes.delete("/sources/:sourceId", requireNonAnonymousUser, async (req, res)
 ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUser, async (req, res) => {
   try {
     const user = req.user;
-    const { sourceId, pages, mode = "auto" } = req.body;
+    const { sourceId, pages, mode = "auto", downloadUrl } = req.body;
     if (!sourceId) {
       return res.status(400).json({ ok: false, error: "Missing sourceId." });
     }
@@ -10069,20 +10797,29 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
     let isOcrRun = false;
     let isOcrFailed = false;
     let pdfData = null;
+    let pdfLoadError = null;
     if (req.file) {
       pdfData = req.file.buffer;
     } else if (!pages && sourceData?.storagePath) {
       try {
-        const bucket = getAdminBucket();
-        const file = bucket.file(sourceData.storagePath);
-        const [exists] = await file.exists();
-        if (exists) {
-          const [buffer] = await retryGoogleAuthOperation("fileDownload", async () => await file.download());
-          pdfData = buffer;
-        }
+        const loaded = await loadPdfSourceBuffer({
+          source: sourceData,
+          storagePath: sourceData.storagePath,
+          submittedDownloadUrl: downloadUrl
+        });
+        pdfData = loaded.buffer;
       } catch (err) {
         console.error("Failed to download PDF from storage for reindexing:", err);
+        pdfLoadError = err;
       }
+    }
+    if (!pdfData && !pages && pdfLoadError) {
+      return res.status(424).json({
+        ok: false,
+        code: pdfLoadError.code || "DIRECT_QA_SOURCE_DOWNLOAD_FAILED",
+        error: "The PDF could not be read from its verified Firebase URL or Admin Storage.",
+        message: "PDF source \u0D91\u0D9A download \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0DB6\u0DD0\u0DBB\u0DD2 \u0DC0\u0DD4\u0DAB\u0DCF. File \u0D91\u0D9A \u0DB1\u0DD0\u0DC0\u0DAD upload \u0D9A\u0DC5\u0DDC\u0DAD\u0DCA original File \u0D91\u0D9A\u0DD9\u0DB1\u0DCA index \u0D9A\u0DBB\u0DBA\u0DD2."
+      });
     }
     if (pdfData) {
       if (mode === "text_extract") {
@@ -10600,8 +11337,6 @@ syllabusRoutes.get("/resources/:resourceId/download", async (req, res) => {
 
 // server/auth/routes.ts
 var import_express4 = __toESM(require("express"), 1);
-init_userRepository();
-var import_auth2 = require("firebase-admin/auth");
 init_admin();
 
 // server/utils/authContext.ts
@@ -10695,6 +11430,7 @@ async function createAuditEvent(params) {
 }
 
 // server/auth/routes.ts
+init_configuredRoles();
 var authRoutes = import_express4.default.Router();
 authRoutes.get("/context", requireFirebaseUser, async (req, res) => {
   try {
@@ -10727,8 +11463,8 @@ authRoutes.post("/force-reset-password", async (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ error: "Email and new password are required" });
     }
-    const userRecord = await (0, import_auth2.getAuth)().getUserByEmail(email);
-    await (0, import_auth2.getAuth)().updateUser(userRecord.uid, { password });
+    const userRecord = await getAdminAuth().getUserByEmail(email);
+    await getAdminAuth().updateUser(userRecord.uid, { password });
     res.json({ success: true, message: "Password updated successfully" });
   } catch (e) {
     res.status(500).json({ error: e.message || "Failed to update password" });
@@ -10740,35 +11476,57 @@ authRoutes.post("/session", async (req, res) => {
     if (!idToken) {
       return res.status(400).json({ error: "ID token is required" });
     }
-    const decodedToken = await (0, import_auth2.getAuth)().verifyIdToken(idToken);
+    const decodedToken = await getAdminAuth().verifyIdToken(idToken);
     const email = decodedToken.email;
     if (!email) {
       return res.status(400).json({ error: "Email missing from token" });
     }
-    let userData = readUser(email);
-    if (!userData.profile) {
-      userData.profile = {
-        email: email.toLowerCase(),
-        username: profileData?.username || decodedToken.name || email.split("@")[0],
-        picture: decodedToken.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
-        nic: profileData?.nic || "",
-        mobileNumber: profileData?.mobileNumber || "",
-        bday: profileData?.bday || "",
-        gender: profileData?.gender || "",
-        isVerified: true,
-        updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-        bio: "Success-driven Technology Stream Learner"
-      };
-      writeUser(email, userData);
+    const configuredRoles = applyConfiguredAdminRoles(
+      email,
+      decodedToken.email_verified === true,
+      Array.isArray(decodedToken.roles) ? decodedToken.roles : [],
+      decodedToken.uid
+    );
+    let claimsUpdated = false;
+    if (configuredRoles.includes("admin")) {
+      try {
+        const auth = getAdminAuth();
+        const record = await auth.getUser(decodedToken.uid);
+        const currentClaims = record.customClaims || {};
+        const nextRoles = [.../* @__PURE__ */ new Set([...Array.isArray(currentClaims.roles) ? currentClaims.roles : [], ...configuredRoles])];
+        if (currentClaims.admin !== true || JSON.stringify(currentClaims.roles || []) !== JSON.stringify(nextRoles)) {
+          await auth.setCustomUserClaims(decodedToken.uid, {
+            ...currentClaims,
+            admin: true,
+            role: "admin",
+            roles: nextRoles
+          });
+          claimsUpdated = true;
+        }
+      } catch (claimError) {
+        console.warn("[AUTH] Admin custom-claim sync skipped:", String(claimError?.message || claimError));
+      }
     }
+    const profile = {
+      email: email.toLowerCase(),
+      username: profileData?.username || decodedToken.name || email.split("@")[0],
+      picture: decodedToken.picture || profileData?.picture || "",
+      nic: profileData?.nic || "",
+      mobileNumber: profileData?.mobileNumber || "",
+      bday: profileData?.bday || "",
+      gender: profileData?.gender || "",
+      isVerified: decodedToken.email_verified === true,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      bio: profileData?.bio || "Technology Stream Learner"
+    };
     const userSession = {
-      email: userData.profile.email,
-      name: userData.profile.username,
-      picture: userData.profile.picture,
-      emailVerified: true,
+      email: profile.email,
+      name: profile.username,
+      picture: profile.picture,
+      emailVerified: decodedToken.email_verified === true,
       uid: decodedToken.uid
     };
-    res.json({ success: true, user: userSession, profile: userData.profile });
+    res.json({ success: true, user: userSession, profile, claimsUpdated });
   } catch (error) {
     res.status(401).json({ error: "Invalid or expired login" });
   }
@@ -11866,10 +12624,96 @@ Instructions:
 // server/pdf/routes.ts
 init_stripVisualBlocks();
 init_retrieve();
+
+// server/pdf/syllabusGrounding.ts
+init_admin();
+init_client();
+var CACHE_TTL_MS3 = 15 * 60 * 1e3;
+var cache2 = /* @__PURE__ */ new Map();
+function configuredSftSyllabusUrl() {
+  return String(process.env.SFT_SYLLABUS_PDF_URL || "").trim();
+}
+function configuredSftSyllabusPath() {
+  return String(process.env.SFT_SYLLABUS_STORAGE_PATH || "").trim();
+}
+async function findSftSyllabusSource(uid) {
+  const db = getAdminDb();
+  const snapshots = await Promise.allSettled([
+    db.collection("users").doc(uid).collection("syllabus_resources").where("subject", "==", "SFT").limit(20).get(),
+    db.collection("rag_sources").where("subject", "==", "SFT").where("sourceScope", "==", "owner_syllabus").limit(20).get()
+  ]);
+  const candidates = [];
+  for (const snapshot of snapshots) {
+    if (snapshot.status !== "fulfilled") continue;
+    snapshot.value.docs.forEach((doc) => candidates.push({ id: doc.id, ...doc.data() }));
+  }
+  return candidates.find((source) => {
+    const text = `${source.title || ""} ${source.fileName || ""} ${source.storagePath || ""}`.toLowerCase();
+    return /syllabus|syl_|curriculum/.test(text);
+  }) || candidates[0] || null;
+}
+async function loadGroundingPdf(uid) {
+  const configuredUrl = configuredSftSyllabusUrl();
+  const configuredPath = storageObjectPath(configuredSftSyllabusPath());
+  if (configuredUrl || configuredPath) {
+    const storagePath = storageObjectPath(configuredUrl) || configuredPath;
+    const verifiedUrl = configuredUrl ? validatedPdfDownloadUrl(configuredUrl, storagePath) : "";
+    if (!storagePath || !/\.pdf$/i.test(storagePath) || configuredUrl && !verifiedUrl) {
+      console.warn("[SFT_SYLLABUS] Ignoring invalid configured SFT syllabus location.");
+    } else {
+      const gcsUri2 = isVertexAiEnabled() ? storageGsUri(configuredUrl || configuredSftSyllabusPath(), storagePath) : "";
+      if (gcsUri2) {
+        return { buffer: null, gcsUri: gcsUri2, sourceId: "configured_sft_syllabus", method: "vertex_gcs_uri" };
+      }
+      try {
+        const loaded = await loadPdfSourceBuffer({
+          source: verifiedUrl ? { downloadUrl: verifiedUrl } : null,
+          storagePath,
+          submittedDownloadUrl: verifiedUrl
+        });
+        return { buffer: loaded.buffer, sourceId: "configured_sft_syllabus", method: loaded.method };
+      } catch (error) {
+        throw error;
+      }
+    }
+  }
+  const source = await findSftSyllabusSource(uid);
+  if (!source?.storagePath) return null;
+  const gcsUri = isVertexAiEnabled() ? storageGsUri(source.storagePath) : "";
+  if (gcsUri) {
+    return {
+      buffer: null,
+      gcsUri,
+      sourceId: source.id || source.sourceId || "sft_syllabus",
+      method: "vertex_gcs_uri"
+    };
+  }
+  try {
+    const loaded = await loadPdfSourceBuffer({ source, storagePath: source.storagePath });
+    return { buffer: loaded.buffer, sourceId: source.id || source.sourceId || "sft_syllabus", method: loaded.method };
+  } catch (error) {
+    throw error;
+  }
+}
+async function getSftSyllabusGroundingPdf(uid, subject) {
+  if (String(subject || "").trim().toUpperCase() !== "SFT") return null;
+  const key = `${uid}:SFT:${configuredSftSyllabusUrl() || configuredSftSyllabusPath() ? "configured" : "library"}`;
+  const cached = cache2.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const value = loadGroundingPdf(uid).catch((error) => {
+    console.warn("[SFT_SYLLABUS] Grounding PDF unavailable; continuing without fabricated evidence:", String(error?.message || error));
+    return null;
+  });
+  cache2.set(key, { expiresAt: Date.now() + CACHE_TTL_MS3, value });
+  return value;
+}
+
+// server/pdf/routes.ts
+init_client();
 init_aiCircuitBreaker();
 var pdfRoutes = (0, import_express5.Router)();
 var upload2 = (0, import_multer2.default)({ storage: import_multer2.default.memoryStorage() });
-function storageObjectPath(input) {
+function storageObjectPath2(input) {
   const value = String(input || "").trim();
   if (!value) return "";
   if (value.startsWith("gs://")) {
@@ -11892,7 +12736,7 @@ function canUseStoragePath(user, path5) {
   const privileged = user?.admin === true || roles.some((role) => ["admin", "content_editor", "ops"].includes(role));
   return privileged || path5.startsWith(`users/${user.uid}/`) || path5.startsWith(`rag_uploads/${user.uid}/`);
 }
-async function resolveDirectQaSource(user, sourceId, submittedPath) {
+async function resolveDirectQaSource(user, sourceId, submittedPath, submittedDownloadUrl) {
   const db = getAdminDb();
   const snapshots = await Promise.all([
     sourceId ? db.collection("rag_sources").doc(sourceId).get() : Promise.resolve(null),
@@ -11900,7 +12744,7 @@ async function resolveDirectQaSource(user, sourceId, submittedPath) {
   ]);
   const sourceSnapshot = snapshots.find((snapshot) => snapshot?.exists);
   const source = sourceSnapshot?.data?.() || null;
-  const path5 = storageObjectPath(source?.storagePath || submittedPath);
+  const path5 = storageObjectPath2(source?.storagePath || submittedPath);
   if (!path5) throw Object.assign(new Error("PDF source has no valid storage path."), { status: 400, code: "DIRECT_QA_SOURCE_PATH_INVALID" });
   const roles = Array.isArray(user?.roles) ? user.roles : [];
   const privileged = user?.admin === true || roles.some((role) => ["admin", "content_editor", "ops"].includes(role));
@@ -11909,9 +12753,13 @@ async function resolveDirectQaSource(user, sourceId, submittedPath) {
   if (!privileged && !visible && !owned) {
     throw Object.assign(new Error("You do not have access to this PDF source."), { status: 403, code: "DIRECT_QA_SOURCE_FORBIDDEN" });
   }
-  return { source, path: path5 };
+  const downloadUrl = validatedPdfDownloadUrl(
+    submittedDownloadUrl || source?.downloadUrl || source?.url,
+    path5
+  );
+  return { source, path: path5, downloadUrl };
 }
-pdfRoutes.post("/process-uploaded", requireFirebaseUser, import_express5.default.json(), async (req, res) => {
+pdfRoutes.post("/process-uploaded", requireNonAnonymousUser, import_express5.default.json(), async (req, res) => {
   try {
     const user = req.user;
     const {
@@ -11925,21 +12773,24 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, import_express5.default
       sourceType,
       sourceScope,
       lesson,
-      deferProcessing
+      deferProcessing,
+      downloadUrl
     } = req.body;
     if (!sourceId || !storagePath) {
       return res.status(400).json({ ok: false, error: "Missing sourceId or storagePath." });
     }
-    const normalizedStoragePath = storageObjectPath(storagePath);
+    const normalizedStoragePath = storageObjectPath2(storagePath);
     if (!normalizedStoragePath || !canUseStoragePath(user, normalizedStoragePath)) {
       return res.status(403).json({ ok: false, error: "Storage path is outside the signed-in user's upload area." });
     }
     const db = getAdminDb();
     const now = (/* @__PURE__ */ new Date()).toISOString();
+    const verifiedDownloadUrl = validatedPdfDownloadUrl(downloadUrl, normalizedStoragePath) || null;
     await db.collection("rag_sources").doc(sourceId).set({
       sourceId,
       ownerUid: user.uid,
       storagePath: normalizedStoragePath,
+      downloadUrl: verifiedDownloadUrl,
       title: title || fileName || "Uploaded PDF",
       fileName: fileName || "upload.pdf",
       subject: String(subject || "").toUpperCase(),
@@ -11962,6 +12813,7 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, import_express5.default
         sourceId,
         ownerUid: user.uid,
         storagePath: normalizedStoragePath,
+        downloadUrl: verifiedDownloadUrl,
         title: title || fileName || "Uploaded PDF",
         fileName: fileName || "upload.pdf",
         subject: String(subject || "").toUpperCase(),
@@ -12004,7 +12856,7 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, import_express5.default
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
-pdfRoutes.post("/reprocess/:sourceId", requireFirebaseUser, upload2.single("file"), async (req, res) => {
+pdfRoutes.post("/reprocess/:sourceId", requireNonAnonymousUser, upload2.single("file"), async (req, res) => {
   try {
     const user = req.user;
     const { sourceId } = req.params;
@@ -12173,10 +13025,24 @@ pdfRoutes.get("/ocr-text/:sourceId", requireFirebaseUser, async (req, res) => {
 });
 var inFlightDirectQa = /* @__PURE__ */ new Map();
 var failedDirectQaCooldown = /* @__PURE__ */ new Map();
-pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload2.single("file"), async (req, res) => {
+function directQaHttpError(error) {
+  const code = String(error?.code || error?.errorCode || "DIRECT_QA_BACKEND_FAILED");
+  const sourceDownloadFailed = code === "DIRECT_QA_SOURCE_DOWNLOAD_FAILED";
+  return {
+    status: Number(error?.status) || (sourceDownloadFailed ? 424 : 500),
+    body: {
+      ok: false,
+      found: false,
+      errorCode: code,
+      stage: error?.stage || (sourceDownloadFailed ? "SOURCE_DOWNLOAD" : "MODEL_CALL"),
+      message: sourceDownloadFailed ? "PDF source \u0D91\u0D9A direct read \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1 \u0DB6\u0DD0\u0DBB\u0DD2 \u0DC0\u0DD4\u0DAB\u0DCF. Source access/IAM settings \u0DB4\u0DBB\u0DD3\u0D9A\u0DCA\u0DC2\u0DCF \u0D9A\u0DBB \u0DB1\u0DD0\u0DC0\u0DAD \u0D8B\u0DAD\u0DCA\u0DC3\u0DCF\u0DC4 \u0D9A\u0DBB\u0DB1\u0DCA\u0DB1." : error?.message || "Direct PDF QA failed"
+    }
+  };
+}
+pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload2.single("file"), async (req, res) => {
   try {
-    const { sourceId, storagePath, prompt, questionId, questionNo, questionType, subject, year } = req.body;
-    console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}`);
+    const { sourceId, storagePath, downloadUrl, prompt, questionId, questionNo, questionType, subject, year, scanMode } = req.body;
+    console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}, scanMode: ${scanMode || "full_paper"}`);
     const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}`;
     const cooldownUntil = failedDirectQaCooldown.get(idempotencyKey);
     if (cooldownUntil && Date.now() < cooldownUntil || isAiBillingCircuitOpen()) {
@@ -12200,7 +13066,8 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload2.single("file"), a
         }
         return res.json(result);
       } catch (e) {
-        return res.status(500).json({ ok: false, errorCode: "DIRECT_QA_BACKEND_ERROR", error: e.message });
+        const mapped = directQaHttpError(e);
+        return res.status(mapped.status).json(mapped.body);
       }
     }
     const requestPromise = async () => {
@@ -12210,8 +13077,10 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload2.single("file"), a
         buffer = req.file.buffer;
         console.log(`[DirectPDFQA] File received via upload. Buffer size: ${req.file.buffer.length} bytes`);
       } else {
-        const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath);
-        resolvedSource = resolved.source;
+        const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath, downloadUrl);
+        resolvedSource = resolved.source || {};
+        resolvedSource.__resolvedStoragePath = resolved.path;
+        resolvedSource.__verifiedDownloadUrl = resolved.downloadUrl;
       }
       const effectivePrompt = prompt?.trim() || `${year || ""} ${subject || ""} ${questionType || "question"} ${questionNo} answer`;
       if (!questionNo || !questionType) {
@@ -12233,7 +13102,44 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload2.single("file"), a
         ].some((value) => String(value || "").toLowerCase().includes("marking")) || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || ""));
         console.log(`[DirectPDFQA] Using structured extraction for ${questionType} ${questionNo}`);
         const { askGeminiDirectPdfStructured: askGeminiDirectPdfStructured2, askIndexedPdfQuestionStructured: askIndexedPdfQuestionStructured2 } = await Promise.resolve().then(() => (init_directPdfQa(), directPdfQa_exports));
+        const syllabusGrounding = await getSftSyllabusGroundingPdf(req.user.uid, subject);
         let result2;
+        const runFullPaperVisualScan = async () => {
+          const sourceGcsUri = isVertexAiEnabled() ? storageGsUri(resolvedSource.__resolvedStoragePath) : "";
+          if (sourceGcsUri) {
+            return askGeminiDirectPdfStructured2({
+              uid: req.user.uid,
+              sourceId,
+              pdfGcsUri: sourceGcsUri,
+              year: year || "unknown",
+              subject: subject || "unknown",
+              questionType,
+              questionNo,
+              prompt: effectivePrompt,
+              allowOfficialAnswer,
+              syllabusPdfBuffer: syllabusGrounding?.buffer,
+              syllabusPdfGcsUri: syllabusGrounding?.gcsUri
+            });
+          }
+          const loaded = await loadPdfSourceBuffer({
+            source: resolvedSource,
+            storagePath: resolvedSource.__resolvedStoragePath,
+            submittedDownloadUrl: resolvedSource.__verifiedDownloadUrl
+          });
+          return askGeminiDirectPdfStructured2({
+            uid: req.user.uid,
+            sourceId,
+            pdfBuffer: loaded.buffer,
+            year: year || "unknown",
+            subject: subject || "unknown",
+            questionType,
+            questionNo,
+            prompt: effectivePrompt,
+            allowOfficialAnswer,
+            syllabusPdfBuffer: syllabusGrounding?.buffer,
+            syllabusPdfGcsUri: syllabusGrounding?.gcsUri
+          });
+        };
         if (!req.file) {
           const indexed = await retrieveExactPaperQuestion({
             uid: req.user.uid,
@@ -12243,28 +13149,29 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload2.single("file"), a
             questionNo,
             questionType
           });
-          if (indexed.needsOcr || indexed.needsLegacyConversion || indexed.chunks.length === 0) {
-            return {
-              ok: false,
-              status: 409,
-              found: false,
-              errorCode: "PDF_REINDEX_REQUIRED",
-              stage: "INDEX_LOOKUP",
-              needsOcr: indexed.needsOcr,
-              needsLegacyConversion: indexed.needsLegacyConversion,
-              message: indexed.needsOcr ? "This PDF needs OCR before exact questions can be read." : "This PDF index is missing or incomplete. Reindex it and retry."
-            };
+          const fullPaperChunks = Array.isArray(indexed.allChunks) && indexed.allChunks.length > 0 ? indexed.allChunks : indexed.chunks;
+          const canTrustFullPaperIndex = !indexed.badTextQuality && !indexed.needsOcr && !indexed.needsLegacyConversion && fullPaperChunks.length > 0;
+          if (canTrustFullPaperIndex) {
+            result2 = await askIndexedPdfQuestionStructured2({
+              uid: req.user.uid,
+              sourceId,
+              chunks: fullPaperChunks,
+              year: year || "unknown",
+              subject: subject || "unknown",
+              questionType,
+              questionNo,
+              allowOfficialAnswer,
+              syllabusPdfBuffer: syllabusGrounding?.buffer,
+              syllabusPdfGcsUri: syllabusGrounding?.gcsUri
+            });
+            if (result2?.errorCode === "FULL_PAPER_VISUAL_SCAN_REQUIRED") {
+              console.log(`[DirectPDFQA] OCR index could not isolate Q${questionNo}; scanning the complete original PDF visually.`);
+              result2 = await runFullPaperVisualScan();
+            }
+          } else {
+            console.log(`[DirectPDFQA] Searchable full-paper index unavailable; scanning the complete original PDF visually.`);
+            result2 = await runFullPaperVisualScan();
           }
-          result2 = await askIndexedPdfQuestionStructured2({
-            uid: req.user.uid,
-            sourceId,
-            chunks: indexed.chunks,
-            year: year || "unknown",
-            subject: subject || "unknown",
-            questionType,
-            questionNo,
-            allowOfficialAnswer
-          });
         } else {
           result2 = await askGeminiDirectPdfStructured2({
             uid: req.user.uid,
@@ -12275,7 +13182,9 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload2.single("file"), a
             questionType,
             questionNo,
             prompt: effectivePrompt,
-            allowOfficialAnswer
+            allowOfficialAnswer,
+            syllabusPdfBuffer: syllabusGrounding?.buffer,
+            syllabusPdfGcsUri: syllabusGrounding?.gcsUri
           });
         }
         console.log(`[DirectPDFQA] Structured extraction result: ${result2.found ? "FOUND" : "NOT_FOUND"}`);
@@ -12297,6 +13206,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload2.single("file"), a
           }
           return {
             ok: false,
+            status: result2.errorCode === "PDF_REINDEX_REQUIRED" ? 409 : void 0,
             found: false,
             errorCode: isRequire ? "AI_CLIENT_RUNTIME_ERROR" : isRateLimit ? "AI_RATE_LIMITED" : result2.errorCode || "EXACT_QUESTION_EVIDENCE_MISSING",
             stage: result2.stage || "MODEL_CALL",
@@ -12356,13 +13266,8 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload2.single("file"), a
     }
   } catch (err) {
     console.error("[DirectPDFQA] Backend error:", err);
-    return res.status(Number(err.status) || 500).json({
-      ok: false,
-      found: false,
-      errorCode: err.code || err.errorCode || "DIRECT_QA_BACKEND_FAILED",
-      stage: err.stage || "MODEL_CALL",
-      message: err.message || "Direct PDF QA failed"
-    });
+    const mapped = directQaHttpError(err);
+    return res.status(mapped.status).json(mapped.body);
   }
 });
 pdfRoutes.get("/question-cache", requireFirebaseUser, async (req, res) => {
@@ -12485,6 +13390,11 @@ pdfRoutes.get("/sources", requireFirebaseUser, async (req, res) => {
 pdfRoutes.post("/admin/repair-source/:sourceId", requireFirebaseUser, async (req, res) => {
   try {
     const { sourceId } = req.params;
+    const roles = Array.isArray(req.user?.roles) ? req.user.roles : [];
+    const canRepair = req.user?.admin === true || roles.some((role) => ["admin", "content_editor", "ops"].includes(role));
+    if (!canRepair) {
+      return res.status(403).json({ ok: false, code: "ADMIN_REQUIRED", message: "Admin or content-editor access is required." });
+    }
     const db = getAdminDb();
     const sourceSnap = await db.collection("rag_sources").doc(sourceId).get();
     if (!sourceSnap.exists) {
@@ -13507,17 +14417,22 @@ async function startTranscode(video) {
   return { enabled: true, jobName: payload.name };
 }
 async function refreshTranscodeStatus(video) {
-  if (!env.ENABLE_VIDEO_TRANSCODING && video.status === "uploaded") {
-    const allowDirect = env.VIDEO_ALLOW_DIRECT_PLAYBACK;
+  const updatedAtMs = Date.parse(video.updatedAt || video.createdAt || "");
+  const failedWithoutUsableJob = video.status === "failed";
+  const uploadedWithoutActiveJob = video.status === "uploaded" && !video.transcoderJobName && Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs > 3e4;
+  if (env.VIDEO_ALLOW_DIRECT_PLAYBACK && (failedWithoutUsableJob || uploadedWithoutActiveJob) && video.inputObjectPath) {
     const updates2 = {
-      status: allowDirect ? "ready" : "failed",
-      isPublished: allowDirect,
-      allowPlayback: allowDirect,
-      playbackMode: allowDirect ? "direct" : "hls",
-      transcoderErrorCode: allowDirect ? void 0 : "SECURE_TRANSCODING_REQUIRED",
+      status: "ready",
+      isPublished: true,
+      allowPlayback: true,
+      playbackMode: "direct",
+      transcoderErrorCode: video.status === "failed" ? "TRANSCODER_FAILED_DIRECT_RECOVERY" : void 0,
       updatedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
-    await getAdminDb().collection("videos").doc(video.id).set(updates2, { merge: true });
+    await getAdminDb().collection("videos").doc(video.id).set({
+      ...updates2,
+      transcoderErrorCode: updates2.transcoderErrorCode || null
+    }, { merge: true });
     await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: updates2.status, lastErrorCode: updates2.transcoderErrorCode || null, updatedAt: updates2.updatedAt }, { merge: true });
     return { ...video, ...updates2 };
   }
@@ -13959,7 +14874,11 @@ videoRoutes.get("/admin/videos", async (req, res) => {
     await verifyVideoAppCheck(req);
     await requireAdmin(req);
     const snapshot = await getAdminDb().collection("videos").orderBy("createdAt", "desc").limit(100).get();
-    res.json({ ok: true, videos: snapshot.docs.map((doc) => publicVideo({ id: doc.id, ...doc.data() })) });
+    const videos = await Promise.all(snapshot.docs.map(async (doc) => {
+      const video = { id: doc.id, ...doc.data() };
+      return publicVideo(await refreshTranscodeStatus(video));
+    }));
+    res.json({ ok: true, videos });
   } catch (error) {
     res.status(400).json({ ok: false, code: "VIDEOS_LIST_FAILED", message: error.message });
   }
@@ -13978,8 +14897,11 @@ videoRoutes.get("/videos", async (req, res) => {
   try {
     await verifyVideoAppCheck(req);
     const user = await requireUser(req);
-    const snapshot = await getAdminDb().collection("videos").where("isPublished", "==", true).limit(100).get();
-    const videos = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((video) => canUserPlayVideo(video, user)).map(publicVideo);
+    const snapshot = await getAdminDb().collection("videos").orderBy("createdAt", "desc").limit(100).get();
+    const refreshed = await Promise.all(snapshot.docs.map(
+      (doc) => refreshTranscodeStatus({ id: doc.id, ...doc.data() })
+    ));
+    const videos = refreshed.filter((video) => video.status !== "archived" && video.isPublished === true).filter((video) => canUserPlayVideo(video, user)).map(publicVideo);
     res.json({ ok: true, videos });
   } catch (error) {
     res.status(401).json({ ok: false, code: "VIDEOS_ACCESS_FAILED", message: error.message });
@@ -14989,6 +15911,17 @@ app.use((0, import_cors.default)({
 }));
 app.use(import_express14.default.json({ limit: `${env.MAX_BODY_LIMIT_MB}mb` }));
 app.use("/api", globalLimiter);
+app.get("/api/firebase/init", (_req, res) => {
+  res.setHeader("Cache-Control", "public, max-age=300, s-maxage=300");
+  res.json({
+    apiKey: process.env.VITE_FIREBASE_API_KEY || "",
+    authDomain: "tecal.vercel.app",
+    projectId: process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || "",
+    storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET || "",
+    messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+    appId: process.env.VITE_FIREBASE_APP_ID || ""
+  });
+});
 app.use("/api/rag", ragRoutes);
 app.use("/api/syllabus", syllabusRoutes);
 app.use("/api/pdf", pdfRoutes);

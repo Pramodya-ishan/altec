@@ -1630,9 +1630,11 @@ const [messages, setMessages] = useState<{
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.95 }}
                 onClick={() => scrollToBottom('smooth')}
-                className="absolute bottom-36 left-1/2 z-30 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg transition-colors hover:bg-slate-50"
+                aria-label="Scroll to latest message"
+                title="Scroll to latest message"
+                className="absolute bottom-36 left-1/2 z-30 inline-flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-lg font-semibold leading-none text-slate-700 shadow-lg transition-colors hover:bg-slate-50"
               >
-                New message ↓
+                ↓
               </motion.button>
             )}
           </AnimatePresence>

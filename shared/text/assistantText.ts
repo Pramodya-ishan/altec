@@ -11,6 +11,9 @@ export function normalizeSinhalaUnicode(value: unknown): string {
     // Add the canonical joiner when models emit the decomposed visible form.
     .replace(/\u0DCA(?!\u200D)(?=[\u0DBA\u0DBB])/g, "\u0DCA\u200D")
     .replace(/\u0DCA\u200D{2,}/g, "\u0DCA\u200D")
+    // OCR can prepend an orphan hal kirima before a Sinhala word (්ප්‍ර...).
+    // It is never a valid word-start and breaks yansaya/rakaransaya shaping.
+    .replace(/(^|[\s\n])\u0DCA+(?=[\u0D80-\u0DFF])/g, "$1")
     .replace(/([\u0D80-\u0DFF])\uFEFF(?=[\u0D80-\u0DFF])/g, "$1");
 }
 

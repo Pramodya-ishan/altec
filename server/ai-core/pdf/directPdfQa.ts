@@ -7,8 +7,9 @@ import { solveExtractedMcqQuestion } from "./solveExtractedQuestion";
 import { trackAIUsage, checkSpecificLimit } from "../../cost/usageTracker";
 import { classifyAiError } from "../../ai/aiErrorClassifier";
 import { cleanAssistantResponse, normalizeSinhalaUnicode } from "../../../shared/text/assistantText";
+import { extractQuestionFromFullPaper } from "./questionExtractor";
 
-const EVIDENCE_VERSION = 3;
+const EVIDENCE_VERSION = 4;
 
 function looksLikeLegacySinhalaGarbage(value: unknown) {
   const text = String(value || "").trim();
@@ -564,12 +565,107 @@ export async function askIndexedPdfQuestionStructured(params: {
   });
   if (cached) return cached;
 
+  const isMcq = String(questionType).toLowerCase().includes("mcq");
+
+  // Scan the complete OCR/native-text index before asking a model to locate the
+  // question. This prevents a vector-search miss from returning unrelated
+  // questions or dumping arbitrary paper chunks into the reply.
+  const deterministicEvidence = extractQuestionFromFullPaper(chunks, questionNo, questionType);
+  if (deterministicEvidence.found && isMcq && !allowOfficialAnswer) {
+    const questionText = deterministicEvidence.questionText as string;
+    const options = deterministicEvidence.options;
+    const solved = await solveExtractedMcqQuestion({
+      questionText,
+      options,
+      subject,
+      year,
+      questionNo,
+      referencePdfBuffer: syllabusPdfBuffer,
+      referencePdfGcsUri: syllabusPdfGcsUri,
+      referenceLabel: "Sri Lankan A/L SFT syllabus PDF",
+    }).catch((error) => {
+      console.error("[DirectPDFQA] Full-paper OCR solver failed:", error);
+      return null;
+    });
+
+    if (!solved || !/^[1-5]$/.test(String(solved.optionNo || "").trim())) {
+      return {
+        ok: false,
+        found: false,
+        errorCode: "MCQ_SOLVER_EMPTY",
+        stage: "ANSWER_VALIDATION",
+        reason: "The exact MCQ was isolated from the full-paper OCR scan, but no validated option was produced.",
+        canRetry: true,
+      };
+    }
+
+    const deterministicResult = sanitizeDirectQaResult({
+      ok: true,
+      found: true,
+      sourceEvidence: {
+        sourceId,
+        pageNumber: deterministicEvidence.pageNumber,
+        questionNo,
+        questionText,
+        options,
+      },
+      answer: {
+        officialAnswer: null,
+        estimatedAnswer: null,
+        explanationSinhala: solved.explanationSinhala || null,
+        lesson: null,
+        solvedAnswer: solved,
+      },
+      confidence: Math.max(0.9, Number(solved.confidence || 0)),
+      reason: deterministicEvidence.reason,
+      fullPaperScan: true,
+      scannedCharacters: deterministicEvidence.scanTextLength,
+    });
+
+    const cacheId = directQaCacheId(sourceId, questionType, questionNo);
+    await getAdminDb().collection("pdf_question_cache").doc(cacheId).set(removeUndefinedDeep({
+      sourceId,
+      subject,
+      year,
+      questionType,
+      questionNo,
+      ...deterministicResult.sourceEvidence,
+      ...deterministicResult.answer,
+      confidence: deterministicResult.confidence,
+      extractionMethod: "full_paper_ocr_scan",
+      validationStatus: "valid",
+      evidenceVersion: EVIDENCE_VERSION,
+      syllabusGrounded: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri),
+      fullPaperScan: true,
+      scannedCharacters: deterministicEvidence.scanTextLength,
+      updatedAt: new Date().toISOString(),
+    }), { merge: true });
+
+    await trackAIUsage(uid, AI_MODELS.pdf, Math.ceil(deterministicEvidence.scanTextLength / 4), 500, "directPdfQaCalls");
+    return deterministicResult;
+  }
+
+  if (isMcq && !allowOfficialAnswer && !deterministicEvidence.found) {
+    return {
+      ok: false,
+      found: false,
+      errorCode: "FULL_PAPER_VISUAL_SCAN_REQUIRED",
+      stage: "FULL_PAPER_INDEX_SCAN",
+      reason: deterministicEvidence.reason,
+      message: "The full OCR/text index did not contain a safe, complete question boundary. Scan the original PDF pages visually.",
+      canRetry: true,
+    };
+  }
+
   const ordered = [...chunks]
-    .sort((a, b) => Number(a.pageNumber || a.chunkIndex || 0) - Number(b.pageNumber || b.chunkIndex || 0))
+    .sort((a, b) => {
+      const pageDiff = Number(a.pageNumber || 0) - Number(b.pageNumber || 0);
+      return pageDiff || (Number(a.chunkIndex || 0) - Number(b.chunkIndex || 0));
+    })
     .map((chunk) => `[Page ${chunk.pageNumber || "?"}]\n${String(chunk.text || "").trim()}`)
     .filter(Boolean)
     .join("\n\n")
-    .slice(0, 70_000);
+    .slice(0, 180_000);
 
   if (ordered.replace(/\s/g, "").length < 80) {
     return {
@@ -608,8 +704,6 @@ Rules:
     const options = Array.isArray(result?.sourceEvidence?.options)
       ? result.sourceEvidence.options.map((value: unknown) => String(value).trim()).filter(Boolean)
       : [];
-    const isMcq = String(questionType).toLowerCase().includes("mcq");
-
     const numberMismatch = isQuestionNumberMismatch(questionText, questionNo);
     if (!result?.found || numberMismatch || questionText.length < 12 || (isMcq && options.length < 4)) {
       return {
@@ -665,10 +759,12 @@ Rules:
       ...result.sourceEvidence,
       ...result.answer,
       confidence: Number(result.confidence || 0),
-      extractionMethod: "indexed_pdf_text",
+      extractionMethod: "full_paper_index_scan",
       validationStatus: Number(result.confidence || 0) >= 0.8 ? "valid" : "needs_review",
       evidenceVersion: EVIDENCE_VERSION,
       syllabusGrounded: Boolean(syllabusPdfBuffer || syllabusPdfGcsUri),
+      fullPaperScan: true,
+      scannedCharacters: ordered.length,
       updatedAt: new Date().toISOString(),
     }), { merge: true });
 

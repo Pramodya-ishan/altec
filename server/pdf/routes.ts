@@ -9,7 +9,6 @@ import { stripRawVisualBlocks } from "../ai-core/answer/stripVisualBlocks";
 import { retrieveExactPaperQuestion } from "../knowledge/retrieve";
 import { loadPdfSourceBuffer, storageGsUri, validatedPdfDownloadUrl } from "./sourceBuffer";
 import { getSftSyllabusGroundingPdf } from "./syllabusGrounding";
-import { createPdfPageSubset } from "./pdfSubset";
 import { isVertexAiEnabled } from "../ai/client";
 
 export const pdfRoutes = Router();
@@ -403,8 +402,8 @@ function directQaHttpError(error: any) {
 
 pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload.single("file"), async (req: any, res) => {
   try {
-    const { sourceId, storagePath, downloadUrl, prompt, questionId, questionNo, questionType, subject, year } = req.body;
-    console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}`);
+    const { sourceId, storagePath, downloadUrl, prompt, questionId, questionNo, questionType, subject, year, scanMode } = req.body;
+    console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}, scanMode: ${scanMode || "full_paper"}`);
 
     const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}`;
 
@@ -473,6 +472,47 @@ pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload.single("file")
         const syllabusGrounding = await getSftSyllabusGroundingPdf(req.user.uid, subject);
         let result: any;
 
+        const runFullPaperVisualScan = async () => {
+          const sourceGcsUri = isVertexAiEnabled()
+            ? storageGsUri(resolvedSource.__resolvedStoragePath)
+            : "";
+
+          if (sourceGcsUri) {
+            return askGeminiDirectPdfStructured({
+              uid: req.user.uid,
+              sourceId,
+              pdfGcsUri: sourceGcsUri,
+              year: year || "unknown",
+              subject: subject || "unknown",
+              questionType,
+              questionNo,
+              prompt: effectivePrompt,
+              allowOfficialAnswer,
+              syllabusPdfBuffer: syllabusGrounding?.buffer,
+              syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
+            });
+          }
+
+          const loaded = await loadPdfSourceBuffer({
+            source: resolvedSource,
+            storagePath: resolvedSource.__resolvedStoragePath,
+            submittedDownloadUrl: resolvedSource.__verifiedDownloadUrl,
+          });
+          return askGeminiDirectPdfStructured({
+            uid: req.user.uid,
+            sourceId,
+            pdfBuffer: loaded.buffer,
+            year: year || "unknown",
+            subject: subject || "unknown",
+            questionType,
+            questionNo,
+            prompt: effectivePrompt,
+            allowOfficialAnswer,
+            syllabusPdfBuffer: syllabusGrounding?.buffer,
+            syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
+          });
+        };
+
         if (!req.file) {
           const indexed = await retrieveExactPaperQuestion({
             uid: req.user.uid,
@@ -482,17 +522,19 @@ pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload.single("file")
             questionNo,
             questionType,
           });
-          const canTrustIndex = indexed.hasExactQuestionText
-            && !indexed.badTextQuality
+          const fullPaperChunks = Array.isArray(indexed.allChunks) && indexed.allChunks.length > 0
+            ? indexed.allChunks
+            : indexed.chunks;
+          const canTrustFullPaperIndex = !indexed.badTextQuality
             && !indexed.needsOcr
             && !indexed.needsLegacyConversion
-            && indexed.chunks.length > 0;
+            && fullPaperChunks.length > 0;
 
-          if (canTrustIndex) {
+          if (canTrustFullPaperIndex) {
             result = await askIndexedPdfQuestionStructured({
               uid: req.user.uid,
               sourceId,
-              chunks: indexed.chunks,
+              chunks: fullPaperChunks,
               year: year || "unknown",
               subject: subject || "unknown",
               questionType,
@@ -501,112 +543,14 @@ pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload.single("file")
               syllabusPdfBuffer: syllabusGrounding?.buffer,
               syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
             });
-          } else if (
-            indexed.hasExactQuestionText
-            && indexed.badTextQuality
-            && indexed.chunks.length > 0
-          ) {
-            // Old Sinhala font PDFs often expose an ASCII-looking text layer
-            // that is useful for locating Q1/Q2 but cannot be read as Unicode.
-            // Download the verified object once, copy only the matching page
-            // (plus the following page when available), and visually scan that
-            // tiny subset. This avoids the old 180-second whole-document scan.
-            const matchedPages = [...new Set(indexed.chunks
-              .map((chunk: any) => Number(chunk.pageNumber || 0))
-              .filter((page: number) => Number.isFinite(page) && page > 0))];
-            const primaryPage = matchedPages[0];
-            const targetPages = primaryPage
-              ? [primaryPage, primaryPage + 1]
-              : [];
 
-            if (targetPages.length === 0) {
-              return {
-                ok: false,
-                status: 409,
-                found: false,
-                errorCode: "PDF_REINDEX_REQUIRED",
-                stage: "INDEX_LOOKUP",
-                reason: "The legacy text index could not locate the requested page.",
-                message: "PDF page index එක refresh කරමින් තිබේ. ඉන්පසු ප්‍රශ්නය නැවත answer කරයි.",
-              };
-            }
-
-            try {
-              const loaded = await loadPdfSourceBuffer({
-                source: resolvedSource,
-                storagePath: resolvedSource.__resolvedStoragePath,
-                submittedDownloadUrl: resolvedSource.__verifiedDownloadUrl,
-              });
-              const subset = await createPdfPageSubset(loaded.buffer, targetPages);
-              result = await askGeminiDirectPdfStructured({
-                uid: req.user.uid,
-                sourceId,
-                pdfBuffer: subset.buffer,
-                originalPageNumbers: subset.originalPageNumbers,
-                year: year || "unknown",
-                subject: subject || "unknown",
-                questionType,
-                questionNo,
-                prompt: effectivePrompt,
-                allowOfficialAnswer,
-                syllabusPdfBuffer: syllabusGrounding?.buffer,
-                syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
-              });
-            } catch (downloadError: any) {
-              const sourceGcsUri = isVertexAiEnabled()
-                ? storageGsUri(resolvedSource.__resolvedStoragePath)
-                : "";
-              if (!sourceGcsUri || downloadError?.code !== "DIRECT_QA_SOURCE_DOWNLOAD_FAILED") {
-                throw downloadError;
-              }
-              // Byte-free fallback: Vertex reads the private object through
-              // service-account IAM. The Firebase download token never leaves
-              // the server and Vercel does not proxy the PDF payload.
-              result = await askGeminiDirectPdfStructured({
-                uid: req.user.uid,
-                sourceId,
-                pdfGcsUri: sourceGcsUri,
-                year: year || "unknown",
-                subject: subject || "unknown",
-                questionType,
-                questionNo,
-                prompt: effectivePrompt,
-                allowOfficialAnswer,
-                syllabusPdfBuffer: syllabusGrounding?.buffer,
-                syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
-              });
+            if (result?.errorCode === "FULL_PAPER_VISUAL_SCAN_REQUIRED") {
+              console.log(`[DirectPDFQA] OCR index could not isolate Q${questionNo}; scanning the complete original PDF visually.`);
+              result = await runFullPaperVisualScan();
             }
           } else {
-            const sourceGcsUri = isVertexAiEnabled()
-              ? storageGsUri(resolvedSource.__resolvedStoragePath)
-              : "";
-            if (sourceGcsUri) {
-              result = await askGeminiDirectPdfStructured({
-                uid: req.user.uid,
-                sourceId,
-                pdfGcsUri: sourceGcsUri,
-                year: year || "unknown",
-                subject: subject || "unknown",
-                questionType,
-                questionNo,
-                prompt: effectivePrompt,
-                allowOfficialAnswer,
-                syllabusPdfBuffer: syllabusGrounding?.buffer,
-                syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
-              });
-            } else {
-              return {
-                ok: false,
-                status: 409,
-                found: false,
-                errorCode: "PDF_REINDEX_REQUIRED",
-                stage: "INDEX_LOOKUP",
-                needsOcr: indexed.needsOcr,
-                needsLegacyConversion: indexed.needsLegacyConversion,
-                reason: indexed.reason || "The saved PDF needs a searchable text index before question answering.",
-                message: "PDF index එක සකස් කරමින් තිබේ. ඉන්පසු ප්‍රශ්නය නැවත answer කරයි.",
-              };
-            }
+            console.log(`[DirectPDFQA] Searchable full-paper index unavailable; scanning the complete original PDF visually.`);
+            result = await runFullPaperVisualScan();
           }
         } else {
           result = await askGeminiDirectPdfStructured({

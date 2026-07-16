@@ -668,6 +668,7 @@ export async function retrieveExactPaperQuestion({
     return {
       source: null,
       chunks: [],
+      allChunks: [],
       hasExactQuestionText: false,
       badTextQuality: false,
       needsOcr: false,
@@ -684,6 +685,7 @@ export async function retrieveExactPaperQuestion({
     return {
       source: sourceData,
       chunks: [],
+      allChunks: [],
       hasExactQuestionText: false,
       badTextQuality: hasLegacyTextLayer,
       needsOcr,
@@ -787,6 +789,7 @@ export async function retrieveExactPaperQuestion({
       ...sourceData
     },
     chunks: matchedChunks,
+    allChunks: chunks,
     hasExactQuestionText,
     badTextQuality,
     needsOcr,

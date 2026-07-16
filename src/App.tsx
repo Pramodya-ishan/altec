@@ -28,7 +28,7 @@ const PdfIntelAdmin = lazy(() => import('./pages/PdfIntelAdmin.tsx'));
 import { AddPaperMarksModal } from './components/modals/AddPaperMarksModal';
 import { NotesModal } from './components/modals/NotesModal';
 import { SilencePlayerModal } from './components/modals/SilencePlayerModal';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { cn } from './lib/utils';
 import { CheckCircle2, XCircle, Info, X, CloudOff, Loader2, RefreshCw } from 'lucide-react';
 import { PageSkeleton } from './components/ui/PageSkeleton';
@@ -227,6 +227,7 @@ function AuthOverlay() {
 function AppContent() {
   const { theme, isSidebarOpen, setCurrentView, user, isUserDataLoading, hasHydratedUserData } = useApp();
   const location = useLocation();
+  const reduceMotion = useReducedMotion();
   const isChatRoute = location.pathname === "/clora-x" || location.pathname === "/ai-chat";
 
   React.useEffect(() => {
@@ -266,37 +267,50 @@ function AppContent() {
               : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
           )}
         >
-          <div className="relative flex h-full min-h-0 w-full flex-1 flex-col">
-              <Suspense fallback={<PageSkeleton pathname={location.pathname} />}>
-                {user && isUserDataLoading && !hasHydratedUserData ? (
-                  <PageSkeleton pathname={location.pathname} />
-                ) : (
-                <Routes location={location} key={location.pathname}>
-                  <Route path="/" element={<Navigate to="/paper-structure" replace />} />
-                  <Route path="/paper-structure" element={<PaperStructureView />} />
-                  <Route path="/question-marks" element={<Navigate to="/paper-structure" replace />} />
-                  <Route path="/paper-marks" element={<PaperMarksView />} />
-                  <Route path="/lesson-marks" element={<Navigate to="/admission-predictor" replace />} />
-                  <Route path="/admission-predictor" element={<AdmissionPredictorView />} />
-                  <Route path="/clora-x" element={<CloraXView />} />
-                  <Route path="/ai-chat" element={<Navigate to="/clora-x" replace />} />
-                  <Route path="/profile" element={<ProfileView />} />
-                  <Route path="/past-papers" element={<PastPapersView />} />
-                  <Route path="/admin-dashboard" element={<AdminDashboardView />} />
-                  <Route path="/syllabus" element={<SyllabusLibraryView />} />
-                  <Route path="/pdf-sources" element={<PdfSourcesPage />} />
-                  <Route path="/question-cache" element={<QuestionCachePage />} />
-                  <Route path="/a3-war-room" element={<A3WarRoom />} />
-                  <Route path="/exam-intel" element={<ExamIntelligence />} />
-                  <Route path="/prediction-papers" element={<PredictionPapers />} />
-                  <Route path="/mistake-notebook" element={<MistakeNotebook />} />
-                  <Route path="/pdf-intel-admin" element={<PdfIntelAdmin />} />
-                  
-                  <Route path="/focus-todo" element={<Navigate to="/paper-structure" replace />} />
-                  <Route path="*" element={<NotFoundView />} />
-                </Routes>
+          <div className="relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden">
+            <AnimatePresence mode="wait" initial={false}>
+              <motion.div
+                key={user && isUserDataLoading && !hasHydratedUserData ? `loading:${location.pathname}` : location.pathname}
+                initial={reduceMotion ? { opacity: 1 } : { opacity: 0, y: 10, scale: 0.995 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -6, scale: 0.998 }}
+                transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                className={cn(
+                  "flex min-h-0 w-full flex-1 flex-col will-change-transform",
+                  isChatRoute ? "h-full overflow-hidden" : "min-h-full"
                 )}
-              </Suspense>
+              >
+                <Suspense fallback={<PageSkeleton pathname={location.pathname} />}>
+                  {user && isUserDataLoading && !hasHydratedUserData ? (
+                    <PageSkeleton pathname={location.pathname} />
+                  ) : (
+                    <Routes location={location}>
+                      <Route path="/" element={<Navigate to="/paper-structure" replace />} />
+                      <Route path="/paper-structure" element={<PaperStructureView />} />
+                      <Route path="/question-marks" element={<Navigate to="/paper-structure" replace />} />
+                      <Route path="/paper-marks" element={<PaperMarksView />} />
+                      <Route path="/lesson-marks" element={<Navigate to="/admission-predictor" replace />} />
+                      <Route path="/admission-predictor" element={<AdmissionPredictorView />} />
+                      <Route path="/clora-x" element={<CloraXView />} />
+                      <Route path="/ai-chat" element={<Navigate to="/clora-x" replace />} />
+                      <Route path="/profile" element={<ProfileView />} />
+                      <Route path="/past-papers" element={<PastPapersView />} />
+                      <Route path="/admin-dashboard" element={<AdminDashboardView />} />
+                      <Route path="/syllabus" element={<SyllabusLibraryView />} />
+                      <Route path="/pdf-sources" element={<PdfSourcesPage />} />
+                      <Route path="/question-cache" element={<QuestionCachePage />} />
+                      <Route path="/a3-war-room" element={<A3WarRoom />} />
+                      <Route path="/exam-intel" element={<ExamIntelligence />} />
+                      <Route path="/prediction-papers" element={<PredictionPapers />} />
+                      <Route path="/mistake-notebook" element={<MistakeNotebook />} />
+                      <Route path="/pdf-intel-admin" element={<PdfIntelAdmin />} />
+                      <Route path="/focus-todo" element={<Navigate to="/paper-structure" replace />} />
+                      <Route path="*" element={<NotFoundView />} />
+                    </Routes>
+                  )}
+                </Suspense>
+              </motion.div>
+            </AnimatePresence>
           </div>
         </main>
       </div>

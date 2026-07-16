@@ -4,6 +4,9 @@ export type EvidenceSource =
   | "pdf_question_cache"
   | "gemini_direct_pdf_qa"
   | "cloud_vision_ocr"
+  | "full_paper_ocr_scan"
+  | "full_paper_index_scan"
+  | "gemini_targeted_legacy_page"
   | "official_marking_scheme"
   | "manual_verified";
 
