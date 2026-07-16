@@ -1,0 +1,469 @@
+මෙන්න Tec A/L project එකට add/improve කරන්න පුළුවන් actionable ideas 300ක්. මුල් items ටික highest priority.me okkoma project ekt add krnn take a deep thinking .
+
+## AI සහ learning features — 1–150
+
+1. PDF එකේ Q1, Q2 වගේ question-number lookup.
+
+2. Previous message එකේ selected PDF එක conversation memory එකේ තබාගැනීම.
+
+3. Lesson name Sinhala/English/Singlish වලින් resolve කිරීම.
+
+4. “තරල”, “tharala”, “fluids” එකම lesson එකක් ලෙස හඳුනාගැනීම.
+
+5. Uploaded PDFs සියල්ල automatic indexing කිරීම.
+
+6. Indexing status එක real time පෙන්වීම.
+
+7. Failed indexing සඳහා automatic retry.
+
+8. Scanned PDFs සඳහා OCR fallback.
+
+9. Sinhala OCR confidence scoring.
+
+10. Low-confidence OCR text user review කිරීමට ලබාදීම.
+
+11. PDF page-number citations.
+
+12. Answer එක සමඟ source page preview.
+
+13. Exact source quote highlighting.
+
+14. Fabricated questions සහ answers අවහිර කිරීම.
+
+15. Source එකේ නැති facts දෙන විට clear warning.
+
+16. Answer confidence indicator.
+
+17. Multiple PDFs එකවර search කිරීම.
+
+18. Lesson container එකේ සියලු resources combine කිරීම.
+
+19. Past paper සහ marking scheme automatically pair කිරීම.
+
+20. Question paper year/type detection.
+
+21. MCQ/Structured/Essay automatic classification.
+
+22. Question number extraction.
+
+23. Marking scheme answer extraction.
+
+24. Diagram-based question detection.
+
+25. Table extraction.
+
+26. Equation extraction.
+
+27. Sinhala mathematical text normalization.
+
+28. Image-only page understanding.
+
+29. PDF duplicate detection.
+
+30. Bad/corrupt PDF detection.
+
+31. Indexed text completeness report.
+
+32. PDF page rotation correction.
+
+33. Handwritten note OCR.
+
+34. Mixed Sinhala-English OCR.
+
+35. Resource title automatic cleanup.
+
+36. File name වෙනුවට lesson-friendly title generation.
+
+37. Teacher name extraction.
+
+38. Exam year extraction.
+
+39. Subject detection: SFT/ET/ICT.
+
+40. Medium detection: Sinhala/English.
+
+41. Paper vs marking scheme detection.
+
+42. Lesson-level semantic search.
+
+43. Keyword search fallback.
+
+44. Exact phrase search.
+
+45. Source relevance ranking.
+
+46. Outdated source warning.
+
+47. Duplicate source merging.
+
+48. Admin source verification.
+
+49. Trusted-source badges.
+
+50. AI answer audit trail.
+
+51. Student weak-lesson detection.
+
+52. Mastered-lesson detection.
+
+53. Personalized revision plan.
+
+54. Daily lesson recommendation.
+
+55. Upcoming exam countdown plan.
+
+56. Student marks-based difficulty adjustment.
+
+57. Beginner/intermediate/advanced answer modes.
+
+58. Short/normal/detailed answer length controls.
+
+59. Sinhala/English/Singlish response selector.
+
+60. Teacher-style explanation selector.
+
+61. Step-by-step calculation mode.
+
+62. Hint-only mode.
+
+63. Socratic tutoring mode.
+
+64. “Don’t reveal answer yet” mode.
+
+65. Formula-first explanation.
+
+66. Diagram-first explanation.
+
+67. Example-first explanation.
+
+68. Common-mistake explanation.
+
+69. Exam marking-point explanation.
+
+70. Time-saving exam technique suggestions.
+
+71. Student’s previous mistakes automatically use කිරීම.
+
+72. Similar past-paper question recommendation.
+
+73. Spaced-repetition scheduling.
+
+74. Forgotten-topic reminders.
+
+75. Daily five-question quiz.
+
+76. Weekly progress quiz.
+
+77. Lesson completion quiz.
+
+78. Adaptive question difficulty.
+
+79. Wrong answer follow-up question.
+
+80. Correct answer deeper challenge.
+
+81. Student confidence input.
+
+82. Guessing detection.
+
+83. Concept misconception detection.
+
+84. Formula misuse detection.
+
+85. Unit-conversion mistake detection.
+
+86. Calculation-step validation.
+
+87. Answer structure feedback.
+
+88. Essay paragraph feedback.
+
+89. Mark allocation prediction.
+
+90. Estimated score per response.
+
+91. PDF එකෙන් exact quiz generation.
+
+92. Marking scheme grounded quiz evaluation.
+
+93. MCQ distractor explanations.
+
+94. Timed MCQ mode.
+
+95. Structured essay practice mode.
+
+96. Full-paper simulation.
+
+97. Automatic paper timer.
+
+98. Section-specific timer.
+
+99. Answer submission history.
+
+100. AI marking rubric.
+
+101. Partial marks calculation.
+
+102. Missing marking points display.
+
+103. Model-answer comparison.
+
+104. Student answer vs marking scheme diff.
+
+105. Handwritten answer image marking.
+
+106. Essay image OCR and evaluation.
+
+107. Diagram marking.
+
+108. Graph marking.
+
+109. Formula validation.
+
+110. Significant-figure validation.
+
+111. Units validation.
+
+112. Sinhala spelling-tolerant marking.
+
+113. Alternative correct-answer support.
+
+114. Teacher review override.
+
+115. Re-mark request feature.
+
+116. Question bookmark.
+
+117. Difficult-question collection.
+
+118. Automatically generated flashcards.
+
+119. Formula flashcards.
+
+120. Diagram flashcards.
+
+121. Lesson summary generation.
+
+122. One-page revision sheet.
+
+123. Formula sheet generation.
+
+124. Last-minute revision mode.
+
+125. Audio lesson summaries.
+
+126. Sinhala text-to-speech.
+
+127. Playback-speed controls.
+
+128. AI voice question reading.
+
+129. Speech-to-text questions.
+
+130. Voice answer practice.
+
+131. Pronunciation-tolerant Singlish input.
+
+132. Uploaded image explanation.
+
+133. Screenshot error diagnosis.
+
+134. Console-log explanation.
+
+135. Code-error troubleshooting for ICT.
+
+136. Circuit image analysis for ET.
+
+137. Experimental setup image analysis.
+
+138. Graph image analysis.
+
+139. Table image analysis.
+
+140. Chemical/physics symbol recognition.
+
+141. Interactive formula calculator.
+
+142. Unit converter.
+
+143. Scientific notation helper.
+
+144. Graph plotting tool.
+
+145. Circuit truth-table generator.
+
+146. Database query practice tool.
+
+147. Python code runner sandbox.
+
+148. Lesson-specific AI tools.
+
+149. Tool-use result citations.
+
+150. AI conversation export.
+
+## Authentication, data සහ profiles — 151–180
+
+151. Popup login වෙනුවට reliable redirect fallback.
+152. Redirect result එක page boot වෙද්දී process කිරීම.
+153. Anonymous Firebase users disable කිරීම.
+154. Auth-loading timeout and retry.
+155. Offline login-state recovery.
+156. Duplicate login requests prevent කිරීම.
+157. API session creation retry.
+158. Expired token automatic refresh.
+159. Cross-tab login synchronization.
+160. Logout all devices.
+161. Session-device list.
+162. Suspicious-login alert.
+163. Google profile image fallback.
+164. Profile image caching.
+165. Broken-avatar fallback.
+166. Profile data progressive loading.
+167. Page-specific data fetching.
+168. Duplicate Firestore reads prevent කිරීම.
+169. SWR/React Query caching.
+170. Optimistic profile updates.
+171. User-data schema validation.
+172. Firestore undefined values sanitize කිරීම.
+173. Server-side user ownership checks.
+174. Email-path වෙනුවට UID-based documents.
+175. Old email-based data migration.
+176. Admin role via Firebase custom claims.
+177. Content-editor role.
+178. Account deletion flow.
+179. Data export flow.
+180. Privacy settings.
+
+## Performance සහ reliability — 181–220
+
+181. Large route bundles code-split කිරීම.
+182. Chart libraries lazy-load කිරීම.
+183. PDF.js only when needed load කිරීම.
+184. Video player lazy-load කිරීම.
+185. Admin dashboard separate chunk.
+186. AI page separate chunk.
+187. Route prefetch on hover.
+188. Critical CSS optimization.
+189. Unused CSS removal.
+190. Image WebP/AVIF conversion.
+191. Responsive image sizes.
+192. Long-term asset caching.
+193. Profile image CDN caching.
+194. API response compression.
+195. Firestore query pagination.
+196. Notifications pagination.
+197. Chat history pagination.
+198. Past-paper infinite scrolling.
+199. Search input debouncing.
+200. Duplicate API-call cancellation.
+201. Request timeout handling.
+202. Exponential retry.
+203. Retry-After support.
+204. Circuit breaker for AI providers.
+205. Gemini/OpenAI provider fallback.
+206. Model-health cache.
+207. Server cold-start reduction.
+208. Heavy imports dynamic-load කිරීම.
+209. Background OCR queue.
+210. Background video-processing queue.
+211. Resumable upload recovery.
+212. Upload pause/resume.
+213. Network reconnect continuation.
+214. Offline draft saving.
+215. Service worker update prompt.
+216. Stale asset-version recovery.
+217. Dynamic-import failure auto reload.
+218. Error boundary per route.
+219. Health dashboard.
+220. Automated synthetic monitoring.
+
+## UI/UX සහ responsive design — 221–260
+
+221. Single consistent white design system.
+222. Unified color tokens.
+223. Unified spacing scale.
+224. Unified border radius.
+225. Unified shadow system.
+226. Consistent typography hierarchy.
+227. Sinhala-compatible font stack.
+228. Dark navy only for primary actions.
+229. Green only for completed states.
+230. Red only for errors/destructive actions.
+231. Consistent button heights.
+232. Consistent form field heights.
+233. Clear hover states.
+234. Clear keyboard-focus states.
+235. Smooth page transitions.
+236. Route-specific skeletons.
+237. Skeleton dimensions match final content.
+238. Avoid full-page spinner after initial load.
+239. Preserve previous page data during tab switching.
+240. Empty-state illustrations without “AI-generated” appearance.
+241. Sidebar tooltips when collapsed.
+242. Sidebar active-item indicator.
+243. Mobile bottom navigation.
+244. Mobile safe-area support.
+245. Keyboard-open viewport handling.
+246. Chat composer attach to keyboard.
+247. Auto-growing textarea with maximum height.
+248. Mobile composer smaller padding.
+249. Scroll-to-latest button.
+250. Restore chat scroll position.
+251. Prevent horizontal mobile overflow.
+252. Modal height use `dvh`.
+253. Modal body independent scrolling.
+254. Sticky modal header.
+255. Sticky modal actions.
+256. Responsive paper cards.
+257. Responsive charts.
+258. Accessible chart summaries.
+259. Reduced-motion setting.
+260. Custom lightweight scrollbar.
+
+## Files, PDFs සහ video — 261–280
+
+261. Simple file-row UI without fake previews.
+262. Clear file-type icon.
+263. Human-readable file size.
+264. Open/download actions grouped consistently.
+265. Upload percentage.
+266. Uploaded size/full size.
+267. Remaining size.
+268. Upload speed.
+269. ETA.
+270. Cancel and retry.
+271. Uploaded video persistent database record.
+272. Video processing state machine.
+273. Processing failure reason.
+274. HLS adaptive-quality generation.
+275. Quality selector.
+276. Short-lived playback sessions.
+277. Signed segment URLs/cookies.
+278. Per-user visible watermark.
+279. Disable raw MP4 production fallback.
+280. Existing videos secure-HLS reprocessing tool.
+
+## Security, DevOps, SEO සහ quality — 281–300
+
+281. Revoke exposed Firebase service-account key.
+282. Use one server credential JSON variable.
+283. Secret-format validation without exposing values.
+284. Firebase App Check enforcement.
+285. Firestore rules automated tests.
+286. Storage rules automated tests.
+287. Rate limit by UID and IP.
+288. Upload MIME/signature validation.
+289. Antivirus/malware scanning.
+290. CSP and security headers.
+291. Dependency vulnerability updates.
+292. Automated unit tests on every PR.
+293. Authentication E2E tests.
+294. PDF-QA E2E tests.
+295. Video upload/playback E2E tests.
+296. Structured logs with request IDs.
+297. Google SEO landing pages by year/subject/lesson.
+298. Sinhala/English/Singlish keyword metadata.
+299. Sitemap, canonical URL and structured-data generation.
+300. Core Web Vitals, error-rate and learning-outcome analytics.
+

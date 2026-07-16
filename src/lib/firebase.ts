@@ -18,10 +18,22 @@ const configuredFirebaseConfig = {
 const selectedConfig = (configuredFirebaseConfig.apiKey && configuredFirebaseConfig.apiKey.trim() !== "")
   ? configuredFirebaseConfig
   : localConfig;
-const productionAuthDomain = typeof window !== "undefined" && window.location.hostname === "tecal.vercel.app"
-  ? window.location.hostname
-  : selectedConfig.authDomain;
-const activeConfig = { ...selectedConfig, authDomain: productionAuthDomain };
+
+// Use Firebase's provisioned auth handler by default. Pointing authDomain at a
+// Vercel hostname without registering the exact /__/auth/handler URI in the
+// Google OAuth client causes the redirect_uri_mismatch shown by Google.
+// A custom auth domain is opt-in only after it has been configured in Firebase
+// Hosting and Google Cloud OAuth settings.
+const projectId = selectedConfig.projectId || localConfig.projectId;
+const defaultFirebaseAuthDomain = projectId ? `${projectId}.firebaseapp.com` : selectedConfig.authDomain;
+const useCustomAuthDomain = String(import.meta.env.VITE_FIREBASE_USE_CUSTOM_AUTH_DOMAIN || "").toLowerCase() === "true";
+const configuredAuthDomain = String(selectedConfig.authDomain || "").trim();
+const activeConfig = {
+  ...selectedConfig,
+  authDomain: useCustomAuthDomain && configuredAuthDomain
+    ? configuredAuthDomain
+    : defaultFirebaseAuthDomain,
+};
 
 let firebaseApp: any = null;
 let db: any = null;

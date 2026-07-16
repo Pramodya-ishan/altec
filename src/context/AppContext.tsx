@@ -3,7 +3,8 @@ import { apiFetch } from "../lib/api";
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
 import { isFirebaseEnabled, auth, authPersistenceReady } from '../lib/firebase';
-import { GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { GoogleAuthProvider, getRedirectResult, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { getGoogleAuthErrorMessage } from '../lib/authErrorMessage';
 
 type ModalsState = {
   playlist: { open: boolean; topic: string };
@@ -80,6 +81,8 @@ type AppContextType = {
   fetchUserInfo: (token: string) => Promise<void>;
   loginWithGooglePopup: () => Promise<void>;
   isAuthLoading: boolean;
+  authError: string;
+  clearAuthError: () => void;
   isUserDataLoading: boolean;
   hasHydratedUserData: boolean;
   logout: () => void;
@@ -151,6 +154,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
 
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState('');
+  const googleLoginPromiseRef = useRef<Promise<void> | null>(null);
   const [isUserDataLoading, setIsUserDataLoading] = useState(false);
   const [hasHydratedUserData, setHasHydratedUserData] = useState(false);
   const [youtubeCookies, setYoutubeCookies] = useState<string>('');
@@ -572,121 +577,136 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const clearAuthError = () => setAuthError('');
+
+  const applyFirebaseUser = (firebaseUser: any, accessToken = '') => {
+    setUser({
+      email: firebaseUser.email || '',
+      name: firebaseUser.displayName || '',
+      picture: firebaseUser.photoURL || '',
+      token: accessToken,
+      emailVerified: firebaseUser.emailVerified,
+    });
+
+    setProfile((current) => current || ({
+      email: firebaseUser.email || '',
+      username: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Student',
+      picture: firebaseUser.photoURL || '',
+      bio: 'Technology Stream Learner',
+      isVerified: firebaseUser.emailVerified,
+      updatedAt: new Date().toISOString(),
+    }));
+  };
+
+  const syncFirebaseSession = async (firebaseUser: any, accessToken = '') => {
+    const idToken = await firebaseUser.getIdToken();
+    const sessionResponse = await apiFetch('/api/auth/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken }),
+    });
+    const sessionData = await sessionResponse.json().catch(() => ({}));
+    if (!sessionResponse.ok) return false;
+
+    if (sessionData?.claimsUpdated) {
+      await firebaseUser.getIdToken(true).catch(() => undefined);
+    }
+    if (sessionData?.profile) {
+      setProfile(sessionData.profile);
+      localStorage.setItem('email_user_profile', JSON.stringify(sessionData.profile));
+    }
+    if (sessionData?.user) {
+      const nextUser = { ...sessionData.user, token: accessToken };
+      setUser(nextUser);
+      localStorage.setItem('email_user_session', JSON.stringify(nextUser));
+    }
+    return true;
+  };
+
   useEffect(() => {
     let unsubscribeAutoAuth = () => {};
     let disposed = false;
-    
+
+    // Old Google OAuth access tokens expire and were causing a userinfo 401 on
+    // reload. Firebase Auth persistence is the only session source of truth.
+    localStorage.removeItem('google_access_token');
+
     if (isFirebaseEnabled && auth) {
-      void authPersistenceReady.then(() => {
+      void authPersistenceReady.then(async () => {
         if (disposed) return;
+
+        try {
+          // Completes the mobile/blocked-popup fallback after the browser
+          // returns from Google. onAuthStateChanged handles the actual session.
+          await getRedirectResult(auth);
+        } catch (error: any) {
+          if (!disposed) setAuthError(getGoogleAuthErrorMessage(error));
+        }
+        if (disposed) return;
+
         unsubscribeAutoAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-        if (firebaseUser) {
-          if (firebaseUser.isAnonymous) {
-            await signOut(auth).catch(() => undefined);
+          if (firebaseUser) {
+            if (firebaseUser.isAnonymous) {
+              await signOut(auth).catch(() => undefined);
+              setUser(null);
+              setIsAuthLoading(false);
+              return;
+            }
+
+            setAuthError('');
+            applyFirebaseUser(firebaseUser);
+
+            const savedData = localStorage.getItem(`student_progress_data_${(firebaseUser.email || '').toLowerCase()}`);
+            if (savedData) {
+              try { setData(JSON.parse(savedData)); } catch {}
+            }
+
+            // Do not block the workspace on profile/API bootstrap. A valid
+            // Firebase user is already authenticated.
+            setIsAuthLoading(false);
+            void syncFirebaseSession(firebaseUser).catch(() => undefined);
+            void fetchUserDataFromDB(firebaseUser.email || '', { showLoading: !savedData });
+            window.setTimeout(() => {
+              fetchYoutubeCookies(firebaseUser.email || '').catch(() => {});
+            }, 1500);
+          } else {
             setUser(null);
             setIsAuthLoading(false);
-            return;
           }
-          const savedToken = localStorage.getItem('google_access_token') || '';
-          setUser({
-            email: firebaseUser.email || '',
-            name: firebaseUser.displayName || '',
-            picture: firebaseUser.photoURL || '',
-            token: savedToken,
-            emailVerified: firebaseUser.emailVerified
-          });
-
-          // Reconcile the restored Firebase session with the server on every
-          // page load. This refreshes configured admin/content-editor claims
-          // without blocking the UI or falling back to an anonymous identity.
-          void (async () => {
-            try {
-              const idToken = await firebaseUser.getIdToken();
-              const sessionResponse = await apiFetch('/api/auth/session', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ idToken }),
-              });
-              if (!sessionResponse.ok) return;
-              const sessionData = await sessionResponse.json();
-              if (sessionData?.claimsUpdated) {
-                await firebaseUser.getIdToken(true);
-              }
-              if (sessionData?.profile) {
-                setProfile(sessionData.profile);
-                localStorage.setItem('email_user_profile', JSON.stringify(sessionData.profile));
-              }
-              if (sessionData?.user) {
-                localStorage.setItem('email_user_session', JSON.stringify({
-                  ...sessionData.user,
-                  token: savedToken,
-                }));
-              }
-            } catch {
-              // Firebase Auth remains the source of truth. A temporary API
-              // failure must never reopen the sign-in overlay.
-            }
-          })();
-
-          const savedData = localStorage.getItem(`student_progress_data_${(firebaseUser.email || '').toLowerCase()}`);
-          if (savedData) {
-             try { setData(JSON.parse(savedData)); } catch(e) {}
-          }
-
-          setIsAuthLoading(false);
-          void fetchUserDataFromDB(firebaseUser.email || '', { showLoading: !savedData });
-          setTimeout(() => {
-            fetchYoutubeCookies(firebaseUser.email || '').catch(() => {});
-          }, 1500);
-          setIsAuthLoading(false);
-        } else {
-          setUser(null);
-          setIsAuthLoading(false);
-        }
         });
       });
     } else {
-      // Offline mode
+      // Local development fallback only. Production authentication never trusts
+      // this cache when Firebase is configured.
       const savedUserSession = localStorage.getItem('email_user_session');
       const savedUserProfile = localStorage.getItem('email_user_profile');
-      
+
       if (savedUserSession && savedUserProfile) {
         try {
           const parsedUser = JSON.parse(savedUserSession);
           const parsedProfile = JSON.parse(savedUserProfile);
           setUser(parsedUser);
           setProfile(parsedProfile);
-          
+
           const savedData = localStorage.getItem(`student_progress_data_${parsedUser.email.toLowerCase()}`);
           if (savedData) {
-             try { setData(JSON.parse(savedData)); } catch(e) {}
+            try { setData(JSON.parse(savedData)); } catch {}
           }
 
-          // Fetch latest details in the background
-          fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData }).then(() => {
-            setTimeout(() => {
+          void fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData }).then(() => {
+            window.setTimeout(() => {
               fetchYoutubeCookies(parsedUser.email).catch(() => {});
             }, 1500);
           });
-          setIsAuthLoading(false);
-        } catch (e) {
-          console.error("Local session parsing failed:", e);
-          setIsAuthLoading(false);
-        }
-      } else {
-        const savedToken = localStorage.getItem('google_access_token');
-        if (savedToken) {
-           fetchUserInfo(savedToken);
-        } else {
-           setIsAuthLoading(false);
+        } catch (error) {
+          console.error('Local session parsing failed:', error);
         }
       }
+      setIsAuthLoading(false);
     }
 
     const localCookies = localStorage.getItem('youtube_bypass_cookies');
-    if (localCookies) {
-        setYoutubeCookies(localCookies);
-    }
+    if (localCookies) setYoutubeCookies(localCookies);
 
     return () => {
       disposed = true;
@@ -694,92 +714,69 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [isFirebaseEnabled]);
 
-  
   const loginWithGooglePopup = async () => {
-    setIsAuthLoading(true);
-    try {
-      if (isFirebaseEnabled && auth) {
-        await authPersistenceReady;
-        const provider = new GoogleAuthProvider();
-        
-        // Remove unnecessary sensitive scopes and keep only standard ones
-        provider.addScope('openid');
-        provider.addScope('https://www.googleapis.com/auth/userinfo.email');
-        provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
-        
-        provider.setCustomParameters({ prompt: 'select_account' });
-        const result = await signInWithPopup(auth, provider);
-        
-        const credential = GoogleAuthProvider.credentialFromResult(result);
-        const accessToken = credential?.accessToken;
-        if (accessToken) {
-          localStorage.setItem('google_access_token', accessToken);
+    if (googleLoginPromiseRef.current) return googleLoginPromiseRef.current;
+
+    const loginTask = (async () => {
+      setAuthError('');
+      setIsAuthLoading(true);
+
+      try {
+        if (!isFirebaseEnabled || !auth) {
+          throw Object.assign(new Error('Firebase Authentication is not configured.'), { code: 'auth/not-configured' });
         }
 
-        const idToken = await result.user.getIdToken(true);
-        const fallbackProfile: UserProfile = {
-          email: result.user.email || '',
-          username: result.user.displayName || result.user.email?.split('@')[0] || 'Student',
-          picture: result.user.photoURL || '',
-          bio: 'Technology Stream Learner',
-          isVerified: result.user.emailVerified,
-          updatedAt: new Date().toISOString(),
-        };
-        setUser({
-          email: result.user.email || '',
-          name: result.user.displayName || '',
-          picture: result.user.photoURL || '',
-          token: accessToken || '',
-          emailVerified: result.user.emailVerified,
-        });
-        setProfile(fallbackProfile);
-        const res = await apiFetch('/api/auth/session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ idToken })
-        });
-        const resData = await res.json();
-        if (res.ok) {
-          if (resData.claimsUpdated) {
-            // Refresh once so Firestore/Storage rules immediately receive the
-            // configured admin claims added by the verified server session.
-            await result.user.getIdToken(true).catch(() => undefined);
+        await authPersistenceReady;
+        const provider = new GoogleAuthProvider();
+        // GoogleAuthProvider already requests the standard identity scopes.
+        // Keeping the request minimal avoids stale/unused userinfo tokens.
+        provider.setCustomParameters({ prompt: 'select_account' });
+
+        let result;
+        try {
+          result = await signInWithPopup(auth, provider);
+        } catch (popupError: any) {
+          const code = String(popupError?.code || '');
+          if (code.includes('popup-blocked') || code.includes('operation-not-supported-in-this-environment')) {
+            setIsAuthLoading(false);
+            await signInWithRedirect(auth, provider);
+            return;
           }
-          setUser({ ...resData.user, token: accessToken || resData.user.token });
-          setProfile(resData.profile);
-          localStorage.setItem('email_user_session', JSON.stringify({ ...resData.user, token: accessToken || resData.user.token }));
-          localStorage.setItem('email_user_profile', JSON.stringify(resData.profile));
-          const savedData = localStorage.getItem(`student_progress_data_${resData.user.email.toLowerCase()}`);
-          if (savedData) {
-             try { setData(JSON.parse(savedData)); } catch(e) {}
-          }
-          await fetchUserDataFromDB(resData.user.email);
-          await fetchYoutubeCookies(resData.user.email);
-          showNotification("Successfully logged in with Google!", "success");
-        } else {
-          // Firebase Auth is the source of truth. A profile/session bootstrap
-          // failure must not sign the user back out or reopen the login overlay.
-          showNotification("Signed in. Profile data will sync in the background.", "info");
-          if (result.user.email) void fetchUserDataFromDB(result.user.email, { showLoading: false });
+          throw popupError;
         }
-      } else {
-         showNotification("Firebase is required for Google login", "error");
+
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        const accessToken = credential?.accessToken || '';
+        applyFirebaseUser(result.user, accessToken);
+        setIsAuthLoading(false);
+
+        const synced = await syncFirebaseSession(result.user, accessToken).catch(() => false);
+        if (result.user.email) {
+          void fetchUserDataFromDB(result.user.email, { showLoading: false });
+          void fetchYoutubeCookies(result.user.email);
+        }
+        showNotification(
+          synced ? 'Google sign-in complete.' : 'Signed in. Profile data will sync in the background.',
+          synced ? 'success' : 'info',
+        );
+      } catch (error: any) {
+        console.error('Google sign-in error:', error);
+        if (auth?.currentUser && !auth.currentUser.isAnonymous) {
+          applyFirebaseUser(auth.currentUser);
+          setAuthError('');
+        } else {
+          const message = getGoogleAuthErrorMessage(error);
+          setAuthError(message);
+          showNotification(message, 'error');
+        }
+      } finally {
+        setIsAuthLoading(false);
+        googleLoginPromiseRef.current = null;
       }
-    } catch (error: any) {
-      console.error("Google Popup Login Error:", error);
-      if (auth?.currentUser && !auth.currentUser.isAnonymous) {
-        setUser({
-          email: auth.currentUser.email || '',
-          name: auth.currentUser.displayName || '',
-          picture: auth.currentUser.photoURL || '',
-          emailVerified: auth.currentUser.emailVerified,
-        });
-        showNotification("Signed in. Profile data will sync in the background.", "info");
-      } else {
-        showNotification("Google login failed or was cancelled.", "error");
-      }
-    }
-    setIsAuthLoading(false);
+    })();
+
+    googleLoginPromiseRef.current = loginTask;
+    return loginTask;
   };
 
   const fetchUserInfo = async (token: string) => {
@@ -796,7 +793,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           name: data.name,
           picture: data.picture,
           token,
-          emailVerified: data.email_verified === true || data.email_verified === 'true' || true
+          emailVerified: data.email_verified === true || data.email_verified === 'true'
         });
 
         const savedData = localStorage.getItem(`student_progress_data_${data.email.toLowerCase()}`);
@@ -1312,6 +1309,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     triggerStars,
     fetchUserInfo,
     loginWithGooglePopup,
+    authError,
+    clearAuthError,
     isAuthLoading,
     isUserDataLoading,
     hasHydratedUserData,
@@ -1336,7 +1335,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     registerWithEmailAndDetails,
     verifyEmailCode
   }), [
-    data, user, currentSubject, currentView, theme, isSidebarOpen, isAdvisorOpen, modals, notifications, stars, isAuthLoading, isUserDataLoading, hasHydratedUserData, youtubeCookies, profile, pushNotifications, localFriends, autoEmailLogin, adminTargetEmail
+    data, user, currentSubject, currentView, theme, isSidebarOpen, isAdvisorOpen, modals, notifications, stars, authError, isAuthLoading, isUserDataLoading, hasHydratedUserData, youtubeCookies, profile, pushNotifications, localFriends, autoEmailLogin, adminTargetEmail
   ]);
 
   return (

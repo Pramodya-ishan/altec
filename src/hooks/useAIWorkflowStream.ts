@@ -7,8 +7,7 @@ import { getUnclosedMathInfo, sanitizeMathMarkdown } from "../lib/mathSanitizer"
 import { extractVisualBlocks } from "../lib/visualBlockExtractor";
 import { apiUrl } from "../lib/apiBase";
 import { askDirectPdfQa } from "../lib/ai/directPdfQa";
-
-const activeDirectQaKeys = new Set<string>();
+import { cleanAssistantResponse, normalizeSinhalaUnicode } from "../../shared/text/assistantText";
 
 export function useAIWorkflowStream() {
   const activeStreamRef = useRef(false);
@@ -47,6 +46,7 @@ export function useAIWorkflowStream() {
     reason?: string;
     assistantMessageId?: string;
     onToken?: (text: string) => void;
+    onReplace?: (text: string) => void;
     onSources?: (sources: any[]) => void;
     onSummary?: (items: string[]) => void;
     onStatus?: (status: any) => void;
@@ -75,6 +75,7 @@ export function useAIWorkflowStream() {
       reason,
       assistantMessageId,
       onToken,
+      onReplace,
       onSources,
       onSummary,
       onStatus,
@@ -244,7 +245,7 @@ export function useAIWorkflowStream() {
               throttleTimer = window.setTimeout(() => {
                 throttleTimer = null;
 
-                const { cleanText, blocks } = extractVisualBlocks(accumulatedFullText);
+                const { cleanText, blocks } = extractVisualBlocks(normalizeSinhalaUnicode(accumulatedFullText));
 
                 if (blocks.length > 0) {
                     onVisualBlocks?.(blocks);
@@ -305,6 +306,14 @@ export function useAIWorkflowStream() {
             activeDirectQaKeysRef.current.add(qaKey);
             directPdfQaPending = true;
 
+            // The server may have streamed a tentative answer before locating the
+            // exact PDF. Direct QA is authoritative, so clear the placeholder
+            // instead of appending a second answer underneath it.
+            accumulatedFullText = "";
+            lastSentRenderedText = "";
+            setAnswer("");
+            onReplace?.("");
+
             setStatus({
                stage: "processing",
                label: "Reading PDF Directly",
@@ -317,7 +326,8 @@ export function useAIWorkflowStream() {
                    const errorMsg = "PDF source එක තියෙනවා, නමුත් Storage path නැති නිසා open/scan කරන්න බැහැ.";
                    if (import.meta.env.DEV) console.error("[DirectPDFQA] Error:", errorMsg);
                    setStatus({ stage: "error", label: "Source Error", message: errorMsg });
-                   onToken?.(errorMsg);
+                   setAnswer(errorMsg);
+                   onReplace?.(errorMsg);
                    setIsStreaming(false);
                    doneReceived = true;
                    onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: "DIRECT_QA_SOURCE_MISSING_STORAGE_PATH", sources: [{ id: sourceId }] });
@@ -365,7 +375,9 @@ export function useAIWorkflowStream() {
 
                 if (result.ok && result.found === true && result.answer) {
                   if (import.meta.env.DEV) console.info("[DirectPDFQA] Success! Displaying answer.");
-                  onToken?.(result.answer);
+                  const finalAnswer = cleanAssistantResponse(result.answer);
+                  setAnswer(finalAnswer);
+                  onReplace?.(finalAnswer);
 
                   // Complete the stream
                   setIsStreaming(false);
@@ -374,10 +386,11 @@ export function useAIWorkflowStream() {
                     ok: true,
                     completed: true,
                     finishReason: "direct_pdf_qa_complete",
-                    answer: result.answer,
-                    sources: [{ id: sourceId, title, storagePath }],
+                    answer: finalAnswer,
+                    sources: [{ id: sourceId, title, storagePath, pageNumber: result.pageNumber || result.sourceEvidence?.pageNumber }],
                     paperInfo: {
                       sourceId: sourceId,
+                      pageNumber: result.pageNumber || result.sourceEvidence?.pageNumber,
                       questionNo,
                       questionType,
                       year,
@@ -407,6 +420,8 @@ export function useAIWorkflowStream() {
                      userMsg = "AI client runtime configuration/import issue. Please check server console.";
                   } else if (result.errorCode === "MCQ_SOLVER_EMPTY") {
                      userMsg = "ප්‍රශ්නය හමු වුණා, නමුත් නිවැරදි විකල්පය තහවුරු වුණේ නැහැ. මම raw OCR text එක පෙන්වන්නේ නැහැ; එම MCQ එක නැවත අහන්න.";
+                  } else if (result.errorCode === "QUESTION_NUMBER_MISMATCH") {
+                     userMsg = "PDF එකෙන් ලැබුණු ප්‍රශ්න අංකය ඔබ ඉල්ලූ අංකයට නොගැළපුණා. වැරදි ප්‍රශ්නයක් පෙන්වන්නේ නැතිව පිළිතුර නවතා ඇත.";
                   } else if (result.found === false) {
                      userMsg = "PDF එකෙන් එම ප්‍රශ්නය පැහැදිලිව හඳුනාගන්න බැරි වුණා. ප්‍රශ්න අංකය සමඟ නැවත අහන්න.";
                   } else if (["DIRECT_QA_FIREBASE_FETCH_FAILED", "ADMIN_STORAGE_DEGRADED_USE_CLIENT_HANDOFF", "DIRECT_QA_SOURCE_DOWNLOAD_FAILED"].includes(String(result.errorCode || ""))) {
@@ -418,7 +433,8 @@ export function useAIWorkflowStream() {
                     label: "Extraction Failed",
                     message: isBillingExhausted ? "AI credits අවසන්" : (isRuntimeError ? "Runtime error" : (result.reason || "No answer found"))
                   });
-                  onToken?.(userMsg);
+                  setAnswer(userMsg);
+                  onReplace?.(userMsg);
                   doneReceived = true;
                   onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: result.errorCode, sources: [{ id: sourceId, title, storagePath }] });
                 }
@@ -448,7 +464,8 @@ export function useAIWorkflowStream() {
 
                 setError(err.message);
                 setStatus({ stage: friendlyStage, label: friendlyLabel, message: err.message });
-                onToken?.(userFriendlyMsg);
+                setAnswer(userFriendlyMsg);
+                onReplace?.(userFriendlyMsg);
                 onError?.({ error: err.message });
                 doneReceived = true;
                 onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode, sources: [{ id: sourceId, title, storagePath }] });
@@ -511,17 +528,15 @@ export function useAIWorkflowStream() {
               throttleTimer = null;
             }
 
-            const { cleanText } = extractVisualBlocks(accumulatedFullText);
-            const finalRendered = sanitizeMathMarkdown(cleanText);
+            const { cleanText } = extractVisualBlocks(normalizeSinhalaUnicode(accumulatedFullText));
+            const finalRendered = cleanAssistantResponse(sanitizeMathMarkdown(cleanText));
 
             if (lastSentRenderedText !== finalRendered) {
-              const delta = finalRendered.substring(lastSentRenderedText.length);
-              if (delta.length > 0) {
-                onToken?.(delta);
-              }
               setAnswer(finalRendered);
+              onReplace?.(finalRendered);
               lastSentRenderedText = finalRendered;
             }
+            data.answer = finalRendered;
 
             doneReceived = true;
             setIsStreaming(false);
@@ -539,13 +554,11 @@ export function useAIWorkflowStream() {
         }
       }
 
-      if (lastSentRenderedText !== accumulatedFullText) {
-        const delta = accumulatedFullText.substring(lastSentRenderedText.length);
-        if (delta.length > 0) {
-          onToken?.(delta);
-        }
-        setAnswer(accumulatedFullText);
-        lastSentRenderedText = accumulatedFullText;
+      const closedStreamText = cleanAssistantResponse(sanitizeMathMarkdown(normalizeSinhalaUnicode(accumulatedFullText)));
+      if (lastSentRenderedText !== closedStreamText) {
+        setAnswer(closedStreamText);
+        onReplace?.(closedStreamText);
+        lastSentRenderedText = closedStreamText;
       }
 
       if (!doneReceived) {

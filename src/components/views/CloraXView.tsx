@@ -57,6 +57,7 @@ import { TtsComposerModal } from '../chat/TtsComposerModal';
 import { RealtimeLiveCallPanel } from '../ui/clora/RealtimeLiveCallPanel';
 import { VoiceAudioCard } from '../chat/VoiceAudioCard';
 import { parseChatCommand } from '../../lib/chatCommandParser';
+import { cleanAssistantResponse } from '../../../shared/text/assistantText';
 
 function generateUUID() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -933,6 +934,32 @@ const [messages, setMessages] = useState<{
             });
           }
         },
+        onReplace: (text) => {
+
+          if (activeStreamIdRef.current !== streamId) return;
+
+          const streamBuffer = (window as any)._cloraStreamBuffer;
+
+          if (streamBuffer?.frameId != null) {
+
+            cancelAnimationFrame(streamBuffer.frameId);
+
+            streamBuffer.frameId = null;
+
+          }
+
+          if (streamBuffer) streamBuffer.text = "";
+
+          const cleanText = cleanAssistantResponse(text);
+
+          setMessages(prev =>
+
+            prev.map(m => m.id === assistantMsgId ? { ...m, content: cleanText } : m)
+
+          );
+
+        },
+
         onSources: (newSources) => {
           if (activeStreamIdRef.current !== streamId) return;
           setMessages(prev =>
@@ -995,10 +1022,11 @@ const [messages, setMessages] = useState<{
           setMessages(prev => {
             return prev.map(m => {
               if (m.id === assistantMsgId) {
-                finalContent = m.content || "";
+                finalContent = cleanAssistantResponse(data?.answer || m.content || "");
                 const hasScanFailure = data?.finishReason === "direct_pdf_qa_failed" || data?.errorCode === "AI_CLIENT_RUNTIME_ERROR" || data?.errorCode === "EXACT_QUESTION_EVIDENCE_MISSING";
                 return {
                   ...m,
+                  content: finalContent,
                   status: hasScanFailure ? "error" : (data?.completed === false ? "incomplete" : "done"),
                   paperInfo: data?.paperInfo || m.paperInfo,
                   errorCode: data?.errorCode
@@ -1063,6 +1091,32 @@ const [messages, setMessages] = useState<{
            )
          );
        },
+       onReplace: (text) => {
+
+         if (activeStreamIdRef.current !== streamId) return;
+
+         const streamBuffer = (window as any)._cloraStreamBuffer;
+
+         if (streamBuffer?.frameId != null) {
+
+           cancelAnimationFrame(streamBuffer.frameId);
+
+           streamBuffer.frameId = null;
+
+         }
+
+         if (streamBuffer) streamBuffer.text = "";
+
+         const cleanText = cleanAssistantResponse(text);
+
+         setMessages(prev =>
+
+           prev.map(m => m.id === assistantMsgId ? { ...m, content: cleanText } : m)
+
+         );
+
+       },
+
        onSources: (newSources) => {
          if (activeStreamIdRef.current !== streamId) return;
          setMessages(prev =>
@@ -1114,8 +1168,8 @@ const [messages, setMessages] = useState<{
          setMessages(prev => {
            return prev.map(m => {
              if (m.id === assistantMsgId) {
-               finalContent = m.content || "";
-               return { ...m, status: data?.completed === false ? "incomplete" : "done" };
+               finalContent = cleanAssistantResponse(data?.answer || m.content || "");
+               return { ...m, content: finalContent, status: data?.completed === false ? "incomplete" : "done" };
              }
              return m;
            });
@@ -1318,6 +1372,32 @@ const [messages, setMessages] = useState<{
             )
           );
         },
+        onReplace: (text) => {
+
+          if (activeStreamIdRef.current !== streamId) return;
+
+          const streamBuffer = (window as any)._cloraStreamBuffer;
+
+          if (streamBuffer?.frameId != null) {
+
+            cancelAnimationFrame(streamBuffer.frameId);
+
+            streamBuffer.frameId = null;
+
+          }
+
+          if (streamBuffer) streamBuffer.text = "";
+
+          const cleanText = cleanAssistantResponse(text);
+
+          setMessages(prev =>
+
+            prev.map(m => m.id === assistantMsgId ? { ...m, content: cleanText } : m)
+
+          );
+
+        },
+
         onSources: (newSources) => {
           if (activeStreamIdRef.current !== streamId) return;
           setMessages(prev =>
@@ -1401,10 +1481,11 @@ const [messages, setMessages] = useState<{
           setMessages(prev => {
             return prev.map(m => {
               if (m.id === assistantMsgId) {
-                finalContent = m.content || "";
+                finalContent = cleanAssistantResponse(data?.answer || m.content || "");
                 const hasScanFailure = data?.finishReason === "direct_pdf_qa_failed" || data?.errorCode === "AI_CLIENT_RUNTIME_ERROR" || data?.errorCode === "EXACT_QUESTION_EVIDENCE_MISSING";
                 return {
                   ...m,
+                  content: finalContent,
                   status: hasScanFailure ? "error" : (data?.completed === false ? "incomplete" : "done"),
                   paperInfo: data?.paperInfo || m.paperInfo,
                   errorCode: data?.errorCode

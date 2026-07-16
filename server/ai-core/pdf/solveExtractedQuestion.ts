@@ -1,5 +1,6 @@
 import { callGeminiWithFallback } from "../../ai/modelRouter";
 import { AI_MODELS } from "../../ai/client";
+import { cleanAssistantResponse, normalizeSinhalaUnicode } from "../../../shared/text/assistantText";
 
 export interface SolveMcqParams {
   questionText: string;
@@ -161,11 +162,17 @@ Return JSON:
     return {
       ...result,
       optionNo,
-      optionText: String(result?.optionText || optionsUnicode[Number(optionNo) - 1] || options[Number(optionNo) - 1] || "").trim(),
+      optionText: normalizeSinhalaUnicode(result?.optionText || optionsUnicode[Number(optionNo) - 1] || options[Number(optionNo) - 1] || "").trim(),
+      formulaOrRule: result?.formulaOrRule ? normalizeSinhalaUnicode(result.formulaOrRule).trim() : null,
+      explanationSinhala: result?.explanationSinhala ? cleanAssistantResponse(result.explanationSinhala) : null,
+      whyOthersWrong: Array.isArray(result?.whyOthersWrong)
+        ? result.whyOthersWrong.map((value: unknown) => cleanAssistantResponse(value)).filter(Boolean)
+        : null,
       answerStatus: "ai_solved_from_extracted_question",
       confidence: Math.max(0, Math.min(1, Number(result?.confidence || 0))),
-      questionUnicode: questionUnicode || null,
-      optionsUnicode: optionsUnicode.length >= 4 ? optionsUnicode : null,
+      questionUnicode: questionUnicode ? normalizeSinhalaUnicode(questionUnicode) : null,
+      optionsUnicode: optionsUnicode.length >= 4 ? optionsUnicode.map(normalizeSinhalaUnicode) : null,
+      syllabusEvidence: result?.syllabusEvidence ? cleanAssistantResponse(result.syllabusEvidence) : null,
     };
   };
 

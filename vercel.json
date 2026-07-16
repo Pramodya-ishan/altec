@@ -31,10 +31,6 @@
       "destination": "/api/firebase/init"
     },
     {
-      "source": "/__/auth/:path*",
-      "destination": "https://al-ai-chat.firebaseapp.com/__/auth/:path*"
-    },
-    {
       "source": "/api/:path*",
       "destination": "/api/index"
     },

@@ -1,3 +1,5 @@
+import { cleanAssistantResponse } from "../../../shared/text/assistantText";
+
 function paragraphizeLongAnswer(content: string) {
   return content.split(/\n{2,}/).map((block) => {
     const trimmed = block.trim();
@@ -21,7 +23,7 @@ function removeMathJoiners(content: string) {
 }
 
 export function normalizeAnswerMarkdown(content: string): string {
-  const normalized = String(content || "")
+  const normalized = cleanAssistantResponse(content)
     .replace(/<summary>\s*(.*?)\s*<\/summary>/gis, (_match, title: string) => {
       const cleanTitle = title.replace(/\*\*/g, "").trim();
       return `\n### ${cleanTitle}\n`;

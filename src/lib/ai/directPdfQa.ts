@@ -4,6 +4,7 @@ import { getLargeEndpointUrl } from "../apiBase";
 import { apiFetch } from "../api";
 import { getDownloadURL, ref } from "firebase/storage";
 import { storage } from "../firebase";
+import { cleanAssistantResponse, normalizeSinhalaUnicode } from "../../../shared/text/assistantText";
 
 export type DirectPdfQaResult = {
   ok: boolean;
@@ -205,7 +206,7 @@ export async function askDirectPdfQa(params: {
        } else if (solvedAnswer) {
          const optNo = solvedAnswer.optionNo ? `(${solvedAnswer.optionNo}) ` : "";
          finalAnswerText = `${optNo}${solvedAnswer.optionText || ""}`;
-         answerStatus = "Reasoning";
+         answerStatus = "AI-derived from exact PDF evidence";
          explanation = solvedAnswer.explanationSinhala || explanation;
          whyOthersWrong = solvedAnswer.whyOthersWrong || [];
        } else {
@@ -235,9 +236,12 @@ export async function askDirectPdfQa(params: {
 
        if (answerStatus === "Official marking scheme verified") text += `_Marking scheme එකෙන් තහවුරු කළ පිළිතුර._\n`;
 
-       result.answer = text;
+       result.answer = cleanAssistantResponse(text);
     }
 
+    if (typeof result.answer === "string") result.answer = cleanAssistantResponse(result.answer);
+    if (typeof result.questionText === "string") result.questionText = normalizeSinhalaUnicode(result.questionText);
+    if (typeof result.explanationSinhala === "string") result.explanationSinhala = cleanAssistantResponse(result.explanationSinhala);
     return result;
   } catch (err: any) {
     if (import.meta.env.DEV) console.error("[DirectPDFQA]", err);

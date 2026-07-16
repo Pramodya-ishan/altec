@@ -6,6 +6,7 @@ import { getAdminDb } from "../../firebase/admin";
 import { solveExtractedMcqQuestion } from "./solveExtractedQuestion";
 import { trackAIUsage, checkSpecificLimit } from "../../cost/usageTracker";
 import { classifyAiError } from "../../ai/aiErrorClassifier";
+import { cleanAssistantResponse, normalizeSinhalaUnicode } from "../../../shared/text/assistantText";
 
 const EVIDENCE_VERSION = 3;
 
@@ -16,6 +17,66 @@ function looksLikeLegacySinhalaGarbage(value: unknown) {
   const legacySignals = (text.match(/[ñú;=<>]|\b(?:fuu|iy|iys|l=|fkdie|mß|wd;;|T[123])\b/g) || []).length;
   const latin = (text.match(/[A-Za-z]/g) || []).length;
   return sinhala === 0 && legacySignals >= 2 && latin / Math.max(1, text.length) > 0.18;
+}
+
+function extractLeadingQuestionNumber(value: unknown): string | null {
+  const text = normalizeSinhalaUnicode(value).trim();
+  const match = text.match(/^(?:#{1,6}\s*)?(?:question|q)?\s*0*(\d{1,3})\s*(?:[.)\]:-]|$)/i);
+  return match?.[1] ? String(Number(match[1])) : null;
+}
+
+function isQuestionNumberMismatch(questionText: unknown, requestedQuestionNo: unknown) {
+  const extracted = extractLeadingQuestionNumber(questionText);
+  const requestedMatch = String(requestedQuestionNo || "").match(/\d{1,3}/);
+  const requested = requestedMatch?.[0] ? String(Number(requestedMatch[0])) : null;
+  return Boolean(extracted && requested && extracted !== requested);
+}
+
+function sanitizeDirectQaResult(input: any) {
+  if (!input || typeof input !== "object") return input;
+  const result = { ...input };
+  if (result.sourceEvidence && typeof result.sourceEvidence === "object") {
+    result.sourceEvidence = {
+      ...result.sourceEvidence,
+      questionText: result.sourceEvidence.questionText
+        ? normalizeSinhalaUnicode(result.sourceEvidence.questionText).trim()
+        : result.sourceEvidence.questionText,
+      options: Array.isArray(result.sourceEvidence.options)
+        ? result.sourceEvidence.options.map((value: unknown) => normalizeSinhalaUnicode(value).trim()).filter(Boolean)
+        : result.sourceEvidence.options,
+    };
+  }
+  if (result.answer && typeof result.answer === "object") {
+    const solved = result.answer.solvedAnswer && typeof result.answer.solvedAnswer === "object"
+      ? {
+          ...result.answer.solvedAnswer,
+          optionText: result.answer.solvedAnswer.optionText
+            ? normalizeSinhalaUnicode(result.answer.solvedAnswer.optionText).trim()
+            : result.answer.solvedAnswer.optionText,
+          explanationSinhala: result.answer.solvedAnswer.explanationSinhala
+            ? cleanAssistantResponse(result.answer.solvedAnswer.explanationSinhala)
+            : result.answer.solvedAnswer.explanationSinhala,
+          whyOthersWrong: Array.isArray(result.answer.solvedAnswer.whyOthersWrong)
+            ? result.answer.solvedAnswer.whyOthersWrong.map((value: unknown) => cleanAssistantResponse(value)).filter(Boolean)
+            : result.answer.solvedAnswer.whyOthersWrong,
+          questionUnicode: result.answer.solvedAnswer.questionUnicode
+            ? normalizeSinhalaUnicode(result.answer.solvedAnswer.questionUnicode).trim()
+            : result.answer.solvedAnswer.questionUnicode,
+          optionsUnicode: Array.isArray(result.answer.solvedAnswer.optionsUnicode)
+            ? result.answer.solvedAnswer.optionsUnicode.map((value: unknown) => normalizeSinhalaUnicode(value).trim()).filter(Boolean)
+            : result.answer.solvedAnswer.optionsUnicode,
+        }
+      : result.answer.solvedAnswer;
+    result.answer = {
+      ...result.answer,
+      officialAnswer: result.answer.officialAnswer ? cleanAssistantResponse(result.answer.officialAnswer) : result.answer.officialAnswer,
+      estimatedAnswer: result.answer.estimatedAnswer ? cleanAssistantResponse(result.answer.estimatedAnswer) : result.answer.estimatedAnswer,
+      explanationSinhala: result.answer.explanationSinhala ? cleanAssistantResponse(result.answer.explanationSinhala) : result.answer.explanationSinhala,
+      lesson: result.answer.lesson ? normalizeSinhalaUnicode(result.answer.lesson).trim() : result.answer.lesson,
+      solvedAnswer: solved,
+    };
+  }
+  return result;
 }
 
 function directQaCacheId(sourceId: string, questionType: string, questionNo: string) {
@@ -64,7 +125,7 @@ async function readVerifiedQuestionCache(params: {
       && (!params.requiresSyllabusGrounding || cached.syllabusGrounded === true);
     if (!verified) return null;
 
-    return {
+    return sanitizeDirectQaResult({
       ok: true,
       found: true,
       fromCache: true,
@@ -84,7 +145,7 @@ async function readVerifiedQuestionCache(params: {
       },
       confidence: Number(cached.confidence || 0),
       reason: "VERIFIED_EVIDENCE_CACHE",
-    };
+    });
   } catch (error) {
     console.warn("[DirectPDFQA] Verified cache lookup skipped:", String((error as any)?.message || error));
     return null;
@@ -298,6 +359,17 @@ Return JSON with exact evidence. If not found, set found:false.
       }
     }
 
+    if (result.found && isQuestionNumberMismatch(qText, questionNo)) {
+      console.warn(`[DirectPDFQA] Rejected mismatched question text. Requested Q${questionNo}; extracted marker=${extractLeadingQuestionNumber(qText)}`);
+      result = {
+        ...result,
+        found: false,
+        reason: "QUESTION_NUMBER_MISMATCH",
+        answer: { officialAnswer: null, estimatedAnswer: null, explanationSinhala: null, lesson: null },
+        confidence: 0,
+      };
+    }
+
     if (!result.found || !qText || qText.length < 20 || hasUnreadableLegacyText) {
       console.log(`[DirectPDFQA] Extraction failed validation: found=${result.found}, textLength=${qText?.length || 0}`);
       result = {
@@ -381,6 +453,8 @@ Return JSON with exact evidence. If not found, set found:false.
       };
     }
 
+    result = sanitizeDirectQaResult(result);
+
     // Save to cache if found
     if (result.found && result.sourceEvidence?.questionText) {
        const db = getAdminDb();
@@ -413,7 +487,7 @@ Return JSON with exact evidence. If not found, set found:false.
        }
     }
 
-    return { ok: true, ...result };
+    return sanitizeDirectQaResult({ ok: true, ...result });
   } catch (err: any) {
     console.error("[AI_CORE] Direct PDF QA JSON extraction failed:", err);
 
@@ -536,13 +610,16 @@ Rules:
       : [];
     const isMcq = String(questionType).toLowerCase().includes("mcq");
 
-    if (!result?.found || questionText.length < 12 || (isMcq && options.length < 4)) {
+    const numberMismatch = isQuestionNumberMismatch(questionText, questionNo);
+    if (!result?.found || numberMismatch || questionText.length < 12 || (isMcq && options.length < 4)) {
       return {
         ok: false,
         found: false,
-        errorCode: "EXACT_QUESTION_EVIDENCE_MISSING",
+        errorCode: numberMismatch ? "QUESTION_NUMBER_MISMATCH" : "EXACT_QUESTION_EVIDENCE_MISSING",
         stage: "INDEX_LOOKUP",
-        reason: "The exact question is not readable in the indexed PDF text.",
+        reason: numberMismatch
+          ? `The extracted question marker does not match requested question ${questionNo}.`
+          : "The exact question is not readable in the indexed PDF text.",
       };
     }
 
@@ -596,7 +673,7 @@ Rules:
     }), { merge: true });
 
     await trackAIUsage(uid, AI_MODELS.pdf, Math.ceil(ordered.length / 4), 500, "directPdfQaCalls");
-    return { ok: true, ...result };
+    return sanitizeDirectQaResult({ ok: true, ...result });
   } catch (error: any) {
     const classified = classifyAiError(error);
     return {

@@ -22,6 +22,7 @@ import { resolveAnswerPolicy } from "./answerPolicy";
 import { scoreSource } from "../sources/sourceScoring";
 import { isLessonEvidenceMode } from "../knowledge/lessonResolver";
 import { parseSelectedPdfQuestionFollowup } from "./selectedPdfFollowup";
+import { cleanAssistantResponse } from "../../shared/text/assistantText";
 
 interface StreamTrace {
   requestId: string;
@@ -319,8 +320,9 @@ export async function aiRespondStream(req: any, res: any) {
         subject: lastPaperInfo.subject
       });
 
-      const correctionMsg = "⚠️ **Feedback Received:** ස්තූතියි! මම එම පිළිතුර වැරදි ලෙස සලකුණු කර Admin review එකට යොමු කළා. මම නැවත වතාවක් Direct PDF QA හරහා source එක පරීක්ෂා කර සත්‍යාපනය කරන්නම්.";
-      emitSse(res, "token", { text: correctionMsg });
+      // Do not stream a feedback paragraph into the answer. The exact-PDF
+      // handoff below replaces the previous answer with one authoritative result.
+      emitSse(res, "status", { step: "correction", message: "Feedback saved. Rechecking the exact PDF evidence…" });
 
       // Force direct PDF QA path for the correction
       route.mode = "paper_question_qa";
@@ -1449,6 +1451,10 @@ export async function aiRespondStream(req: any, res: any) {
       emitSse(res, "error", { ok: false, error: "Stream interrupted", recoverable: true, code: "STREAM_INTERRUPTED", completed: false, incomplete: true });
     }
 
+    // Strip hidden reasoning/source labels and normalize Sinhala before
+    // persistence. The client receives this authoritative final copy in done.
+    fullText = cleanAssistantResponse(fullText);
+
     // Track AI Usage Costs
     try {
       const { trackAIUsage } = await import("../cost/usageTracker");
@@ -1600,7 +1606,7 @@ Do not include any other text or markdown formatting.`;
 
     emitSse(res, "safe_summary", { items: summaryItems });
     trace.completed = !isInterrupted;
-    emitSse(res, "done", { ok: !isInterrupted, completed: !isInterrupted, incomplete: isInterrupted, requestId, messageId: chatRes?.messageId || null, chatSaved: trace.chatSaved, sources: allSources || [], finishReason: isInterrupted ? "interrupted" : "complete" });
+    emitSse(res, "done", { ok: !isInterrupted, completed: !isInterrupted, incomplete: isInterrupted, requestId, messageId: chatRes?.messageId || null, chatSaved: trace.chatSaved, sources: allSources || [], answer: fullText, finishReason: isInterrupted ? "interrupted" : "complete" });
     trace.doneSent = true;
     trace.lastEvent = "done";
   } catch (error: any) {
