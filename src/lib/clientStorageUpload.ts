@@ -1,33 +1,6 @@
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import { auth, storage } from "./firebase";
 
-const storageUrlCache = new Map<string, { url: string; expiresAt: number }>();
-const STORAGE_URL_CACHE_MS = 5 * 60 * 1000;
-
-function rememberStorageUrl(storagePath: string, url: string) {
-  if (!url) return;
-  storageUrlCache.set(storagePath, { url, expiresAt: Date.now() + STORAGE_URL_CACHE_MS });
-}
-
-async function getCachedStorageUrl(storagePath: string) {
-  const cached = storageUrlCache.get(storagePath);
-  if (cached && cached.expiresAt > Date.now()) return cached.url;
-  storageUrlCache.delete(storagePath);
-  const url = await getDownloadURL(ref(storage, storagePath));
-  rememberStorageUrl(storagePath, url);
-  return url;
-}
-
-export async function prefetchPrivateStorageUrl(storagePath: string) {
-  if (!storagePath) return null;
-  try {
-    return await getCachedStorageUrl(storagePath);
-  } catch (error) {
-    if (import.meta.env.DEV) console.warn("[storage-prefetch] URL unavailable", storagePath, error);
-    return null;
-  }
-}
-
 export type UploadProgressSnapshot = {
   bytesTransferred: number;
   totalBytes: number;
@@ -129,21 +102,7 @@ export async function uploadPdfWithClientStorage({
       },
     );
   });
-  // Persist the Firebase token URL alongside metadata. The backend validates
-  // that it resolves to this exact object before using it, then falls back to
-  // Admin Storage. This avoids repeat failures when the Vercel service account
-  // can read Firestore but temporarily lacks Storage object IAM.
-  let downloadUrl = "";
-  try {
-    downloadUrl = await getDownloadURL(storageRef);
-    rememberStorageUrl(storagePath, downloadUrl);
-  } catch (error) {
-    // The upload itself is already complete. Some Storage rule sets allow the
-    // write but do not expose a token URL to the client. Keep the upload valid;
-    // the backend can still use Admin Storage as a secondary path.
-    if (import.meta.env.DEV) console.warn("[clientStorageUpload] Download URL unavailable", error);
-  }
-  return { sourceId, storagePath, downloadUrl };
+  return { sourceId, storagePath };
 }
 
 export async function uploadFileWithClientStorage(args: Parameters<typeof uploadPdfWithClientStorage>[0]) {
@@ -210,16 +169,10 @@ export async function uploadImageWithClientStorage({
 }
 
 export async function openPrivateStoragePdf(storagePath: string) {
-  // Create the tab synchronously so popup blockers do not reject it while the
-  // Firebase SDK resolves a token URL. Cached opens are effectively instant.
-  const target = window.open("about:blank", "_blank");
-  if (target) target.opener = null;
   try {
-    const url = await getCachedStorageUrl(storagePath);
-    if (target) target.location.replace(url);
-    else window.location.assign(url);
+    const url = await getDownloadURL(ref(storage, storagePath));
+    window.open(url, "_blank", "noopener,noreferrer");
   } catch (e) {
-    target?.close();
     console.warn("Failed to get download URL for", storagePath, e);
   }
 }
@@ -237,7 +190,6 @@ export async function deletePrivateStorageObject(storagePath: string) {
 
   try {
     await deleteObject(ref(storage, storagePath));
-    storageUrlCache.delete(storagePath);
     return { ok: true };
   } catch (e: any) {
     if (e.code === 'storage/object-not-found') {

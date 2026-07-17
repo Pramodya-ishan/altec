@@ -1,6 +1,5 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {defineConfig} from 'vite';
@@ -12,37 +11,7 @@ export default defineConfig(() => {
   return {
     plugins: [
        react(), 
-       tailwindcss(),
-       VitePWA({
-          registerType: 'autoUpdate',
-          workbox: {
-             maximumFileSizeToCacheInBytes: 1024 * 1024,
-             globIgnores: [
-                "**/pdf.worker*",
-                "**/assets/pdf*",
-                "**/assets/charts*",
-                "**/assets/admission-predictor*",
-                "**/*.map"
-             ],
-             // Never let the service worker turn an API request into the SPA.
-             // Unknown SPA routes intentionally redirect to admission-predictor,
-             // which made failed API navigations look like server redirects.
-             navigateFallbackDenylist: [/^\/api(?:\/|$)/],
-             clientsClaim: true,
-             skipWaiting: true,
-             cleanupOutdatedCaches: true
-          },
-          devOptions: {
-             enabled: false
-          },
-          manifest: {
-             name: 'Tec A/L',
-             short_name: 'Tec A/L',
-             description: 'Sri Lankan A/L Technology study workspace',
-             theme_color: '#2563eb',
-             icons: []
-          }
-       })
+       tailwindcss()
     ],
     resolve: {
       alias: {

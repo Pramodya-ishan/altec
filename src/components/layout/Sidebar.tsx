@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import { cn } from '../../lib/utils';
@@ -8,36 +8,34 @@ import {
   LineChart, 
   FileText, 
   GraduationCap, 
+  Bot, 
   BookOpen, 
   ShieldAlert,
-  ListChecks,
   Menu,
-  ChevronUp
 } from 'lucide-react';
 
 export function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { isSidebarOpen, setSidebarOpen, theme, setTheme, user, profile } = useApp();
+  const { isSidebarOpen, setSidebarOpen, profile } = useApp();
   
   const menuItems: { id: ViewKey; label: string; icon: any }[] = [
-    { id: 'paper-structure', label: 'Paper Structure', icon: Layers },
-    { id: 'paper-marks', label: 'Past Paper Marks', icon: LineChart },
-    { id: 'past-papers', label: 'Past Papers DB', icon: FileText },
-    { id: 'admission-predictor', label: 'Z Core & Analytics', icon: GraduationCap },
-    { id: 'clora-x', label: 'Study Assistant', icon: BookOpen }
+    { id: 'paper-structure', label: 'ප්‍රශ්න පත්‍ර ව්‍යුහය', icon: Layers },
+    { id: 'paper-marks', label: 'ලකුණු ප්‍රගතිය', icon: LineChart },
+    { id: 'past-papers', label: 'ප්‍රශ්න පත්‍ර', icon: FileText },
+    { id: 'admission-predictor', label: 'Z-Score විශ්ලේෂණය', icon: GraduationCap },
+    { id: 'clora-x', label: 'අධ්‍යයන සහායක', icon: Bot }
   ];
 
   const isAdminUser = profile?.role === 'admin' || profile?.roles?.includes('admin');
   const isSyllabusEditor = isAdminUser || profile?.role === 'content_editor' || profile?.roles?.includes('content_editor') || profile?.role === 'teacher' || profile?.roles?.includes('teacher');
 
   if (isSyllabusEditor) {
-    menuItems.push({ id: 'syllabus', label: 'Syllabus Library', icon: BookOpen } as any);
+    menuItems.push({ id: 'syllabus', label: 'විෂය නිර්දේශය', icon: BookOpen } as any);
   }
   if (isAdminUser) {
     menuItems.push({ id: 'pdf-sources', label: 'PDF Intelligence', icon: FileText } as any);
     menuItems.push({ id: 'admin-dashboard', label: 'Admin Dashboard', icon: ShieldAlert } as any);
-    menuItems.push({ id: 'feature-center', label: 'Feature Center', icon: ListChecks } as any);
   }
 
   return (
@@ -58,7 +56,7 @@ export function Sidebar() {
         )}
       >
         <div className={cn("px-3 mb-6 flex items-center", isSidebarOpen ? "justify-between px-6" : "justify-center")}>
-          {isSidebarOpen && <span className="font-extrabold text-lg tracking-tight text-slate-900">Menu</span>}
+          {isSidebarOpen && <span className="font-extrabold text-lg tracking-tight text-slate-900">Tec A/L</span>}
           <button
             onClick={() => setSidebarOpen(!isSidebarOpen)}
             className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"

@@ -23,7 +23,6 @@ export interface ServerEnv {
   RATE_LIMIT_UID_MAX: number;
   ENABLE_VIDEO: boolean;
   ENABLE_VIDEO_TRANSCODING: boolean;
-  VIDEO_ALLOW_DIRECT_PLAYBACK: boolean;
   VIDEO_REQUIRE_APP_CHECK: boolean;
   VIDEO_INPUT_BUCKET: string;
   VIDEO_OUTPUT_BUCKET: string;
@@ -123,13 +122,6 @@ const RATE_LIMIT_UID_MAX = validateNumber("RATE_LIMIT_UID_MAX", 100, 1);
 
 const ENABLE_VIDEO = validateBoolean("ENABLE_VIDEO", true);
 const ENABLE_VIDEO_TRANSCODING = validateBoolean("ENABLE_VIDEO_TRANSCODING", false);
-// Keep uploaded lessons playable when the optional Transcoder/HLS pipeline is
-// not configured. Direct playback still uses a short-lived, authenticated URL.
-// Install a signed-cookie CDN + HLS pipeline before explicitly disabling this.
-// Keep an authenticated short-lived direct stream as a safety net even when
-// HLS transcoding is enabled.  Otherwise a temporary Transcoder outage leaves
-// an otherwise valid upload permanently marked as failed and hidden.
-const VIDEO_ALLOW_DIRECT_PLAYBACK = validateBoolean("VIDEO_ALLOW_DIRECT_PLAYBACK", true);
 const VIDEO_REQUIRE_APP_CHECK = validateBoolean("VIDEO_REQUIRE_APP_CHECK", false);
 const VIDEO_INPUT_BUCKET = validateOptional("VIDEO_INPUT_BUCKET", FIREBASE_STORAGE_BUCKET);
 const VIDEO_OUTPUT_BUCKET = validateOptional("VIDEO_OUTPUT_BUCKET", "");
@@ -197,7 +189,6 @@ export const env: ServerEnv = {
   RATE_LIMIT_UID_MAX,
   ENABLE_VIDEO,
   ENABLE_VIDEO_TRANSCODING,
-  VIDEO_ALLOW_DIRECT_PLAYBACK,
   VIDEO_REQUIRE_APP_CHECK,
   VIDEO_INPUT_BUCKET,
   VIDEO_OUTPUT_BUCKET,

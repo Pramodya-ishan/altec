@@ -21,9 +21,6 @@ import { generateContentStreamWithFallback, callGeminiWithFallback, AITask } fro
 import { resolveAnswerPolicy } from "./answerPolicy";
 import { scoreSource } from "../sources/sourceScoring";
 import { isLessonEvidenceMode } from "../knowledge/lessonResolver";
-import { parseSelectedPdfQuestionFollowup } from "./selectedPdfFollowup";
-import { cleanAssistantResponse } from "../../shared/text/assistantText";
-import { detectPaperMcqQuizStart, getActivePaperMcqQuiz, parsePaperMcqQuizAction, evaluatePaperMcqQuizAnswer, beginPaperMcqQuiz } from "../ai-core/quiz/paperMcqQuiz";
 
 interface StreamTrace {
   requestId: string;
@@ -200,126 +197,17 @@ export async function aiRespondStream(req: any, res: any) {
     const { prompt, activeSubject, mode: requestedMode = "auto", history = [], image, attachments } = req.body;
     const user = req.user;
 
-    const quizStartIntent = detectPaperMcqQuizStart(prompt, activeSubject);
-    const activePaperQuiz = quizStartIntent
-      ? null
-      : await safeCall("getActivePaperMcqQuiz", () => getActivePaperMcqQuiz(user.uid), null, res);
-
-    if (activePaperQuiz) {
-      const action = parsePaperMcqQuizAction(prompt, activePaperQuiz);
-      const evaluation = await safeCall(
-        "evaluatePaperMcqQuizAnswer",
-        () => evaluatePaperMcqQuizAnswer({ uid: user.uid, session: activePaperQuiz, action }),
-        { kind: "invalid", message: "පිළිතුර ලෙස 1, 2, 3, 4 හෝ 5 යවන්න.", session: activePaperQuiz } as any,
-        res,
-      );
-
-      if (evaluation.kind === "invalid" || evaluation.kind === "not_ready") {
-        emitSse(res, "token", { text: evaluation.message });
-        const chatRes = await saveFinalChat({
-          uid: user.uid, email: user.email, userText: prompt, assistantText: evaluation.message,
-          mode: "paper_mcq_quiz", subject: activePaperQuiz.subject,
-        });
-        trace.completed = true;
-        trace.chatSaved = chatRes.chatSaved;
-        trace.messageId = chatRes.messageId;
-        emitSse(res, "done", { ok: true, completed: true, requestId, chatSaved: chatRes.chatSaved, messageId: chatRes.messageId || null });
-        trace.doneSent = true;
-        return;
-      }
-
-      if (evaluation.kind === "stopped") {
-        const stoppedText = `Quiz එක නවතා ඇත.\n\n**ප්‍රතිඵලය:** නිවැරදි ${evaluation.session.correctCount} · වැරදි ${evaluation.session.wrongCount} · මඟහැරීම් ${evaluation.session.skippedCount}`;
-        emitSse(res, "token", { text: stoppedText });
-        const chatRes = await saveFinalChat({
-          uid: user.uid, email: user.email, userText: prompt, assistantText: stoppedText,
-          mode: "paper_mcq_quiz", subject: activePaperQuiz.subject,
-        });
-        trace.completed = true;
-        trace.chatSaved = chatRes.chatSaved;
-        trace.messageId = chatRes.messageId;
-        emitSse(res, "done", { ok: true, completed: true, requestId, chatSaved: chatRes.chatSaved, messageId: chatRes.messageId || null });
-        trace.doneSent = true;
-        return;
-      }
-
-      if (evaluation.kind === "finished") {
-        const summary = `${evaluation.feedback}\n\n---\n\n### Quiz අවසන්\n\n**නිවැරදි:** ${evaluation.session.correctCount}  \n**වැරදි:** ${evaluation.session.wrongCount}  \n**මඟහැරීම්:** ${evaluation.session.skippedCount}  \n**ලකුණ:** ${evaluation.session.correctCount}/${evaluation.session.endQuestionNo - evaluation.session.startQuestionNo + 1}`;
-        emitSse(res, "token", { text: summary });
-        const chatRes = await saveFinalChat({
-          uid: user.uid, email: user.email, userText: prompt, assistantText: summary,
-          mode: "paper_mcq_quiz", subject: activePaperQuiz.subject,
-        });
-        trace.completed = true;
-        trace.chatSaved = chatRes.chatSaved;
-        trace.messageId = chatRes.messageId;
-        emitSse(res, "done", { ok: true, completed: true, requestId, chatSaved: chatRes.chatSaved, messageId: chatRes.messageId || null });
-        trace.doneSent = true;
-        return;
-      }
-
-      if (evaluation.kind === "continue" && evaluation.nextQuestionNo) {
-        const source = {
-          id: activePaperQuiz.sourceId,
-          sourceId: activePaperQuiz.sourceId,
-          storagePath: activePaperQuiz.storagePath || null,
-          downloadUrl: activePaperQuiz.downloadUrl || null,
-          url: activePaperQuiz.downloadUrl || null,
-          title: activePaperQuiz.title || `${activePaperQuiz.year} ${activePaperQuiz.subject} Paper`,
-          subject: activePaperQuiz.subject,
-          year: activePaperQuiz.year,
-          badge: "Official Source",
-        };
-        emitSse(res, "sources", { sources: [source] });
-        emitSse(res, "direct_pdf_handoff_required", {
-          sourceId: activePaperQuiz.sourceId,
-          storagePath: activePaperQuiz.storagePath || null,
-          downloadUrl: activePaperQuiz.downloadUrl || null,
-          title: source.title,
-          subject: activePaperQuiz.subject,
-          year: activePaperQuiz.year,
-          questionNo: String(evaluation.nextQuestionNo),
-          questionType: "MCQ",
-          prompt: `${activePaperQuiz.year} ${activePaperQuiz.subject} MCQ ${evaluation.nextQuestionNo}`,
-          scanMode: "full_paper",
-          interactionMode: "quiz_question",
-          quizStartQuestionNo: activePaperQuiz.startQuestionNo,
-          quizEndQuestionNo: activePaperQuiz.endQuestionNo,
-          quizFeedback: evaluation.feedback,
-          reason: "PAPER_MCQ_QUIZ_NEXT",
-          message: `MCQ ${evaluation.nextQuestionNo} load කරමින් පවතී.`,
-        });
-        emitSse(res, "done", {
-          ok: true, completed: false, pending: true, requestId,
-          finishReason: "pending_direct_pdf_qa", canContinue: true, needsClientFile: false, sources: [source],
-        });
-        trace.doneSent = true;
-        return;
-      }
-    }
-
     // Check Daily Safety Limit Guardrails (REMOVED)
     const { trackAIUsage } = await import("../cost/usageTracker");
 
     let allSources: any[] = [];
 
-    emitSse(res, "status", { step: "started", message: "Starting stream..." });
-    emitSse(res, "status", { label: "Thinking" });
+    emitSse(res, "status", { step: "started", message: "පිළිතුර සකස් කරමින්..." });
+    emitSse(res, "status", { label: "සොයමින්..." });
 
     // 1. Route Request
     const { detectOfficialPaperCandidate } = await import("../ai-core/intent/paperQuestionParser");
-    const detectedPaperIntent = detectOfficialPaperCandidate(prompt, activeSubject);
-    let paperIntent = quizStartIntent
-      ? {
-          ...detectedPaperIntent,
-          isOfficialPaperCandidate: true,
-          year: quizStartIntent.year,
-          subject: quizStartIntent.subject,
-          questionNo: String(quizStartIntent.startQuestionNo),
-          questionType: "MCQ",
-          needsSubjectClarification: false,
-        }
-      : detectedPaperIntent;
+    const paperIntent = detectOfficialPaperCandidate(prompt, activeSubject);
 
     // Check if it's an official paper candidate but subject is missing
     if (paperIntent.isOfficialPaperCandidate && paperIntent.needsSubjectClarification) {
@@ -375,56 +263,48 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     const activeConversationState = await getConversationState(user.uid);
-    const lowerPrompt = prompt.toLowerCase();
-    const isRecheckRequest = [
-      "recheck", "check again", "verify again", "නැවත බලන්න", "නැවත පරීක්ෂා", "ආයෙත් බලන්න", "ආයෙ බලන්න"
-    ].some((phrase) => lowerPrompt.includes(phrase));
+    const normalizedFollowUp = String(prompt || "").trim().toLowerCase();
+    const selectedSourceId = activeConversationState.selectedSourceId || activeConversationState.activeSourceIds?.[0] || null;
+    const explicitQuestionFollowUp = normalizedFollowUp.match(/^(?:q(?:uestion)?|ප්‍රශ්නය|prashna|mcq|essay)\s*[-:#]?\s*(\d{1,3})[?.!]*$/i)
+      || normalizedFollowUp.match(/^(\d{1,3})\s*(?:වන|වෙනි|වැනි|st|nd|rd|th)\s*(?:ප්‍රශ්නය|question|mcq|essay)[?.!]*$/i);
+    const bareQuestionFollowUp = activeConversationState.lastIntent !== "lesson_pdf_search"
+      ? normalizedFollowUp.match(/^(\d{1,3})[?.!]*$/)
+      : null;
+    const questionFollowUp = explicitQuestionFollowUp || bareQuestionFollowUp;
+    const resourceFollowUp = /^(?:1|eka|ek|එක|ඒක|මේක|ek\s+krmu|eka\s+karamu|එක\s+කරමු|ඒක\s+කරමු|e\s*pdf\s*eke.*|මේ\s*pdf.*)$/i.test(normalizedFollowUp);
 
-    if (!paperIntent.isOfficialPaperCandidate && isRecheckRequest && activeConversationState.selectedQuestionId) {
-      const { getSourceInventory } = await import("../sources/sourceInventoryService");
-      const isAdminUser = user.roles?.includes("admin") || user.admin === true;
-      const inventory = await safeCall(
-        "getSourceInventoryForRecheck",
-        () => getSourceInventory({ uid: user.uid, subject: activeConversationState.activeSubject, isAdmin: isAdminUser }),
-        { all: [] } as any,
-        res,
-      );
-      const selectedId = activeConversationState.selectedSourceId || activeConversationState.activeSourceIds[0];
-      const selectedSource = (inventory.all || []).find((source: any) => {
-        const ids = [source.id, source.sourceId, ...(source.duplicateSourceIds || [])].map(String);
-        return selectedId && ids.includes(String(selectedId));
-      });
-
-      if (selectedSource) {
-        paperIntent = {
-          isOfficialPaperCandidate: true,
-          year: selectedSource.year,
-          subject: selectedSource.subject || activeConversationState.activeSubject || activeSubject || "SFT",
-          questionNo: String(activeConversationState.selectedQuestionId).replace(/^Q/i, ""),
-          questionType: "MCQ",
-          needsSubjectClarification: false,
-        } as any;
-        route.mode = "paper_question_qa";
-        route.entities.year = paperIntent.year;
-        route.entities.subject = paperIntent.subject;
-        route.entities.questionNo = paperIntent.questionNo;
-        route.entities.questionType = paperIntent.questionType;
-        route.entities.activeSourceId = selectedSource.id || selectedSource.sourceId;
-        route.answerHints.mustUseRag = true;
+    // A short follow-up such as "1", "q1" or "එක කරමු" refers to the
+    // source selected in the previous turn. Persisting and resolving this on
+    // the server prevents the model from losing the PDF and asking for it
+    // again.
+    if (selectedSourceId && (questionFollowUp || resourceFollowUp)) {
+      route.mode = questionFollowUp ? "paper_question_qa" : "continue_grounded_discussion";
+      route.entities = route.entities || {};
+      route.entities.activeSourceId = selectedSourceId;
+      if (questionFollowUp) {
+        route.entities.questionNo = questionFollowUp[1];
+        route.entities.questionType = route.entities.questionType || "MCQ";
       }
+      route.answerHints = {
+        ...(route.answerHints || {}),
+        mustUseRag: true,
+        mustAskClarification: false,
+      };
     }
 
     const policy = resolveAnswerPolicy(prompt, route, activeSubject, attachments);
     const evidence = await retrieveEvidence(user.uid, prompt, route, policy, activeConversationState);
     // REMOVED: Early evidence apology block (Finding 026)
     if (evidence.selectedSource) {
-       route.entities.activeSourceId = evidence.selectedSource.id;
+       route.entities.activeSourceId = evidence.selectedSource.id || evidence.selectedSource.sourceId;
        route.entities.year = evidence.selectedSource.year || route.entities.year;
     }
     await updateConversationState(user.uid, {
       activeSubject: evidence.subject || activeConversationState.activeSubject,
       activeLessonIds: evidence.lessonIds.length > 0 ? evidence.lessonIds : activeConversationState.activeLessonIds,
       activeSourceIds: evidence.allowedSourceIds.length > 0 ? evidence.allowedSourceIds : activeConversationState.activeSourceIds,
+      selectedSourceId: evidence.selectedSource?.id || evidence.selectedSource?.sourceId || activeConversationState.selectedSourceId,
+      currentQuestionIndex: questionFollowUp ? Number(questionFollowUp[1]) : activeConversationState.currentQuestionIndex,
       lastIntent: evidence.intent
     });
     if (policy.intent === "blocked_or_unsafe") {
@@ -442,7 +322,8 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     // [FIX 8] Correction Phrase Detection (e.g., "oka fake")
-    const correctionPhrases = ["recheck", "check again", "verify again", "oka fake", "werdi", "weradi", "oka newe", "වැරදියි", "ඕක බොරු", "oka boru", "not correct", "fake", "wrong", "boru", "boru kiynn epa", "boru dewal", "බොරු", "මේක බොරු", "නෑ", "not this"];
+    const lowerPrompt = prompt.toLowerCase();
+    const correctionPhrases = ["oka fake", "werdi", "weradi", "oka newe", "වැරදියි", "ඕක බොරු", "oka boru", "not correct", "fake", "wrong", "boru", "boru kiynn epa", "boru dewal", "බොරු", "මේක බොරු", "නෑ", "not this"];
     const isCorrection = correctionPhrases.some(p => lowerPrompt.includes(p));
 
 
@@ -468,9 +349,8 @@ export async function aiRespondStream(req: any, res: any) {
         subject: lastPaperInfo.subject
       });
 
-      // Do not stream a feedback paragraph into the answer. The exact-PDF
-      // handoff below replaces the previous answer with one authoritative result.
-      emitSse(res, "status", { step: "correction", message: "Feedback saved. Rechecking the exact PDF evidence…" });
+      const correctionMsg = "⚠️ **Feedback Received:** ස්තූතියි! මම එම පිළිතුර වැරදි ලෙස සලකුණු කර Admin review එකට යොමු කළා. මම නැවත වතාවක් Direct PDF QA හරහා source එක පරීක්ෂා කර සත්‍යාපනය කරන්නම්.";
+      emitSse(res, "token", { text: correctionMsg });
 
       // Force direct PDF QA path for the correction
       route.mode = "paper_question_qa";
@@ -509,87 +389,6 @@ export async function aiRespondStream(req: any, res: any) {
       return;
     }
 
-    // A short follow-up such as "1", "q1", or "1st mcq" must stay locked
-    // to the PDF selected in the previous turn. Previously the lesson lookup
-    // returned before persisting selectedSourceId, so this fell through to the
-    // generic model and could fabricate a question.
-    const selectedPdfQuestion = parseSelectedPdfQuestionFollowup(prompt);
-    if (activeConversationState.selectedSourceId && selectedPdfQuestion) {
-      const { getSourceInventory } = await import("../sources/sourceInventoryService");
-      const selectedSubject = evidence.subject || activeConversationState.activeSubject || activeSubject || "SFT";
-      const isAdminUser = user.roles?.includes("admin") || user.admin === true;
-      const inventory = await getSourceInventory({ uid: user.uid, subject: selectedSubject, isAdmin: isAdminUser });
-      const availableSources = [
-        ...inventory.groups.pastPapers,
-        ...inventory.groups.markingSchemes,
-        ...inventory.groups.syllabus,
-        ...inventory.groups.uploadedPdfs,
-        ...inventory.groups.paperStructure,
-      ];
-      const selectedSource = availableSources.find((source: any) => {
-        const id = String(source.sourceId || source.id || "");
-        return id === String(activeConversationState.selectedSourceId);
-      });
-
-      if (selectedSource) {
-        const sourceId = selectedSource.sourceId || selectedSource.id;
-        const sourcePayload = {
-          ...selectedSource,
-          id: sourceId,
-          sourceId,
-          url: selectedSource.url || `/api/rag/sources/${sourceId}/download`,
-          usedInAnswer: true,
-        };
-        await updateConversationState(user.uid, {
-          activeSubject: selectedSubject,
-          activeSourceIds: [sourceId],
-          selectedSourceId: sourceId,
-          selectedQuestionId: selectedPdfQuestion.questionNo,
-          currentQuestionIndex: Number(selectedPdfQuestion.questionNo),
-          evidenceMode: "strict",
-          allowGeneratedContent: false,
-          lastIntent: "selected_resource_discussion",
-        });
-
-        emitSse(res, "sources", { sources: [sourcePayload] });
-        emitSse(res, "direct_pdf_handoff_required", {
-          sourceId,
-          storagePath: selectedSource.storagePath,
-          downloadUrl: selectedSource.downloadUrl || selectedSource.url,
-          title: selectedSource.title,
-          subject: selectedSubject,
-          year: selectedSource.year,
-          questionNo: selectedPdfQuestion.questionNo,
-          questionType: selectedPdfQuestion.questionType,
-          prompt,
-          reason: "SELECTED_PDF_QUESTION_FOLLOWUP",
-          message: "Selected PDF එකෙන් exact question evidence එක සොයමින් පවතී.",
-        });
-        emitSse(res, "done", {
-          ok: true,
-          completed: false,
-          pending: true,
-          requestId,
-          finishReason: "pending_direct_pdf_qa",
-          reason: "SELECTED_PDF_QUESTION_FOLLOWUP",
-          canContinue: true,
-          sources: [sourcePayload],
-          paperInfo: {
-            sourceId,
-            questionNo: selectedPdfQuestion.questionNo,
-            year: selectedSource.year,
-            subject: selectedSubject,
-            questionType: selectedPdfQuestion.questionType,
-            prompt,
-            extractionMethod: "pending_direct_pdf_qa",
-          },
-        });
-        trace.doneSent = true;
-        trace.completed = false;
-        return;
-      }
-    }
-
     // A lesson PDF lookup is an inventory operation, not a generative answer.
     // Return exact Firebase matches so the model cannot invent a web source.
     if (route.mode === "lesson_pdf_search") {
@@ -606,24 +405,18 @@ export async function aiRespondStream(req: any, res: any) {
         };
       });
       const answer = lessonSources.length > 0
-        ? `“${lessonSources[0].title}” තෝරාගත්තා. දැන් “Q1”, “4th MCQ” හෝ ප්‍රශ්නයේ කොටසක් කියන්න.`
-        : `“${lessonName}” සඳහා save කරපු PDF එකක් හමු වුණේ නැහැ.`;
+        ? [
+            `**${lessonName}** lesson එකට match වෙන saved PDF resource${lessonSources.length === 1 ? " එක" : "s"}:`,
+            "",
+            ...lessonSources.map((source: any, index: number) => {
+              return `${index + 1}. [${source.title}](${source.url})`;
+            }),
+            "",
+            "මෙය saved lesson resources වල exact result එකයි. Web candidate PDFs හෝ source එකේ නැති exam details add කරන්නේ නැහැ.",
+          ].join("\n")
+        : `**${lessonName}** lesson එකට match වෙන saved PDF resource එකක් හමු වුණේ නැහැ. Lesson resource එක නිවැරදි lesson name එක යටතේ upload කර index කරන්න.`;
 
-      if (lessonSources.length > 0) {
-        const selected = lessonSources[0];
-        await updateConversationState(user.uid, {
-          activeSubject: route.entities.subject || activeSubject || activeConversationState.activeSubject,
-          activeLessonIds: evidence.lessonIds.length > 0 ? evidence.lessonIds : activeConversationState.activeLessonIds,
-          activeSourceIds: lessonSources.map((source: any) => source.sourceId || source.id).filter(Boolean),
-          selectedSourceId: selected.sourceId || selected.id,
-          selectedQuestionId: null,
-          currentQuestionIndex: null,
-          evidenceMode: "strict",
-          allowGeneratedContent: false,
-          lastIntent: "lesson_pdf_search",
-        });
-        emitSse(res, "sources", { sources: lessonSources });
-      }
+      if (lessonSources.length > 0) emitSse(res, "sources", { sources: lessonSources });
       emitSse(res, "token", { text: answer });
       const chatRes = await saveFinalChat({
         uid: user.uid,
@@ -785,20 +578,10 @@ export async function aiRespondStream(req: any, res: any) {
 
       const sseSources = allSources.map(s => ({
         id: s.id,
-        sourceId: s.sourceId || s.id,
         title: s.title,
-        url: s.url || s.downloadUrl || `/api/rag/sources/${s.id}/download`,
-        downloadUrl: s.downloadUrl || s.url || null,
+        url: s.url || `/api/rag/sources/${s.id}/download`,
         storagePath: s.storagePath,
-        badge: s.resourceType === "past_paper"
-          ? "Past Paper"
-          : s.resourceType === "marking_scheme"
-            ? "Marking Scheme"
-            : s.resourceType === "syllabus"
-              ? "Syllabus"
-              : s.resourceType === "paper_structure"
-                ? "Paper Structure"
-                : "Uploaded PDF",
+        badge: s.resourceType === "past_paper" ? "Past Paper" : s.resourceType === "marking_scheme" ? "Marking Scheme" : "PDF Store",
         confidence: 1.0,
         sourceType: s.resourceType,
         sourceScope: s.sourceScope
@@ -806,26 +589,61 @@ export async function aiRespondStream(req: any, res: any) {
 
       emitSse(res, "sources", { sources: sseSources });
 
-      let answer = `### PDF Library\n\n`;
-      answer += `Duplicate copies merge කරලා **unique sources ${allSources.length}ක්** හමු වුණා.\n\n`;
-      answer += `- Past Papers: **${pastPapers.length}**\n`;
-      answer += `- Marking Schemes: **${markingSchemes.length}**\n`;
-      answer += `- Syllabus: **${syllabusList.length}**\n`;
-      answer += `- Paper Structure: **${paperStructureList.length}**\n`;
-      answer += `- Uploaded PDFs: **${uploadedList.length}**\n`;
-      if (imagesList.length > 0) answer += `- Images: **${imagesList.length}**\n`;
+      let answer = `📚 **මම සොයාගත් PDF සහ ප්‍රභවයන් (Sources) මෙන්න:**\n\n`;
+      let count = 1;
 
-      const recentPapers = pastPapers.slice(0, 8);
-      if (recentPapers.length > 0) {
-        answer += `\n**Recent papers**\n`;
-        answer += recentPapers.map((paper: any) => `- ${paper.year || "Year N/A"} · ${paper.title}`).join("\n");
+      if (pastPapers.length > 0) {
+        answer += `🏛️ **Past Papers**\n`;
+        pastPapers.forEach((p: any) => {
+          answer += `${count++}. **${p.title}** (${p.year || "Year N/A"}) - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
+        });
+        answer += `\n`;
+      }
+
+      if (markingSchemes.length > 0) {
+        answer += `📝 **Marking Schemes**\n`;
+        markingSchemes.forEach((p: any) => {
+          answer += `${count++}. **${p.title}** (${p.year || "Year N/A"}) - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
+        });
+        answer += `\n`;
+      }
+
+      if (syllabusList.length > 0) {
+        answer += `📖 **Syllabus Library**\n`;
+        syllabusList.forEach((p: any) => {
+          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
+        });
+        answer += `\n`;
+      }
+
+      if (paperStructureList.length > 0) {
+        answer += `📐 **Paper Structure**\n`;
+        paperStructureList.forEach((p: any) => {
+          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
+        });
+        answer += `\n`;
+      }
+
+      if (uploadedList.length > 0) {
+        answer += `📤 **Uploaded PDFs**\n`;
+        uploadedList.forEach((p: any) => {
+          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
+        });
+        answer += `\n`;
+      }
+
+      if (imagesList.length > 0) {
+        answer += `🖼️ **Images**\n`;
+        imagesList.forEach((p: any) => {
+          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
+        });
         answer += `\n`;
       }
 
       if (allSources.length === 0) {
         answer = `❌ Firebase එකේ PDFs තවම හම්බුණේ නැහැ. Upload කළා නම් index/reload කරන්න.`;
       } else {
-        answer += `\nපහළ source cards වලින් ඕනෑම PDF එක open කරන්න. Paper question එකක් අහන විට system එක ඒ PDF එක direct scan කරයි.`;
+        answer += `💡 මෙම ඕනෑම PDF එකක් මත ක්ලික් කර එය කියවිය හැක. එමෙන්ම එම ප්‍රශ්න පත්‍රවලින් ඕනෑම ප්‍රශ්නයක් මගෙන් විමසන්න!`;
       }
 
       emitSse(res, "token", { text: stripRawVisualBlocks(answer) });
@@ -876,9 +694,8 @@ export async function aiRespondStream(req: any, res: any) {
         const strictRes = resolveStrictSource(allAvailableSources, {
           year: requestedYear,
           subject: requestedSubject,
-          activeSourceId: route.entities.activeSourceId || activeConversationState.selectedSourceId,
-          prompt,
-          expectedResourceType: route.mode === "marking_scheme_request" ? "marking_scheme" : "past_paper",
+          activeSourceId: null,
+          prompt
         });
 
         if (strictRes.sourceLocked && strictRes.selectedSource) {
@@ -888,8 +705,7 @@ export async function aiRespondStream(req: any, res: any) {
            allSources = [{
              sourceId: paperSource.id || paperSource.sourceId,
              title: paperSource.title,
-             url: paperSource.url || paperSource.downloadUrl || null,
-             downloadUrl: paperSource.downloadUrl || paperSource.url || null,
+             url: paperSource.url || null,
              storagePath: paperSource.storagePath || null,
              badge: "Official Source",
              year: paperSource.year,
@@ -917,7 +733,7 @@ export async function aiRespondStream(req: any, res: any) {
 
            // Fallback to legacy resolver if not strictly locked
            const { resolveExamResources } = await import("./examResourceResolver");
-           resolution = await safeCall("resolveExamResources", () => resolveExamResources({
+           const resolution = await safeCall("resolveExamResources", () => resolveExamResources({
              prompt,
              uid: user.uid,
              subject: requestedSubject,
@@ -933,84 +749,15 @@ export async function aiRespondStream(req: any, res: any) {
 
         if (paperSource) {
           if (!allSources.find((s: any) => s.id === paperSource.id)) {
-            allSources.push({
-              sourceId: paperSource.id,
-              title: paperSource.title,
-              url: paperSource.url || paperSource.downloadUrl,
-              downloadUrl: paperSource.downloadUrl || paperSource.url,
-              storagePath: paperSource.storagePath,
-              badge: "Locked Source"
-            });
+            allSources.push({ sourceId: paperSource.id, title: paperSource.title, url: paperSource.url, storagePath: paperSource.storagePath, badge: "Locked Source" });
           }
           emitSse(res, "sources", { sources: allSources });
-          await updateConversationState(user.uid, {
-            activeSubject: requestedSubject,
-            activeSourceIds: [paperSource.id || paperSource.sourceId],
-            selectedSourceId: paperSource.id || paperSource.sourceId,
-            selectedQuestionId: requestedQuestionNo ? String(requestedQuestionNo) : null,
-            currentQuestionIndex: requestedQuestionNo ? Number(requestedQuestionNo) : null,
-            requestedResourceType: route.mode === "marking_scheme_request" ? "marking_scheme" : "past_paper",
-            evidenceMode: "strict",
-            allowGeneratedContent: false,
-            lastIntent: route.mode,
-          });
         }
         const hasPaperSource = !!paperSource;
         const questionId = (paperSource?.id && requestedQuestionNo) ? `${paperSource.id}_${paperIntent.questionType || 'MCQ'}_${requestedQuestionNo}`.replace(/\//g, "_") : null;
 
-        if (hasPaperSource && quizStartIntent && route.mode !== "pdf_link_request") {
-          const sourceId = paperSource.id || paperSource.sourceId;
-          const storagePath = paperSource.storagePath || null;
-          const downloadUrl = paperSource.downloadUrl || paperSource.url || null;
-          const title = paperSource.title || `${quizStartIntent.year} ${quizStartIntent.subject} Paper`;
-
-          await beginPaperMcqQuiz({
-            uid: user.uid,
-            sourceId,
-            storagePath,
-            downloadUrl,
-            title,
-            year: quizStartIntent.year,
-            subject: quizStartIntent.subject,
-            startQuestionNo: quizStartIntent.startQuestionNo,
-            endQuestionNo: quizStartIntent.endQuestionNo,
-          });
-
-          emitSse(res, "direct_pdf_handoff_required", {
-            sourceId,
-            storagePath,
-            downloadUrl,
-            title,
-            subject: quizStartIntent.subject,
-            year: quizStartIntent.year,
-            questionNo: String(quizStartIntent.startQuestionNo),
-            questionType: "MCQ",
-            prompt: `${quizStartIntent.year} ${quizStartIntent.subject} MCQ ${quizStartIntent.startQuestionNo}`,
-            scanMode: "full_paper",
-            interactionMode: "quiz_question",
-            quizStartQuestionNo: quizStartIntent.startQuestionNo,
-            quizEndQuestionNo: quizStartIntent.endQuestionNo,
-            quizFeedback: `### Quiz ආරම්භයි\n\nවැරදි පිළිතුරු Error Log එකට ස්වයංක්‍රීයව සුරැකේ.`,
-            reason: "PAPER_MCQ_QUIZ_START",
-            message: `MCQ ${quizStartIntent.startQuestionNo} load කරමින් පවතී.`,
-          });
-
-          emitSse(res, "done", {
-            ok: true,
-            completed: false,
-            pending: true,
-            requestId,
-            finishReason: "pending_direct_pdf_qa",
-            reason: "PAPER_MCQ_QUIZ_START",
-            canContinue: true,
-            needsClientFile: false,
-            sources: allSources.length > 0 ? allSources : [paperSource],
-          });
-          trace.doneSent = true;
-          return;
-        }
-
         if (hasPaperSource && route.mode !== "pdf_link_request") {
+          const db = getAdminDb();
           const { retrieveEvidenceForPaperQuestion } = await import("../ai-core/evidence/evidenceRetriever");
 
           // 1.1 Check Evidence first!
@@ -1024,28 +771,17 @@ export async function aiRespondStream(req: any, res: any) {
               subject: requestedSubject!
             });
 
-            const cachedEvidence = evidenceResult.evidence;
-            const hasCachedAnswer = Boolean(
-              cachedEvidence?.answer
-              || cachedEvidence?.officialAnswer
-              || cachedEvidence?.solvedAnswer?.optionNo
-              || cachedEvidence?.estimatedAnswer
-            );
-            if (evidenceResult.ok && cachedEvidence?.questionText && hasCachedAnswer) {
-              const evidence = cachedEvidence;
-              console.log(`[AI_RESPOND_STREAM] Full-paper evidence found for ${questionId}`);
+            if (evidenceResult.ok && evidenceResult.evidence?.answer) {
+              const evidence = evidenceResult.evidence;
+              console.log(`[AI_RESPOND_STREAM] Evidence Found for ${questionId}`);
 
-              const methodLabel = evidence.extractionMethod === "manual_verified" ? "Verified by Teacher" : "Found in full paper scan";
+              const methodLabel = evidence.extractionMethod === "manual_verified" ? "Verified by Teacher" : "Found in PDF";
               emitSse(res, "status", { step: "evidence", message: `${methodLabel}...` });
 
-              const { formatPaperQuestionAnswer } = await import("../../shared/text/paperAnswer");
-              const finalAnswer = formatPaperQuestionAnswer({
-                questionText: evidence.questionText,
-                options: evidence.options,
-                officialAnswer: evidence.answer || evidence.officialAnswer || evidence.estimatedAnswer,
-                solvedAnswer: evidence.solvedAnswer,
-                explanationSinhala: evidence.explanationSinhala,
-              });
+              let finalAnswer: string = String(evidence.answer || evidence.officialAnswer || evidence.estimatedAnswer || "Answer extracted from PDF.");
+              if (evidence.explanationSinhala) {
+                finalAnswer += `\n\n🧠 **Explanation:**\n${evidence.explanationSinhala}`;
+              }
 
               emitSse(res, "token", { text: stripRawVisualBlocks(finalAnswer) });
               trace.lastEvent = "token";
@@ -1068,7 +804,7 @@ export async function aiRespondStream(req: any, res: any) {
                   year: requestedYear,
                   subject: requestedSubject,
                   questionType: paperIntent.questionType || "MCQ",
-                  prompt,
+              prompt: prompt,
                   extractionMethod: evidence.extractionMethod
                 }
               });
@@ -1077,62 +813,139 @@ export async function aiRespondStream(req: any, res: any) {
             }
           }
 
-          // Always hand the locked paper to the authoritative full-paper scan
-          // path. The old shortcut rendered whatever vector chunks happened to
-          // match, which could mix Q5 with unrelated MCQs and expose the entire
-          // OCR dump in chat.
-          console.log(`[AI_RESPOND_STREAM] Full-paper OCR scan required for ${paperSource.id}. Emitting event...`);
+          // 1.2 Check if Chunks are healthy
+          let needsOcr = paperSource?.needsOcr === true || paperSource?.indexStatus === "needs_ocr";
+          let noChunks = Number(paperSource?.chunkCount || 0) === 0;
+          let badTextQuality = false;
+          let healthyChunks: any[] = [];
 
-          emitSse(res, "direct_pdf_handoff_required", {
-            sourceId: paperSource.id || paperSource.sourceId,
-            storagePath: paperSource.storagePath,
-            downloadUrl: paperSource.downloadUrl || paperSource.url,
-            title: paperSource.title,
-            subject: requestedSubject,
-            year: requestedYear,
-            questionNo: requestedQuestionNo,
-            questionType: paperIntent.questionType || "MCQ",
-            prompt,
-            scanMode: "full_paper",
-            reason: "FULL_PAPER_OCR_SCAN_REQUIRED",
-            message: "සම්පූර්ණ paper එක scan කර නිවැරදි ප්‍රශ්නය වෙන් කරමින් පවතී."
-          });
+          if (paperSource.id && !noChunks) {
+            try {
+              const { retrieveExactPaperQuestion } = await import("../knowledge/retrieve");
+              const exactResult = await retrieveExactPaperQuestion({
+                uid: user.uid,
+                sourceId: paperSource.id,
+                subject: requestedSubject,
+                year: requestedYear,
+                questionNo: requestedQuestionNo,
+              });
+              if (exactResult) {
+                if (exactResult.needsOcr || exactResult.chunks.length === 0) {
+                  noChunks = true;
+                }
+                if (exactResult.badTextQuality) {
+                  badTextQuality = true;
+                }
+                healthyChunks = exactResult.chunks;
 
-          emitSse(res, "done", {
-            ok: true,
-            completed: false,
-            pending: true,
-            requestId,
-            finishReason: "pending_direct_pdf_qa",
-            reason: "FULL_PAPER_OCR_SCAN_REQUIRED",
-            canContinue: true,
-            needsClientFile: false,
-            sources: allSources.length > 0 ? allSources : [paperSource],
-            paperInfo: {
-              sourceId: paperSource.id || paperSource.sourceId,
-              questionNo: requestedQuestionNo,
-              year: requestedYear,
-              subject: requestedSubject,
-              questionType: paperIntent.questionType || "MCQ",
-              prompt,
-              extractionMethod: "pending_full_paper_ocr_scan"
+                // --- EVIDENCE GATE CHECK ---
+                if (requestedQuestionNo && paperIntent.isOfficialPaperCandidate) {
+                   const chunkText = (healthyChunks || []).map((c: any) => c.text).join("\n");
+
+                   // [FIX 10] Stricter Chunk Quality Check
+                   const qNoMarker = new RegExp(`\\b${requestedQuestionNo}\\b`);
+                   const hasQuestionMarker = qNoMarker.test(chunkText);
+                   const hasOptions = /1\)|2\)|3\)|4\)|5\)/.test(chunkText) || /\(1\)|\(2\)|\(3\)|\(4\)|\(5\)/.test(chunkText);
+
+                   const isHealthy = hasQuestionMarker && (paperIntent.questionType === "MCQ" ? hasOptions : true);
+
+                   if (!isHealthy || chunkText.length < 50) {
+                      console.log(`[AI_CORE] Evidence Gate Failed for Chunks: ${paperSource.id} Q${requestedQuestionNo}`);
+                      badTextQuality = true; // Force Direct PDF QA or OCR
+                   }
+                }
+              }
+            } catch (err) {
+              console.warn("Failed to retrieve exact paper question for quality checks:", err);
             }
-          });
+          }
 
-          trace.doneSent = true;
-          trace.completed = false;
-          return;
+          // 1.3 If chunks are missing or bad, trigger the authenticated Direct
+          // PDF QA handoff. The frontend sends the source identity; the backend
+          // performs the verified Firebase Admin read.
+          if (noChunks || badTextQuality || needsOcr) {
+            console.log(`[AI_RESPOND_STREAM] Direct PDF QA required for ${paperSource.id}. Emitting event...`);
+
+            emitSse(res, "direct_pdf_handoff_required", {
+              sourceId: paperSource.id || paperSource.sourceId,
+              storagePath: paperSource.storagePath,
+              title: paperSource.title,
+              subject: requestedSubject,
+              year: requestedYear,
+              questionNo: requestedQuestionNo,
+              questionType: paperIntent.questionType || "MCQ",
+              prompt: prompt,
+              reason: "DIRECT_PDF_QA_SERVER_SCAN_REQUIRED",
+              message: "PDF source එක secure server scan එකකට යොමු කරනවා."
+            });
+
+            // [FIX 1] Emit explicit done event for pending Direct PDF QA
+            emitSse(res, "done", {
+              ok: true,
+              completed: false,
+              pending: true,
+              requestId,
+              finishReason: "pending_direct_pdf_qa",
+              reason: "DIRECT_PDF_SERVER_SCAN_REQUIRED",
+              canContinue: true,
+              needsClientFile: false,
+              sources: allSources.length > 0 ? allSources : [paperSource],
+              paperInfo: {
+                sourceId: paperSource.id || paperSource.sourceId,
+                questionNo: requestedQuestionNo,
+                year: requestedYear,
+                subject: requestedSubject,
+                questionType: paperIntent.questionType || "MCQ",
+              prompt: prompt,
+                extractionMethod: "pending_direct_pdf_qa"
+              }
+            });
+
+            // The frontend starts the follow-up request while the backend reads
+            // the verified source path. No cross-origin Storage fetch is used.
+            trace.doneSent = true;
+            trace.completed = false;
+            return;
+          } else if (strictRes && strictRes.sourceLocked) {
+            // 1.4 If chunks are healthy and we bypassed legacy resolver, populate resolution!
+            resolution.hasExactQuestionText = true;
+            resolution.bestTextBlocks = healthyChunks.map((c: any) => c.text);
+            resolution.paperSource = paperSource;
+          }
         }
 
-        // PDF-link requests return only the source card. Question-answer requests
-        // never render resolver snippets; they must pass through the full-paper
-        // extraction path above.
-        if (route.mode === "pdf_link_request" && paperSource) {
-          const composedAnswer = `මෙන්න **${paperSource.title || "PDF එක"}**. පහළ file card එකෙන් විවෘත කරන්න.`;
-          emitSse(res, "token", { text: composedAnswer });
+        // Case 2: Exact resource is resolved locally!
+        if (resolution.hasExactQuestionText || (route.mode === "pdf_link_request" && resolution.hasPdfSource)) {
+          emitSse(res, "status", { step: "standard_answer", message: "Composing Standard Exam Answer..." });
+
+          let composedAnswer = "";
+          if (route.mode === "pdf_link_request") {
+            const pSrc = resolution.paperSource;
+            composedAnswer = `✅ **ඔයා හෙව්ව PDF එක හමු වුණා!**\n\n📌 **${pSrc?.title}**\n- **Subject:** ${requestedSubject}\n- **Year:** ${requestedYear}\n- **Source:** Local Verified Store 🏛️\n\n📥 **Download Link:** [මත ක්ලික් කරන්න](${pSrc?.url || `/api/rag/sources/${pSrc?.id}/download`})\n\nමෙම ලින්ක් එක පැය 24 පුරාම සක්‍රීයව පවතිනවා.`;
+          } else {
+            const { composeMarkingSchemeAnswer } = await import("./markingSchemeResolver");
+            composedAnswer = composeMarkingSchemeAnswer({
+              subject: requestedSubject,
+              year: requestedYear,
+              questionNo: requestedQuestionNo || "Q1",
+              paperSource: resolution.paperSource,
+              markingSchemeSource: resolution.markingSchemeSource,
+              syllabusSource: resolution.syllabusSource,
+              paperStructureSource: resolution.paperStructureSource,
+              questionText: `G.C.E. A/L ${requestedYear} ${requestedSubject} විභාගයේ ${requestedQuestionNo || "Q1"} ප්‍රශ්නයට අදාළ පිළිතුර මෙසේය.`,
+              officialAnswer: resolution.bestTextBlocks.join("\n\n") || "නිල ලකුණු දීමේ පටිපාටියට අනුකූල පිළිතුර.",
+              isEstimated: !resolution.markingSchemeSource,
+            });
+          }
+
+          if (resolution.paperSource && resolution.paperSource.ocrTextPdfStoragePath) {
+            composedAnswer = `💡 *Sinhala text PDF එකත් generate වෙලා තියෙනවා. එතනින් indexed text භාවිතා කරනවා.*\n\n` + composedAnswer;
+          }
+
+          emitSse(res, "token", { text: stripRawVisualBlocks(composedAnswer) });
           trace.lastEvent = "token";
 
-          const chatRes = await saveFinalChat({
+          let chatRes = await saveFinalChat({
             uid: user.uid,
             email: user.email,
             userText: prompt,
@@ -1141,19 +954,12 @@ export async function aiRespondStream(req: any, res: any) {
             subject: requestedSubject,
             sources: allSources,
           });
-          if (chatRes?.chatSaved) {
+          if (chatRes && chatRes.chatSaved) {
             trace.chatSaved = true;
             trace.messageId = chatRes.messageId;
           }
           trace.completed = true;
-          emitSse(res, "done", {
-            ok: true,
-            completed: true,
-            requestId,
-            messageId: chatRes?.messageId || null,
-            chatSaved: trace.chatSaved,
-            sources: allSources,
-          });
+          emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes?.messageId || null, chatSaved: trace.chatSaved, sources: allSources });
           trace.doneSent = true;
           trace.lastEvent = "done";
           return;
@@ -1239,76 +1045,6 @@ export async function aiRespondStream(req: any, res: any) {
     let hasExactQuestionText = false;
     let needsOcr = false;
 
-    // Multi-PDF exam prediction/trend analysis. This is deliberately separate
-    // from lesson filename lookup: the user is asking to combine all relevant
-    // papers, marking schemes, syllabus and paper-structure evidence.
-    if (route.mode === "past_paper_analysis") {
-      const predictionSubject = (route.entities.subject || activeSubject) as "SFT" | "ET" | "ICT" | undefined;
-      if (!predictionSubject) {
-        const clarification = "2026 prediction එක හදන්න subject එක කියන්න: SFT, ET, නැත්නම් ICT?";
-        emitSse(res, "token", { text: clarification });
-        const chatRes = await saveFinalChat({
-          uid: user.uid,
-          email: user.email,
-          userText: prompt,
-          assistantText: clarification,
-          mode: route.mode,
-          subject: activeSubject,
-        });
-        trace.completed = true;
-        trace.chatSaved = chatRes.chatSaved;
-        trace.messageId = chatRes.messageId;
-        emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: [] });
-        trace.doneSent = true;
-        return;
-      }
-
-      emitSse(res, "status", { step: "exam_intelligence", status: "searching", message: "Past papers සහ marking schemes combine කරමින්..." });
-      const { retrievePastPaperAnalysisEvidence } = await import("../knowledge/predictionEvidence");
-      const isAdminUser = user.roles?.includes("admin") || user.admin === true;
-      const predictionEvidence = await safeCall(
-        "retrievePastPaperAnalysisEvidence",
-        () => retrievePastPaperAnalysisEvidence({
-          uid: user.uid,
-          subject: predictionSubject,
-          targetYear: route.entities.year || "2026",
-          isAdmin: isAdminUser,
-        }),
-        { contextText: "", sources: [], stats: null, hasEvidence: false } as any,
-        res,
-      );
-
-      contextBlocksText += predictionEvidence.contextText || "";
-      allSources.push(...(predictionEvidence.sources || []));
-      route.answerHints.mustUseRag = false;
-
-      if (!predictionEvidence.hasEvidence) {
-        const noIndexMessage = `**${predictionSubject}** සඳහා PDFs හමු වුණා, නමුත් prediction analysis සඳහා searchable question index තවම සූදානම් නැහැ. PDFs reindex/build exam index කළ පසු සියලු papers එකට භාවිත කර evidence-based prediction එක ලබා දෙන්න පුළුවන්.`;
-        emitSse(res, "prediction_index_required", {
-          subject: predictionSubject,
-          targetYear: route.entities.year || "2026",
-          stats: predictionEvidence.stats,
-          sources: predictionEvidence.sources,
-        });
-        emitSse(res, "token", { text: noIndexMessage });
-        const chatRes = await saveFinalChat({
-          uid: user.uid,
-          email: user.email,
-          userText: prompt,
-          assistantText: noIndexMessage,
-          mode: route.mode,
-          subject: predictionSubject,
-          sources: predictionEvidence.sources,
-        });
-        trace.completed = true;
-        trace.chatSaved = chatRes.chatSaved;
-        trace.messageId = chatRes.messageId;
-        emitSse(res, "done", { ok: false, completed: true, requestId, finishReason: "prediction_index_required", messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: predictionEvidence.sources });
-        trace.doneSent = true;
-        return;
-      }
-    }
-
     // 2.5 Targeted Uploaded PDF QA Flow
     if (route.mode === "uploaded_pdf_question_qa") {
       emitSse(res, "status", { step: "rag", status: "searching" });
@@ -1369,7 +1105,7 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     // 3. RAG Search
-    if (requestedMode === "deep_search" || (route.mode !== "uploaded_pdf_question_qa" && route.mode !== "past_paper_analysis" && (route.answerHints.mustUseRag || route.mode === "normal_chat" || hasUploadedPdf))) {
+    if (requestedMode === "deep_search" || (route.mode !== "uploaded_pdf_question_qa" && (route.answerHints.mustUseRag || route.mode === "normal_chat" || hasUploadedPdf))) {
       emitSse(res, "status", { step: "rag", status: "searching" });
       const retrieveResult: any = await safeCall("retrieveRelevantKnowledge", () => retrieveRelevantKnowledge({
         query: prompt,
@@ -1476,7 +1212,7 @@ export async function aiRespondStream(req: any, res: any) {
     // Final prompt setup
     const ai = getAIClient();
     let aiTask: AITask = "normal_chat";
-    if (["paper_question_qa", "marking_scheme_request", "lesson_marks_intent", "zscore_prediction", "past_paper_analysis", "uploaded_pdf_question_qa", "tutor_explanation"].includes(route.mode) || image) {
+    if (["paper_question_qa", "marking_scheme_request", "lesson_marks_intent", "zscore_prediction", "uploaded_pdf_question_qa", "tutor_explanation"].includes(route.mode) || image) {
       aiTask = image ? "image_understanding" : "final_answer";
     }
 
@@ -1658,10 +1394,6 @@ export async function aiRespondStream(req: any, res: any) {
       emitSse(res, "error", { ok: false, error: "Stream interrupted", recoverable: true, code: "STREAM_INTERRUPTED", completed: false, incomplete: true });
     }
 
-    // Strip hidden reasoning/source labels and normalize Sinhala before
-    // persistence. The client receives this authoritative final copy in done.
-    fullText = cleanAssistantResponse(fullText);
-
     // Track AI Usage Costs
     try {
       const { trackAIUsage } = await import("../cost/usageTracker");
@@ -1737,7 +1469,7 @@ export async function aiRespondStream(req: any, res: any) {
         if (process.env.ENABLE_AI_SUGGESTIONS === "true") {
           const suggPrompt = `Based on the user's message: "${prompt}" and the assistant's answer: "${fullText.substring(0, 1000)}...", generate 3 short, contextual follow-up suggestions in Sinhala.
 Important: Output ONLY a valid JSON array of 3 strings.
-Example suggestions for Clora X:
+Tec A/L සඳහා උදාහරණ:
 - "මේ ප්‍රශ්නය PDF එකෙන් ආයෙත් පරීක්ෂා කරන්න" (Recheck from PDF)
 - "මේ අවුරුද්දේ marking scheme එක දෙන්න" (Get marking scheme)
 - "මේ lesson එකෙන් තව mcq ප්‍රශ්න දෙන්න" (More MCQs from this lesson)
@@ -1790,30 +1522,11 @@ Do not include any other text or markdown formatting.`;
       }
     }
 
-    const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
-    let summaryItems: string[] = [];
-
-    if (route.mode === "normal_chat") {
-       summaryItems.push(`Thought for ${elapsedSeconds}s`);
-    } else if (paperIntent.isOfficialPaperCandidate) {
-       summaryItems.push(`✓ Official paper request detected`);
-       summaryItems.push(`✓ Subject/year/question parsed (${paperIntent.subject || ''} ${paperIntent.year || ''} Q${paperIntent.questionNo || ''})`);
-       summaryItems.push(`✓ Past Papers DB checked`);
-       if (hasExactQuestionText) {
-          summaryItems.push(`✓ Source lock checked`);
-          summaryItems.push(`✓ Evidence checked`);
-       } else {
-          summaryItems.push(`✓ Source checked`);
-          summaryItems.push(`⚠ Exact question evidence missing`);
-       }
-    } else {
-       summaryItems.push(`Thought for ${elapsedSeconds}s`);
-       if (allSources && allSources.length > 0) summaryItems.push(`✓ Context sources checked`);
-    }
-
-    emitSse(res, "safe_summary", { items: summaryItems });
+    // Internal routing, retrieval and validation details are deliberately not
+    // sent to the browser. Only the answer and its usable sources belong in
+    // the learner-facing conversation.
     trace.completed = !isInterrupted;
-    emitSse(res, "done", { ok: !isInterrupted, completed: !isInterrupted, incomplete: isInterrupted, requestId, messageId: chatRes?.messageId || null, chatSaved: trace.chatSaved, sources: allSources || [], answer: fullText, finishReason: isInterrupted ? "interrupted" : "complete" });
+    emitSse(res, "done", { ok: !isInterrupted, completed: !isInterrupted, incomplete: isInterrupted, requestId, messageId: chatRes?.messageId || null, chatSaved: trace.chatSaved, sources: allSources || [], finishReason: isInterrupted ? "interrupted" : "complete" });
     trace.doneSent = true;
     trace.lastEvent = "done";
   } catch (error: any) {

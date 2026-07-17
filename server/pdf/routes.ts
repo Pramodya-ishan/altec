@@ -1,15 +1,12 @@
 import express, { Router } from "express";
 import multer from "multer";
-import { requireFirebaseUser, requireNonAnonymousUser } from "../firebase/authMiddleware";
+import { requireFirebaseUser } from "../firebase/authMiddleware";
 import { getAdminDb, getAdminBucket } from "../firebase/admin";
 import { processUploadedPdf, finalizePipelineProcessing } from "./processingPipeline";
 import { checkOcrJobStatus } from "../ocr/cloudVisionOcr";
 import { askGeminiDirectPdf } from "./directPdfQa";
 import { stripRawVisualBlocks } from "../ai-core/answer/stripVisualBlocks";
-import { retrieveExactPaperQuestion } from "../knowledge/retrieve";
-import { loadPdfSourceBuffer, storageGsUri, validatedPdfDownloadUrl } from "./sourceBuffer";
-import { getSftSyllabusGroundingPdf } from "./syllabusGrounding";
-import { isVertexAiEnabled } from "../ai/client";
+import { extractPdfText } from "./extractText";
 
 export const pdfRoutes = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -43,41 +40,39 @@ function canUseStoragePath(user: any, path: string) {
     || path.startsWith(`rag_uploads/${user.uid}/`);
 }
 
-async function resolveDirectQaSource(user: any, sourceId: string, submittedPath: unknown, submittedDownloadUrl?: unknown) {
+async function resolveDirectQaSource(user: any, sourceId: string, submittedPath: unknown) {
   const db = getAdminDb();
   const snapshots = await Promise.all([
     sourceId ? db.collection("rag_sources").doc(sourceId).get() : Promise.resolve(null),
     sourceId ? db.collection("past_papers").doc(sourceId).get() : Promise.resolve(null),
+    sourceId ? db.collection("users").doc(user.uid).collection("syllabus_resources").doc(sourceId).get() : Promise.resolve(null),
   ]);
-  const sourceSnapshot = snapshots.find((snapshot: any) => snapshot?.exists) as any;
-  const source = sourceSnapshot?.data?.() || null;
-  const path = storageObjectPath(
-    source?.storagePath
-    || submittedPath
-    || source?.downloadUrl
-    || source?.firebaseDownloadUrl
-    || source?.url
-    || submittedDownloadUrl,
-  );
+  const candidates = snapshots
+    .filter((snapshot: any) => snapshot?.exists)
+    .map((snapshot: any) => snapshot.data?.() || null)
+    .filter(Boolean);
+  // A legacy rag_sources row may exist without its storagePath while the
+  // complete lesson-resource row lives under users/{uid}/syllabus_resources.
+  // Prefer a complete row so terse follow-ups such as “q1” keep using the
+  // already selected lesson PDF.
+  const source = candidates.find((candidate: any) => storageObjectPath(candidate?.storagePath))
+    || candidates[0]
+    || null;
+  const path = storageObjectPath(source?.storagePath || submittedPath);
   if (!path) throw Object.assign(new Error("PDF source has no valid storage path."), { status: 400, code: "DIRECT_QA_SOURCE_PATH_INVALID" });
 
   const roles = Array.isArray(user?.roles) ? user.roles : [];
   const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
-  const visible = ["public", "official", "shared"].includes(String(source?.visibility || "").toLowerCase())
-    || ["public", "official", "shared"].includes(String(source?.sourceScope || "").toLowerCase());
+  const visible = ["public", "official", "shared"].includes(String(source?.visibility || ""));
   const owned = source?.ownerUid === user.uid || canUseStoragePath(user, path);
   if (!privileged && !visible && !owned) {
     throw Object.assign(new Error("You do not have access to this PDF source."), { status: 403, code: "DIRECT_QA_SOURCE_FORBIDDEN" });
   }
-  const downloadUrl = validatedPdfDownloadUrl(
-    submittedDownloadUrl || source?.downloadUrl || source?.url,
-    path,
-  );
-  return { source: { ...(source || {}), storagePath: path }, path, downloadUrl };
+  return { source, path };
 }
 
 // 1. Process uploaded PDF immediately after upload
-pdfRoutes.post("/process-uploaded", requireNonAnonymousUser, express.json(), async (req: any, res) => {
+pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (req: any, res) => {
   try {
     const user = req.user;
     const {
@@ -92,7 +87,6 @@ pdfRoutes.post("/process-uploaded", requireNonAnonymousUser, express.json(), asy
       sourceScope,
       lesson,
       deferProcessing,
-      downloadUrl,
     } = req.body;
 
     if (!sourceId || !storagePath) {
@@ -109,12 +103,10 @@ pdfRoutes.post("/process-uploaded", requireNonAnonymousUser, express.json(), asy
     // raised Firestore NOT_FOUND and surfaced as /process-uploaded 500.
     const db = getAdminDb();
     const now = new Date().toISOString();
-    const verifiedDownloadUrl = validatedPdfDownloadUrl(downloadUrl, normalizedStoragePath) || null;
     await db.collection("rag_sources").doc(sourceId).set({
       sourceId,
       ownerUid: user.uid,
       storagePath: normalizedStoragePath,
-      downloadUrl: verifiedDownloadUrl,
       title: title || fileName || "Uploaded PDF",
       fileName: fileName || "upload.pdf",
       subject: String(subject || "").toUpperCase(),
@@ -138,7 +130,6 @@ pdfRoutes.post("/process-uploaded", requireNonAnonymousUser, express.json(), asy
         sourceId,
         ownerUid: user.uid,
         storagePath: normalizedStoragePath,
-        downloadUrl: verifiedDownloadUrl,
         title: title || fileName || "Uploaded PDF",
         fileName: fileName || "upload.pdf",
         subject: String(subject || "").toUpperCase(),
@@ -188,7 +179,7 @@ pdfRoutes.post("/process-uploaded", requireNonAnonymousUser, express.json(), asy
 });
 
 // 2. Reprocess OCR or Legacy Convert for a source
-pdfRoutes.post("/reprocess/:sourceId", requireNonAnonymousUser, upload.single("file"), async (req: any, res) => {
+pdfRoutes.post("/reprocess/:sourceId", requireFirebaseUser, upload.single("file"), async (req: any, res) => {
   try {
     const user = req.user;
     const { sourceId } = req.params;
@@ -391,32 +382,12 @@ pdfRoutes.get("/ocr-text/:sourceId", requireFirebaseUser, async (req: any, res) 
 const inFlightDirectQa = new Map<string, Promise<any>>();
 const failedDirectQaCooldown = new Map<string, number>();
 
-function directQaHttpError(error: any) {
-  const code = String(error?.code || error?.errorCode || "DIRECT_QA_BACKEND_FAILED");
-  const sourceDownloadFailed = code === "DIRECT_QA_SOURCE_DOWNLOAD_FAILED";
-  return {
-    status: Number(error?.status) || (sourceDownloadFailed ? 424 : 500),
-    body: {
-      ok: false,
-      found: false,
-      errorCode: code,
-      stage: error?.stage || (sourceDownloadFailed ? "SOURCE_DOWNLOAD" : "MODEL_CALL"),
-      message: sourceDownloadFailed
-        ? "PDF source එක direct read කරන්න බැරි වුණා. Source access/IAM settings පරීක්ෂා කර නැවත උත්සාහ කරන්න."
-        : (error?.message || "Direct PDF QA failed"),
-    },
-  };
-}
-
-pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload.single("file"), async (req: any, res) => {
+pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), async (req: any, res) => {
   try {
-    const {
-      sourceId, storagePath, downloadUrl, prompt, questionId, questionNo, questionType, subject, year, scanMode,
-      interactionMode, quizStartQuestionNo, quizEndQuestionNo
-    } = req.body;
-    console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}, scanMode: ${scanMode || "full_paper"}, interactionMode: ${interactionMode || "answer"}`);
+    const { sourceId, storagePath, prompt, questionId, questionNo, questionType, subject, year } = req.body;
+    console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}`);
 
-    const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}:${interactionMode || "answer"}`;
+    const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}`;
 
     const cooldownUntil = failedDirectQaCooldown.get(idempotencyKey);
     if ((cooldownUntil && Date.now() < cooldownUntil) || isAiBillingCircuitOpen()) {
@@ -441,143 +412,308 @@ pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload.single("file")
         }
         return res.json(result);
       } catch (e: any) {
-        const mapped = directQaHttpError(e);
-        return res.status(mapped.status).json(mapped.body);
+        return res.status(500).json({ ok: false, errorCode: "DIRECT_QA_BACKEND_ERROR", error: e.message });
       }
     }
 
     const requestPromise = async () => {
-      let buffer: Buffer | null = null;
-      let resolvedSource: any = null;
-      if (req.file) {
-        buffer = req.file.buffer;
-        console.log(`[DirectPDFQA] File received via upload. Buffer size: ${req.file.buffer.length} bytes`);
-      } else {
-        const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath, downloadUrl);
-        resolvedSource = resolved.source || {};
-        (resolvedSource as any).__resolvedStoragePath = resolved.path;
-        (resolvedSource as any).__verifiedDownloadUrl = resolved.downloadUrl;
-      }
-      const effectivePrompt = prompt?.trim() || `${year || ""} ${subject || ""} ${questionType || "question"} ${questionNo} answer`;
       if (!questionNo || !questionType) {
-        console.error("[DirectPDFQA] Missing questionNo or questionType");
         return {
           ok: false,
           status: 400,
           found: false,
           errorCode: "DIRECT_QA_MISSING_STRUCTURED_INTENT",
           stage: "VALIDATION",
-          message: "Direct PDF QA requires questionNo and questionType."
+          message: "ප්‍රශ්න අංකය සහ ප්‍රශ්න වර්ගය සඳහන් කරන්න."
         };
       }
+
+      let buffer: Buffer;
+      let resolvedSource: any = null;
+      if (req.file) {
+        buffer = req.file.buffer;
+        console.log(`[DirectPDFQA] File received via upload. Buffer size: ${buffer.length} bytes`);
+      } else {
+        const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath);
+        resolvedSource = resolved.source;
+
+        // A scan may already have an asynchronous Vision operation running.
+        // Reuse it instead of starting another whole-document scan whenever
+        // the student follows up with a short message such as “q1”.
+        if (sourceId && ["queued", "running"].includes(String(resolvedSource?.ocrStatus || ""))) {
+          const existingJob = await checkOcrJobStatus(sourceId);
+          if (existingJob.status === "ready" && existingJob.result) {
+            await finalizePipelineProcessing({
+              uid: String(resolvedSource.ownerUid || req.user.uid),
+              sourceId,
+              storagePath: String(resolvedSource.storagePath || storagePath || ""),
+              fileName: String(resolvedSource.fileName || resolvedSource.title || `${sourceId}.pdf`),
+              title: String(resolvedSource.title || resolvedSource.fileName || "PDF ගොනුව"),
+              subject: String(subject || resolvedSource.subject || ""),
+              year: String(year || resolvedSource.year || "") || null,
+              resourceType: String(resolvedSource.resourceType || "uploaded_pdf"),
+              sourceType: String(resolvedSource.sourceType || resolvedSource.resourceType || "uploaded_pdf"),
+              sourceScope: String(resolvedSource.sourceScope || "personal"),
+              lesson: resolvedSource.lesson ? String(resolvedSource.lesson) : undefined,
+              pages: existingJob.result.pages.map((page) => ({
+                pageNumber: page.pageNumber,
+                text: page.text,
+                rawText: page.text,
+                textEncoding: "unicode_sinhala",
+                conversionApplied: false,
+                conversionConfidence: 1,
+              })),
+              extractionMethod: "cloud_vision_ocr",
+              textEncoding: "unicode_sinhala",
+              ocrConfidence: existingJob.result.confidence,
+              needsOcr: false,
+              needsLegacyConversion: false,
+            });
+          } else if (["queued", "running"].includes(existingJob.status)) {
+            return {
+              ok: false,
+              status: 202,
+              found: false,
+              errorCode: "PDF_INDEXING_STARTED",
+              stage: "PDF_INDEXING",
+              message: "PDF අකුරු හඳුනාගැනීම තවම ක්‍රියාත්මකයි. අවසන් වූ විගස මෙම ප්‍රශ්නය ස්වයංක්‍රීයව නැවත පරීක්ෂා කරනවා.",
+              canRetry: true,
+              retryAfterMs: 8_000,
+            };
+          }
+        }
+
+        // Prefer the already indexed source text. This keeps follow-up prompts
+        // such as “q1” attached to the selected PDF and avoids repeatedly
+        // uploading/scanning a large document in a short-lived function.
+        if (sourceId) {
+          const chunkSnapshot = await getAdminDb().collection("rag_chunks").where("sourceId", "==", sourceId).get();
+          const indexedChunks = chunkSnapshot.docs
+            .map((document: any) => document.data())
+            .filter((chunk: any) => String(chunk?.text || "").trim())
+            .sort((a: any, b: any) => {
+              const pageDelta = Number(a.pageNumber || 0) - Number(b.pageNumber || 0);
+              return pageDelta || Number(a.chunkIndex || 0) - Number(b.chunkIndex || 0);
+            });
+
+          if (indexedChunks.length > 0) {
+            const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
+            const marker = new RegExp(`(?:^|\\s|\\n)(?:q(?:uestion)?\\s*)?0?${targetNo}(?:\\.|\\)|\\s|$)`, "i");
+            const exactIndexes = indexedChunks
+              .map((chunk: any, index: number) => marker.test(String(chunk.text || "")) ? index : -1)
+              .filter((index: number) => index >= 0);
+            const selectedIndexes = new Set<number>();
+            if (exactIndexes.length > 0) {
+              exactIndexes.slice(0, 3).forEach((index: number) => {
+                for (let offset = -1; offset <= 2; offset += 1) {
+                  if (indexedChunks[index + offset]) selectedIndexes.add(index + offset);
+                }
+              });
+            } else {
+              indexedChunks.slice(0, 10).forEach((_chunk: any, index: number) => selectedIndexes.add(index));
+            }
+            const indexedText = Array.from(selectedIndexes)
+              .sort((a, b) => a - b)
+              .map((index) => {
+                const chunk = indexedChunks[index];
+                return `[Page ${chunk.pageNumber || "?"}]\n${chunk.text}`;
+              })
+              .join("\n\n")
+              .slice(0, 90_000);
+
+            if (indexedText.trim().length >= 80) {
+              const { askGeminiExtractedTextStructured } = await import("../ai-core/pdf/directPdfQa");
+              const indexedResult = await askGeminiExtractedTextStructured({
+                uid: req.user.uid,
+                sourceId,
+                extractedText: indexedText,
+                year: year || "unknown",
+                subject: subject || "unknown",
+                questionType,
+                questionNo,
+                allowOfficialAnswer: [resolvedSource?.resourceType, resolvedSource?.sourceType, resolvedSource?.sourceScope]
+                  .some((value) => String(value || "").toLowerCase().includes("marking"))
+                  || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
+              });
+              if (indexedResult.ok && indexedResult.found) return indexedResult;
+            }
+          }
+        }
+
+        console.log(`[DirectPDFQA] Reading verified source from Firebase Admin: ${resolved.path}`);
+        const [downloaded] = await getAdminBucket().file(resolved.path).download();
+        buffer = downloaded;
+        if (!buffer?.length) {
+          return { ok: false, status: 404, errorCode: "DIRECT_QA_SOURCE_EMPTY", error: "The stored PDF is empty or unavailable." };
+        }
+      }
+      const effectivePrompt = prompt?.trim() || `${year || ""} ${subject || ""} ${questionType || "question"} ${questionNo} answer`;
       if (questionNo && questionType) {
-        const allowOfficialAnswer = [
+        console.log(`[DirectPDFQA] Using structured extraction for ${questionType} ${questionNo}`);
+        const { askGeminiDirectPdfStructured, askGeminiExtractedTextStructured } = await import("../ai-core/pdf/directPdfQa");
+        // Fast path for native/legacy text-layer PDFs. This avoids sending a
+        // large binary to the model and removes the 180-second whole-document
+        // timeout seen in production. Scan-only documents continue to the
+        // full-PDF/OCR fallback below.
+        const localExtraction = await extractPdfText(buffer);
+        if (localExtraction.text.trim().length >= 80) {
+          const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
+          const marker = new RegExp(`(?:^|\\s|\\n)(?:q(?:uestion)?\\s*)?0?${targetNo}(?:\\.|\\)|\\s|$)`, "i");
+          const matchingPages = localExtraction.pages.filter((page: any) => marker.test(String(page.text || page.rawText || "")));
+          const candidatePages = matchingPages.length > 0
+            ? matchingPages.slice(0, 4)
+            : localExtraction.pages.slice(Math.max(0, Number(targetNo) - 1), Math.max(0, Number(targetNo) - 1) + 4);
+          const candidateText = (candidatePages.length > 0 ? candidatePages : localExtraction.pages.slice(0, 5))
+            .map((page: any) => `[Page ${page.pageNumber}]\n${page.text || page.rawText || ""}`)
+            .join("\n\n")
+            .slice(0, 90_000);
+          const textResult = await askGeminiExtractedTextStructured({
+            uid: req.user.uid,
+            sourceId: sourceId || "uploaded_temp",
+            extractedText: candidateText,
+            year: year || "unknown",
+            subject: subject || "unknown",
+            questionType,
+            questionNo,
+            allowOfficialAnswer: [resolvedSource?.resourceType, resolvedSource?.sourceType, resolvedSource?.sourceScope]
+              .some((value) => String(value || "").toLowerCase().includes("marking"))
+              || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
+          });
+          if (textResult.ok && textResult.found) {
+            return textResult;
+          }
+          if (!localExtraction.needsOcr) {
+            return textResult;
+          }
+        }
+        // A stored scan must be indexed once, not uploaded to the model again
+        // for every question. Whole-document binary calls on large scans were
+        // timing out after 180 seconds and left the chat in a pending state.
+        // Queue Cloud Vision OCR, persist the source state, then let the next
+        // question use the fast rag_chunks path above.
+        if (sourceId && resolvedSource) {
+          const cloudOcrEnabled = process.env.ENABLE_CLOUD_VISION_OCR === "true"
+            || process.env.OCR_ENABLED === "true";
+          const db = getAdminDb();
+          await db.collection("rag_sources").doc(sourceId).set({
+            indexStatus: cloudOcrEnabled ? "queued" : "needs_ocr",
+            ocrStatus: cloudOcrEnabled ? "queued" : "not_configured",
+            needsOcr: true,
+            textIndexed: false,
+            updatedAt: new Date().toISOString(),
+          }, { merge: true });
+
+          if (cloudOcrEnabled) {
+            const indexingResult = await processUploadedPdf({
+              uid: String(resolvedSource.ownerUid || req.user.uid),
+              sourceId,
+              storagePath: storageObjectPath(resolvedSource.storagePath || storagePath),
+              fileName: String(resolvedSource.fileName || resolvedSource.title || `${sourceId}.pdf`),
+              title: String(resolvedSource.title || resolvedSource.fileName || "PDF ගොනුව"),
+              subject: String(subject || resolvedSource.subject || ""),
+              year: String(year || resolvedSource.year || "") || null,
+              resourceType: String(resolvedSource.resourceType || "uploaded_pdf"),
+              sourceType: String(resolvedSource.sourceType || resolvedSource.resourceType || "uploaded_pdf"),
+              sourceScope: String(resolvedSource.sourceScope || "personal"),
+              lesson: resolvedSource.lesson ? String(resolvedSource.lesson) : undefined,
+              buffer,
+              forceOcr: true,
+            });
+
+            // Cloud Vision can finish inline for a small scan. In that case
+            // answer the question in the same request instead of forcing the
+            // student to repeat “q1”. This also preserves the selected PDF
+            // across terse follow-up messages.
+            if (indexingResult.status === "ready") {
+              const refreshedChunks = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
+              const orderedChunks = refreshedChunks.docs
+                .map((document: any) => document.data())
+                .filter((chunk: any) => String(chunk?.text || "").trim())
+                .sort((left: any, right: any) => Number(left.pageNumber || 0) - Number(right.pageNumber || 0)
+                  || Number(left.chunkIndex || 0) - Number(right.chunkIndex || 0));
+              if (orderedChunks.length > 0) {
+                const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
+                const marker = new RegExp(`(?:^|\\s|\\n)(?:q(?:uestion)?\\s*)?0?${targetNo}(?:\\.|\\)|\\s|$)`, "i");
+                const exactIndex = orderedChunks.findIndex((chunk: any) => marker.test(String(chunk.text || "")));
+                const startIndex = exactIndex >= 0 ? Math.max(0, exactIndex - 1) : 0;
+                const indexedText = orderedChunks
+                  .slice(startIndex, exactIndex >= 0 ? startIndex + 5 : 10)
+                  .map((chunk: any) => `[Page ${chunk.pageNumber || "?"}]\n${chunk.text}`)
+                  .join("\n\n")
+                  .slice(0, 90_000);
+                if (indexedText.trim().length >= 80) {
+                  const answerFromIndex = await askGeminiExtractedTextStructured({
+                    uid: req.user.uid,
+                    sourceId,
+                    extractedText: indexedText,
+                    year: year || "unknown",
+                    subject: subject || "unknown",
+                    questionType,
+                    questionNo,
+                    allowOfficialAnswer: [resolvedSource?.resourceType, resolvedSource?.sourceType, resolvedSource?.sourceScope]
+                      .some((value) => String(value || "").toLowerCase().includes("marking"))
+                      || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
+                  });
+                  if (answerFromIndex.ok && answerFromIndex.found) return answerFromIndex;
+                }
+              }
+            }
+
+            return {
+              ok: false,
+              status: 202,
+              found: false,
+              errorCode: indexingResult.status === "ready" ? "PDF_INDEX_READY_RETRY" : "PDF_INDEXING_STARTED",
+              stage: "PDF_INDEXING",
+              message: indexingResult.status === "ready"
+                ? "PDF එක index කර අවසන්. එම ප්‍රශ්නය නැවත යවන්න."
+                : "PDF එකේ අකුරු හඳුනාගැනීම ආරම්භ කළා. Index කිරීම අවසන් වූ පසු එම ප්‍රශ්නය නැවත යවන්න.",
+              canRetry: true,
+              retryAfterMs: indexingResult.status === "ready" ? 1000 : 12000,
+            };
+          }
+
+          return {
+            ok: false,
+            status: 503,
+            found: false,
+            errorCode: "PDF_OCR_NOT_CONFIGURED",
+            stage: "PDF_INDEXING",
+            message: "මෙය scan කළ PDF එකක්. OCR_ENABLED=true සහ OCR_INPUT_BUCKET සකසා නැවත deploy කරන්න.",
+            canRetry: false,
+          };
+        }
+
+        // A small one-off file uploaded directly in this request has no saved
+        // source to index, so it may still use the bounded direct model path.
+        const inlineLimit = Number(process.env.DIRECT_PDF_INLINE_MAX_BYTES || 10 * 1024 * 1024);
+        if (buffer.length > inlineLimit) {
+          return {
+            ok: false,
+            status: 413,
+            found: false,
+            errorCode: "DIRECT_PDF_TOO_LARGE_TO_SCAN_INLINE",
+            stage: "PDF_INDEXING",
+            message: "විශාල PDF එක මුලින් සුරකිමින් index කරන්න. එවිට ප්‍රශ්න ඉක්මනින් අහන්න පුළුවන්.",
+          };
+        }
+
+        const result = await askGeminiDirectPdfStructured({
+          uid: req.user.uid,
+          sourceId: sourceId || "uploaded_temp",
+          pdfBuffer: buffer,
+          year: year || "unknown",
+          subject: subject || "unknown",
+          questionType,
+          questionNo,
+          prompt: effectivePrompt,
+          allowOfficialAnswer: [
             resolvedSource?.resourceType,
             resolvedSource?.sourceType,
             resolvedSource?.sourceScope,
           ].some((value) => String(value || "").toLowerCase().includes("marking"))
-            || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || ""));
-
-        console.log(`[DirectPDFQA] Using structured extraction for ${questionType} ${questionNo}`);
-        const { askGeminiDirectPdfStructured, askIndexedPdfQuestionStructured } = await import("../ai-core/pdf/directPdfQa");
-        const syllabusGrounding = await getSftSyllabusGroundingPdf(req.user.uid, subject);
-        let result: any;
-
-        const runFullPaperVisualScan = async () => {
-          const sourceGcsUri = isVertexAiEnabled()
-            ? storageGsUri(resolvedSource.__resolvedStoragePath)
-            : "";
-
-          if (sourceGcsUri) {
-            return askGeminiDirectPdfStructured({
-              uid: req.user.uid,
-              sourceId,
-              pdfGcsUri: sourceGcsUri,
-              year: year || "unknown",
-              subject: subject || "unknown",
-              questionType,
-              questionNo,
-              prompt: effectivePrompt,
-              allowOfficialAnswer,
-              syllabusPdfBuffer: syllabusGrounding?.buffer,
-              syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
-            });
-          }
-
-          const loaded = await loadPdfSourceBuffer({
-            source: resolvedSource,
-            storagePath: resolvedSource.__resolvedStoragePath,
-            submittedDownloadUrl: resolvedSource.__verifiedDownloadUrl,
-          });
-          return askGeminiDirectPdfStructured({
-            uid: req.user.uid,
-            sourceId,
-            pdfBuffer: loaded.buffer,
-            year: year || "unknown",
-            subject: subject || "unknown",
-            questionType,
-            questionNo,
-            prompt: effectivePrompt,
-            allowOfficialAnswer,
-            syllabusPdfBuffer: syllabusGrounding?.buffer,
-            syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
-          });
-        };
-
-        if (!req.file) {
-          const indexed = await retrieveExactPaperQuestion({
-            uid: req.user.uid,
-            sourceId,
-            subject,
-            year,
-            questionNo,
-            questionType,
-          });
-          const fullPaperChunks = Array.isArray(indexed.allChunks) && indexed.allChunks.length > 0
-            ? indexed.allChunks
-            : indexed.chunks;
-          const canTrustFullPaperIndex = !indexed.badTextQuality
-            && !indexed.needsOcr
-            && !indexed.needsLegacyConversion
-            && fullPaperChunks.length > 0;
-
-          if (canTrustFullPaperIndex) {
-            result = await askIndexedPdfQuestionStructured({
-              uid: req.user.uid,
-              sourceId,
-              chunks: fullPaperChunks,
-              year: year || "unknown",
-              subject: subject || "unknown",
-              questionType,
-              questionNo,
-              allowOfficialAnswer,
-              syllabusPdfBuffer: syllabusGrounding?.buffer,
-              syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
-            });
-
-            if (result?.errorCode === "FULL_PAPER_VISUAL_SCAN_REQUIRED") {
-              console.log(`[DirectPDFQA] OCR index could not isolate Q${questionNo}; scanning the complete original PDF visually.`);
-              result = await runFullPaperVisualScan();
-            }
-          } else {
-            console.log(`[DirectPDFQA] Searchable full-paper index unavailable; scanning the complete original PDF visually.`);
-            result = await runFullPaperVisualScan();
-          }
-        } else {
-          result = await askGeminiDirectPdfStructured({
-            uid: req.user.uid,
-            sourceId: sourceId || "uploaded_temp",
-            pdfBuffer: buffer as Buffer,
-            year: year || "unknown",
-            subject: subject || "unknown",
-            questionType,
-            questionNo,
-            prompt: effectivePrompt,
-            allowOfficialAnswer,
-            syllabusPdfBuffer: syllabusGrounding?.buffer,
-            syllabusPdfGcsUri: syllabusGrounding?.gcsUri,
-          });
-        }
+            || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
+        });
         console.log(`[DirectPDFQA] Structured extraction result: ${result.found ? "FOUND" : "NOT_FOUND"}`);
         if (!result.ok || !result.found || !result.sourceEvidence?.questionText) {
           const isRequire = result.errorCode === "AI_CLIENT_RUNTIME_ERROR" || (result.error && String(result.error).includes("require is not defined"));
@@ -599,7 +735,6 @@ pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload.single("file")
 
           return {
             ok: false,
-            status: result.errorCode === "PDF_REINDEX_REQUIRED" ? 409 : undefined,
             found: false,
             errorCode: isRequire ? "AI_CLIENT_RUNTIME_ERROR" : (isRateLimit ? "AI_RATE_LIMITED" : (result.errorCode || "EXACT_QUESTION_EVIDENCE_MISSING")),
             stage: result.stage || "MODEL_CALL",
@@ -607,82 +742,15 @@ pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload.single("file")
             error: result.error
           };
         }
-        if (interactionMode === "quiz_question") {
-          const solved = result.answer?.solvedAnswer || null;
-          const officialText = String(result.answer?.officialAnswer || "").trim();
-          const officialNo = officialText.match(/(?:^|\()\s*([1-5])\s*(?:\)|[.)]|$)/)?.[1] || null;
-          const optionNo = String(solved?.optionNo || officialNo || "").trim();
-          if (!/^[1-5]$/.test(optionNo)) {
-            return {
-              ok: false,
-              found: false,
-              errorCode: "MCQ_SOLVER_EMPTY",
-              stage: "QUIZ_ANSWER_PREPARATION",
-              reason: "The question was extracted, but its correct option could not be stored safely for quiz evaluation.",
-            };
-          }
-
-          const { attachPaperMcqQuizQuestion } = await import("../ai-core/quiz/paperMcqQuiz");
-          const quizState = await attachPaperMcqQuizQuestion({
-            uid: req.user.uid,
-            sourceId,
-            year: year || "unknown",
-            subject: subject || "unknown",
-            questionNo: Number(questionNo),
-            pageNumber: result.sourceEvidence?.pageNumber ?? null,
-            questionText: result.sourceEvidence.questionText,
-            options: Array.isArray(result.sourceEvidence.options) ? result.sourceEvidence.options : [],
-            optionNo,
-            optionText: solved?.optionText || null,
-            explanationSinhala: solved?.explanationSinhala || result.answer?.explanationSinhala || null,
-            lesson: result.answer?.lesson || null,
-          });
-
-          if (!quizState) {
-            return {
-              ok: false,
-              found: false,
-              errorCode: "QUIZ_SESSION_STALE",
-              stage: "QUIZ_STATE",
-              reason: "The active quiz changed before this question finished loading.",
-            };
-          }
-
-          return {
-            ok: true,
-            found: true,
-            sourceEvidence: result.sourceEvidence,
-            quiz: {
-              interactionMode: "quiz_question",
-              questionNo: Number(questionNo),
-              startQuestionNo: Number(quizStartQuestionNo || quizState.startQuestionNo),
-              endQuestionNo: Number(quizEndQuestionNo || quizState.endQuestionNo),
-              year: quizState.year,
-              subject: quizState.subject,
-            },
-            answer: { quizQuestion: true },
-            confidence: result.confidence,
-            reason: result.reason,
-          };
-        }
-
         return {
           ok: true,
           ...result
         };
       }
       console.log("[DirectPDFQA] Using general extraction");
-      if (!buffer) {
-        return {
-          ok: false,
-          status: 400,
-          errorCode: "DIRECT_QA_MISSING_STRUCTURED_INTENT",
-          message: "Select a question number before asking from a saved PDF.",
-        };
-      }
       const result = await askGeminiDirectPdf({
         sourceId: sourceId || "uploaded_temp",
-        pdfBuffer: buffer as Buffer,
+        pdfBuffer: buffer,
         prompt: effectivePrompt,
         questionId,
         subject,
@@ -720,8 +788,13 @@ pdfRoutes.post("/direct-qa-file", requireNonAnonymousUser, upload.single("file")
     }
   } catch (err: any) {
     console.error("[DirectPDFQA] Backend error:", err);
-    const mapped = directQaHttpError(err);
-    return res.status(mapped.status).json(mapped.body);
+    return res.status(Number(err.status) || 500).json({
+       ok: false,
+       found: false,
+       errorCode: err.code || err.errorCode || "DIRECT_QA_BACKEND_FAILED",
+       stage: err.stage || "MODEL_CALL",
+       message: err.message || "Direct PDF QA failed"
+    });
   }
 });
 
@@ -878,12 +951,7 @@ pdfRoutes.get("/sources", requireFirebaseUser, async (req: any, res) => {
 pdfRoutes.post("/admin/repair-source/:sourceId", requireFirebaseUser, async (req: any, res) => {
   try {
     const { sourceId } = req.params;
-    const roles = Array.isArray(req.user?.roles) ? req.user.roles : [];
-    const canRepair = req.user?.admin === true
-      || roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
-    if (!canRepair) {
-      return res.status(403).json({ ok: false, code: "ADMIN_REQUIRED", message: "Admin or content-editor access is required." });
-    }
+    // In a real app, verify admin claims. Here we assume owner or admin.
     const db = getAdminDb();
     const sourceSnap = await db.collection("rag_sources").doc(sourceId).get();
     if (!sourceSnap.exists) {

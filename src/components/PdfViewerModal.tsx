@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize, Loader2 } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { motion, AnimatePresence } from 'motion/react';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-// Let Vite fingerprint the worker with the rest of the application assets.
-// A missing public worker used to fall through to index.html, which browsers
-// rejected as a module because its MIME type was text/html.
+// Let Vite fingerprint and serve the exact worker version used by react-pdf.
+// A runtime manifest fetch could be intercepted by a stale service worker and
+// return index.html, which PDF.js rejected as a non-JavaScript module.
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 interface PdfViewerModalProps {
@@ -88,19 +88,19 @@ export function PdfViewerModal({ isOpen, onClose, pdfUrl, title }: PdfViewerModa
               {loading && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center z-10 bg-slate-100">
                   <Loader2 className="w-8 h-8 text-primary-500 animate-spin mb-2" />
-                  <span className="text-sm font-medium text-slate-500">Loading document...</span>
+                  <span className="text-sm font-medium text-slate-500">PDF ගොනුව විවෘත කරමින්…</span>
                 </div>
               )}
               {error && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center z-10 bg-slate-100 text-rose-500">
                   <div className="bg-rose-50 p-4 rounded-xl border border-rose-200 text-center max-w-md">
-                    <p className="font-bold mb-1">Could not load PDF</p>
+                    <p className="font-bold mb-1">PDF ගොනුව විවෘත කළ නොහැක</p>
                     <p className="text-xs">{error}</p>
                     <button 
                       onClick={() => window.open(pdfUrl, '_blank')}
                       className="mt-4 text-xs font-bold underline hover:text-rose-700"
                     >
-                      Open in new tab instead
+                      අලුත් tab එකක විවෘත කරන්න
                     </button>
                   </div>
                 </div>

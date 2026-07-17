@@ -25,27 +25,32 @@ export const ResponsiveChartShell: React.FC<ResponsiveChartShellProps> = ({
 
     updateSize();
 
+    let frame = 0;
     const observer = new ResizeObserver((entries) => {
-      window.requestAnimationFrame(() => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
         if (!Array.isArray(entries) || !entries.length) return;
         const rect = entries[0].contentRect;
-        if (rect.width > 0 && rect.height > 0) {
+        if (rect.width >= 16 && rect.height >= 16) {
           setSize({ width: rect.width, height: rect.height });
         }
       });
     });
 
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, []);
 
-  const isReady = size.width > 0 && size.height > 0;
+  const isReady = size.width >= 16 && size.height >= 16;
 
   return (
     <div
       ref={containerRef}
       className="min-w-0 w-full relative"
-      style={{ height: minHeight }}
+      style={{ height: minHeight, minWidth: 0 }}
       aria-busy={!isReady}
     >
       {isReady ? children : (

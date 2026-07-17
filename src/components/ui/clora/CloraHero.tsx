@@ -11,10 +11,9 @@ export function CloraHero({ onSelectPrompt, prompts = [] }: CloraHeroProps) {
   return (
     <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-5 py-10 sm:px-8">
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45 }}>
-        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Tec A/L study assistant</p>
-        <h1 className="max-w-xl text-3xl font-semibold tracking-[-0.035em] text-slate-950 sm:text-4xl">What do you want to study?</h1>
+        <h1 className="max-w-xl text-3xl font-semibold tracking-[-0.035em] text-slate-950 sm:text-4xl">අද මොනවද ඉගෙන ගන්නේ?</h1>
         <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500 sm:text-base">
-          Sri Lankan A/L විෂයයන්, past papers, lesson resources සහ ඔබේ notes සමඟ ඉගෙන ගන්න.
+          ශ්‍රී ලංකා උසස් පෙළ විෂයයන්, පසුගිය ප්‍රශ්න පත්‍ර, පාඩම් ගොනු සහ ඔබේ සටහන් සමඟ ඉගෙන ගන්න.
         </p>
 
         <div className="mt-7 grid gap-2 sm:grid-cols-2">

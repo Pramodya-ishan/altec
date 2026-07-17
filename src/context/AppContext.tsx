@@ -3,8 +3,17 @@ import { apiFetch } from "../lib/api";
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
 import { isFirebaseEnabled, auth, authPersistenceReady } from '../lib/firebase';
-import { GoogleAuthProvider, getRedirectResult, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-import { getGoogleAuthErrorMessage } from '../lib/authErrorMessage';
+import {
+  GoogleAuthProvider,
+  createUserWithEmailAndPassword,
+  getRedirectResult,
+  onAuthStateChanged,
+  signInWithCredential,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+} from 'firebase/auth';
 
 type ModalsState = {
   playlist: { open: boolean; topic: string };
@@ -81,8 +90,6 @@ type AppContextType = {
   fetchUserInfo: (token: string) => Promise<void>;
   loginWithGooglePopup: () => Promise<void>;
   isAuthLoading: boolean;
-  authError: string;
-  clearAuthError: () => void;
   isUserDataLoading: boolean;
   hasHydratedUserData: boolean;
   logout: () => void;
@@ -154,15 +161,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
 
   const [isAuthLoading, setIsAuthLoading] = useState(true);
-  const [authError, setAuthError] = useState('');
-  const googleLoginPromiseRef = useRef<Promise<void> | null>(null);
   const [isUserDataLoading, setIsUserDataLoading] = useState(false);
   const [hasHydratedUserData, setHasHydratedUserData] = useState(false);
   const [youtubeCookies, setYoutubeCookies] = useState<string>('');
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [pushNotifications, setPushNotifications] = useState<PushNotification[]>([]);
-  const notificationPollRef = useRef<number | null>(null);
   const [localFriends, setLocalFriends] = useState<string[]>(['dilshan@alblueprint.com', 'amara@alblueprint.com']);
 
   const [adminTargetEmail, setAdminTargetEmailState] = useState<string | null>(null);
@@ -174,14 +178,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         if (data.profile) {
-          const googlePicture = auth?.currentUser?.photoURL || user?.picture || '';
-          const storedPicture = String(data.profile.picture || '');
-          setProfile({
-            ...data.profile,
-            picture: (!storedPicture || storedPicture.includes('api.dicebear.com')) && googlePicture
-              ? googlePicture
-              : storedPicture,
-          });
+          setProfile(data.profile);
           return;
         }
       }
@@ -191,8 +188,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setProfile({
       email,
       username: email.split('@')[0],
-      picture: auth?.currentUser?.photoURL || user?.picture || '',
-      bio: 'Student on A/L Tech Blueprint journey!',
+      picture: user?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
+      bio: 'උසස් පෙළ තාක්ෂණවේදය හදාරන ශිෂ්‍යයෙක්.',
       updatedAt: new Date().toISOString()
     });
   };
@@ -280,6 +277,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    let unsubscribe: () => void = () => {};
     let isCancelled = false;
 
     const timer = setTimeout(() => {
@@ -287,17 +285,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fetchProfile(email);
       fetchExpressNotifications();
 
-      const intervalId = window.setInterval(fetchExpressNotifications, 30_000);
-      notificationPollRef.current = intervalId;
+      // Notifications are read through the authenticated API only. A direct
+      // users/{email}/notifications listener used a different document key
+      // from Firebase Auth's uid and repeatedly produced permission errors (or
+      // anonymous reads) while sign-in was settling. The server verifies the
+      // ID token and owns the Firestore access, so one polling path is both
+      // safer and consistent with Vercel/Firebase rules.
+      const intervalId = window.setInterval(fetchExpressNotifications, 20_000);
+      unsubscribe = () => window.clearInterval(intervalId);
     }, 1200);
 
     return () => {
       isCancelled = true;
       clearTimeout(timer);
-      if (notificationPollRef.current !== null) {
-        window.clearInterval(notificationPollRef.current);
-        notificationPollRef.current = null;
-      }
+      if (unsubscribe) unsubscribe();
     };
   }, [user]);
 
@@ -577,136 +578,125 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const clearAuthError = () => setAuthError('');
-
-  const applyFirebaseUser = (firebaseUser: any, accessToken = '') => {
-    setUser({
-      email: firebaseUser.email || '',
-      name: firebaseUser.displayName || '',
-      picture: firebaseUser.photoURL || '',
-      token: accessToken,
-      emailVerified: firebaseUser.emailVerified,
-    });
-
-    setProfile((current) => current || ({
-      email: firebaseUser.email || '',
-      username: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Student',
-      picture: firebaseUser.photoURL || '',
-      bio: 'Technology Stream Learner',
-      isVerified: firebaseUser.emailVerified,
-      updatedAt: new Date().toISOString(),
-    }));
-  };
-
-  const syncFirebaseSession = async (firebaseUser: any, accessToken = '') => {
-    const idToken = await firebaseUser.getIdToken();
-    const sessionResponse = await apiFetch('/api/auth/session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idToken }),
-    });
-    const sessionData = await sessionResponse.json().catch(() => ({}));
-    if (!sessionResponse.ok) return false;
-
-    if (sessionData?.claimsUpdated) {
-      await firebaseUser.getIdToken(true).catch(() => undefined);
-    }
-    if (sessionData?.profile) {
-      setProfile(sessionData.profile);
-      localStorage.setItem('email_user_profile', JSON.stringify(sessionData.profile));
-    }
-    if (sessionData?.user) {
-      const nextUser = { ...sessionData.user, token: accessToken };
-      setUser(nextUser);
-      localStorage.setItem('email_user_session', JSON.stringify(nextUser));
-    }
-    return true;
-  };
-
   useEffect(() => {
     let unsubscribeAutoAuth = () => {};
     let disposed = false;
-
-    // Old Google OAuth access tokens expire and were causing a userinfo 401 on
-    // reload. Firebase Auth persistence is the only session source of truth.
-    localStorage.removeItem('google_access_token');
-
+    
     if (isFirebaseEnabled && auth) {
-      void authPersistenceReady.then(async () => {
+      // Wait for local persistence before subscribing. Otherwise the first
+      // transient null event after the popup can replace a valid user with the
+      // sign-in screen while Firebase is restoring its IndexedDB session.
+      void authPersistenceReady.then(() => {
         if (disposed) return;
 
-        try {
-          // Completes the mobile/blocked-popup fallback after the browser
-          // returns from Google. onAuthStateChanged handles the actual session.
-          await getRedirectResult(auth);
-        } catch (error: any) {
-          if (!disposed) setAuthError(getGoogleAuthErrorMessage(error));
-        }
-        if (disposed) return;
+        // Complete the redirect fallback before subscribing to the stable
+        // auth state. This is used on mobile browsers and when popup windows
+        // are blocked. The same-origin /__/auth handler keeps the result in
+        // Firebase's persistent browser session.
+        void getRedirectResult(auth).then((redirectResult) => {
+          if (!redirectResult || disposed) return;
+          const credential = GoogleAuthProvider.credentialFromResult(redirectResult);
+          if (credential?.accessToken) {
+            localStorage.setItem('google_access_token', credential.accessToken);
+          }
+          const redirectedUser: User = {
+            email: redirectResult.user.email || '',
+            name: redirectResult.user.displayName || '',
+            picture: redirectResult.user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(redirectResult.user.email || '')}`,
+            token: credential?.accessToken || '',
+            emailVerified: redirectResult.user.emailVerified,
+          };
+          setUser(redirectedUser);
+          localStorage.setItem('email_user_session', JSON.stringify(redirectedUser));
+        }).catch((redirectError) => {
+          if (import.meta.env.DEV) console.warn('Google redirect result could not be restored', redirectError);
+        });
 
         unsubscribeAutoAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-          if (firebaseUser) {
-            if (firebaseUser.isAnonymous) {
-              await signOut(auth).catch(() => undefined);
-              setUser(null);
-              setIsAuthLoading(false);
-              return;
-            }
-
-            setAuthError('');
-            applyFirebaseUser(firebaseUser);
-
-            const savedData = localStorage.getItem(`student_progress_data_${(firebaseUser.email || '').toLowerCase()}`);
-            if (savedData) {
-              try { setData(JSON.parse(savedData)); } catch {}
-            }
-
-            // Do not block the workspace on profile/API bootstrap. A valid
-            // Firebase user is already authenticated.
-            setIsAuthLoading(false);
-            void syncFirebaseSession(firebaseUser).catch(() => undefined);
-            void fetchUserDataFromDB(firebaseUser.email || '', { showLoading: !savedData });
-            window.setTimeout(() => {
-              fetchYoutubeCookies(firebaseUser.email || '').catch(() => {});
-            }, 1500);
-          } else {
+        if (firebaseUser) {
+          if (firebaseUser.isAnonymous) {
+            // Never promote an anonymous Firebase identity to a cached email
+            // session. Do not call signOut here: an asynchronous anonymous
+            // cleanup can race with signInWithPopup and sign out the newly
+            // authenticated Google user after the account chooser closes.
+            // apiFetch already refuses anonymous ID tokens, so leaving the
+            // anonymous identity in place until the explicit sign-in is safe.
             setUser(null);
+            setProfile(null);
             setIsAuthLoading(false);
+            return;
           }
+          const savedToken = localStorage.getItem('google_access_token') || '';
+          setUser({
+            email: firebaseUser.email || '',
+            name: firebaseUser.displayName || '',
+            picture: firebaseUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(firebaseUser.email || '')}`,
+            token: savedToken,
+            emailVerified: firebaseUser.emailVerified
+          });
+
+          const savedData = localStorage.getItem(`student_progress_data_${(firebaseUser.email || '').toLowerCase()}`);
+          if (savedData) {
+             try { setData(JSON.parse(savedData)); } catch(e) {}
+          }
+
+          setIsAuthLoading(false);
+          void fetchUserDataFromDB(firebaseUser.email || '', { showLoading: !savedData });
+          setTimeout(() => {
+            fetchYoutubeCookies(firebaseUser.email || '').catch(() => {});
+          }, 1500);
+          setIsAuthLoading(false);
+        } else {
+          setUser(null);
+          setProfile(null);
+          setIsAuthLoading(false);
+        }
         });
+      }).catch(() => {
+        if (!disposed) setIsAuthLoading(false);
       });
     } else {
-      // Local development fallback only. Production authentication never trusts
-      // this cache when Firebase is configured.
+      // Offline mode
       const savedUserSession = localStorage.getItem('email_user_session');
       const savedUserProfile = localStorage.getItem('email_user_profile');
-
+      
       if (savedUserSession && savedUserProfile) {
         try {
           const parsedUser = JSON.parse(savedUserSession);
           const parsedProfile = JSON.parse(savedUserProfile);
           setUser(parsedUser);
           setProfile(parsedProfile);
-
+          
           const savedData = localStorage.getItem(`student_progress_data_${parsedUser.email.toLowerCase()}`);
           if (savedData) {
-            try { setData(JSON.parse(savedData)); } catch {}
+             try { setData(JSON.parse(savedData)); } catch(e) {}
           }
 
-          void fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData }).then(() => {
-            window.setTimeout(() => {
+          // Fetch latest details in the background
+          fetchUserDataFromDB(parsedUser.email, { showLoading: !savedData }).then(() => {
+            setTimeout(() => {
               fetchYoutubeCookies(parsedUser.email).catch(() => {});
             }, 1500);
           });
-        } catch (error) {
-          console.error('Local session parsing failed:', error);
+          setIsAuthLoading(false);
+        } catch (e) {
+          console.error("Local session parsing failed:", e);
+          setIsAuthLoading(false);
+        }
+      } else {
+        const savedToken = localStorage.getItem('google_access_token');
+        if (savedToken) {
+           fetchUserInfo(savedToken);
+        } else {
+           setIsAuthLoading(false);
         }
       }
-      setIsAuthLoading(false);
     }
 
     const localCookies = localStorage.getItem('youtube_bypass_cookies');
-    if (localCookies) setYoutubeCookies(localCookies);
+    if (localCookies) {
+        setYoutubeCookies(localCookies);
+    }
 
     return () => {
       disposed = true;
@@ -714,69 +704,96 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [isFirebaseEnabled]);
 
+  
   const loginWithGooglePopup = async () => {
-    if (googleLoginPromiseRef.current) return googleLoginPromiseRef.current;
-
-    const loginTask = (async () => {
-      setAuthError('');
-      setIsAuthLoading(true);
-
-      try {
-        if (!isFirebaseEnabled || !auth) {
-          throw Object.assign(new Error('Firebase Authentication is not configured.'), { code: 'auth/not-configured' });
-        }
-
-        await authPersistenceReady;
+    setIsAuthLoading(true);
+    try {
+      if (isFirebaseEnabled && auth) {
         const provider = new GoogleAuthProvider();
-        // GoogleAuthProvider already requests the standard identity scopes.
-        // Keeping the request minimal avoids stale/unused userinfo tokens.
+        
+        // Remove unnecessary sensitive scopes and keep only standard ones
+        provider.addScope('openid');
+        provider.addScope('https://www.googleapis.com/auth/userinfo.email');
+        provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
+        
         provider.setCustomParameters({ prompt: 'select_account' });
-
-        let result;
-        try {
-          result = await signInWithPopup(auth, provider);
-        } catch (popupError: any) {
-          const code = String(popupError?.code || '');
-          if (code.includes('popup-blocked') || code.includes('operation-not-supported-in-this-environment')) {
-            setIsAuthLoading(false);
-            await signInWithRedirect(auth, provider);
-            return;
-          }
-          throw popupError;
-        }
-
+        await authPersistenceReady;
+        const result = await signInWithPopup(auth, provider);
+        
         const credential = GoogleAuthProvider.credentialFromResult(result);
-        const accessToken = credential?.accessToken || '';
-        applyFirebaseUser(result.user, accessToken);
-        setIsAuthLoading(false);
+        const accessToken = credential?.accessToken;
+        if (accessToken) {
+          localStorage.setItem('google_access_token', accessToken);
+        }
 
-        const synced = await syncFirebaseSession(result.user, accessToken).catch(() => false);
-        if (result.user.email) {
-          void fetchUserDataFromDB(result.user.email, { showLoading: false });
-          void fetchYoutubeCookies(result.user.email);
-        }
-        showNotification(
-          synced ? 'Google sign-in complete.' : 'Signed in. Profile data will sync in the background.',
-          synced ? 'success' : 'info',
-        );
-      } catch (error: any) {
-        console.error('Google sign-in error:', error);
-        if (auth?.currentUser && !auth.currentUser.isAnonymous) {
-          applyFirebaseUser(auth.currentUser);
-          setAuthError('');
-        } else {
-          const message = getGoogleAuthErrorMessage(error);
-          setAuthError(message);
-          showNotification(message, 'error');
-        }
-      } finally {
+        // Firebase Auth is the browser session source of truth. Do not make a
+        // working Google sign-in depend on a second API request: a cold or
+        // temporarily unavailable Vercel function previously returned the UI
+        // to the sign-in screen even though Firebase had authenticated.
+        const signedInUser: User = {
+          email: result.user.email || '',
+          name: result.user.displayName || '',
+          picture: result.user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(result.user.email || '')}`,
+          token: accessToken || '',
+          emailVerified: result.user.emailVerified,
+        };
+        setUser(signedInUser);
+        localStorage.setItem('email_user_session', JSON.stringify(signedInUser));
         setIsAuthLoading(false);
-        googleLoginPromiseRef.current = null;
+        showNotification("Google ගිණුමෙන් සාර්ථකව පිවිසුණා.", "success");
+
+        const savedData = localStorage.getItem(`student_progress_data_${signedInUser.email.toLowerCase()}`);
+        if (savedData) {
+          try { setData(JSON.parse(savedData)); } catch { /* ignore corrupt local cache */ }
+        }
+        void fetchUserDataFromDB(signedInUser.email, { showLoading: !savedData });
+        void fetchYoutubeCookies(signedInUser.email).catch(() => undefined);
+
+        // Establish the HttpOnly server session in the background. Client API
+        // calls still carry the Firebase ID token, so a transient failure here
+        // must not invalidate the authenticated browser session.
+        void result.user.getIdToken(true).then(async (idToken) => {
+          const res = await apiFetch('/api/auth/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ idToken })
+          });
+          if (!res.ok) return;
+          const resData = await res.json().catch(() => null);
+          if (resData?.profile) {
+            setProfile(resData.profile);
+            localStorage.setItem('email_user_profile', JSON.stringify(resData.profile));
+          }
+        }).catch((sessionError) => {
+          if (import.meta.env.DEV) console.warn('Server session bootstrap skipped', sessionError);
+        });
+      } else {
+         showNotification("Google පිවිසුම සඳහා Firebase සැකසුම් අවශ්‍යයි.", "error");
       }
-    })();
-
-    googleLoginPromiseRef.current = loginTask;
-    return loginTask;
+    } catch (error: any) {
+      console.error("Google Popup Login Error:", error);
+      const code = String(error?.code || '');
+      if (
+        isFirebaseEnabled
+        && auth
+        && ['auth/popup-blocked', 'auth/cancelled-popup-request', 'auth/web-storage-unsupported'].includes(code)
+      ) {
+        const provider = new GoogleAuthProvider();
+        provider.addScope('openid');
+        provider.addScope('https://www.googleapis.com/auth/userinfo.email');
+        provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
+        provider.setCustomParameters({ prompt: 'select_account' });
+        await signInWithRedirect(auth, provider);
+        return;
+      }
+      const message = code === 'auth/popup-closed-by-user'
+        ? "Google පිවිසුම් කවුළුව වසා දමා ඇත."
+        : code === 'auth/unauthorized-domain'
+          ? "මෙම domain එක Firebase Authorized domains ලැයිස්තුවට එක් කළ යුතුයි."
+          : "Google පිවිසුම සම්පූර්ණ කළ නොහැකි වුණා. නැවත උත්සාහ කරන්න.";
+      showNotification(message, "error");
+    }
+    setIsAuthLoading(false);
   };
 
   const fetchUserInfo = async (token: string) => {
@@ -788,12 +805,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         
+        if (isFirebaseEnabled && auth) {
+          try {
+            const credential = GoogleAuthProvider.credential(null, token);
+            await signInWithCredential(auth, credential);
+            console.log("Firebase Auth signed in via standard token!");
+          } catch (e) {
+            throw new Error('Google Firebase session could not be verified. Please sign in again.');
+          }
+        }
+
         setUser({
           email: data.email,
           name: data.name,
           picture: data.picture,
           token,
-          emailVerified: data.email_verified === true || data.email_verified === 'true'
+          emailVerified: data.email_verified === true || data.email_verified === 'true' || true
         });
 
         const savedData = localStorage.getItem(`student_progress_data_${data.email.toLowerCase()}`);
@@ -838,7 +865,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
              if (result.data) {
                  setData(result.data);
                  localStorage.setItem(`student_progress_data_${email}`, JSON.stringify(result.data));
-                 
                  return;
              }
          }
@@ -848,7 +874,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
          if (savedData) {
             try {
                setData(JSON.parse(savedData));
-               console.log("Successfully restored student progress from local storage fallback");
+               if (import.meta.env.DEV) console.info("දේශීය cache එකෙන් ශිෂ්‍ය ප්‍රගතිය ප්‍රතිසාධනය කළා.");
             } catch(e) {}
          }
       } catch (e) {
@@ -891,7 +917,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
      localStorage.setItem('youtube_bypass_cookies', cookies);
      if (!user?.email) return;
      const email = user.email.toLowerCase();
-     
      try {
         await apiFetch('/api/cookies', {
            method: 'POST',
@@ -961,7 +986,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (unsyncedRaw) {
         try {
           const unsyncedData = JSON.parse(unsyncedRaw);
-          showNotification("Connection restored! Synchronizing your offline changes...", "info");
+          showNotification("සම්බන්ධතාවය නැවත ලැබුණා. නොබැඳි වෙනස්කම් සමමුහුර්ත කරමින්…", "info");
 
           let serverSynced = false;
 
@@ -980,7 +1005,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           if (serverSynced) {
             localStorage.removeItem(unsyncedKey);
-            showNotification("Your offline changes have been fully synchronized with the cloud db!", "success");
+            showNotification("නොබැඳි වෙනස්කම් cloud ගබඩාවට සමමුහුර්ත කළා.", "success");
             setData(unsyncedData);
           }
         } catch (e) {
@@ -1309,8 +1334,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     triggerStars,
     fetchUserInfo,
     loginWithGooglePopup,
-    authError,
-    clearAuthError,
     isAuthLoading,
     isUserDataLoading,
     hasHydratedUserData,
@@ -1335,7 +1358,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     registerWithEmailAndDetails,
     verifyEmailCode
   }), [
-    data, user, currentSubject, currentView, theme, isSidebarOpen, isAdvisorOpen, modals, notifications, stars, authError, isAuthLoading, isUserDataLoading, hasHydratedUserData, youtubeCookies, profile, pushNotifications, localFriends, autoEmailLogin, adminTargetEmail
+    data, user, currentSubject, currentView, theme, isSidebarOpen, isAdvisorOpen, modals, notifications, stars, isAuthLoading, isUserDataLoading, hasHydratedUserData, youtubeCookies, profile, pushNotifications, localFriends, autoEmailLogin, adminTargetEmail
   ]);
 
   return (

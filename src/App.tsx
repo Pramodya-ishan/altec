@@ -24,14 +24,13 @@ const ExamIntelligence = lazy(() => import('./pages/ExamIntelligence.tsx'));
 const PredictionPapers = lazy(() => import('./pages/PredictionPapers.tsx'));
 const MistakeNotebook = lazy(() => import('./pages/MistakeNotebook.tsx'));
 const PdfIntelAdmin = lazy(() => import('./pages/PdfIntelAdmin.tsx'));
-const FeatureCenter = lazy(() => import('./pages/FeatureCenter.tsx'));
 
 import { AddPaperMarksModal } from './components/modals/AddPaperMarksModal';
 import { NotesModal } from './components/modals/NotesModal';
 import { SilencePlayerModal } from './components/modals/SilencePlayerModal';
-import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { AnimatePresence, motion } from 'motion/react';
 import { cn } from './lib/utils';
-import { CheckCircle2, XCircle, Info, X, CloudOff, Loader2, RefreshCw } from 'lucide-react';
+import { CheckCircle2, XCircle, Info, X, CloudOff, GraduationCap, Loader2 } from 'lucide-react';
 import { PageSkeleton } from './components/ui/PageSkeleton';
 
 function ToastNotification() {
@@ -117,15 +116,15 @@ function NotFoundView() {
     <section className="flex min-h-[60vh] flex-1 items-center justify-center px-6 py-16 text-center">
       <div className="max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-400">404</p>
-        <h1 className="mt-3 text-2xl font-semibold text-slate-950">Page not found</h1>
+        <h1 className="mt-3 text-2xl font-semibold text-slate-950">පිටුව හමු නොවුණි</h1>
         <p className="mt-3 text-sm leading-6 text-slate-500">
-          This address is not an application page. Check the URL or return to the dashboard.
+          මෙම ලිපිනය Tec A/L පිටුවක් නොවේ. ලිපිනය පරීක්ෂා කරන්න හෝ ප්‍රධාන පිටුවට යන්න.
         </p>
         <a
           href="/"
           className="mt-6 inline-flex rounded-full bg-slate-950 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800"
         >
-          Return home
+          ප්‍රධාන පිටුවට යන්න
         </a>
       </div>
     </section>
@@ -133,11 +132,10 @@ function NotFoundView() {
 }
 
 function AuthOverlay() {
-  const { user, loginWithGooglePopup, isAuthLoading, authError, clearAuthError } = useApp();
+  const { user, loginWithGooglePopup, isAuthLoading } = useApp();
   const [actionLoading, setActionLoading] = React.useState(false);
 
   const handleGoogleLogin = async () => {
-    clearAuthError();
     setActionLoading(true);
     try {
       await loginWithGooglePopup();
@@ -149,11 +147,11 @@ function AuthOverlay() {
   if (isAuthLoading) {
     return (
       <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-white" role="status" aria-live="polite" aria-label="Checking sign-in">
-        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
-          <Loader2 className="h-5 w-5 animate-spin text-slate-900" />
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 px-5 py-4 shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
           <div>
-            <p className="text-sm font-semibold text-slate-900">Opening your workspace</p>
-            <p className="text-xs text-slate-500">Checking your secure session…</p>
+            <p className="text-sm font-bold text-slate-800">ඔබගේ ගිණුම විවෘත කරමින්</p>
+            <p className="text-xs text-slate-500">ආරක්ෂිත පිවිසුම පරීක්ෂා කරමින්…</p>
           </div>
         </div>
       </div>
@@ -163,64 +161,40 @@ function AuthOverlay() {
   if (user) return null;
 
   return (
-    <div className="fixed inset-0 z-[999999] flex items-center justify-center overflow-y-auto bg-slate-950/70 p-4 backdrop-blur-xl sm:p-6">
-      <section
-        className="w-full max-w-[430px] overflow-hidden rounded-[28px] border border-white/70 bg-white shadow-[0_32px_90px_-28px_rgba(15,23,42,0.75)]"
-        aria-labelledby="signin-title"
-      >
-        <div className="px-6 pb-7 pt-7 sm:px-8 sm:pb-8 sm:pt-8">
-          <div className="mb-7">
-            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Secure access</p>
-            <h1 id="signin-title" className="text-[28px] font-semibold leading-tight tracking-[-0.035em] text-slate-950">
-              Welcome back
-            </h1>
-            <p className="mt-2 text-sm leading-6 text-slate-500">Choose your Google account to continue.</p>
+    <div className="fixed inset-0 bg-white z-[999999] flex items-center justify-center p-4">
+      <div className="bg-white rounded-[1.5rem] shadow-2xl p-8 max-w-sm w-full text-center flex flex-col gap-6">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-16 h-16 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shadow-sm border border-indigo-100">
+            <GraduationCap className="w-8 h-8" />
           </div>
-
-          {authError && (
-            <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3" role="alert">
-              <p className="text-sm font-medium leading-5 text-rose-800">{authError}</p>
-              <button
-                type="button"
-                onClick={handleGoogleLogin}
-                disabled={actionLoading}
-                className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-rose-700 transition hover:text-rose-900 disabled:opacity-60"
-              >
-                <RefreshCw className={cn("h-3.5 w-3.5", actionLoading && "animate-spin")} />
-                Try again
-              </button>
-            </div>
-          )}
-
-          <button
-            type="button"
-            onClick={handleGoogleLogin}
-            disabled={actionLoading}
-            className="group flex w-full cursor-pointer items-center justify-center gap-3 rounded-2xl border border-slate-300 bg-white px-5 py-3.5 text-sm font-semibold text-slate-900 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-slate-200 active:scale-[0.99] disabled:cursor-wait disabled:opacity-70"
-          >
-            {actionLoading ? (
-              <>
-                <Loader2 className="h-5 w-5 animate-spin text-slate-500" />
-                Opening Google…
-              </>
-            ) : (
-              <>
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="h-5 w-5" aria-hidden="true">
-                  <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z" />
-                  <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z" />
-                  <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z" />
-                  <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z" />
-                </svg>
-                Continue with Google
-              </>
-            )}
-          </button>
-
-          <p className="mt-5 text-center text-[11px] leading-5 text-slate-400">
-            Authentication is handled securely by Google and Firebase.
-          </p>
+          <div className="space-y-1.5">
+            <h2 className="text-2xl font-black text-slate-900 tracking-tight">Tec A/L</h2>
+            <p className="text-sm font-medium text-slate-500">
+              ඔබගේ A/L අධ්‍යයන පුවරුවට පිවිසීමට Google ගිණුම භාවිත කරන්න.
+            </p>
+          </div>
         </div>
-      </section>
+
+        <button
+          onClick={handleGoogleLogin}
+          disabled={actionLoading}
+          className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-800 font-bold py-3.5 px-6 rounded-xl cursor-pointer active:scale-[0.98] transition-all text-sm flex items-center justify-center gap-3 shadow-sm"
+        >
+          {actionLoading ? (
+            <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+          ) : (
+            <>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" className="w-5 h-5">
+                <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
+                <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
+                <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
+                <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
+              </svg>
+              Google සමඟ පිවිසෙන්න
+            </>
+          )}
+        </button>
+      </div>
     </div>
   );
 }
@@ -228,7 +202,6 @@ function AuthOverlay() {
 function AppContent() {
   const { theme, isSidebarOpen, setCurrentView, user, isUserDataLoading, hasHydratedUserData } = useApp();
   const location = useLocation();
-  const reduceMotion = useReducedMotion();
   const isChatRoute = location.pathname === "/clora-x" || location.pathname === "/ai-chat";
 
   React.useEffect(() => {
@@ -243,20 +216,11 @@ function AppContent() {
      setCurrentView(path as any);
   }, [location.pathname, setCurrentView]);
 
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-white font-sans text-slate-900">
-        <OnlineStatus />
-        <ToastNotification />
-        <AuthOverlay />
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-white font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 relative">
       <OnlineStatus />
       <ToastNotification />
+      <AuthOverlay />
       <Sidebar />
       <div className={cn("flex flex-col transition-all duration-300", isChatRoute ? "h-[100dvh] overflow-hidden bg-white" : "min-h-screen bg-white", isSidebarOpen ? "lg:pl-72" : "lg:pl-[72px] pl-0")}>
         <TopNav />
@@ -268,51 +232,37 @@ function AppContent() {
               : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
           )}
         >
-          <div className="relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden">
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.div
-                key={user && isUserDataLoading && !hasHydratedUserData ? `loading:${location.pathname}` : location.pathname}
-                initial={reduceMotion ? { opacity: 1 } : { opacity: 0, y: 10, scale: 0.995 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -6, scale: 0.998 }}
-                transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-                className={cn(
-                  "flex min-h-0 w-full flex-1 flex-col will-change-transform",
-                  isChatRoute ? "h-full overflow-hidden" : "min-h-full"
+          <div className="relative flex h-full min-h-0 w-full flex-1 flex-col">
+              <Suspense fallback={<PageSkeleton pathname={location.pathname} />}>
+                {user && isUserDataLoading && !hasHydratedUserData ? (
+                  <PageSkeleton pathname={location.pathname} />
+                ) : (
+                <Routes location={location} key={location.pathname}>
+                  <Route path="/" element={<Navigate to="/paper-structure" replace />} />
+                  <Route path="/paper-structure" element={<PaperStructureView />} />
+                  <Route path="/question-marks" element={<Navigate to="/paper-structure" replace />} />
+                  <Route path="/paper-marks" element={<PaperMarksView />} />
+                  <Route path="/lesson-marks" element={<Navigate to="/admission-predictor" replace />} />
+                  <Route path="/admission-predictor" element={<AdmissionPredictorView />} />
+                  <Route path="/clora-x" element={<CloraXView />} />
+                  <Route path="/ai-chat" element={<Navigate to="/clora-x" replace />} />
+                  <Route path="/profile" element={<ProfileView />} />
+                  <Route path="/past-papers" element={<PastPapersView />} />
+                  <Route path="/admin-dashboard" element={<AdminDashboardView />} />
+                  <Route path="/syllabus" element={<SyllabusLibraryView />} />
+                  <Route path="/pdf-sources" element={<PdfSourcesPage />} />
+                  <Route path="/question-cache" element={<QuestionCachePage />} />
+                  <Route path="/a3-war-room" element={<A3WarRoom />} />
+                  <Route path="/exam-intel" element={<ExamIntelligence />} />
+                  <Route path="/prediction-papers" element={<PredictionPapers />} />
+                  <Route path="/mistake-notebook" element={<MistakeNotebook />} />
+                  <Route path="/pdf-intel-admin" element={<PdfIntelAdmin />} />
+                  
+                  <Route path="/focus-todo" element={<Navigate to="/paper-structure" replace />} />
+                  <Route path="*" element={<NotFoundView />} />
+                </Routes>
                 )}
-              >
-                <Suspense fallback={<PageSkeleton pathname={location.pathname} />}>
-                  {user && isUserDataLoading && !hasHydratedUserData ? (
-                    <PageSkeleton pathname={location.pathname} />
-                  ) : (
-                    <Routes location={location}>
-                      <Route path="/" element={<Navigate to="/paper-structure" replace />} />
-                      <Route path="/paper-structure" element={<PaperStructureView />} />
-                      <Route path="/question-marks" element={<Navigate to="/paper-structure" replace />} />
-                      <Route path="/paper-marks" element={<PaperMarksView />} />
-                      <Route path="/lesson-marks" element={<Navigate to="/admission-predictor" replace />} />
-                      <Route path="/admission-predictor" element={<AdmissionPredictorView />} />
-                      <Route path="/clora-x" element={<CloraXView />} />
-                      <Route path="/ai-chat" element={<Navigate to="/clora-x" replace />} />
-                      <Route path="/profile" element={<ProfileView />} />
-                      <Route path="/past-papers" element={<PastPapersView />} />
-                      <Route path="/admin-dashboard" element={<AdminDashboardView />} />
-                      <Route path="/syllabus" element={<SyllabusLibraryView />} />
-                      <Route path="/pdf-sources" element={<PdfSourcesPage />} />
-                      <Route path="/question-cache" element={<QuestionCachePage />} />
-                      <Route path="/a3-war-room" element={<A3WarRoom />} />
-                      <Route path="/exam-intel" element={<ExamIntelligence />} />
-                      <Route path="/prediction-papers" element={<PredictionPapers />} />
-                      <Route path="/mistake-notebook" element={<MistakeNotebook />} />
-                      <Route path="/pdf-intel-admin" element={<PdfIntelAdmin />} />
-                      <Route path="/feature-center" element={<FeatureCenter />} />
-                      <Route path="/focus-todo" element={<Navigate to="/paper-structure" replace />} />
-                      <Route path="*" element={<NotFoundView />} />
-                    </Routes>
-                  )}
-                </Suspense>
-              </motion.div>
-            </AnimatePresence>
+              </Suspense>
           </div>
         </main>
       </div>

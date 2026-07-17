@@ -14,29 +14,29 @@ const defaultTools: ToolOption[] = [
   {
     id: "web",
     command: "@web",
-    title: "Web Search",
-    description: "Search the internet for up-to-date information.",
+    title: "වෙබ් සෙවීම",
+    description: "අලුත් තොරතුරු සඳහා වෙබ් අඩවි සොයන්න.",
     icon: <Globe className="w-4 h-4 text-slate-700" />
   },
   {
     id: "pdf",
     command: "@pdf",
-    title: "PDF Library",
-    description: "Search within syllabus and past papers.",
+    title: "PDF එකතුව",
+    description: "පාඩම් සහ පසුගිය ප්‍රශ්න පත්‍ර තුළ සොයන්න.",
     icon: <BookOpen className="w-4 h-4 text-slate-700" />
   },
   {
     id: "deep",
     command: "@deep",
-    title: "Deep Search",
-    description: "Multi-step reasoning for complex questions.",
+    title: "ගැඹුරු සෙවීම",
+    description: "සංකීර්ණ ප්‍රශ්නයකට මූලාශ්‍ර කිහිපයක් පරීක්ෂා කරන්න.",
     icon: <Layers className="w-4 h-4 text-slate-700" />
   },
   {
     id: "error",
     command: "@error",
-    title: "Error Log",
-    description: "Log a mistake for AI diagnostic & analysis.",
+    title: "වැරදි සටහන",
+    description: "නැවත අධ්‍යයනය සඳහා වැරදීමක් සුරකින්න.",
     icon: <AlertCircle className="w-4 h-4 text-rose-500" />
   }
 ];
@@ -69,7 +69,7 @@ export function CloraToolPalette({ isOpen, query, onSelect, position }: CloraToo
           }}
         >
           <div className="border-b border-slate-100 bg-white px-3 py-2 text-xs font-semibold text-slate-500">
-            Select an AI Tool
+            මෙවලමක් තෝරන්න
           </div>
           <div className="max-h-64 overflow-y-auto p-1">
             {filteredTools.length > 0 ? (
@@ -95,7 +95,7 @@ export function CloraToolPalette({ isOpen, query, onSelect, position }: CloraToo
               ))
             ) : (
               <div className="p-4 text-center text-sm text-slate-500">
-                No tools found for "{query}"
+                “{query}” සඳහා මෙවලමක් හමු නොවුණා
               </div>
             )}
           </div>

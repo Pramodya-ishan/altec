@@ -21,7 +21,7 @@ console.warn = (...args: any[]) => {
 // Suppress Vite websocket warnings in AI Studio preview
 if (typeof window !== 'undefined') {
   const recoverFromStaleChunk = async () => {
-    const recoveryKey = 'tecal_chunk_recovery';
+    const recoveryKey = 'clora_chunk_recovery';
     const lastRecovery = Number(sessionStorage.getItem(recoveryKey) || 0);
     if (Date.now() - lastRecovery < 30_000) return;
     sessionStorage.setItem(recoveryKey, String(Date.now()));
@@ -31,7 +31,7 @@ if (typeof window !== 'undefined') {
     }
     if (typeof caches !== 'undefined') {
       const keys = await caches.keys().catch(() => []);
-      await Promise.all(keys.filter((key) => key.startsWith('workbox') || key.startsWith('clora') || key.startsWith('tecal')).map((key) => caches.delete(key)));
+      await Promise.all(keys.filter((key) => key.startsWith('workbox') || key.startsWith('clora')).map((key) => caches.delete(key)));
     }
     window.location.reload();
   };
@@ -72,32 +72,22 @@ if (typeof window !== 'undefined') {
   });
 }
 
-const APP_VERSION = import.meta.env.VITE_APP_VERSION || Date.now().toString();
+const APP_VERSION = import.meta.env.VITE_APP_VERSION || 'development';
 if (import.meta.env.DEV) {
-  console.info(`[APP_VERSION] Booting Tec A/L version ${APP_VERSION}`);
+  console.info(`[APP_VERSION] Tec A/L ${APP_VERSION}`);
 }
 
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-  const isDev = import.meta.env.DEV || window.location.hostname.includes('localhost') || window.location.hostname.includes('ais-dev');
-  if (isDev) {
-    navigator.serviceWorker.getRegistrations().then((registrations) => {
-      registrations.forEach((registration) => {
-        registration.unregister().then(() => {
-          console.log('[APP_VERSION] Unregistered old service worker in dev');
-        });
-      });
-    });
-    if (typeof caches !== 'undefined') {
-      caches.keys().then((keys) => {
-        keys.forEach((key) => {
-          if (key.startsWith('workbox') || key.startsWith('clora') || key.startsWith('tecal')) {
-            caches.delete(key).then(() => {
-              console.log(`[APP_VERSION] Purged old cache key: ${key}`);
-            });
-          }
-        });
-      });
-    }
+  // Earlier releases cached hashed lazy chunks and even API fallbacks. Remove
+  // those registrations in every environment; this application now relies on
+  // normal HTTP caching so a deploy cannot keep serving deleted JS modules.
+  void navigator.serviceWorker.getRegistrations()
+    .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+    .catch(() => undefined);
+  if (typeof caches !== 'undefined') {
+    void caches.keys()
+      .then((keys) => Promise.all(keys.filter((key) => key.startsWith('workbox') || key.startsWith('clora')).map((key) => caches.delete(key))))
+      .catch(() => undefined);
   }
 }
 

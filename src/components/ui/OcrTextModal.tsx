@@ -107,7 +107,7 @@ export const OcrTextModal: React.FC<OcrTextModalProps> = ({ sourceId, title, onC
                 {title}
               </h3>
               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                Extracted Sinhala Unicode Text View
+                ලබාගත් සිංහල Unicode පෙළ
               </p>
             </div>
           </div>
@@ -131,19 +131,19 @@ export const OcrTextModal: React.FC<OcrTextModalProps> = ({ sourceId, title, onC
           ) : error ? (
             <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
               <AlertCircle className="w-12 h-12 text-rose-500 mb-3" />
-              <h4 className="font-bold text-slate-800 mb-1">Text Loading Failed</h4>
+              <h4 className="font-bold text-slate-800 mb-1">පෙළ පූරණය කළ නොහැක</h4>
               <p className="text-slate-500 text-xs max-w-md mb-4">{error}</p>
               <button
                 onClick={onClose}
                 className="px-4 py-2 text-xs font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-xl transition-all"
               >
-                Close View
+                වසන්න
               </button>
             </div>
           ) : pages.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
               <AlertCircle className="w-12 h-12 text-amber-500 mb-3" />
-              <h4 className="font-bold text-slate-800 mb-1">No Extracted Text Available</h4>
+              <h4 className="font-bold text-slate-800 mb-1">ලබාගත් පෙළක් නැහැ</h4>
               <p className="text-slate-500 text-xs max-w-md">
                 මෙම PDF පත්‍රිකාවේ extract කරන ලද text අඩංගු නොවේ. කරුණාකර නැවත Reindex/OCR කරන්න.
               </p>

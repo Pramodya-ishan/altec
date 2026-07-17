@@ -116,7 +116,6 @@ export function KnowledgeBaseView() {
           const payload = {
             sourceId: uploaded.sourceId,
             storagePath: uploaded.storagePath,
-            downloadUrl: uploaded.downloadUrl,
             title: title || file.name,
             fileName: file.name,
             subject: subject,

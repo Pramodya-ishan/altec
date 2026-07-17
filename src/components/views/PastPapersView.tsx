@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../../lib/utils';
-import { openSourcePdf, prefetchSourcePdf } from '../../lib/sourceActions';
+import { openSourcePdf } from '../../lib/sourceActions';
 import { useApp } from '../../context/AppContext';
 import { auth } from '../../lib/firebase';
 import { apiFetch } from '../../lib/api';
@@ -46,13 +46,13 @@ function formatBytes(value: number) {
 }
 
 function formatEta(seconds: number | null) {
-  if (seconds === null || !Number.isFinite(seconds)) return "Calculating…";
+  if (seconds === null || !Number.isFinite(seconds)) return "ගණනය කරමින්…";
   if (seconds < 60) return `${Math.max(1, Math.ceil(seconds))}s`;
   return `${Math.floor(seconds / 60)}m ${Math.ceil(seconds % 60)}s`;
 }
 
 export default function PastPapersView() {
-  const { currentSubject, profile } = useApp();
+  const { currentSubject, profile, user } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('A/L Past Papers');
   const [papers, setPapers] = useState<any[]>([]);
@@ -74,15 +74,29 @@ export default function PastPapersView() {
   }, [toast]);
 
   useEffect(() => {
-    let active = true;
+    if (!auth.currentUser || auth.currentUser.isAnonymous) {
+      setPapers([]);
+      return;
+    }
+    let cancelled = false;
     const loadPapers = async () => {
-      const response = await apiFetch(`/api/rag/past-papers?subject=${encodeURIComponent(normalizeSubject(currentSubject))}`);
-      const payload = await response.json().catch(() => null);
-      if (active && response.ok && Array.isArray(payload?.papers)) setPapers(dedupeBySourceId(payload.papers));
+      try {
+        const response = await apiFetch(`/api/rag/past-papers?subject=${encodeURIComponent(normalizeSubject(currentSubject))}`);
+        const result = await response.json().catch(() => null);
+        if (!cancelled) {
+          setPapers(response.ok && Array.isArray(result?.papers) ? dedupeBySourceId(result.papers) : []);
+        }
+      } catch {
+        if (!cancelled) setPapers([]);
+      }
     };
     void loadPapers();
-    return () => { active = false; };
-  }, [currentSubject]);
+    const interval = window.setInterval(loadPapers, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [currentSubject, user?.email]);
 
   const filteredPapers = dedupeBySourceId([...uploadedPapers, ...papers]).filter(paper => {
     const matchesSearch = String(paper.title || "").toLowerCase().includes(searchTerm.toLowerCase()) || String(paper.year || "").includes(searchTerm);
@@ -90,26 +104,20 @@ export default function PastPapersView() {
     return matchesSearch && matchesCategory;
   });
 
-  useEffect(() => {
-    filteredPapers.slice(0, 12).forEach((paper) => {
-      if (paper.storagePath) void prefetchSourcePdf(paper);
-    });
-  }, [papers, uploadedPapers, selectedCategory, searchTerm]);
-
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const user = auth.currentUser;
     if (!user || user.isAnonymous) {
-      setToast({ type: 'error', message: "Please sign in before uploading PDFs." });
+      setToast({ type: 'error', message: "PDF එකක් එක් කිරීමට පෙර නැවත පිවිසෙන්න." });
       return;
     }
 
     // simple metadata gathering
-    const year = prompt('Enter Year:') || new Date().getFullYear().toString();
-    const type = prompt('Enter Type (MCQ/Essay):') || 'MCQ';
-    const title = prompt('Enter Paper Title:') || file.name;
+    const year = prompt('වර්ෂය ඇතුළත් කරන්න:') || new Date().getFullYear().toString();
+    const type = prompt('වර්ගය ඇතුළත් කරන්න (MCQ/Essay):') || 'MCQ';
+    const title = prompt('ප්‍රශ්න පත්‍රයේ නම ඇතුළත් කරන්න:') || file.name;
     const category = selectedCategory;
 
     setIsUploading(true);
@@ -155,7 +163,6 @@ export default function PastPapersView() {
         const payload = {
           sourceId: uploaded.sourceId,
           storagePath: uploaded.storagePath,
-          downloadUrl: uploaded.downloadUrl,
           title: title,
           fileName: file.name,
           subject: normSubj,
@@ -213,7 +220,6 @@ export default function PastPapersView() {
             paperType: type,
             resourceType: resType,
             storagePath: uploaded.storagePath,
-            downloadUrl: uploaded.downloadUrl,
             chunkCount: indexingData.chunkCount || 0,
             needsOcr: indexingData.needsOcr || false,
             indexStatus: indexingData.indexStatus || indexingData.status || "queued",
@@ -289,10 +295,10 @@ export default function PastPapersView() {
       setUploadProgress(0);
       setUploadTelemetry(null);
       uploadControlsRef.current = null;
-      setToast({ type: 'success', message: "PDF uploaded successfully. Indexing status updated." });
+      setToast({ type: 'success', message: "PDF එක සාර්ථකව එක් කළා. සෙවුම් දත්ත සකස් කරමින් පවතී." });
     } catch (error: any) {
       console.error("Upload failed", error);
-      setToast({ type: 'error', message: `Upload failed: ${error.message || error}` });
+      setToast({ type: 'error', message: `PDF එක එක් කිරීමට නොහැකි වුණා: ${error.message || error}` });
       setIsUploading(false);
       setUploadProgress(0);
       setUploadTelemetry(null);
@@ -311,7 +317,7 @@ export default function PastPapersView() {
 
   const handleDeletePaper = async (paper: any, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm(`Are you sure you want to delete "${paper.title}"?`)) return;
+    if (!confirm(`“${paper.title}” ඉවත් කරන්නද?`)) return;
 
     try {
       const paperId = paper.sourceId || paper.id;
@@ -331,9 +337,9 @@ export default function PastPapersView() {
       setUploadedPapers(prev => prev.filter(p => (p.sourceId || p.id) !== paperId));
       setPapers(prev => prev.filter(p => (p.sourceId || p.id) !== paperId));
 
-      setToast({ type: 'success', message: "Deleted successfully!" });
+      setToast({ type: 'success', message: "ප්‍රශ්න පත්‍රය ඉවත් කළා." });
     } catch (err: any) {
-      setToast({ type: 'error', message: `Deletion failed: ${err.message}` });
+      setToast({ type: 'error', message: `ඉවත් කිරීමට නොහැකි වුණා: ${err.message}` });
     }
   };
 
@@ -370,7 +376,7 @@ export default function PastPapersView() {
  : "text-slate-500 hover:text-slate-800 hover:bg-slate-200/50"
  )}
  >
- {cat === 'A/L Past Papers' ? 'Papers' : 'Models'}
+ {cat === 'A/L Past Papers' ? 'ප්‍රශ්න පත්‍ර' : 'ආදර්ශ පත්‍ර'}
  </button>
  ))}
  </div>
@@ -389,26 +395,26 @@ export default function PastPapersView() {
  className="cursor-pointer bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-sm transition-colors flex items-center gap-2"
  >
  {isUploading ? (
- <><i className="fa-solid fa-circle-notch fa-spin"></i> {uploadTelemetry?.phase === "indexing" ? "Indexing…" : `Uploading ${Math.round(uploadProgress)}%`}</>
+ <><i className="fa-solid fa-circle-notch fa-spin"></i> {uploadTelemetry?.phase === "indexing" ? "සෙවුම් දත්ත සකසමින්…" : `එක් කරමින් ${Math.round(uploadProgress)}%`}</>
  ) : (
- <><i className="fa-solid fa-cloud-arrow-up"></i> Upload PDF</>
+ <><i className="fa-solid fa-cloud-arrow-up"></i> PDF එකක් එක් කරන්න</>
  )}
  </label>
  {isUploading && uploadTelemetry && (
    <div className="fixed left-4 right-4 top-24 z-50 w-auto rounded-2xl border border-slate-200 bg-white p-4 text-xs shadow-xl sm:absolute sm:left-auto sm:right-0 sm:top-12 sm:w-72" role="status" aria-live="polite">
      <div className="mb-2 flex items-center justify-between font-bold text-slate-800">
-       <span>{uploadTelemetry.phase === "indexing" ? "Upload complete · indexing" : "Uploading PDF"}</span>
+       <span>{uploadTelemetry.phase === "indexing" ? "එක් කිරීම අවසන් · සෙවුම් දත්ත සකසමින්" : "PDF එක එක් කරමින්"}</span>
        <span>{Math.round(uploadTelemetry.progress * 100)}%</span>
      </div>
      <div className="mb-3 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-slate-900 transition-all" style={{ width: `${uploadTelemetry.progress * 100}%` }} /></div>
      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-slate-500">
-       <span>Uploaded</span><strong className="text-right text-slate-700">{formatBytes(uploadTelemetry.bytesTransferred)} / {formatBytes(uploadTelemetry.totalBytes)}</strong>
-       <span>Remaining</span><strong className="text-right text-slate-700">{formatBytes(uploadTelemetry.remainingBytes)}</strong>
-       <span>Speed</span><strong className="text-right text-slate-700">{formatBytes(uploadTelemetry.speedBytesPerSecond)}/s</strong>
-       <span>ETA</span><strong className="text-right text-slate-700">{uploadTelemetry.phase === "indexing" ? "Processing…" : formatEta(uploadTelemetry.etaSeconds)}</strong>
+       <span>එක් කළ ප්‍රමාණය</span><strong className="text-right text-slate-700">{formatBytes(uploadTelemetry.bytesTransferred)} / {formatBytes(uploadTelemetry.totalBytes)}</strong>
+       <span>ඉතිරි ප්‍රමාණය</span><strong className="text-right text-slate-700">{formatBytes(uploadTelemetry.remainingBytes)}</strong>
+       <span>වේගය</span><strong className="text-right text-slate-700">{formatBytes(uploadTelemetry.speedBytesPerSecond)}/s</strong>
+       <span>ඉතිරි කාලය</span><strong className="text-right text-slate-700">{uploadTelemetry.phase === "indexing" ? "සකසමින්…" : formatEta(uploadTelemetry.etaSeconds)}</strong>
      </div>
      {uploadTelemetry.phase === "uploading" && (
-       <button type="button" onClick={() => uploadControlsRef.current?.cancel()} className="mt-3 w-full rounded-lg border border-slate-200 py-2 font-bold text-slate-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700">Cancel upload</button>
+       <button type="button" onClick={() => uploadControlsRef.current?.cancel()} className="mt-3 w-full rounded-lg border border-slate-200 py-2 font-bold text-slate-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700">එක් කිරීම නවත්වන්න</button>
      )}
    </div>
  )}
@@ -421,7 +427,7 @@ export default function PastPapersView() {
  <i className="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
  <input
  type="text"
- placeholder="Search by year or paper title..."
+ placeholder="වර්ෂය හෝ නම අනුව සොයන්න…"
  value={searchTerm}
  onChange={(e) => setSearchTerm(e.target.value)}
  className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-4 focus:ring-primary-50 focus:border-primary-500 transition-all font-medium"
@@ -433,8 +439,8 @@ export default function PastPapersView() {
  {filteredPapers.length === 0 ? (
  <div className="text-center py-12 bg-slate-50 rounded-xl border border-dashed border-slate-300">
  <i className="fa-solid fa-folder-open text-3xl text-slate-300 mb-3"></i>
- <h3 className="text-slate-600 font-bold mb-1">No Papers Found</h3>
- <p className="text-slate-400 text-sm">Upload some papers or adjust your search.</p>
+ <h3 className="text-slate-600 font-bold mb-1">ප්‍රශ්න පත්‍ර හමු වුණේ නැහැ</h3>
+ <p className="text-slate-400 text-sm">PDF එකක් එක් කරන්න හෝ සෙවුම වෙනස් කරන්න.</p>
  </div>
  ) : (
  <motion.div 
@@ -484,17 +490,17 @@ export default function PastPapersView() {
  </div>
  </div>
  <h4 className="font-bold text-slate-800 text-base mb-1 group-hover:text-primary-600 transition-colors leading-tight">{paper.title}</h4>
- <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider mt-2">{paper.year || 'A/L'} · {paper.type || 'Paper'}</p>
+ <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider mt-2">{paper.category}</p>
  </div>
  
  <div className="mt-5 pt-3 border-t border-slate-100 flex justify-between items-center relative z-10">
- <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Open PDF</span>
+ <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">PDF එක විවෘත කරන්න</span>
  <div className="flex items-center gap-2">
   {isDeleteAllowed(paper) && (
     <button
     onClick={(e) => handleDeletePaper(paper, e)}
     className="w-8 h-8 rounded-full bg-slate-50 border border-slate-200 text-slate-400 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-600 flex items-center justify-center transition-all shadow-sm cursor-pointer shrink-0"
-    title="Delete Paper"
+    title="ප්‍රශ්න පත්‍රය ඉවත් කරන්න"
    >
     <i className="fa-regular fa-trash-can text-xs"></i>
    </button>

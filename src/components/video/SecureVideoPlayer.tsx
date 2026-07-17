@@ -35,7 +35,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
   const shakaRef = useRef<any>(null);
   const plyrRef = useRef<Plyr | null>(null);
   const sessionIdRef = useRef<string | null>(null);
-  const [status, setStatus] = useState("Preparing video…");
+  const [status, setStatus] = useState("වීඩියෝව සූදානම් කරමින්…");
   const [error, setError] = useState<string | null>(null);
   const [watermark, setWatermark] = useState("");
   const [qualityOptions, setQualityOptions] = useState<number[]>([]);
@@ -45,25 +45,29 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
   useEffect(() => {
     let disposed = false;
     let heartbeat: number | undefined;
+    const deviceId = getDeviceId();
     const video = videoRef.current;
     if (!video) return;
 
     const endSession = () => {
       const sessionId = sessionIdRef.current;
       if (!sessionId) return;
-      void apiFetch(`/api/video-sessions/${sessionId}/end`, { method: "POST", keepalive: true });
+      void apiFetch(`/api/video-sessions/${sessionId}/end`, {
+        method: "POST",
+        keepalive: true,
+        headers: { "X-Device-ID": deviceId },
+      });
       sessionIdRef.current = null;
     };
 
     const boot = async () => {
       try {
-        const deviceId = getDeviceId();
         const response = await apiFetch(`/api/videos/${videoId}/playback-session`, {
           method: "POST",
           headers: { "X-Device-ID": deviceId },
         });
         const session = await response.json() as SessionResponse & { message?: string };
-        if (!response.ok || !session.ok) throw new Error(session.message || "Playback authorization failed");
+        if (!response.ok || !session.ok) throw new Error(session.message || "වීඩියෝව නැරඹීමට අවසර ලැබුණේ නැහැ");
         if (disposed) return;
 
         sessionIdRef.current = session.sessionId;
@@ -75,12 +79,20 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
           video.src = session.directUrl;
           video.load();
         } else {
-          if (!session.manifestUrl) throw new Error("The secure video source is unavailable.");
+          if (!session.manifestUrl) throw new Error("ආරක්ෂිත වීඩියෝ මූලාශ්‍රය ලබාගත නොහැක.");
           shaka.polyfill.installAll();
-          if (!shaka.Player.isBrowserSupported()) throw new Error("This browser cannot play the secure stream.");
+          if (!shaka.Player.isBrowserSupported()) throw new Error("මෙම browser එකෙන් ආරක්ෂිත stream එක play කළ නොහැක.");
           const engine = new shaka.Player();
           await engine.attach(video);
           shakaRef.current = engine;
+          engine.getNetworkingEngine()?.registerRequestFilter((_type: unknown, request: any) => {
+            // The CDN authorization token is an HttpOnly SameSite=None cookie.
+            // Shaka must explicitly include credentials on manifest and segment requests.
+            request.allowCrossSiteCredentials = true;
+          });
+          engine.addEventListener("error", (event: any) => {
+            if (!disposed) setError(event?.detail?.message || "ආරක්ෂිත වීඩියෝ stream එක load කිරීමට නොහැකි වුණා");
+          });
           engine.configure({
             abr: { enabled: true, defaultBandwidthEstimate: 1_500_000 },
             streaming: { bufferingGoal: 24, rebufferingGoal: 2 },
@@ -101,7 +113,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
 
         const resumeAt = Number(localStorage.getItem(`clora_video_resume_${videoId}`) || 0);
         if (resumeAt > 5 && Number.isFinite(resumeAt)) video.currentTime = resumeAt;
-        setStatus("Ready to play");
+        setStatus("නැරඹීමට සූදානම්");
 
         heartbeat = window.setInterval(() => {
           if (sessionIdRef.current) {
@@ -112,7 +124,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
           }
         }, 45_000);
       } catch (caught: any) {
-        if (!disposed) setError(caught?.message || "Video playback failed");
+        if (!disposed) setError(caught?.message || "වීඩියෝව play කිරීමට නොහැකි විය");
       }
     };
 
@@ -151,31 +163,40 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
   };
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/75 p-3 backdrop-blur-md sm:p-6" role="dialog" aria-modal="true" aria-label={`${title} video player`}>
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/75 p-3 backdrop-blur-md sm:p-6" role="dialog" aria-modal="true" aria-label={`${title} වීඩියෝ වාදකය`}>
       <div className="w-full max-w-5xl overflow-hidden rounded-[28px] border border-white/10 bg-white shadow-2xl">
         <header className="flex items-center justify-between gap-4 border-b border-slate-200 px-4 py-3 sm:px-5">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-slate-950 sm:text-base">{title}</p>
             <p className="mt-0.5 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-              {error ? null : status === "Ready to play" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {error ? null : status === "නැරඹීමට සූදානම්" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               {error || status}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <label className="relative">
-                <span className="sr-only">Video quality</span>
+                <span className="sr-only">වීඩියෝ ගුණාත්මකභාවය</span>
                 <select value={selectedQuality} disabled={playbackMode !== "hls" || qualityOptions.length === 0} onChange={(event) => changeQuality(Number(event.target.value))} className="h-9 appearance-none rounded-xl border border-slate-200 bg-slate-50 px-3 pr-8 text-xs font-semibold text-slate-700 outline-none transition focus:border-slate-400 disabled:cursor-default disabled:text-slate-500">
-                  <option value={0}>{playbackMode === "hls" && qualityOptions.length > 0 ? "Auto quality" : "Original quality"}</option>
+                  <option value={0}>{playbackMode === "hls" && qualityOptions.length > 0 ? "ස්වයංක්‍රීය quality" : "මුල් quality"}</option>
                   {[...qualityOptions].reverse().map((height) => <option key={height} value={height}>{height}p</option>)}
                 </select>
                 <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[9px] text-slate-400">▾</span>
               </label>
-            <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-900" aria-label="Close video"><X className="h-5 w-5" /></button>
+            <button type="button" onClick={onClose} className="grid h-9 w-9 place-items-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-slate-900" aria-label="වීඩියෝව වසන්න"><X className="h-5 w-5" /></button>
           </div>
         </header>
 
         <div className="relative aspect-video w-full overflow-hidden bg-black">
-          <video ref={videoRef} className="h-full w-full" playsInline controlsList="nodownload noremoteplayback" disablePictureInPicture />
+          <video
+            ref={videoRef}
+            className="h-full w-full"
+            playsInline
+            preload="metadata"
+            controlsList="nodownload noremoteplayback"
+            disablePictureInPicture
+            disableRemotePlayback
+            onContextMenu={(event) => event.preventDefault()}
+          />
           {watermark && <div className="pointer-events-none absolute right-3 top-3 rounded-md bg-black/30 px-2 py-1 text-[9px] font-medium text-white/45">{watermark}</div>}
           {error && <div className="absolute inset-0 grid place-items-center bg-slate-950 p-8 text-center text-sm font-semibold text-rose-300">{error}</div>}
         </div>

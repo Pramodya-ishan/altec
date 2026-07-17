@@ -349,14 +349,14 @@ export default function PaperStructureView() {
  if (result.quiz && Array.isArray(result.quiz) && result.quiz.length > 0) {
  setQuizQuestions(result.quiz);
  } else {
- setQuizError("Received empty quiz questions from system.");
+ setQuizError("පද්ධතියෙන් ප්‍රශ්න ලැබුණේ නැහැ.");
  }
  } else {
  const errData = await response.json().catch(() => ({}));
- setQuizError(errData.error || "Failed to contact quiz engine.");
+ setQuizError(errData.error || "ප්‍රශ්න සේවාවට සම්බන්ධ වීමට නොහැකි වුණා.");
  }
  } catch {
- setQuizError("Network failure connecting to AI workspace.");
+ setQuizError("ජාල සම්බන්ධතාව අසාර්ථක වුණා.");
  } finally {
  setLoadingQuiz(false);
  }
@@ -403,7 +403,7 @@ export default function PaperStructureView() {
  
  saveData(nextData);
  if (showNotification) {
- showNotification(`Quick test complete! Normalised score: ${finalNormalizedScore}/${mcqMax}`, 'success');
+ showNotification(`කෙටි පරීක්ෂණය අවසන්. ලකුණු: ${finalNormalizedScore}/${mcqMax}`, 'success');
  }
  if (quizScore >= 4 && triggerStars) {
  triggerStars();
@@ -440,7 +440,7 @@ export default function PaperStructureView() {
  <button
  className={cn(
  "shrink-0 flex items-center gap-1.5 transition-all text-xl cursor-pointer active:scale-95",
- isChecked ? "text-emerald-500" : "text-slate-300 hover:text-slate-400"
+ isChecked ? "text-emerald-600 drop-shadow-[0_1px_1px_rgba(5,150,105,0.18)]" : "text-slate-300 hover:text-slate-400"
  )}
  onClick={() => toggleTopic(topic)}
  >
@@ -464,7 +464,7 @@ export default function PaperStructureView() {
  <span
  onClick={() => openPlaylist(topic)}
  className="text-sm font-semibold text-slate-700 cursor-pointer hover:text-primary-600 transition-all flex items-start gap-1.5 text-left leading-tight group"
- title="Open Lesson Notes & Files"
+ title="පාඩම් සටහන් සහ ගොනු විවෘත කරන්න"
  >
  <span className="line-clamp-2 group-hover:underline">{topic}</span>
  
@@ -493,10 +493,10 @@ export default function PaperStructureView() {
  <div className="bg-gradient-to-r from-indigo-600 to-indigo-700 text-white p-5 md:p-6 flex justify-between items-center relative shrink-0">
  <div className="space-y-1">
  <span className="bg-white/20 text-white text-[9px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
- {isTopicSelectionMode ? "Unit Test Selection" : "Unit Test Drill"}
+ {isTopicSelectionMode ? "ඒකක පරීක්ෂණය" : "ප්‍රශ්න පුහුණුව"}
  </span>
- <h3 className="text-lg md:text-xl font-display font-bold truncate max-w-lg" title={selectedTopic || "Select a Topic"}>
- {isTopicSelectionMode ? "Select Unit" : selectedTopic}
+ <h3 className="text-lg md:text-xl font-display font-bold truncate max-w-lg" title={selectedTopic || "පාඩමක් තෝරන්න"}>
+ {isTopicSelectionMode ? "පාඩම තෝරන්න" : selectedTopic}
  </h3>
  </div>
  <button
@@ -511,9 +511,9 @@ export default function PaperStructureView() {
  {isTopicSelectionMode && (
  <div className="flex-1 p-6 md:p-8 space-y-6 flex flex-col">
  <div className="space-y-2">
- <h4 className="text-sm font-bold text-slate-800">Select a Lesson for the Unit Test</h4>
+ <h4 className="text-sm font-bold text-slate-800">පරීක්ෂණයට පාඩමක් තෝරන්න</h4>
  <p className="text-xs text-slate-500">
- Choose a specific lesson to test your knowledge.
+ ඔබේ දැනුම පරීක්ෂා කිරීමට එක් පාඩමක් තෝරන්න.
  </p>
  </div>
  <div className="space-y-4">
@@ -548,7 +548,7 @@ export default function PaperStructureView() {
  disabled={!selectedTopic}
  className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold px-5 py-2.5 rounded-xl shadow-xs transition-all active:scale-[0.98] cursor-pointer"
  >
- Start Unit Test
+ පරීක්ෂණය අරඹන්න
  </button>
  </div>
  </div>
@@ -582,14 +582,14 @@ export default function PaperStructureView() {
  <i className="fa-solid fa-circle-exclamation"></i>
  </div>
  <div className="text-center space-y-1">
- <h4 className="text-sm font-bold text-slate-800">Failed to load quiz</h4>
+ <h4 className="text-sm font-bold text-slate-800">ප්‍රශ්න load කිරීමට නොහැකි වුණා</h4>
  <p className="text-xs text-slate-500 max-w-xs">{quizError}</p>
  </div>
  <button
  onClick={() => fetchQuizQuestions(selectedTopic)}
  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition-all"
  >
- Try Again
+ නැවත උත්සාහ කරන්න
  </button>
  </div>
  )}
@@ -729,7 +729,7 @@ export default function PaperStructureView() {
  onClick={handleNextQuestion}
  className="bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs md:text-sm px-6 py-2.5 rounded-xl shadow-md transition-all active:scale-[0.98] cursor-pointer"
  >
- {currentQuizQuestionIdx < 4 ? "Next Question" : "Finish Quiz"}
+ {currentQuizQuestionIdx < 4 ? "ඊළඟ ප්‍රශ්නය" : "පරීක්ෂණය අවසන් කරන්න"}
  </button>
  )}
  </div>
@@ -744,7 +744,7 @@ export default function PaperStructureView() {
  </div>
  
  <div className="space-y-1.5">
- <h4 className="text-xl md:text-2xl font-black text-slate-800 font-display">Test Drill Completed!</h4>
+ <h4 className="text-xl md:text-2xl font-black text-slate-800 font-display">ප්‍රශ්න පුහුණුව සම්පූර්ණයි</h4>
  <p className="text-xs sm:text-sm text-slate-500 max-w-sm mx-auto leading-relaxed">
  Your performance on <b>{selectedTopic}</b> has been recorded to update your study analytics log.
  </p>
@@ -752,11 +752,11 @@ export default function PaperStructureView() {
 
  <div className="bg-gradient-to-br from-indigo-50/50 to-purple-50/50 rounded-2xl p-5 border border-indigo-100 max-w-xs mx-auto grid grid-cols-2 divide-x divide-indigo-100">
  <div className="text-center space-y-1">
- <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Your Score</span>
+ <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">ඔබේ ලකුණු</span>
  <h5 className="text-2xl font-black text-indigo-700">{quizScore} / 5</h5>
  </div>
  <div className="text-center space-y-1">
- <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Accuracy</span>
+ <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">නිවැරදිභාවය</span>
  <h5 className="text-2xl font-black text-indigo-700">{(quizScore / 5) * 100}%</h5>
  </div>
  </div>
@@ -768,7 +768,7 @@ export default function PaperStructureView() {
  }}
  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs md:text-sm py-3.5 rounded-2xl shadow-md hover:shadow-lg transition-all active:scale-[0.98] mt-6 cursor-pointer"
  >
- Return to Syllabus
+ පාඩම් සැලැස්මට ආපසු යන්න
  </button>
  </div>
  )}
@@ -837,7 +837,7 @@ export default function PaperStructureView() {
  className="w-full flex justify-between items-center py-3 mb-4 border-b border-slate-200 text-slate-500 text-sm font-extrabold uppercase tracking-wider focus:outline-none focus:ring-0 cursor-pointer text-left select-none bg-transparent"
  onClick={() => toggleSection('partA')}
  >
- <span>Part A</span>
+ <span>කොටස A</span>
  <i className={cn("fa-solid fa-chevron-up transition-transform duration-300", collapsedSections['partA'] && "rotate-180")}></i>
  </button>
 
@@ -852,7 +852,7 @@ export default function PaperStructureView() {
  >
  <div className="bg-white border border-slate-200 rounded-[1.5rem] p-6 sm:p-8 shadow-sm hover:shadow-md transition-all duration-300">
  <div className="mb-6">
- <h2 className="text-2xl text-slate-900 font-display font-extrabold tracking-tight">Structured Essay (Part A)</h2>
+ <h2 className="text-2xl text-slate-900 font-display font-extrabold tracking-tight">ව්‍යුහගත රචනා (කොටස A)</h2>
  </div>
  <motion.div 
  className="grid grid-cols-1 sm:grid-cols-2 gap-6"
@@ -913,7 +913,7 @@ export default function PaperStructureView() {
  className="w-full flex justify-between items-center py-3 mb-4 border-b border-slate-200 text-slate-500 text-sm font-extrabold uppercase tracking-wider focus:outline-none focus:ring-0 cursor-pointer text-left select-none bg-transparent"
  onClick={() => toggleSection('partBCD')}
  >
- <span>Essay (Part B, C, D)</span>
+ <span>රචනා (කොටස් B, C, D)</span>
  <i className={cn("fa-solid fa-chevron-up transition-transform duration-300", collapsedSections['partBCD'] && "rotate-180")}></i>
  </button>
 

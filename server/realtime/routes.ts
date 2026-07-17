@@ -83,7 +83,7 @@ router.post("/session", async (req, res) => {
       body: JSON.stringify({
         model: process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview-2024-12-17",
         voice: process.env.OPENAI_REALTIME_VOICE || "alloy",
-        instructions: `You are Clora X, a Sinhala-first A/L Technology live tutor for SFT, ET, ICT.
+        instructions: `You are the Sinhala-first Tec A/L live tutor for SFT, ET and ICT.
 - Speak naturally like a teacher in a live call.
 - Sinhala-first, simple, short chunks.
 - Do not read long essays unless user asks.

@@ -1,12 +1,11 @@
 import { getAdminDb } from "../firebase/admin";
 import { checkOcrJobStatus } from "./cloudVisionOcr";
 import { finalizePipelineProcessing } from "../pdf/processingPipeline";
-import { env } from "../utils/env";
 
 export function startOcrWorker(intervalMs = 60000) {
-  if (process.env.NODE_ENV === "test" || !env.OCR_ENABLED) return;
+  if (process.env.NODE_ENV === "test") return;
 
-  const timer = setInterval(async () => {
+  setInterval(async () => {
     try {
       const db = getAdminDb();
       const snapshot = await db.collection("ocr_jobs")
@@ -63,8 +62,4 @@ export function startOcrWorker(intervalMs = 60000) {
       console.error("[OCR Worker] Error in worker loop:", err);
     }
   }, intervalMs);
-
-  // Do not make a one-shot local process or serverless invocation stay alive
-  // solely because the background poller exists.
-  timer.unref?.();
 }

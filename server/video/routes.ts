@@ -35,6 +35,24 @@ async function loadVideo(videoId: string) {
   return { id: snapshot.id, ...snapshot.data() } as VideoDocument;
 }
 
+async function refreshVisibleVideoStatuses(videos: VideoDocument[]) {
+  const refreshable = videos
+    .filter((video) => ["uploaded", "queued", "transcoding"].includes(video.status))
+    .slice(0, 12);
+  if (!refreshable.length) return videos;
+
+  const refreshed = await Promise.all(refreshable.map(async (video) => {
+    try {
+      return await refreshTranscodeStatus(video);
+    } catch (error) {
+      console.warn("Video status refresh skipped", video.id, error);
+      return video;
+    }
+  }));
+  const byId = new Map(refreshed.map((video) => [video.id, video]));
+  return videos.map((video) => byId.get(video.id) || video);
+}
+
 function requireVideoEnabled() {
   if (!env.ENABLE_VIDEO) throw new Error("VIDEO_FEATURE_DISABLED");
 }
@@ -240,25 +258,25 @@ videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
         await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "queued" }, { merge: true });
       }
     } catch (error: any) {
-      console.warn("Secure video transcoding unavailable.", error?.message || error);
+      // The original upload is already a validated, playable video. A missing
+      // Transcoder permission/configuration must not discard it or leave an
+      // empty lesson card; fall back to signed direct playback.
+      console.warn("Video transcoder unavailable; using original quality playback.", error?.message || error);
       transcode = { enabled: false, jobName: null };
     }
 
     const fallbackReady = !transcode.enabled;
     if (fallbackReady) {
-      const allowDirect = env.VIDEO_ALLOW_DIRECT_PLAYBACK;
       await getAdminDb().collection("videos").doc(video.id).set({
-        status: allowDirect ? "ready" : "failed",
-        isPublished: allowDirect,
-        allowPlayback: allowDirect,
-        playbackMode: allowDirect ? "direct" : "hls",
-        transcoderErrorCode: allowDirect ? null : "SECURE_TRANSCODING_REQUIRED",
-        publishedAt: allowDirect ? now : null,
+        status: "ready",
+        isPublished: true,
+        allowPlayback: true,
+        playbackMode: "direct",
+        publishedAt: now,
         updatedAt: now,
       }, { merge: true });
       await getAdminDb().collection("sources").doc(video.sourceId).set({
-        processingStatus: allowDirect ? "ready" : "failed",
-        lastErrorCode: allowDirect ? null : "SECURE_TRANSCODING_REQUIRED",
+        processingStatus: "ready",
         updatedAt: now,
       }, { merge: true });
     } else {
@@ -274,12 +292,9 @@ videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
       ok: true,
       videoId: video.id,
       sourceId: video.sourceId,
-      status: transcode.enabled ? "queued" : (env.VIDEO_ALLOW_DIRECT_PLAYBACK ? "ready" : "failed"),
+      status: transcode.enabled ? "queued" : "ready",
       transcodeQueued: transcode.enabled,
-      playbackMode: transcode.enabled ? "hls" : (env.VIDEO_ALLOW_DIRECT_PLAYBACK ? "direct" : "hls"),
-      message: !transcode.enabled && !env.VIDEO_ALLOW_DIRECT_PLAYBACK
-        ? "Upload saved. Secure HLS processing is not configured; the video remains available for admin reprocessing."
-        : undefined,
+      playbackMode: transcode.enabled ? "hls" : "direct",
     });
   } catch (error: any) {
     res.status(400).json({ ok: false, code: "VIDEO_FINALIZE_FAILED", message: error.message });
@@ -393,11 +408,8 @@ videoRoutes.get("/admin/videos", async (req, res) => {
     await verifyVideoAppCheck(req);
     await requireAdmin(req);
     const snapshot = await getAdminDb().collection("videos").orderBy("createdAt", "desc").limit(100).get();
-    const videos = await Promise.all(snapshot.docs.map(async (doc: any) => {
-      const video = { id: doc.id, ...doc.data() } as VideoDocument;
-      return publicVideo(await refreshTranscodeStatus(video));
-    }));
-    res.json({ ok: true, videos });
+    const videos = await refreshVisibleVideoStatuses(snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as VideoDocument)));
+    res.json({ ok: true, videos: videos.map(publicVideo) });
   } catch (error: any) {
     res.status(400).json({ ok: false, code: "VIDEOS_LIST_FAILED", message: error.message });
   }
@@ -418,15 +430,12 @@ videoRoutes.get("/videos", async (req, res) => {
   try {
     await verifyVideoAppCheck(req);
     const user = await requireUser(req);
-    // Read recent records before filtering so legacy uploads that were marked
-    // failed only because transcoding was disabled can be recovered to direct
-    // playback by refreshTranscodeStatus().
+    // Query by recency instead of only isPublished: queued jobs need one final
+    // status refresh before they can become published and visible.
     const snapshot = await getAdminDb().collection("videos").orderBy("createdAt", "desc").limit(100).get();
-    const refreshed = await Promise.all(snapshot.docs.map((doc: any) =>
-      refreshTranscodeStatus({ id: doc.id, ...doc.data() } as VideoDocument),
-    ));
+    const refreshed = await refreshVisibleVideoStatuses(snapshot.docs
+      .map((doc: any) => ({ id: doc.id, ...doc.data() } as VideoDocument)));
     const videos = refreshed
-      .filter((video: VideoDocument) => video.status !== "archived" && video.isPublished === true)
       .filter((video: VideoDocument) => canUserPlayVideo(video, user))
       .map(publicVideo);
     res.json({ ok: true, videos });
@@ -455,26 +464,33 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
     if (!canUserPlayVideo(video, user)) return res.status(403).json({ ok: false, code: "VIDEO_FORBIDDEN" });
 
     const db = getAdminDb();
+    const now = Date.now();
+    const deviceId = String(req.header("X-Device-ID") || "unknown").slice(0, 160);
     const active = await db.collection("videoPlaybackSessions")
       .where("userId", "==", user.uid)
       .where("status", "==", "active")
-      .limit(Math.max(1, video.maxConcurrentSessions))
+      .limit(Math.max(20, video.maxConcurrentSessions * 4))
       .get();
-    const now = Date.now();
-    const liveSessions = active.docs.filter((doc: any) => Number(doc.data().expiresAtMs || 0) > now);
+    const cleanupBatch = db.batch();
+    const liveSessions = active.docs.filter((doc: any) => {
+      const data = doc.data();
+      const expired = Number(data.expiresAtMs || 0) <= now;
+      const replacesCurrentDevice = data.videoId === video.id && data.deviceId === deviceId;
+      if (expired || replacesCurrentDevice) {
+        cleanupBatch.set(doc.ref, {
+          status: expired ? "expired" : "replaced",
+          endedAt: new Date(now).toISOString(),
+        }, { merge: true });
+        return false;
+      }
+      return true;
+    });
+    if (active.docs.length !== liveSessions.length) await cleanupBatch.commit();
     if (liveSessions.length >= video.maxConcurrentSessions) {
-      return res.status(409).json({ ok: false, code: "PLAYBACK_SESSION_LIMIT", message: "This account already has an active playback session." });
+      return res.status(409).json({ ok: false, code: "PLAYBACK_SESSION_LIMIT", message: "මෙම ගිණුමෙන් දැනටමත් වෙනත් උපාංගයක වීඩියෝවක් නරඹමින් පවතී." });
     }
 
-    const directPlayback = env.VIDEO_ALLOW_DIRECT_PLAYBACK
-      && (!video.transcoderJobName || (video as any).playbackMode === "direct");
-    if (!directPlayback && ((video as any).playbackMode === "direct" || !video.transcoderJobName)) {
-      return res.status(409).json({
-        ok: false,
-        code: "VIDEO_SECURE_STREAM_NOT_READY",
-        message: "Secure HLS processing is not complete. Ask an admin to reprocess this video.",
-      });
-    }
+    const directPlayback = !video.transcoderJobName || (video as any).playbackMode === "direct";
     const signed = directPlayback ? null : createSignedPlaybackCookie(video);
     const sessionRef = db.collection("videoPlaybackSessions").doc();
     const expiresAtMs = now + env.VIDEO_SESSION_TTL_SECONDS * 1000;
@@ -482,7 +498,7 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
       sessionId: sessionRef.id,
       userId: user.uid,
       videoId: video.id,
-      deviceId: String(req.header("X-Device-ID") || "unknown").slice(0, 160),
+      deviceId,
       userAgentHash: crypto.createHash("sha256").update(String(req.header("user-agent") || "unknown")).digest("hex"),
       createdAt: new Date(now).toISOString(),
       lastHeartbeatAt: new Date(now).toISOString(),
@@ -523,7 +539,10 @@ videoRoutes.post("/video-sessions/:sessionId/heartbeat", async (req, res) => {
     const user = await requireUser(req);
     const ref = getAdminDb().collection("videoPlaybackSessions").doc(req.params.sessionId);
     const snapshot = await ref.get();
-    if (!snapshot.exists || snapshot.data()?.userId !== user.uid || snapshot.data()?.status !== "active") {
+    const session = snapshot.data();
+    const deviceId = String(req.header("X-Device-ID") || "unknown").slice(0, 160);
+    const deviceMismatch = session?.deviceId && session.deviceId !== "unknown" && session.deviceId !== deviceId;
+    if (!snapshot.exists || session?.userId !== user.uid || session?.status !== "active" || deviceMismatch) {
       return res.status(403).json({ ok: false, code: "SESSION_REVOKED" });
     }
     const expiresAtMs = Date.now() + env.VIDEO_SESSION_TTL_SECONDS * 1000;
@@ -540,7 +559,10 @@ videoRoutes.post("/video-sessions/:sessionId/end", async (req, res) => {
     const user = await requireUser(req);
     const ref = getAdminDb().collection("videoPlaybackSessions").doc(req.params.sessionId);
     const snapshot = await ref.get();
-    if (!snapshot.exists || snapshot.data()?.userId !== user.uid) return res.status(403).json({ ok: false, code: "SESSION_FORBIDDEN" });
+    const session = snapshot.data();
+    const deviceId = String(req.header("X-Device-ID") || "unknown").slice(0, 160);
+    const deviceMismatch = session?.deviceId && session.deviceId !== "unknown" && session.deviceId !== deviceId;
+    if (!snapshot.exists || session?.userId !== user.uid || deviceMismatch) return res.status(403).json({ ok: false, code: "SESSION_FORBIDDEN" });
     await ref.set({ status: "revoked", endedAt: new Date().toISOString() }, { merge: true });
     res.json({ ok: true });
   } catch (error: any) {

@@ -66,8 +66,8 @@ export function getModelForTask(task: AITask): ModelConfig {
       };
     case "direct_pdf_solve":
       return {
-        primary: process.env.GEMINI_PDF_QA_MODEL || process.env.GEMINI_VISION_MODEL || "gemini-2.5-flash",
-        fallback: process.env.GEMINI_PDF_QA_FALLBACK || "gemini-2.5-flash"
+        primary: process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
+        fallback: "gemini-3.5-flash"
       };
     case "final_answer":
       return {

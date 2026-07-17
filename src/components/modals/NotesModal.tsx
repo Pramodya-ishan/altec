@@ -8,7 +8,6 @@ import { apiFetch } from "../../lib/api";
 import {
   deletePrivateStorageObject,
   openPrivateStoragePdf,
-  prefetchPrivateStorageUrl,
   uploadPdfWithClientStorage,
   type UploadProgressSnapshot,
   type UploadTaskControls,
@@ -33,11 +32,20 @@ function formatBytes(value: number) {
 }
 
 function formatEta(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return "Calculating…";
-  if (value < 60) return `${Math.max(1, Math.ceil(value))} sec`;
+  if (value === null || !Number.isFinite(value)) return "ගණනය කරමින්…";
+  if (value < 60) return `${Math.max(1, Math.ceil(value))} තත්`;
   const minutes = Math.floor(value / 60);
   const seconds = Math.ceil(value % 60);
-  return `${minutes}m ${seconds}s`;
+  return `${minutes} මිනි ${seconds} තත්`;
+}
+
+function mediaKindLabel(kind?: LessonResourceKind) {
+  if (kind === "video") return "වීඩියෝ";
+  if (kind === "image") return "රූපය";
+  if (kind === "audio") return "ශ්‍රව්‍ය";
+  if (kind === "pdf") return "PDF";
+  if (kind === "link") return "සබැඳිය";
+  return "ගොනුව";
 }
 
 function getMediaKind(file: File): LessonResourceKind {
@@ -59,6 +67,15 @@ function normalizeLegacyResource(resource: LessonResource): LessonResource {
   return { ...resource, mediaKind, mimeType: resource.mimeType || resource.type, sourceId: resource.sourceId || (!resource.url?.startsWith("http") ? resource.url : undefined) };
 }
 
+function normalizeLessonKey(value: unknown) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .trim();
+}
+
 function ResourceIcon({ kind }: { kind?: LessonResourceKind }) {
   const className = "h-5 w-5";
   if (kind === "video") return <Film className={`${className} text-violet-500`} />;
@@ -76,11 +93,10 @@ export function NotesModal() {
   const [isPaused, setIsPaused] = useState(false);
   const [telemetry, setTelemetry] = useState<UploadTelemetry | null>(null);
   const [playerResource, setPlayerResource] = useState<LessonResource | null>(null);
-  const [libraryTab, setLibraryTab] = useState<"resources" | "videos">("resources");
-  const [remoteVideos, setRemoteVideos] = useState<LessonResource[]>([]);
+  const [activeTab, setActiveTab] = useState<"resources" | "videos">("resources");
+  const [catalogVideos, setCatalogVideos] = useState<LessonResource[]>([]);
   const controlsRef = useRef<UploadTaskControls | null>(null);
   const uploadStartedAtRef = useRef(0);
-  const speedSampleRef = useRef({ time: 0, bytes: 0, smoothed: 0 });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const isAdmin = videoPermission === "allowed";
 
@@ -89,13 +105,15 @@ export function NotesModal() {
   const resources = useMemo(() => {
     const local = (topicData?.resources?.length ? topicData.resources : topicData?.videos || []).map(normalizeLegacyResource);
     const merged = new Map<string, LessonResource>();
-    [...local, ...remoteVideos].forEach((resource) => merged.set(String(resource.videoId || resource.sourceId || resource.id || resource.title), resource));
+    [...local, ...catalogVideos].forEach((resource) => {
+      const key = String(resource.videoId || resource.sourceId || resource.id || resource.storagePath || resource.title);
+      if (key) merged.set(key, { ...(merged.get(key) || {}), ...resource });
+    });
     return Array.from(merged.values());
-  }, [topicData?.resources, topicData?.videos, remoteVideos]);
-  const visibleResources = useMemo(
-    () => resources.filter((resource) => libraryTab === "videos" ? resource.mediaKind === "video" : resource.mediaKind !== "video"),
-    [resources, libraryTab],
-  );
+  }, [topicData?.resources, topicData?.videos, catalogVideos]);
+  const fileResources = useMemo(() => resources.filter((resource) => resource.mediaKind !== "video"), [resources]);
+  const videoResources = useMemo(() => resources.filter((resource) => resource.mediaKind === "video"), [resources]);
+  const visibleResources = activeTab === "videos" ? videoResources : fileResources;
 
   useEffect(() => {
     if (!modals.playlist.open) return;
@@ -143,68 +161,54 @@ export function NotesModal() {
   }, [modals.playlist.open]);
 
   useEffect(() => {
-    if (!modals.playlist.open || videoPermission === "loading" || videoPermission === "unavailable") return;
+    if (!modals.playlist.open || videoPermission === "loading") return;
     let active = true;
-    const syncVideos = async () => {
-      const endpoint = videoPermission === "allowed" ? "/api/admin/videos" : "/api/videos";
-      const response = await apiFetch(endpoint);
-      const payload = await response.json().catch(() => null);
-      if (!active || !response.ok || !Array.isArray(payload?.videos)) return;
-      const matching = payload.videos
-        .filter((video: any) => String(video.subject || "").toLowerCase() === currentSubject.toLowerCase()
-          && String(video.lesson || "").trim().toLowerCase() === String(topic || "").trim().toLowerCase()
-          && video.status !== "archived")
-        .map((video: any): LessonResource => ({
-          id: video.id,
-          videoId: video.id,
-          sourceId: video.sourceId,
-          url: `video://${video.id}`,
-          title: video.title || "Lesson video",
-          type: video.mimeType || "video/mp4",
-          mimeType: video.mimeType || "video/mp4",
-          mediaKind: "video",
-          resourceRole: "video",
-          status: video.status,
-          sizeBytes: video.sourceSizeBytes,
-          createdAt: video.createdAt,
-        }));
-      setRemoteVideos(matching);
+    const hydrateVideos = async () => {
+      const user = auth.currentUser;
+      if (!user || user.isAnonymous) return;
+      try {
+        const response = await apiFetch(videoPermission === "allowed" ? "/api/admin/videos" : "/api/videos");
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !Array.isArray(payload?.videos) || !active) return;
+        const matching = payload.videos
+          .filter((video: any) => String(video.subject || "").toUpperCase() === currentSubject.toUpperCase()
+            && normalizeLessonKey(video.lesson) === normalizeLessonKey(topic)
+            && video.status !== "archived")
+          .map((video: any): LessonResource => ({
+            id: video.id,
+            videoId: video.id,
+            sourceId: video.sourceId,
+            url: `video://${video.id}`,
+            title: video.title || "Lesson video",
+            type: video.mimeType || "video/mp4",
+            mimeType: video.mimeType || "video/mp4",
+            mediaKind: "video",
+            resourceRole: "video",
+            status: video.status,
+            sizeBytes: Number(video.sourceSizeBytes || 0) || undefined,
+            createdAt: video.createdAt,
+          }));
+        setCatalogVideos(matching);
+      } catch {
+        // Local lesson metadata remains available when the catalog is offline.
+      }
     };
-    void syncVideos();
-    const timer = window.setInterval(syncVideos, 30_000);
+    void hydrateVideos();
+    const timer = window.setInterval(hydrateVideos, 30_000);
     return () => { active = false; window.clearInterval(timer); };
   }, [currentSubject, modals.playlist.open, topic, videoPermission]);
-
-  useEffect(() => {
-    if (!modals.playlist.open) return;
-    const paths = resources
-      .filter((resource) => resource.mediaKind !== "video" && Boolean(resource.storagePath))
-      .map((resource) => String(resource.storagePath))
-      .slice(0, 12);
-    paths.forEach((path) => { void prefetchPrivateStorageUrl(path); });
-  }, [modals.playlist.open, resources]);
 
   if (!modals.playlist.open) return null;
 
   const close = () => {
-    if (isUploading && !confirm("An upload is still running. Cancel it and close?")) return;
+    if (isUploading && !confirm("ගොනුව තවම එක් කරමින් පවතී. එය නවතා වසන්නද?")) return;
     controlsRef.current?.cancel();
     setModals((previous) => ({ ...previous, playlist: { open: false, topic: "" } }));
   };
 
   const updateProgress = (fileName: string) => (snapshot: UploadProgressSnapshot) => {
-    const now = performance.now();
-    const sample = speedSampleRef.current;
-    let speed = sample.smoothed;
-    if (snapshot.bytesTransferred > sample.bytes && now > sample.time) {
-      const instant = (snapshot.bytesTransferred - sample.bytes) / ((now - sample.time) / 1000);
-      speed = sample.smoothed > 0 ? sample.smoothed * 0.72 + instant * 0.28 : instant;
-      speedSampleRef.current = { time: now, bytes: snapshot.bytesTransferred, smoothed: speed };
-    }
-    if (snapshot.bytesTransferred === 0) {
-      speedSampleRef.current = { time: now, bytes: 0, smoothed: 0 };
-      speed = 0;
-    }
+    const elapsedSeconds = Math.max(0.25, (performance.now() - uploadStartedAtRef.current) / 1000);
+    const speed = snapshot.bytesTransferred / elapsedSeconds;
     const remaining = Math.max(0, snapshot.totalBytes - snapshot.bytesTransferred);
     setTelemetry({
       ...snapshot,
@@ -222,7 +226,7 @@ export function NotesModal() {
     const current = (nextTopic.resources?.length ? nextTopic.resources : nextTopic.videos || []).map(normalizeLegacyResource);
     const nextResources = [...current, resource];
     nextTopic.resources = nextResources;
-    nextTopic.videos = nextResources;
+    nextTopic.videos = nextResources.filter((item) => normalizeLegacyResource(item).mediaKind === "video");
     nextData[currentSubject].topics[topic] = nextTopic;
     saveData(nextData);
   };
@@ -232,16 +236,16 @@ export function NotesModal() {
     const mediaKind = getMediaKind(file);
     const maxBytes = mediaKind === "video" ? 10 * 1024 * 1024 * 1024 : 50 * 1024 * 1024;
     if (file.size <= 0 || file.size > maxBytes) {
-      showNotification(`File size is invalid. ${mediaKind === "video" ? "10 GB" : "50 MB"} limit.`, "error");
+      showNotification(`ගොනුවේ ප්‍රමාණය වලංගු නැහැ. උපරිමය ${mediaKind === "video" ? "10 GB" : "50 MB"}.`, "error");
       return;
     }
     if (mediaKind === "video" && videoPermission !== "allowed") {
       if (videoPermission === "loading") {
-        showNotification("Checking video upload permission. Please try again in a moment.", "info");
+        showNotification("වීඩියෝ එක් කිරීමේ අවසරය පරීක්ෂා කරමින්. මොහොතකින් නැවත උත්සාහ කරන්න.", "info");
       } else if (videoPermission === "unavailable") {
-        showNotification("Could not verify video upload permission. Check your connection and retry.", "error");
+        showNotification("වීඩියෝ අවසරය තහවුරු කළ නොහැක. සම්බන්ධතාව පරීක්ෂා කර නැවත උත්සාහ කරන්න.", "error");
       } else {
-        showNotification("Only an admin or content editor can upload lesson videos.", "error");
+        showNotification("පාඩම් වීඩියෝ එක් කළ හැක්කේ පරිපාලකයෙකුට හෝ අන්තර්ගත සංස්කාරකයෙකුට පමණයි.", "error");
       }
       return;
     }
@@ -249,7 +253,6 @@ export function NotesModal() {
     setIsUploading(true);
     setIsPaused(false);
     uploadStartedAtRef.current = performance.now();
-    speedSampleRef.current = { time: uploadStartedAtRef.current, bytes: 0, smoothed: 0 };
     updateProgress(file.name)({ bytesTransferred: 0, totalBytes: file.size, progress: 0, state: "running" });
 
     try {
@@ -275,7 +278,7 @@ export function NotesModal() {
           sizeBytes: file.size,
           createdAt: new Date().toISOString(),
         });
-        showNotification(result.transcodeQueued ? "Video uploaded. Secure processing has started." : "Video uploaded and ready to play.", "success");
+        showNotification(result.transcodeQueued ? "වීඩියෝව එක් කළා. ආරක්ෂිත සැකසුම ආරම්භ වුණා." : "වීඩියෝව එක් කළා. දැන් වාදනය කළ හැක.", "success");
       } else {
         const upload = await uploadPdfWithClientStorage({
           file,
@@ -288,7 +291,7 @@ export function NotesModal() {
           onTask: (controls) => { controlsRef.current = controls; },
         });
 
-        let processed: any = { sourceId: upload.sourceId, storagePath: upload.storagePath, downloadUrl: upload.downloadUrl };
+        let processed: any = { sourceId: upload.sourceId, storagePath: upload.storagePath };
         if (mediaKind === "pdf") {
           const response = await apiFetch("/api/pdf/process-uploaded", {
             method: "POST",
@@ -302,7 +305,6 @@ export function NotesModal() {
               sourceScope: "paper_structure",
               sourceId: upload.sourceId,
               storagePath: upload.storagePath,
-              downloadUrl: upload.downloadUrl,
             }),
           });
           const payload = await response.json().catch(() => null);
@@ -324,12 +326,12 @@ export function NotesModal() {
           sizeBytes: file.size,
           createdAt: new Date().toISOString(),
         });
-        showNotification("Lesson resource uploaded successfully.", "success");
+        showNotification("පාඩම් සම්පත සාර්ථකව එක් කළා.", "success");
       }
     } catch (error: any) {
       if (error?.name !== "AbortError" && error?.code !== "storage/canceled") {
         console.error(error);
-        showNotification(error?.message || "Upload failed", "error");
+        showNotification(error?.message || "ගොනුව එක් කිරීමට නොහැකි වුණා", "error");
       }
     } finally {
       setIsUploading(false);
@@ -347,38 +349,22 @@ export function NotesModal() {
   const openResource = async (resource: LessonResource) => {
     if (resource.mediaKind === "video" && resource.videoId) {
       const endpoint = isAdmin ? `/api/admin/videos/${resource.videoId}` : `/api/videos/${resource.videoId}`;
-      const readVideo = async () => {
-        const response = await apiFetch(endpoint);
-        const payload = await response.json().catch(() => null);
-        return { response, payload, status: payload?.video?.status || resource.status };
-      };
-      let live = await readVideo();
-      if (live.response.ok && ["uploaded", "processing", "failed"].includes(String(live.status || ""))) {
-        await new Promise((resolve) => window.setTimeout(resolve, 900));
-        live = await readVideo();
-      }
-      const { response, payload, status: liveStatus } = live;
+      const response = await apiFetch(endpoint);
+      const payload = await response.json().catch(() => null);
+      const liveStatus = payload?.video?.status || resource.status;
       if (!response.ok || liveStatus !== "ready") {
-        const message = liveStatus === "failed"
-          ? "The original video is being restored. Please retry in a moment."
-          : `Video is still processing (${liveStatus || "pending"}).`;
-        showNotification(message, liveStatus === "failed" ? "error" : "info");
+        showNotification(`වීඩියෝව තවම සකසමින් පවතී (${liveStatus || "පොරොත්තුවෙන්"}).`, "info");
         return;
       }
-      setPlayerResource({
-        ...resource,
-        status: "ready",
-        title: payload?.video?.title || resource.title,
-        sizeBytes: payload?.video?.sourceSizeBytes || resource.sizeBytes,
-      });
+      setPlayerResource({ ...resource, status: "ready" });
       return;
     }
     if (resource.url?.startsWith("http")) window.open(resource.url, "_blank", "noopener,noreferrer");
     else if (resource.storagePath) void openPrivateStoragePdf(resource.storagePath);
   };
 
-  const deleteResource = async (resource: LessonResource, index: number) => {
-    if (!isAdmin || !confirm(`Delete “${resource.title}”?`)) return;
+  const deleteResource = async (resource: LessonResource) => {
+    if (!isAdmin || !confirm(`“${resource.title}” ඉවත් කරන්නද?`)) return;
     try {
       if (resource.mediaKind === "video" && resource.videoId) {
         const response = await apiFetch(`/api/admin/videos/${resource.videoId}`, { method: "DELETE" });
@@ -389,13 +375,23 @@ export function NotesModal() {
       }
       const nextData = structuredClone(data);
       const nextTopic = nextData[currentSubject].topics[topic];
-      const nextResources = resources.filter((_, resourceIndex) => resourceIndex !== index);
+      const resourceKey = String(resource.videoId || resource.sourceId || resource.id || resource.storagePath || resource.title);
+      const localResources = [
+        ...(nextTopic.resources || []),
+        ...(nextTopic.videos || []),
+      ].map(normalizeLegacyResource);
+      const nextResources = localResources.filter((item) => (
+        String(item.videoId || item.sourceId || item.id || item.storagePath || item.title) !== resourceKey
+      ));
       nextTopic.resources = nextResources;
-      nextTopic.videos = nextResources;
+      nextTopic.videos = nextResources.filter((item) => normalizeLegacyResource(item).mediaKind === "video");
       saveData(nextData);
-      showNotification("Resource removed.", "success");
+      setCatalogVideos((current) => current.filter((item) => (
+        String(item.videoId || item.sourceId || item.id || item.storagePath || item.title) !== resourceKey
+      )));
+      showNotification("සම්පත ඉවත් කළා.", "success");
     } catch (error: any) {
-      showNotification(error?.message || "Delete failed", "error");
+      showNotification(error?.message || "සම්පත ඉවත් කිරීමට නොහැකි වුණා", "error");
     }
   };
 
@@ -405,26 +401,22 @@ export function NotesModal() {
         <motion.div initial={{ opacity: 0, scale: 0.97, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 14 }} transition={{ type: "spring", damping: 28, stiffness: 320 }} className="flex max-h-[92dvh] w-full max-w-4xl flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white shadow-[0_28px_80px_rgba(15,23,42,0.22)]">
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-7">
             <div>
-              <h2 className="text-sm font-black uppercase tracking-wide text-slate-800">Lesson Resources</h2>
+              <h2 className="text-sm font-black tracking-wide text-slate-800">පාඩම් සම්පත්</h2>
               <p className="mt-1 text-xs font-medium text-slate-500">{currentSubject.toUpperCase()} · {topic}</p>
             </div>
             <button onClick={close} className="rounded-xl p-2 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500" aria-label="Close resources"><X className="h-5 w-5" /></button>
           </div>
 
           <div className="clora-scrollbar min-h-0 flex-1 overflow-y-auto bg-white p-4 sm:p-6">
-            <section className="bg-white">
+            <section>
               <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="inline-flex w-fit rounded-xl bg-slate-100 p-1">
-                  {(["resources", "videos"] as const).map((tab) => (
-                    <button key={tab} type="button" onClick={() => setLibraryTab(tab)} className="relative min-w-24 rounded-lg px-4 py-2 text-xs font-semibold capitalize text-slate-600">
-                      {libraryTab === tab && <motion.span layoutId="lesson-library-tab" className="absolute inset-0 rounded-lg bg-white shadow-sm" transition={{ type: "spring", stiffness: 420, damping: 34 }} />}
-                      <span className="relative">{tab}{tab === "videos" ? ` (${resources.filter((item) => item.mediaKind === "video").length})` : ""}</span>
-                    </button>
-                  ))}
+                <div className="inline-flex w-fit rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Lesson resource type">
+                  <button type="button" role="tab" aria-selected={activeTab === "resources"} onClick={() => setActiveTab("resources")} className={`rounded-lg px-4 py-2 text-xs font-bold transition-all ${activeTab === "resources" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500"}`}>සම්පත් ({fileResources.length})</button>
+                  <button type="button" role="tab" aria-selected={activeTab === "videos"} onClick={() => setActiveTab("videos")} className={`rounded-lg px-4 py-2 text-xs font-bold transition-all ${activeTab === "videos" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500"}`}>වීඩියෝ ({videoResources.length})</button>
                 </div>
                 <input ref={fileInputRef} type="file" accept="application/pdf,image/*,audio/*,video/mp4,video/quicktime,video/webm,.doc,.docx,.ppt,.pptx,.txt" onChange={handleFileInput} className="hidden" id="lesson-resource-upload" disabled={isUploading} />
                 <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isUploading} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 shadow-sm transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60">
-                  <UploadCloud className="h-4 w-4" /> {isUploading ? `${Math.round((telemetry?.progress || 0) * 100)}% uploading` : isAdmin ? "Upload resource / video" : videoPermission === "loading" ? "Checking upload access…" : "Upload PDF / image"}
+                  <UploadCloud className="h-4 w-4" /> {isUploading ? `${Math.round((telemetry?.progress || 0) * 100)}%` : isAdmin ? "සම්පතක් / වීඩියෝවක් එක් කරන්න" : videoPermission === "loading" ? "අවසර පරීක්ෂා කරමින්…" : "PDF / රූපයක් එක් කරන්න"}
                 </button>
               </div>
 
@@ -433,53 +425,52 @@ export function NotesModal() {
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-black text-slate-800">{telemetry.fileName}</p>
-                      <p className="mt-1 text-xs font-semibold text-indigo-600">{telemetry.state === "paused" ? "Paused" : "Uploading securely"}</p>
+                      <p className="mt-1 text-xs font-semibold text-indigo-600">{telemetry.state === "paused" ? "විරාම කර ඇත" : "ආරක්ෂිතව එක් කරමින්"}</p>
                     </div>
                     <span className="text-lg font-black text-indigo-700">{Math.round(telemetry.progress * 100)}%</span>
                   </div>
                   <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-indigo-100"><div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-[width] duration-300" style={{ width: `${Math.max(1, telemetry.progress * 100)}%` }} /></div>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
-                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">Uploaded</span><strong className="text-slate-700">{formatBytes(telemetry.bytesTransferred)} / {formatBytes(telemetry.totalBytes)}</strong></div>
-                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">Remaining</span><strong className="text-slate-700">{formatBytes(telemetry.remainingBytes)}</strong></div>
-                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">Speed</span><strong className="text-slate-700">{formatBytes(telemetry.speedBytesPerSecond)}/s</strong></div>
-                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">ETA</span><strong className="text-slate-700">{formatEta(telemetry.etaSeconds)}</strong></div>
+                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">එක් කළ ප්‍රමාණය</span><strong className="text-slate-700">{formatBytes(telemetry.bytesTransferred)} / {formatBytes(telemetry.totalBytes)}</strong></div>
+                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">ඉතිරි ප්‍රමාණය</span><strong className="text-slate-700">{formatBytes(telemetry.remainingBytes)}</strong></div>
+                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">වේගය</span><strong className="text-slate-700">{formatBytes(telemetry.speedBytesPerSecond)}/s</strong></div>
+                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">ඉතිරි කාලය</span><strong className="text-slate-700">{formatEta(telemetry.etaSeconds)}</strong></div>
                   </div>
                   <div className="mt-3 flex justify-end gap-2">
                     <button type="button" onClick={() => { const changed = isPaused ? controlsRef.current?.resume() : controlsRef.current?.pause(); if (changed) setIsPaused(!isPaused); }} className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200">
-                      {isPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />} {isPaused ? "Resume" : "Pause"}
+                      {isPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />} {isPaused ? "නැවත අරඹන්න" : "විරාම කරන්න"}
                     </button>
-                    <button type="button" onClick={() => controlsRef.current?.cancel()} className="rounded-lg bg-rose-100 px-3 py-2 text-xs font-bold text-rose-700">Cancel</button>
+                    <button type="button" onClick={() => controlsRef.current?.cancel()} className="rounded-lg bg-rose-100 px-3 py-2 text-xs font-bold text-rose-700">නවත්වන්න</button>
                   </div>
                 </div>
               )}
 
-              <div onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (event.currentTarget === event.target) setIsDragging(false); }} onDrop={(event) => { event.preventDefault(); setIsDragging(false); const file = event.dataTransfer.files?.[0]; if (file) void processFile(file); }} className={`mt-4 rounded-2xl p-1 transition ${isDragging ? "bg-slate-100" : "bg-white"}`}>
+              <div onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (event.currentTarget === event.target) setIsDragging(false); }} onDrop={(event) => { event.preventDefault(); setIsDragging(false); const file = event.dataTransfer.files?.[0]; if (file) void processFile(file); }} className={`mt-4 rounded-2xl p-0 transition ${isDragging ? "bg-slate-50 ring-2 ring-slate-300 ring-offset-2" : "bg-white"}`}>
                 {visibleResources.length === 0 ? (
                   <button type="button" onClick={() => fileInputRef.current?.click()} className="flex w-full flex-col items-center py-8 text-center">
                     <UploadCloud className="mb-3 h-8 w-8 text-slate-300" />
-                    <span className="text-sm font-bold text-slate-500">Drop a lesson resource here or click to browse</span>
-                    <span className="mt-1 text-xs text-slate-400">PDF, image, audio, document{isAdmin ? " or video" : ""}</span>
+                    <span className="text-sm font-bold text-slate-500">මෙම පාඩමට තවම {activeTab === "videos" ? "වීඩියෝ" : "සම්පත්"} නැහැ</span>
                   </button>
                 ) : (
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <AnimatePresence mode="popLayout" initial={false}>
+                  <motion.div key={activeTab} initial={{ opacity: 0, x: activeTab === "videos" ? 12 : -12 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: activeTab === "videos" ? -12 : 12 }} className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     {visibleResources.map((resource) => {
-                      const index = resources.findIndex((item) => String(item.videoId || item.sourceId || item.id) === String(resource.videoId || resource.sourceId || resource.id));
-                      return (
-                      <div key={resource.id || resource.sourceId || `${resource.title}-${index}`} className="group flex min-w-0 items-center gap-2">
-                        <button type="button" onClick={() => void openResource(resource)} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:border-slate-400 hover:shadow-sm">
-                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100"><ResourceIcon kind={resource.mediaKind} /></span>
+                      return <div key={resource.videoId || resource.id || resource.sourceId || resource.storagePath || resource.title} className="group flex min-w-0 items-center gap-2">
+                        <button type="button" onClick={() => void openResource(resource)} className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md">
+                          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100"><ResourceIcon kind={resource.mediaKind} /></span>
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-sm font-black text-slate-800 group-hover:text-indigo-700">{resource.title}</span>
                             <span className="mt-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                              {resource.mediaKind || "document"}
+                              {mediaKindLabel(resource.mediaKind)}
                               {resource.sizeBytes ? ` · ${formatBytes(resource.sizeBytes)}` : ""}
                             </span>
                           </span>
                         </button>
-                        {isAdmin && <button type="button" onClick={() => void deleteResource(resource, index)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500" aria-label={`Delete ${resource.title}`}><i className="fa-regular fa-trash-can text-sm" /></button>}
+                        {isAdmin && <button type="button" onClick={() => void deleteResource(resource)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500" aria-label={`Delete ${resource.title}`}><i className="fa-regular fa-trash-can text-sm" /></button>}
                       </div>
-                    );})}
-                  </div>
+                    })}
+                  </motion.div>
+                  </AnimatePresence>
                 )}
               </div>
             </section>

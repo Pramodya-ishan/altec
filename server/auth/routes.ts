@@ -1,8 +1,9 @@
 import express from 'express';
-import { requireAdmin, getAdminAuth } from '../firebase/admin';
+import { readUser, writeUser } from '../data/userRepository';
+import { getAuth } from 'firebase-admin/auth';
+import { requireAdmin } from '../firebase/admin';
 import { requireFirebaseUser } from '../firebase/authMiddleware';
 import { computeSourceCapabilities } from '../utils/authContext';
-import { applyConfiguredAdminRoles } from '../utils/configuredRoles';
 
 export const authRoutes = express.Router();
 
@@ -38,8 +39,8 @@ authRoutes.post("/force-reset-password", async (req, res) => {
       if (!email || !password) {
         return res.status(400).json({ error: "Email and new password are required" });
       }
-      const userRecord = await getAdminAuth().getUserByEmail(email);
-      await getAdminAuth().updateUser(userRecord.uid, { password });
+      const userRecord = await getAuth().getUserByEmail(email);
+      await getAuth().updateUser(userRecord.uid, { password });
       res.json({ success: true, message: "Password updated successfully" });
     } catch (e: any) {
       res.status(500).json({ error: e.message || "Failed to update password" });
@@ -52,61 +53,35 @@ authRoutes.post("/session", async (req, res) => {
       if (!idToken) {
         return res.status(400).json({ error: "ID token is required" });
       }
-      const decodedToken = await getAdminAuth().verifyIdToken(idToken);
+      const decodedToken = await getAuth().verifyIdToken(idToken);
       const email = decodedToken.email;
       if (!email) {
         return res.status(400).json({ error: "Email missing from token" });
       }
-      const configuredRoles = applyConfiguredAdminRoles(
-        email,
-        decodedToken.email_verified === true,
-        Array.isArray(decodedToken.roles) ? decodedToken.roles : [],
-        decodedToken.uid,
-      );
-      let claimsUpdated = false;
-      if (configuredRoles.includes("admin")) {
-        try {
-          const auth = getAdminAuth();
-          const record = await auth.getUser(decodedToken.uid);
-          const currentClaims = record.customClaims || {};
-          const nextRoles = [...new Set([...(Array.isArray(currentClaims.roles) ? currentClaims.roles : []), ...configuredRoles])];
-          if (currentClaims.admin !== true || JSON.stringify(currentClaims.roles || []) !== JSON.stringify(nextRoles)) {
-            await auth.setCustomUserClaims(decodedToken.uid, {
-              ...currentClaims,
-              admin: true,
-              role: "admin",
-              roles: nextRoles,
-            });
-            claimsUpdated = true;
-          }
-        } catch (claimError: any) {
-          // Server routes still resolve configured roles by UID. Claim sync is
-          // best-effort and only needed for direct client Firestore access.
-          console.warn("[AUTH] Admin custom-claim sync skipped:", String(claimError?.message || claimError));
-        }
+      let userData = readUser(email);
+      if (!userData.profile) {
+         userData.profile = {
+           email: email.toLowerCase(),
+           username: profileData?.username || decodedToken.name || email.split('@')[0],
+           picture: decodedToken.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
+           nic: profileData?.nic || "",
+           mobileNumber: profileData?.mobileNumber || "",
+           bday: profileData?.bday || "",
+           gender: profileData?.gender || "",
+           isVerified: true,
+           updatedAt: new Date().toISOString(),
+           bio: "Success-driven Technology Stream Learner"
+         };
+         writeUser(email, userData);
       }
-      // Vercel Functions have an ephemeral/read-only application filesystem.
-      // Authentication must never depend on writing a local JSON user store.
-      const profile = {
-        email: email.toLowerCase(),
-        username: profileData?.username || decodedToken.name || email.split('@')[0],
-        picture: decodedToken.picture || profileData?.picture || "",
-        nic: profileData?.nic || "",
-        mobileNumber: profileData?.mobileNumber || "",
-        bday: profileData?.bday || "",
-        gender: profileData?.gender || "",
-        isVerified: decodedToken.email_verified === true,
-        updatedAt: new Date().toISOString(),
-        bio: profileData?.bio || "Technology Stream Learner"
-      };
       const userSession = {
-        email: profile.email,
-        name: profile.username,
-        picture: profile.picture,
-        emailVerified: decodedToken.email_verified === true,
+        email: userData.profile.email,
+        name: userData.profile.username,
+        picture: userData.profile.picture,
+        emailVerified: true,
         uid: decodedToken.uid
       };
-      res.json({ success: true, user: userSession, profile, claimsUpdated });
+      res.json({ success: true, user: userSession, profile: userData.profile });
     } catch (error: any) {
       res.status(401).json({ error: "Invalid or expired login" });
     }

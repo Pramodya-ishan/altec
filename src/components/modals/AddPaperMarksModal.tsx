@@ -42,20 +42,20 @@ export function AddPaperMarksModal() {
     let total = 0;
     if (currentSubject === 'et') {
       if (parsedMcq > 37.5) {
-        showNotification('MCQ marks for ET cannot exceed 37.5 (out of 75 paper marks)', 'error');
+        showNotification('ET MCQ ලකුණු 37.5 ඉක්මවිය නොහැක.', 'error');
         return;
       }
       if (parsedEssay > 37.5) {
-        showNotification('Essay marks for ET cannot exceed 37.5 (out of 75 paper marks)', 'error');
+        showNotification('ET රචනා ලකුණු 37.5 ඉක්මවිය නොහැක.', 'error');
         return;
       }
       if (parsedPractical > 25) {
-        showNotification('Practical marks for ET cannot exceed 25', 'error');
+        showNotification('ET ප්‍රායෝගික ලකුණු 25 ඉක්මවිය නොහැක.', 'error');
         return;
       }
       const paperTotal = parsedMcq + parsedEssay;
       if (paperTotal > 75) {
-        showNotification('Total written paper marks for ET cannot exceed 75', 'error');
+        showNotification('ET ලිඛිත පත්‍රයේ මුළු ලකුණු 75 ඉක්මවිය නොහැක.', 'error');
         return;
       }
       total = paperTotal + parsedPractical;
@@ -63,14 +63,14 @@ export function AddPaperMarksModal() {
       total = parsedMcq + parsedEssay;
       const maxTotal = 100;
       if (total > maxTotal) {
-        showNotification(`Total marks exceed the maximum of ${maxTotal} for ${currentSubject.toUpperCase()}`, 'error');
+        showNotification(`${currentSubject.toUpperCase()} මුළු ලකුණු ${maxTotal} ඉක්මවිය නොහැක.`, 'error');
         return;
       }
     }
 
     const grade = calculateGrade(total, currentSubject);
     const entry: PaperMark = {
-      title: title.trim() || 'Untitled Paper',
+      title: title.trim() || 'නම් නොකළ පත්‍රය',
       mcq: parsedMcq,
       essay: parsedEssay,
       practical: currentSubject === 'et' ? parsedPractical : undefined,
@@ -92,7 +92,7 @@ export function AddPaperMarksModal() {
         const newLevel = gradeLevels[grade as keyof typeof gradeLevels] || 0;
         if (newLevel > prevLevel) {
           triggerStars();
-          showNotification(`Grade upgraded to ${grade}! Outstanding!`, 'success');
+          showNotification(`ඔබේ ශ්‍රේණිය ${grade} දක්වා ඉහළ ගියා!`, 'success');
         }
       } else if (grade === 'A+' || grade === 'A' || grade === 'B') {
         triggerStars();
@@ -105,10 +105,10 @@ export function AddPaperMarksModal() {
     {
       const dataWithVerifiedHistory = appendPracticeZHistory(
         nextData,
-        `Saved actual paper marks: ${title}`,
+        `සැබෑ පත්‍ර ලකුණු සුරැකිණි: ${title}`,
       );
       saveData(dataWithVerifiedHistory);
-      showNotification('Paper Marks saved successfully!', 'success');
+      showNotification('පත්‍ර ලකුණු සුරැකිණි.', 'success');
       close();
     }
   };
@@ -121,7 +121,7 @@ export function AddPaperMarksModal() {
         <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-white">
           <h2 className="text-lg font-extrabold text-slate-900 flex items-center gap-2">
             <i className="fa-solid fa-chart-line text-primary-600"></i>
-            <span>Add Paper Marks</span>
+            <span>පත්‍ර ලකුණු එක් කරන්න</span>
           </h2>
           <button onClick={close} className="text-slate-400 hover:text-red-500 transition-colors pt-1">
             <i className="fa-solid fa-xmark text-xl"></i>
@@ -130,10 +130,10 @@ export function AddPaperMarksModal() {
 
         <div className="p-6 flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-semibold text-slate-700">Paper Title / Name</label>
+            <label className="text-sm font-semibold text-slate-700">පත්‍රයේ නම</label>
             <input
               type="text"
-              placeholder="e.g., 2026 Model Paper 1"
+              placeholder="උදා: 2026 ආදර්ශ පත්‍රය 1"
               value={title}
               onChange={e => setTitle(e.target.value)}
               className="w-full px-3.5 py-2.5 border border-slate-300 rounded-lg text-sm outline-none focus:border-primary-600 focus:ring-2 focus:ring-primary-50 transition-all font-medium"
@@ -143,7 +143,7 @@ export function AddPaperMarksModal() {
           <div className="grid grid-cols-2 gap-4">
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-semibold text-slate-700">
-                MCQ Marks {isET ? '(Max 37.5)' : '(Max 50)'}
+                MCQ ලකුණු {isET ? '(උපරිම 37.5)' : '(උපරිම 50)'}
               </label>
               <input
                 type="number"
@@ -157,7 +157,7 @@ export function AddPaperMarksModal() {
             </div>
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-semibold text-slate-700">
-                Essay Marks {isET ? '(Max 37.5)' : '(Max 50)'}
+                රචනා ලකුණු {isET ? '(උපරිම 37.5)' : '(උපරිම 50)'}
               </label>
               <input
                 type="number"
@@ -173,7 +173,7 @@ export function AddPaperMarksModal() {
 
           {isET && (
             <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-semibold text-slate-700">Practical Marks (Max 25)</label>
+              <label className="text-sm font-semibold text-slate-700">ප්‍රායෝගික ලකුණු (උපරිම 25)</label>
               <input
                 type="number"
                 min="0"
@@ -190,7 +190,7 @@ export function AddPaperMarksModal() {
             onClick={handleSave}
             className="w-full py-3 bg-primary-600 text-white font-bold rounded-xl mt-2 hover:bg-primary-700 active:scale-[0.98] transition-all shadow-sm"
           >
-            Save Marks
+            ලකුණු සුරකින්න
           </button>
         </div>
       </div>

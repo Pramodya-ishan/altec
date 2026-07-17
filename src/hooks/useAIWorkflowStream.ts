@@ -7,7 +7,6 @@ import { getUnclosedMathInfo, sanitizeMathMarkdown } from "../lib/mathSanitizer"
 import { extractVisualBlocks } from "../lib/visualBlockExtractor";
 import { apiUrl } from "../lib/apiBase";
 import { askDirectPdfQa } from "../lib/ai/directPdfQa";
-import { cleanAssistantResponse, normalizeSinhalaUnicode } from "../../shared/text/assistantText";
 
 export function useAIWorkflowStream() {
   const activeStreamRef = useRef(false);
@@ -46,7 +45,6 @@ export function useAIWorkflowStream() {
     reason?: string;
     assistantMessageId?: string;
     onToken?: (text: string) => void;
-    onReplace?: (text: string) => void;
     onSources?: (sources: any[]) => void;
     onSummary?: (items: string[]) => void;
     onStatus?: (status: any) => void;
@@ -75,7 +73,6 @@ export function useAIWorkflowStream() {
       reason,
       assistantMessageId,
       onToken,
-      onReplace,
       onSources,
       onSummary,
       onStatus,
@@ -245,7 +242,7 @@ export function useAIWorkflowStream() {
               throttleTimer = window.setTimeout(() => {
                 throttleTimer = null;
 
-                const { cleanText, blocks } = extractVisualBlocks(normalizeSinhalaUnicode(accumulatedFullText));
+                const { cleanText, blocks } = extractVisualBlocks(accumulatedFullText);
 
                 if (blocks.length > 0) {
                     onVisualBlocks?.(blocks);
@@ -292,50 +289,41 @@ export function useAIWorkflowStream() {
           }
           if (eventName === "direct_pdf_handoff_required") {
             // Trigger direct PDF QA flow
-            if (import.meta.env.DEV) console.info("[DirectPDFQA] Pending mode started. Keeping stream alive.");
+            if (import.meta.env.DEV) console.info("[DirectPDFQA] secure scan started");
 
-            const { sourceId, storagePath, downloadUrl, title, subject, year } = data;
+            const { sourceId, storagePath, title, subject, year, reason, message } = data;
             const questionNo = data.questionNo || data.parsedIntent?.questionNo || data.question?.questionNo;
             const questionType = data.questionType || data.parsedIntent?.questionType || "MCQ";
 
             const qaKey = data.idempotencyKey || `${sourceId}:${questionType}:${questionNo}`;
             if (activeDirectQaKeysRef.current.has(qaKey)) {
-              if (import.meta.env.DEV) console.warn("[DirectPDFQA] Skipping duplicate call for key:", qaKey);
+              if (import.meta.env.DEV) console.warn("[DirectPDFQA] duplicate request skipped:", qaKey);
               return;
             }
             activeDirectQaKeysRef.current.add(qaKey);
             directPdfQaPending = true;
 
-            // The server may have streamed a tentative answer before locating the
-            // exact PDF. Direct QA is authoritative, so clear the placeholder
-            // instead of appending a second answer underneath it.
-            accumulatedFullText = "";
-            lastSentRenderedText = "";
-            setAnswer("");
-            onReplace?.("");
-
             setStatus({
                stage: "processing",
-               label: "Reading PDF Directly",
-               message: "PDF source එක හම්බුණා. Direct scan සඳහා file prepare කරනවා..."
+               label: "PDF එක පරීක්ෂා කරමින්",
+               message: "තෝරාගත් PDF මූලාශ්‍රයෙන් අදාළ ප්‍රශ්නය සොයමින්…"
             });
 
             void (async () => {
               try {
-                if (!storagePath && !downloadUrl) {
-                   const errorMsg = "PDF source එක තියෙනවා, නමුත් Storage path/download URL දෙකම නැති නිසා scan කරන්න බැහැ.";
-                   if (import.meta.env.DEV) console.error("[DirectPDFQA] Error:", errorMsg);
-                   setStatus({ stage: "error", label: "Source Error", message: errorMsg });
-                   setAnswer(errorMsg);
-                   onReplace?.(errorMsg);
+                if (!sourceId && !storagePath) {
+                   const errorMsg = "PDF මූලාශ්‍රය හඳුනාගැනීමට අවශ්‍ය source ID හෝ storage path එකක් ලැබී නැහැ.";
+                   if (import.meta.env.DEV) console.error("[DirectPDFQA]", errorMsg);
+                   setStatus({ stage: "error", label: "මූලාශ්‍ර දෝෂයක්", message: errorMsg });
+                   onToken?.(errorMsg);
                    setIsStreaming(false);
                    doneReceived = true;
-                   onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: "DIRECT_QA_SOURCE_LOCATION_MISSING", sources: [{ id: sourceId }] });
+                   onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: "DIRECT_QA_SOURCE_MISSING_STORAGE_PATH", sources: [{ id: sourceId }] });
                    return;
                 }
 
-                const result = await askDirectPdfQa({
-                  source: { id: sourceId, storagePath, downloadUrl, url: downloadUrl, title, subject, year, fileName: `${sourceId}.pdf` },
+                const runDirectPdfQa = () => askDirectPdfQa({
+                  source: { id: sourceId, storagePath, title, subject, year, fileName: `${sourceId}.pdf` },
                   prompt: data.prompt || data.question || "",
                   questionId: data.questionId,
                   questionNo,
@@ -343,47 +331,65 @@ export function useAIWorkflowStream() {
                   questionType,
                   subject,
                   year,
-                  scanMode: data.scanMode === "targeted" ? "targeted" : "full_paper",
-                  interactionMode: data.interactionMode === "quiz_question" ? "quiz_question" : "answer",
-                  quizStartQuestionNo: Number(data.quizStartQuestionNo || 0) || undefined,
-                  quizEndQuestionNo: Number(data.quizEndQuestionNo || 0) || undefined,
-                  quizFeedback: typeof data.quizFeedback === "string" ? data.quizFeedback : undefined,
                   onProgress: (step, payload) => {
                     if (step === "fetching") {
                       setStatus({
                         stage: "processing",
-                        label: "Fetching PDF",
-                        message: "PDF source එක Firebase Storage එකෙන් download කරගනිමින් පවතී..."
+                        label: "PDF එක සූදානම් කරමින්",
+                        message: "ආරක්ෂිත මූලාශ්‍රය විවෘත කරමින්…"
                       });
                     } else if (step === "uploading") {
                       const sizeWarn = payload?.isLarge ? " ⚠️ PDF එක 15MB වලට වඩා විශාල බැවින් scan කිරීමට වැඩි වේලාවක් ගතවිය හැක. Indexing/Reindex භාවිත කරන්න." : "";
                       setStatus({
                         stage: "processing",
-                        label: "Uploading to AI",
-                        message: `AI backend එක වෙත PDF ගොනුව upload කරමින් පවතී...${sizeWarn}`
+                        label: "PDF එක සූදානම් කරමින්",
+                        message: `PDF ගොනුව විශ්ලේෂණයට සූදානම් කරමින්…${sizeWarn}`
                       });
                     } else if (step === "scanning") {
                       setStatus({
                         stage: "processing",
-                        label: "Scanning Full Paper",
-                        message: "සම්පූර්ණ paper එක OCR/text scan කර නිවැරදි ප්‍රශ්නය වෙන් කරමින් පවතී..."
+                        label: "ප්‍රශ්නය සොයමින්",
+                        message: "ප්‍රශ්නයට අදාළ කොටස් PDF ගොනුවෙන් scan කරමින් පවතී..."
                       });
                     } else if (step === "generating") {
-                      const isQuizQuestion = data.interactionMode === "quiz_question";
                       setStatus({
                         stage: "processing",
-                        label: isQuizQuestion ? "Preparing Question" : "Generating Answer",
-                        message: isQuizQuestion ? "ඊළඟ MCQ එක සකස් කරමින් පවතී..." : "ප්‍රශ්නයට පිළිතුර සකස් කරමින් පවතී..."
+                        label: "පිළිතුර සකස් කරමින්",
+                        message: "ප්‍රශ්නයට පිළිතුර සකස් කරමින් පවතී..."
                       });
                     }
                   }
                 });
 
+                let result = await runDirectPdfQa();
+                // Scan-only lesson PDFs may need one indexing pass before the
+                // requested question becomes searchable. Keep the same source
+                // and question context and retry automatically, so a student
+                // does not have to send “q1” again after OCR finishes.
+                for (let attempt = 0; attempt < 3; attempt += 1) {
+                  const waitingForIndex = result.errorCode === "PDF_INDEXING_STARTED"
+                    || result.errorCode === "PDF_INDEX_READY_RETRY";
+                  if (!waitingForIndex || abortRef.current?.signal.aborted) break;
+                  const waitMs = Math.min(15_000, Math.max(800, Number(result.retryAfterMs || 4_000)));
+                  setStatus({
+                    stage: "processing",
+                    label: "PDF අකුරු සකසමින්",
+                    message: `මූලාශ්‍රය සූදානම් වූ විගස ප්‍රශ්නය ස්වයංක්‍රීයව නැවත පරීක්ෂා කරනවා… (${attempt + 1}/3)`,
+                  });
+                  await new Promise<void>((resolve) => {
+                    const timer = window.setTimeout(resolve, waitMs);
+                    abortRef.current?.signal.addEventListener("abort", () => {
+                      window.clearTimeout(timer);
+                      resolve();
+                    }, { once: true });
+                  });
+                  if (abortRef.current?.signal.aborted) break;
+                  result = await runDirectPdfQa();
+                }
+
                 if (result.ok && result.found === true && result.answer) {
-                  if (import.meta.env.DEV) console.info("[DirectPDFQA] Success! Displaying answer.");
-                  const finalAnswer = cleanAssistantResponse(result.answer);
-                  setAnswer(finalAnswer);
-                  onReplace?.(finalAnswer);
+                  if (import.meta.env.DEV) console.info("[DirectPDFQA] answer ready");
+                  onToken?.(result.answer);
 
                   // Complete the stream
                   setIsStreaming(false);
@@ -392,11 +398,10 @@ export function useAIWorkflowStream() {
                     ok: true,
                     completed: true,
                     finishReason: "direct_pdf_qa_complete",
-                    answer: finalAnswer,
-                    sources: [{ id: sourceId, title, storagePath, pageNumber: result.pageNumber || result.sourceEvidence?.pageNumber }],
+                    answer: result.answer,
+                    sources: [{ id: sourceId, title, storagePath }],
                     paperInfo: {
                       sourceId: sourceId,
-                      pageNumber: result.pageNumber || result.sourceEvidence?.pageNumber,
                       questionNo,
                       questionType,
                       year,
@@ -406,8 +411,8 @@ export function useAIWorkflowStream() {
                     }
                   });
                 } else {
-                  if (import.meta.env.DEV) console.error("[DirectPDFQA] Failed to get answer:", result);
-                  let userMsg = "මේ වතාවේ PDF එකෙන් පිළිතුර තහවුරු කරගන්න බැරි වුණා. තත්පර කිහිපයකින් එම ප්‍රශ්නය නැවත අහන්න.";
+                  if (import.meta.env.DEV) console.error("[DirectPDFQA]", result);
+                  let userMsg = "PDF source එක Firebase එකේ හම්බුණා. හැබැයි server-side PDF download එක fail වුණා, ඒ නිසා මම answer එක guess කරන්නේ නැහැ. Direct Scan/Reindex action එක run කළාම PDF එකෙන්ම answer දෙන්නම්.";
 
                   const errorStr = String(result.error || "").toLowerCase();
                   const isBillingExhausted = result.errorCode === "AI_BILLING_EXHAUSTED" ||
@@ -419,59 +424,62 @@ export function useAIWorkflowStream() {
                     errorStr.includes("resource_exhausted");
 
                   const isRuntimeError = result.errorCode === "AI_CLIENT_RUNTIME_ERROR";
+                  const isIndexing = result.errorCode === "PDF_INDEXING_STARTED" || result.errorCode === "PDF_INDEX_READY_RETRY";
 
-                  if (isBillingExhausted) {
-                     userMsg = "AI credits අවසන් වෙලා තියෙනවා. Billing/credits update කළාම නැවත PDF scan/AI answer දෙන්න පුළුවන්.";
+                  if (isIndexing) {
+                     userMsg = (result as any).message || "PDF එක index කරමින් පවතී. අවසන් වූ පසු ප්‍රශ්නය නැවත යවන්න.";
+                  } else if (result.errorCode === "PDF_OCR_NOT_CONFIGURED") {
+                     userMsg = (result as any).message || "මෙම scan කළ PDF එක කියවීමට OCR සැකසුම් අවශ්‍යයි.";
+                  } else if (isBillingExhausted) {
+                     userMsg = "AI සේවා සීමාව අවසන් වී තිබෙනවා. සේවා සැලැස්ම යාවත්කාලීන කළ පසු PDF පිළිතුර නැවත ලබාගත හැක.";
                   } else if (isRuntimeError) {
-                     userMsg = "AI client runtime configuration/import issue. Please check server console.";
-                  } else if (result.errorCode === "MCQ_SOLVER_EMPTY") {
-                     userMsg = "ප්‍රශ්නය හමු වුණා, නමුත් නිවැරදි විකල්පය තහවුරු වුණේ නැහැ. මම raw OCR text එක පෙන්වන්නේ නැහැ; එම MCQ එක නැවත අහන්න.";
-                  } else if (result.errorCode === "QUESTION_NUMBER_MISMATCH") {
-                     userMsg = "PDF එකෙන් ලැබුණු ප්‍රශ්න අංකය ඔබ ඉල්ලූ අංකයට නොගැළපුණා. වැරදි ප්‍රශ්නයක් පෙන්වන්නේ නැතිව පිළිතුර නවතා ඇත.";
+                     userMsg = "AI සේවාවේ සැකසුම් දෝෂයක් ඇති වුණා. මොහොතකින් නැවත උත්සාහ කරන්න.";
                   } else if (result.found === false) {
-                     userMsg = "PDF එකෙන් එම ප්‍රශ්නය පැහැදිලිව හඳුනාගන්න බැරි වුණා. ප්‍රශ්න අංකය සමඟ නැවත අහන්න.";
-                  } else if (["DIRECT_QA_FIREBASE_FETCH_FAILED", "ADMIN_STORAGE_DEGRADED_USE_CLIENT_HANDOFF", "DIRECT_QA_SOURCE_DOWNLOAD_FAILED"].includes(String(result.errorCode || ""))) {
-                     userMsg = "PDF access session එක refresh කරගන්න බැරි වුණා. නැවත sign in කර එම ප්‍රශ්නය අහන්න.";
+                     userMsg = (result as any).message || result.reason || "PDF එක පරීක්ෂා කළා. නමුත් ප්‍රශ්නයට අදාළ නිශ්චිත පෙළ හමු නොවුණි. PDF එක නැවත සකස් කර හෝ ප්‍රශ්නයේ රූපයක් එක් කර උත්සාහ කරන්න.";
+                  } else if (result.errorCode === "DIRECT_QA_FIREBASE_FETCH_FAILED" || result.errorCode === "ADMIN_STORAGE_DEGRADED_USE_CLIENT_HANDOFF") {
+                     userMsg = "PDF මූලාශ්‍රය හමු වුණත් එය කියවීමට අවසර ලැබී නැහැ. නැවත පිවිසී උත්සාහ කරන්න.";
                   }
 
                   setStatus({
-                    stage: result.stage || "error",
-                    label: "Extraction Failed",
-                    message: isBillingExhausted ? "AI credits අවසන්" : (isRuntimeError ? "Runtime error" : (result.reason || "No answer found"))
+                    stage: isIndexing ? "processing" : (result.stage || "error"),
+                    label: isIndexing
+                      ? "PDF එක සූදානම් කරමින්"
+                      : "PDF පිළිතුර ලබාගත නොහැක",
+                    message: isIndexing
+                      ? ((result as any).message || "Index කරමින් පවතී")
+                      : (isBillingExhausted ? "සේවා සීමාව අවසන්" : (isRuntimeError ? "සේවා සැකසුම් දෝෂයක්" : (result.reason || "අදාළ සාක්ෂිය හමු නොවුණි")))
                   });
-                  setAnswer(userMsg);
-                  onReplace?.(userMsg);
+                  onToken?.(userMsg);
                   doneReceived = true;
                   onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: result.errorCode, sources: [{ id: sourceId, title, storagePath }] });
                 }
               } catch (err: any) {
-                if (import.meta.env.DEV) console.error("[DirectPDFQA] Unexpected Error:", err);
+                if (import.meta.env.DEV) console.error("[DirectPDFQA]", err);
                 setIsStreaming(false);
                 doneReceived = true;
 
-                let userFriendlyMsg = `Direct PDF QA flow failed: ${err.message}`;
+                let userFriendlyMsg = `PDF එකෙන් පිළිතුර ලබාගැනීම අසාර්ථක වුණා: ${err.message}`;
                 let friendlyStage = "error";
-                let friendlyLabel = "Extraction Failed";
+                let friendlyLabel = "PDF පිළිතුර ලබාගත නොහැක";
                 let errorCode = err.errorCode || "FATAL_ERROR";
 
                 if (err.errorCode === "DIRECT_QA_BACKEND_NON_JSON_RESPONSE") {
-                  userFriendlyMsg = "PDF answer service එක තාවකාලිකව ප්‍රතිචාර නොදුන්නා. තත්පර කිහිපයකින් නැවත උත්සාහ කරන්න.";
-                  friendlyLabel = "Scan Timeout / Error";
+                  userFriendlyMsg = "⚠️ PDF scan endpoint එකෙන් non-JSON response එකක් ලැබුණා (උදා: gateway/proxy timeout හෝ backend crash වීමක්). විශාල PDF එකක් නිසා scan කිරීමට වැඩි වේලාවක් ගතවුණා විය හැක. කරුණාකර මෙම PDF එක Reindex/Process කර නැවත උත්සාහ කරන්න.";
+                  friendlyLabel = "PDF පරීක්ෂාව කල් ඉකුත් වුණා";
                 } else if (err.errorCode === "DIRECT_QA_BACKEND_ERROR") {
-                  userFriendlyMsg = "PDF answer service එක තාවකාලිකව unavailable. නැවත උත්සාහ කරන්න.";
-                  friendlyLabel = "Backend Error";
+                  userFriendlyMsg = `⚠️ PDF scan backend එකේ දෝෂයක් ඇති විය: ${err.details?.message || err.message}`;
+                  friendlyLabel = "සේවා දෝෂයක්";
                 } else if (err.errorCode === "DIRECT_QA_FIREBASE_FETCH_FAILED") {
-                  userFriendlyMsg = "PDF access session එක refresh කරගන්න බැරි වුණා. නැවත sign in කර උත්සාහ කරන්න.";
-                  friendlyLabel = "Storage Error";
+                  userFriendlyMsg = `⚠️ PDF ගොනුව Firebase Storage එකෙන් බාගත කර ගැනීමට නොහැකි විය: ${err.details?.message || err.message}\nකරුණාකර Storage rules/login status පරීක්ෂා කරන්න.`;
+                  friendlyLabel = "ගොනු අවසර දෝෂයක්";
                 } else if (err.message && err.message.includes("Failed to fetch")) {
                   userFriendlyMsg = "⚠️ Backend සේවාදායකය සමඟ සම්බන්ධ වීමට නොහැකි විය (Network Connection / CORS Error). කරුණාකර ඔබගේ අන්තර්ජාල සම්බන්ධතාවය පරීක්ෂා කර නැවත උත්සාහ කරන්න.";
-                  friendlyLabel = "Connection Error";
+                  friendlyLabel = "සම්බන්ධතා දෝෂයක්";
                 }
 
                 setError(err.message);
                 setStatus({ stage: friendlyStage, label: friendlyLabel, message: err.message });
-                setAnswer(userFriendlyMsg);
-                onReplace?.(userFriendlyMsg);
+                onToken?.(userFriendlyMsg);
                 onError?.({ error: err.message });
                 doneReceived = true;
                 onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode, sources: [{ id: sourceId, title, storagePath }] });
@@ -513,17 +521,17 @@ export function useAIWorkflowStream() {
             if (data.recoverable) setIsRecoverableError(true);
             if (data.code === "AI_BILLING_EXHAUSTED") {
                setIsRecoverableError(false); // Do not show retry button for this
-               setStatus({ stage: "error", label: "Billing/credits exhausted", message: data.message });
+               setStatus({ stage: "error", label: "AI සේවා සීමාව අවසන්", message: data.message });
             }
             onError?.(errObj);
           }
           if (eventName === "done") {
             if (data.finishReason === "pending_direct_pdf_qa" || data.pending === true || directPdfQaPending) {
-              if (import.meta.env.DEV) console.info("[DirectPDFQA] Ignoring parent stream done because Direct PDF QA is pending.");
+              if (import.meta.env.DEV) console.info("[DirectPDFQA] waiting for secure scan");
               doneReceived = true;
               setStatus({
                 stage: "processing",
-                label: "Direct PDF QA running",
+                label: "PDF එක පරීක්ෂා කරමින්",
                 message: "PDF එකෙන් exact question extract කරමින්..."
               });
               return;
@@ -534,22 +542,24 @@ export function useAIWorkflowStream() {
               throttleTimer = null;
             }
 
-            const { cleanText } = extractVisualBlocks(normalizeSinhalaUnicode(accumulatedFullText));
-            const finalRendered = cleanAssistantResponse(sanitizeMathMarkdown(cleanText));
+            const { cleanText } = extractVisualBlocks(accumulatedFullText);
+            const finalRendered = sanitizeMathMarkdown(cleanText);
 
             if (lastSentRenderedText !== finalRendered) {
+              const delta = finalRendered.substring(lastSentRenderedText.length);
+              if (delta.length > 0) {
+                onToken?.(delta);
+              }
               setAnswer(finalRendered);
-              onReplace?.(finalRendered);
               lastSentRenderedText = finalRendered;
             }
-            data.answer = finalRendered;
 
             doneReceived = true;
             setIsStreaming(false);
             setTotalSeconds(data.totalSeconds);
             setStatus({
               stage: data.ok !== false ? "done" : "error",
-              label: data.ok !== false ? "Thought" : "Stopped",
+              label: data.ok !== false ? "සම්පූර්ණයි" : "නවතා ඇත",
               startedAt: Date.now() - (data.totalMs || 0),
             });
             if (data.sources) {
@@ -560,11 +570,13 @@ export function useAIWorkflowStream() {
         }
       }
 
-      const closedStreamText = cleanAssistantResponse(sanitizeMathMarkdown(normalizeSinhalaUnicode(accumulatedFullText)));
-      if (lastSentRenderedText !== closedStreamText) {
-        setAnswer(closedStreamText);
-        onReplace?.(closedStreamText);
-        lastSentRenderedText = closedStreamText;
+      if (lastSentRenderedText !== accumulatedFullText) {
+        const delta = accumulatedFullText.substring(lastSentRenderedText.length);
+        if (delta.length > 0) {
+          onToken?.(delta);
+        }
+        setAnswer(accumulatedFullText);
+        lastSentRenderedText = accumulatedFullText;
       }
 
       if (!doneReceived) {

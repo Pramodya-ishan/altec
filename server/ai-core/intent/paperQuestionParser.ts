@@ -32,15 +32,12 @@ export function detectOfficialPaperCandidate(prompt: string, activeSubject?: str
   // Question Number Extraction
   let questionNo = null;
   const mcqNoMatch = prompt.match(/\bmcq\s*[-_]?\s*(\d+)\b/i);
-  const numberBeforeMcqMatch = prompt.match(/\b(\d{1,2})\s*(?:(?:වෙනි|වැනි|weni|th|st|nd|rd)\s*)?mcq\b/i);
   const qNoMatch = prompt.match(/(?:question|q|ප්‍රශ්න|ප්‍රශ්නය|අංක|no)\s*(\d+)/i) || 
                    prompt.match(/\b(\d+)\s*(?:වෙනි|වැනි|th|st|nd|rd)\b/i) ||
                    prompt.match(/\b(?:පළවෙනි|පළමු|දෙවෙනි|දෙවන|තුන්වෙනි|හතරවෙනි|පස්වෙනි|හයවෙනි|හත්වෙනි|අටවෙනි|නවවෙනි|දහවෙනි|first|second|third)\b/i);
 
   if (mcqNoMatch) {
     questionNo = mcqNoMatch[1];
-  } else if (numberBeforeMcqMatch) {
-    questionNo = numberBeforeMcqMatch[1];
   } else if (qNoMatch) {
     // Basic mapping for Sinhala/English word numbers
     let val = qNoMatch[1] || qNoMatch[0].toLowerCase();

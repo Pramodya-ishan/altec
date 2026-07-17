@@ -748,7 +748,7 @@ export default function AdmissionPredictorView() {
       const name = point.normalizedDate.toISOString().slice(0, 10);
       byDay.set(name, {
         name,
-        "Calculated Z Score": Number(point.zScore),
+        "ගණනය කළ Z අගය": Number(point.zScore),
         reason: point.reason,
       });
     });
@@ -764,7 +764,7 @@ export default function AdmissionPredictorView() {
       visiblePoints.unshift({
         ...visiblePoints[0],
         name: previousDate.toISOString().slice(0, 10),
-        reason: "Started tracking",
+        reason: "ප්‍රගති සටහන් ආරම්භ කළා",
       });
     }
     return visiblePoints;
@@ -805,7 +805,7 @@ export default function AdmissionPredictorView() {
           {payload[0] && payload[0].payload.reason && (
             <div className="mt-3 pt-3 border-t border-slate-100">
               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">
-                Reason for change
+                වෙනස්වීමට හේතුව
               </p>
               <p className="text-xs text-slate-700 font-medium leading-snug">
                 {payload[0].payload.reason}
@@ -840,17 +840,13 @@ export default function AdmissionPredictorView() {
               {/* LEFT COLUMN: LIVE COHORT METRICS SUMMARY cards (5 columns) */}
               <div className="lg:col-span-5 space-y-6">
                 <div className="bg-transparent border-none shadow-none p-0 space-y-5">
-                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2 border-b border-slate-200/80 pb-3">
-                    <Database className="w-5 h-5 text-slate-500" /> Z-Score &amp; Analytics
-                  </h3>
-
                   <div className="grid grid-cols-3 gap-2.5">
                     <div className="bg-white border border-slate-200 p-3.5 rounded-2xl text-center shadow-sm relative overflow-hidden">
                       <div className="absolute top-0 right-0 p-2 opacity-[0.03] pointer-events-none -rotate-12">
                         <LineChart className="w-10 h-10 text-indigo-900" />
                       </div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 leading-tight relative">
-                        Z-Score
+                        අනුමාන Z අගය
                       </p>
                       <p className="text-lg font-black text-slate-900 tracking-tight relative">
                         {formatZ(overallZScore, 4)}
@@ -861,7 +857,7 @@ export default function AdmissionPredictorView() {
                         <MapPin className="w-10 h-10 text-emerald-900" />
                       </div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 leading-tight relative">
-                        District rank
+                        දිස්ත්‍රික් අනුමාන ස්ථානය
                       </p>
                       <p className="text-sm font-black text-slate-900 relative">
                         ≈ {prediction.estimatedDistrictRank.toLocaleString()}
@@ -872,7 +868,7 @@ export default function AdmissionPredictorView() {
                         <Globe className="w-10 h-10 text-amber-900" />
                       </div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 leading-tight relative">
-                        Island rank
+                        දිවයින් අනුමාන ස්ථානය
                       </p>
                       <p className="text-sm font-black text-slate-900 relative">
                         ≈ {prediction.estimatedIslandRank.toLocaleString()}
@@ -888,21 +884,18 @@ export default function AdmissionPredictorView() {
                           SFT
                         </span>
                         <span className="text-xs font-bold text-slate-800 leading-none truncate flex-1 pl-1">
-                          Science for Technology
+                          තාක්ෂණවේදය සඳහා විද්‍යාව
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between">
                         <div>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            Score
-                          </span>
                           <div className="text-xl font-extrabold text-slate-900 leading-none">
                             {formatMark(sftMark)}
                           </div>
                         </div>
                         <div className="text-right">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            Subject Z
+                            විෂය Z අගය
                           </span>
                           <div className="text-xl font-mono font-black text-slate-700 leading-none">
                             {formatZ(sftZ)}
@@ -918,21 +911,18 @@ export default function AdmissionPredictorView() {
                           ET
                         </span>
                         <span className="text-xs font-bold text-slate-800 leading-none truncate flex-1 pl-1">
-                          Engineering Tech
+                          ඉංජිනේරු තාක්ෂණවේදය
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between">
                         <div>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            Score
-                          </span>
                           <div className="text-xl font-extrabold text-slate-900 leading-none">
                             {formatMark(etMark)}
                           </div>
                         </div>
                         <div className="text-right">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            Subject Z
+                            විෂය Z අගය
                           </span>
                           <div className="text-xl font-mono font-black text-slate-700 leading-none">
                             {formatZ(etZ)}
@@ -948,21 +938,18 @@ export default function AdmissionPredictorView() {
                           ICT
                         </span>
                         <span className="text-xs font-bold text-slate-800 leading-none truncate flex-1 pl-1">
-                          Information Tech
+                          තොරතුරු හා සන්නිවේදන තාක්ෂණය
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between">
                         <div>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            Score
-                          </span>
                           <div className="text-xl font-extrabold text-slate-900 leading-none">
                             {formatMark(ictMark)}
                           </div>
                         </div>
                         <div className="text-right">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            Subject Z
+                            විෂය Z අගය
                           </span>
                           <div className="text-xl font-mono font-black text-slate-700 leading-none">
                             {formatZ(ictZ)}
@@ -981,11 +968,8 @@ export default function AdmissionPredictorView() {
                 <div className="bg-white rounded-[1.8rem] border border-slate-200 p-6 shadow-sm space-y-6">
                   <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                     <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                      <LineChart className="w-5 h-5 text-slate-500" /> Z-Score Progress
+                      <LineChart className="w-5 h-5 text-primary-500" /> Z-Score ප්‍රගතිය
                     </h3>
-                    <div className="flex gap-3 items-center">
-                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-500">History</span>
-                    </div>
                   </div>
 
                   <div className="w-full h-80 min-h-0 min-w-0">
@@ -993,8 +977,8 @@ export default function AdmissionPredictorView() {
                       <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
                         <div className="max-w-sm">
                           <LineChart className="mx-auto mb-3 h-7 w-7 text-slate-300" />
-                          <p className="text-sm font-bold text-slate-700">Your predictor history starts here</p>
-                          <p className="mt-1 text-xs leading-5 text-slate-500">Complete syllabus lessons and this chart will retain each real progress snapshot.</p>
+                          <p className="text-sm font-bold text-slate-700">ප්‍රගති ඉතිහාසය මෙතැනින් ආරම්භ වේ</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">පාඩම් සම්පූර්ණ කරන විට සත්‍ය ප්‍රගති සටහන් මෙහි පෙන්වයි.</p>
                         </div>
                       </div>
                     ) : (
@@ -1064,7 +1048,7 @@ export default function AdmissionPredictorView() {
                           />
                           <Area
                             type="monotone"
-                            dataKey="Calculated Z Score"
+                            dataKey="ගණනය කළ Z අගය"
                             stroke="var(--primary-500)"
                             strokeWidth={3}
                             fillOpacity={1}
@@ -1077,7 +1061,7 @@ export default function AdmissionPredictorView() {
                             strokeWidth={2}
                             strokeDasharray="4 4"
                             label={{
-                              value: `Target: +${targetZ.toFixed(2)}`,
+                              value: `ඉලක්කය: +${targetZ.toFixed(2)}`,
                               fill: "#ec4899",
                               fontSize: 10,
                               fontWeight: 800,

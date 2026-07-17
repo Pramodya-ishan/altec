@@ -32,10 +32,7 @@ export async function retrieveEvidenceForPaperQuestion(params: {
   if (cacheSnap.exists) {
     const data = cacheSnap.data() as any;
     const gate = validateQuestionEvidence(data, { year, subject, questionNo, questionType });
-    const method = String(data.extractionMethod || "");
-    const fullPaperVerified = data.fullPaperScan === true
-      || ["gemini_direct_pdf_qa", "gemini_targeted_legacy_page", "full_paper_ocr_scan", "full_paper_index_scan"].includes(method);
-    if (gate.ok && Number(data.evidenceVersion || 0) >= 4 && fullPaperVerified) {
+    if (gate.ok) {
       return { ok: true, evidence: data as QuestionEvidence };
     }
   }

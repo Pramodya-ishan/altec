@@ -79,6 +79,19 @@ export function resolveAnswerPolicy(
     };
   }
 
+  if (["selected_resource_discussion", "continue_grounded_discussion"].includes(route?.mode)) {
+    return {
+      intent: "continue_grounded_discussion",
+      allowSources: true,
+      allowedSourceTypes: ["uploaded_pdf", "past_paper", "marking_scheme", "syllabus", "notes"],
+      requireEvidence: true,
+      allowVisuals: /diagram|graph|වගුව|රූප|සටහන/i.test(prompt),
+      maxAnswerStyle: "exam_style",
+      shouldUseStudentContext: false,
+      shouldUseSyllabus: false,
+    };
+  }
+
   // 1. Official paper intent first (with Sinhala keywords)
   const isOfficialPaper = (p.includes("mcq") || p.includes("essay") || p.includes("structured") || p.includes("q") || p.includes("prashna") || p.includes("ප්‍රශ්න") || p.includes("marking scheme") || p.includes("answer") || p.includes("පිළිතුරු")) && p.match(/\b(201\d|202\d)\b/) || route?.mode === "paper_question_qa";
   if (isOfficialPaper) {

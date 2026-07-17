@@ -70,7 +70,7 @@ voiceRoutes.post("/live-turn", async (req, res) => {
     }
 
     // Call Gemini to generate answer using fallback model router
-    let systemInstruction = "You are Clora X, a helpful AI tutor for Sri Lankan students. Answer concisely and conversationally in Sinhala.";
+    let systemInstruction = "You are the Tec A/L study assistant for Sri Lankan students. Answer concisely, naturally and conversationally in Sinhala Unicode. Never invent unsupported facts or sources.";
     let aiTask: "normal_chat" | "direct_pdf_solve" = "normal_chat";
 
     if (mode === "live_pdf_answer") {

@@ -138,35 +138,17 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
 
   let db: any = null;
   if (tests.adminInitialized) {
-    const usesApplicationDefault = dbInfo.credentialMode === "application_default";
-    const runsOnGoogleInfrastructure = Boolean(
-      process.env.K_SERVICE || process.env.FUNCTION_TARGET || process.env.GAE_SERVICE,
-    );
-
-    // Vercel and ordinary local processes do not provide Google ADC. Trying
-    // applicationDefault() there starts metadata detection which can reject
-    // outside the request lifecycle. Report the configuration problem as JSON
-    // instead of risking a FUNCTION_INVOCATION_FAILED process termination.
-    if (usesApplicationDefault && !runsOnGoogleInfrastructure) {
+    try {
+      db = getAdminDb();
+    } catch (err: any) {
       errors.push({
         test: "getAdminDb",
-        code: "GOOGLE_CREDENTIALS_NOT_CONFIGURED",
-        message: "Google service-account credentials are not configured.",
-        hint: "Set GOOGLE_APPLICATION_CREDENTIALS_JSON to the complete service-account JSON.",
+        code: "FIRESTORE_GET_DB_FAILED",
+        message: err.message,
+        hint: err.message.includes("CONFIG_ERROR_FIRESTORE_DATABASE_ID_MISSING")
+          ? "FIRESTORE_DATABASE_ID environment variable is missing."
+          : "Firestore database retrieval failed."
       });
-    } else {
-      try {
-        db = getAdminDb();
-      } catch (err: any) {
-        errors.push({
-          test: "getAdminDb",
-          code: "FIRESTORE_GET_DB_FAILED",
-          message: err.message,
-          hint: err.message.includes("CONFIG_ERROR_FIRESTORE_DATABASE_ID_MISSING")
-            ? "FIRESTORE_DATABASE_ID environment variable is missing."
-            : "Firestore database retrieval failed."
-        });
-      }
     }
   }
 
@@ -347,9 +329,9 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
   // OCR health check validation
   let ocrAvailable = false;
   let ocrLastError: string | null = null;
-  const isOcrEnabled = process.env.ENABLE_CLOUD_VISION_OCR === "true";
-  const ocrInputBucket = process.env.VISION_OCR_INPUT_BUCKET || "al-ai-chat-ocr-input";
-  const ocrOutputBucket = process.env.VISION_OCR_OUTPUT_BUCKET || "al-ai-chat-ocr-output";
+  const isOcrEnabled = process.env.ENABLE_CLOUD_VISION_OCR === "true" || process.env.OCR_ENABLED === "true";
+  const ocrInputBucket = process.env.VISION_OCR_INPUT_BUCKET || process.env.OCR_INPUT_BUCKET || "al-ai-chat-ocr-input";
+  const ocrOutputBucket = process.env.VISION_OCR_OUTPUT_BUCKET || process.env.OCR_OUTPUT_BUCKET || "al-ai-chat-ocr-output";
 
   if (isOcrEnabled) {
     try {

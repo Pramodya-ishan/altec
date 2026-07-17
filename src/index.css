@@ -5,8 +5,8 @@
 
 
 @theme {
-  --font-sans: "Noto Sans Sinhala", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Noto Sans Sinhala", "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", "Noto Sans Sinhala", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", "Noto Sans Sinhala", ui-sans-serif, system-ui, sans-serif;
   --color-primary-50: var(--primary-50);
   --color-primary-100: var(--primary-100);
   --color-primary-200: var(--primary-200);
@@ -27,7 +27,7 @@
 :root {
   --app-bg: #ffffff;
   --app-surface: #ffffff;
-  --app-surface-soft: #ffffff;
+  --app-surface-soft: #f8fafc;
   --app-text: #0f172a;
   --app-muted: #64748b;
   --app-border: #e2e8f0;
@@ -215,17 +215,11 @@ html, body, #root {
 body {
   background: var(--app-bg);
   color: var(--app-text);
-  font-family: "Noto Sans Sinhala", Inter, system-ui, sans-serif;
+  font-family: Inter, "Noto Sans Sinhala", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
   overflow-x: hidden;
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
-}
-
-button, input, textarea, select {
-  font: inherit;
 }
 
 body::-webkit-scrollbar { width: 7px; }

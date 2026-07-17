@@ -1,42 +1,12 @@
 import { apiFetch } from "./api";
 import type { UploadProgressSnapshot, UploadTaskControls } from "./clientStorageUpload";
 
-const DEFAULT_CHUNK_SIZE = 64 * 1024 * 1024;
-const MAX_UPLOAD_ATTEMPTS = 5;
+const DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024;
 
 function chooseChunkSize(fileSize: number) {
-  if (fileSize >= 1024 * 1024 * 1024) return 256 * 1024 * 1024;
-  if (fileSize >= 256 * 1024 * 1024) return 128 * 1024 * 1024;
+  if (fileSize >= 1024 * 1024 * 1024) return 32 * 1024 * 1024;
+  if (fileSize >= 256 * 1024 * 1024) return 16 * 1024 * 1024;
   return DEFAULT_CHUNK_SIZE;
-}
-
-function wait(ms: number) {
-  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
-}
-
-function isRetryableUploadStatus(status: number) {
-  return status === 0 || status === 408 || status === 429 || status >= 500;
-}
-
-function nextOffsetFromRange(value: string | null) {
-  const end = Number(value?.match(/bytes=\d+-(\d+)/i)?.[1] || NaN);
-  return Number.isFinite(end) ? end + 1 : null;
-}
-
-/** Ask GCS how many bytes survived a dropped connection. */
-async function queryCommittedOffset(uploadUrl: string, totalBytes: number) {
-  return await new Promise<number | null>((resolve) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", uploadUrl, true);
-    xhr.setRequestHeader("Content-Range", `bytes */${totalBytes}`);
-    xhr.onload = () => {
-      if (xhr.status === 200 || xhr.status === 201) return resolve(totalBytes);
-      if (xhr.status === 308) return resolve(nextOffsetFromRange(xhr.getResponseHeader("Range")) || 0);
-      resolve(null);
-    };
-    xhr.onerror = () => resolve(null);
-    xhr.send();
-  });
 }
 
 type VideoMetadata = {
@@ -160,60 +130,39 @@ async function uploadResumableFile(params: {
     const chunk = file.slice(offset, endExclusive);
     const startOffset = offset;
 
-    let uploaded = false;
-    let attempt = 0;
-    while (!uploaded) {
-      attempt += 1;
-      try {
-        const committedOffset = await new Promise<number>((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          activeRequest = xhr;
-          xhr.open("PUT", uploadUrl, true);
-          xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
-          xhr.setRequestHeader(
-            "Content-Range",
-            `bytes ${startOffset}-${endExclusive - 1}/${file.size}`,
-          );
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      activeRequest = xhr;
+      xhr.open("PUT", uploadUrl, true);
+      xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+      xhr.setRequestHeader(
+        "Content-Range",
+        `bytes ${startOffset}-${endExclusive - 1}/${file.size}`,
+      );
 
-          xhr.upload.onprogress = (event) => {
-            const transferred = Math.min(file.size, startOffset + event.loaded);
-            onProgress?.({
-              bytesTransferred: transferred,
-              totalBytes: file.size,
-              progress: file.size ? transferred / file.size : 0,
-              state: paused ? "paused" : "running",
-            });
-          };
-          xhr.onerror = () => reject(Object.assign(new Error("Video upload network error"), { status: 0 }));
-          xhr.onabort = () => {
-            if (canceled) reject(new DOMException("Upload canceled", "AbortError"));
-            else reject(Object.assign(new Error("Video upload interrupted"), { status: 0 }));
-          };
-          xhr.onload = () => {
-            if (xhr.status === 200 || xhr.status === 201) resolve(file.size);
-            else if (xhr.status === 308) resolve(nextOffsetFromRange(xhr.getResponseHeader("Range")) || endExclusive);
-            else reject(Object.assign(new Error(`Video upload failed (${xhr.status})`), { status: xhr.status }));
-          };
-          xhr.send(chunk);
+      xhr.upload.onprogress = (event) => {
+        const transferred = Math.min(file.size, startOffset + event.loaded);
+        onProgress?.({
+          bytesTransferred: transferred,
+          totalBytes: file.size,
+          progress: file.size ? transferred / file.size : 0,
+          state: paused ? "paused" : "running",
         });
-        offset = Math.max(offset, Math.min(file.size, committedOffset));
-        uploaded = true;
-      } catch (error: any) {
-        if (canceled || error?.name === "AbortError") throw error;
-        if (attempt >= MAX_UPLOAD_ATTEMPTS || !isRetryableUploadStatus(Number(error?.status || 0))) throw error;
-        const committedOffset = await queryCommittedOffset(uploadUrl, file.size);
-        if (committedOffset !== null && committedOffset > offset) {
-          offset = Math.min(file.size, committedOffset);
-          uploaded = true;
-          break;
-        }
-        await wait(Math.min(8_000, 500 * (2 ** (attempt - 1))) + Math.round(Math.random() * 250));
-      }
-    }
+      };
+      xhr.onerror = () => reject(new Error("Video upload network error"));
+      xhr.onabort = () => {
+        if (canceled) reject(new DOMException("Upload canceled", "AbortError"));
+        else reject(new Error("Video upload interrupted"));
+      };
+      xhr.onload = () => {
+        if (xhr.status === 200 || xhr.status === 201 || xhr.status === 308) resolve();
+        else reject(new Error(`Video upload failed (${xhr.status})`));
+      };
+      xhr.send(chunk);
+    });
 
     activeRequest = null;
-    // A successful 308 response tells us the exact server-committed byte.
-    // Never blindly resend or skip bytes after a partial network failure.
+    offset = endExclusive;
     onProgress?.({
       bytesTransferred: offset,
       totalBytes: file.size,

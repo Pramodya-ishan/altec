@@ -177,7 +177,7 @@ export function RealtimeLiveCallPanel({
         token: tokenData.token,
         model: tokenData.model,
         systemInstruction: `
-You are Clora X, a Sinhala-first Sri Lankan G.C.E. A/L Technology live voice tutor.
+You are the Sinhala-first Tec A/L live voice tutor for Sri Lankan G.C.E. A/L Technology students.
 
 Rules:
 - Speak naturally and helpfully in Sinhala (mixed with English tech terms).
@@ -296,9 +296,9 @@ Rules:
               <Sparkles className="w-8 h-8 text-indigo-600" />
             </div>
             <div>
-              <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Gemini Live Voice</h2>
+              <h2 className="text-2xl font-bold text-slate-900 tracking-tight">සජීවී කටහඬ සාකච්ඡාව</h2>
               <p className="text-sm text-slate-500 mt-2 leading-relaxed">
-                Clora X සමඟ සජීවීව කටහඬින් සාකච්ඡා කරන්න. පාඩම් කරුණු, ගණනය කිරීම් සහ ගැටළු සෘජුවම විමසන්න.
+                Tec A/L සමඟ කටහඬින් සාකච්ඡා කරන්න. පාඩම් කරුණු, ගණනය කිරීම් සහ ගැටළු සෘජුවම විමසන්න.
               </p>
             </div>
             <button
@@ -306,7 +306,7 @@ Rules:
               className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl transition-all shadow-md hover:shadow-lg active:scale-95 flex items-center justify-center gap-2.5 cursor-pointer text-base"
             >
               <Play className="w-5 h-5 fill-current" />
-              Start Voice Call
+              සාකච්ඡාව අරඹන්න
             </button>
           </motion.div>
         )}
@@ -315,8 +315,8 @@ Rules:
         {status === "connecting" && (
           <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-10 shadow-xl border border-slate-200/80 text-center w-full flex flex-col items-center gap-6">
             <Loader2 className="w-12 h-12 animate-spin text-indigo-600" />
-            <p className="text-lg font-semibold tracking-tight text-slate-700">Connecting to Gemini Live...</p>
-            <p className="text-xs text-slate-400">Microphone සහ Server සම්බන්ධතාවය තහවුරු කරමින් පවතී</p>
+            <p className="text-lg font-semibold tracking-tight text-slate-700">සජීවී කටහඬ සේවාවට සම්බන්ධ වෙමින්…</p>
+            <p className="text-xs text-slate-400">මයික්‍රෆෝනය සහ සේවාදායක සම්බන්ධතාවය තහවුරු කරමින් පවතී</p>
           </motion.div>
         )}
 
@@ -332,10 +332,10 @@ Rules:
             </div>
             <div className="flex gap-3 w-full">
               <button onClick={handleStartCall} className="flex-1 py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-bold rounded-xl transition-all cursor-pointer text-sm border border-indigo-100">
-                Retry
+                නැවත උත්සාහ කරන්න
               </button>
               <button onClick={endCall} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl transition-all cursor-pointer text-sm">
-                Close
+                වසන්න
               </button>
             </div>
           </motion.div>
@@ -348,15 +348,15 @@ Rules:
               <AlertCircle className="w-8 h-8" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-900">Error Occurred</h3>
+              <h3 className="text-lg font-bold text-slate-900">දෝෂයක් ඇති වුණා</h3>
               <p className="text-sm text-red-600 mt-2 leading-relaxed">{errorMsg}</p>
             </div>
             <div className="flex gap-3 w-full">
               <button onClick={handleStartCall} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all cursor-pointer text-sm shadow-md">
-                Try Again
+                නැවත උත්සාහ කරන්න
               </button>
               <button onClick={endCall} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl transition-all cursor-pointer text-sm">
-                Close
+                වසන්න
               </button>
             </div>
           </motion.div>
@@ -368,8 +368,8 @@ Rules:
             {/* Top Status */}
             <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full shadow-sm">
               <Sparkles className="w-4 h-4 text-emerald-600" />
-              <span className="text-xs font-bold tracking-wide">Gemini Connected</span>
-              {activeSourceId && <span className="ml-2 px-2 py-0.5 bg-indigo-500/10 text-indigo-700 text-[10px] font-extrabold rounded-md border border-indigo-100">Context Linked</span>}
+              <span className="text-xs font-bold tracking-wide">සජීවී සේවාව සම්බන්ධයි</span>
+              {activeSourceId && <span className="ml-2 px-2 py-0.5 bg-indigo-500/10 text-indigo-700 text-[10px] font-extrabold rounded-md border border-indigo-100">මූලාශ්‍රය සම්බන්ධයි</span>}
             </div>
 
             {/* Center Orb (Visualizer Placeholder) */}

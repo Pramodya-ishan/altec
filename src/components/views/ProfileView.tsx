@@ -114,10 +114,6 @@ export default function ProfileView() {
  const [showRawEditor, setShowRawEditor] = useState(false);
  const [rawJsonData, setRawJsonData] = useState('');
  const [rawEditorStatus, setRawEditorStatus] = useState('');
- const googleProfilePicture = user?.picture || '';
- const displayedPicture = profile?.picture && !profile.picture.includes('api.dicebear.com')
-   ? profile.picture
-   : googleProfilePicture || profile?.picture || PRESET_AVATARS[0];
 
  // Local storage telemetry metric states
  const [storageUsage, setStorageUsage] = useState<number | null>(null);
@@ -461,7 +457,7 @@ export default function ProfileView() {
  <div className="relative group mb-5">
  <div className="absolute inset-0 bg-primary-500 rounded-full blur-sm opacity-20 scale-105 group-hover:opacity-30 transition-opacity" />
  <img
- src={displayedPicture}
+ src={profile?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profile?.username || 'LocalStudent')}`}
  alt="Avatar"
  className="w-28 h-28 rounded-full border-4 border-white shadow-md relative z-10 bg-slate-50 object-cover"
  referrerPolicy="no-referrer"
@@ -568,25 +564,9 @@ export default function ProfileView() {
 
  <div className="mb-5">
  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">
- Profile photo
+ Choose Preset Avatar to upload avatar
  </label>
  <div className="flex flex-wrap gap-2.5 mb-3">
- {googleProfilePicture && (
- <button
- type="button"
- onClick={() => {
- setEditPicture(googleProfilePicture);
- setCustomPicUrl('');
- }}
- className={cn(
- "h-12 w-12 overflow-hidden rounded-full border-2 bg-slate-50 transition-all hover:scale-105 active:scale-95",
- editPicture === googleProfilePicture && customPicUrl === '' ? "border-primary-600 shadow-sm" : "border-slate-200"
- )}
- title="Use Google account photo"
- >
- <img src={googleProfilePicture} alt="Google account" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
- </button>
- )}
  {PRESET_AVATARS.map((pic, idx) => (
  <button
  key={idx}

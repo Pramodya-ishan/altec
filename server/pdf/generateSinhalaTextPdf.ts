@@ -256,7 +256,7 @@ export async function generateSinhalaTextPdf(params: {
     </main>
 
     <footer class="footer">
-      Clora X / A.L Tech Blueprint - Sinhala-First A/L Learning Platform &copy; ${new Date().getFullYear()}
+      Tec A/L - සිංහල ප්‍රමුඛ A/L අධ්‍යයන පද්ධතිය &copy; ${new Date().getFullYear()}
     </footer>
   </div>
 </body>

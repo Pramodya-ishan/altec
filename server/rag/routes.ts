@@ -8,7 +8,6 @@ import { retryGoogleAuthOperation } from "../utils/retry";
 import multer from "multer";
 import { invalidateInventoryCache, computeIndexStatus } from "../sources/sourceInventoryService";
 import { isGeminiPdfOcrConfigured } from "../pdf/geminiPdfOcr";
-import { loadPdfSourceBuffer, validatedPdfDownloadUrl } from "../pdf/sourceBuffer";
 
 export const ragRoutes = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -99,10 +98,8 @@ ragRoutes.get("/sources/:sourceId/download", requireFirebaseUser, async (req: an
       return res.status(404).json({ ok: false, error: "Storage path not found" });
     }
     
-    const roles = Array.isArray(user?.roles) ? user.roles : [];
-    const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
-    // Owners and configured content administrators may open managed sources.
-    if (data.ownerUid !== user.uid && !privileged) {
+    // Ensure only the owner of the source document can download the file
+    if (data.ownerUid !== user.uid) {
       return res.status(403).json({ ok: false, error: "Unauthorized access to source. Only the owner of the source document can download the file." });
     }
     
@@ -161,15 +158,24 @@ ragRoutes.post("/upload", upload.single("file"), requireNonAnonymousUser, async 
 ragRoutes.get("/past-papers", requireNonAnonymousUser, async (req: any, res) => {
   try {
     const subject = normalizeSubject(String(req.query.subject || ""));
-    let query: FirebaseFirestore.Query = getAdminDb().collection("past_papers");
-    if (subject) query = query.where("subject", "==", subject);
-    const snapshot = await query.limit(200).get();
-    const papers = snapshot.docs
-      .map((doc) => ({ id: doc.id, ...doc.data() }))
-      .sort((left: any, right: any) => String(right.updatedAt || right.createdAt || "").localeCompare(String(left.updatedAt || left.createdAt || "")));
-    res.json({ ok: true, papers });
+    const snapshot = await getAdminDb()
+      .collection("past_papers")
+      .where("subject", "==", subject)
+      .limit(200)
+      .get();
+    const papers = snapshot.docs.map((document: any) => ({
+      id: document.id,
+      ...document.data(),
+    }));
+    return res.json({ ok: true, papers });
   } catch (err: any) {
-    res.status(500).json({ ok: false, code: "PAST_PAPERS_READ_FAILED", message: err.message });
+    return res.status(isPermissionError(err) ? 503 : 500).json({
+      ok: false,
+      code: isPermissionError(err) ? "FIRESTORE_ADMIN_PERMISSION_DENIED" : "PAST_PAPERS_LIST_FAILED",
+      message: isPermissionError(err)
+        ? "Server Firebase අවසර සැකසුම නිවැරදි කරන්න."
+        : (err?.message || "ප්‍රශ්න පත්‍ර ලබාගත නොහැකි වුණා."),
+    });
   }
 });
 
@@ -189,7 +195,6 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
       sourceType,
       sourceScope,
       storagePath,
-      downloadUrl,
       chunkCount,
       needsOcr,
       createdAt,
@@ -220,7 +225,6 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
       sourceType: sourceType || resourceType || "past_paper",
       sourceScope: sourceScope || "past_paper",
       storagePath: storagePath || null,
-      downloadUrl: storagePath ? (validatedPdfDownloadUrl(downloadUrl, storagePath) || existing.downloadUrl || null) : null,
       ownerUid: req.user.uid,
       ownerEmail: req.user.email || "unknown",
       uploaded: true,
@@ -458,7 +462,7 @@ ragRoutes.delete("/sources/:sourceId", requireNonAnonymousUser, async (req: any,
 ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUser, async (req: any, res) => {
   try {
     const user = req.user;
-    const { sourceId, pages, mode = "auto", downloadUrl } = req.body;
+    const { sourceId, pages, mode = "auto" } = req.body;
     
     if (!sourceId) {
       return res.status(400).json({ ok: false, error: "Missing sourceId." });
@@ -509,30 +513,20 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
     let isOcrFailed = false;
 
     let pdfData: Buffer | null = null;
-    let pdfLoadError: any = null;
     if (req.file) {
       pdfData = req.file.buffer;
     } else if (!pages && sourceData?.storagePath) {
       try {
-        const loaded = await loadPdfSourceBuffer({
-          source: sourceData,
-          storagePath: sourceData.storagePath,
-          submittedDownloadUrl: downloadUrl,
-        });
-        pdfData = loaded.buffer;
+        const bucket = getAdminBucket();
+        const file = bucket.file(sourceData.storagePath);
+        const [exists] = await file.exists();
+        if (exists) {
+          const [buffer] = await retryGoogleAuthOperation("fileDownload", async () => await file.download());
+          pdfData = buffer;
+        }
       } catch (err: any) {
         console.error("Failed to download PDF from storage for reindexing:", err);
-        pdfLoadError = err;
       }
-    }
-
-    if (!pdfData && !pages && pdfLoadError) {
-      return res.status(424).json({
-        ok: false,
-        code: pdfLoadError.code || "DIRECT_QA_SOURCE_DOWNLOAD_FAILED",
-        error: "The PDF could not be read from its verified Firebase URL or Admin Storage.",
-        message: "PDF source එක download කරන්න බැරි වුණා. File එක නැවත upload කළොත් original File එකෙන් index කරයි.",
-      });
     }
 
     // 2. Either process newly uploaded/downloaded file OR use passed-in pages array

@@ -1,34 +1,5 @@
 import { getAdminDb } from "../firebase/admin";
 
-
-export interface PaperMcqQuizSession {
-  active: boolean;
-  sourceId: string;
-  storagePath?: string | null;
-  downloadUrl?: string | null;
-  title?: string | null;
-  year: string;
-  subject: string;
-  questionType: "MCQ";
-  startQuestionNo: number;
-  endQuestionNo: number;
-  currentQuestionNo: number;
-  awaitingAnswer: boolean;
-  expectedOptionNo?: string | null;
-  expectedOptionText?: string | null;
-  questionText?: string | null;
-  options?: string[];
-  explanationSinhala?: string | null;
-  lesson?: string | null;
-  pageNumber?: number | null;
-  correctCount: number;
-  wrongCount: number;
-  skippedCount: number;
-  answeredCount: number;
-  startedAt: string;
-  updatedAt: string;
-}
-
 export interface ConversationState {
   uid: string;
   conversationId: string;
@@ -42,7 +13,6 @@ export interface ConversationState {
   evidenceMode: "strict" | "relaxed" | "none";
   allowGeneratedContent: boolean;
   lastIntent: string | null;
-  quizSession?: PaperMcqQuizSession | null;
   updatedAt: string;
 }
 

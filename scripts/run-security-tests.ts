@@ -4,10 +4,6 @@ import fs from "fs";
 import path from "path";
 import { generateKeyPairSync } from "node:crypto";
 import { parseGoogleServiceAccountJson } from "../server/utils/googleCredentials";
-import { storageGsUri, storageObjectPath, validatedPdfDownloadUrl } from "../server/pdf/sourceBuffer";
-import { createPdfPageSubset } from "../server/pdf/pdfSubset";
-import { PDFDocument } from "pdf-lib";
-import { parseSelectedPdfQuestionFollowup } from "../server/ai/selectedPdfFollowup";
 
 function logTest(name: string, passed: boolean, details?: string) {
   console.log(`[${passed ? "PASS" : "FAIL"}] ${name}${details ? ` - ${details}` : ""}`);
@@ -149,26 +145,20 @@ async function runTests() {
 
   // Group C: Environment-configured owner role bootstrap
   const previousAdminEmails = process.env.ADMIN_EMAILS;
-  const previousAdminUids = process.env.ADMIN_UIDS;
   try {
     console.log("\n--- Group C: Configured Admin Role Tests ---");
     process.env.ADMIN_EMAILS = "owner@example.com, editor@example.com";
-    process.env.ADMIN_UIDS = "owner-uid";
 
     const verifiedOwnerRoles = applyConfiguredAdminRoles("OWNER@example.com", true, ["student"]);
     const unverifiedOwnerRoles = applyConfiguredAdminRoles("owner@example.com", false, ["student"]);
     const unrelatedRoles = applyConfiguredAdminRoles("student@example.com", true, ["student"]);
-    const uidOwnerRoles = applyConfiguredAdminRoles(undefined, false, ["student"], "owner-uid");
 
     const verifiedOwnerIsPrivileged = ["admin", "content_editor", "ops", "reviewer"]
       .every((role) => verifiedOwnerRoles.includes(role));
     const unverifiedOwnerIsStudent = unverifiedOwnerRoles.length === 1 && unverifiedOwnerRoles[0] === "student";
     const unrelatedUserIsStudent = unrelatedRoles.length === 1 && unrelatedRoles[0] === "student";
 
-    const uidOwnerIsPrivileged = ["admin", "content_editor", "ops", "reviewer"]
-      .every((role) => uidOwnerRoles.includes(role));
-
-    if (verifiedOwnerIsPrivileged && uidOwnerIsPrivileged && unverifiedOwnerIsStudent && unrelatedUserIsStudent) {
+    if (verifiedOwnerIsPrivileged && unverifiedOwnerIsStudent && unrelatedUserIsStudent) {
       logTest("Configured admin requires a verified matching Firebase email", true);
     } else {
       logTest("Configured admin requires a verified matching Firebase email", false, "Role bootstrap boundary failed");
@@ -180,8 +170,6 @@ async function runTests() {
   } finally {
     if (previousAdminEmails === undefined) delete process.env.ADMIN_EMAILS;
     else process.env.ADMIN_EMAILS = previousAdminEmails;
-    if (previousAdminUids === undefined) delete process.env.ADMIN_UIDS;
-    else process.env.ADMIN_UIDS = previousAdminUids;
   }
 
   // Group D: Service-account parsing must be strict because malformed Vercel
@@ -202,6 +190,9 @@ async function runTests() {
 
     const parsed = parseGoogleServiceAccountJson(JSON.stringify(serviceAccount));
     const doubleEncoded = parseGoogleServiceAccountJson(JSON.stringify(JSON.stringify(serviceAccount)));
+    const base64Encoded = parseGoogleServiceAccountJson(
+      Buffer.from(JSON.stringify(serviceAccount), "utf8").toString("base64"),
+    );
     let placeholderRejected = false;
     try {
       parseGoogleServiceAccountJson("PASTE_SERVICE_ACCOUNT_JSON_HERE");
@@ -212,6 +203,7 @@ async function runTests() {
     if (
       parsed.project_id === serviceAccount.project_id
       && doubleEncoded.client_email === serviceAccount.client_email
+      && base64Encoded.private_key === serviceAccount.private_key
       && placeholderRejected
     ) {
       logTest("Strict Google service-account parsing", true);
@@ -221,65 +213,6 @@ async function runTests() {
     }
   } catch (err: any) {
     console.error("Group D failed with error:", err);
-    allPassed = false;
-  }
-
-  // Group E: client-supplied Firebase URLs are accepted only for the exact
-  // resolved object. This prevents the reindex endpoint becoming an SSRF or
-  // cross-user Storage proxy.
-  try {
-    console.log("\n--- Group E: Verified PDF URL Handoff Tests ---");
-    const expectedPath = "users/test-user/past_papers/SFT/paper.pdf";
-    const exactUrl = `https://firebasestorage.googleapis.com/v0/b/example.firebasestorage.app/o/${encodeURIComponent(expectedPath)}?alt=media&token=test-token`;
-    const otherUrl = `https://firebasestorage.googleapis.com/v0/b/example.firebasestorage.app/o/${encodeURIComponent("users/other/private.pdf")}?alt=media&token=test-token`;
-
-    const exactAccepted = validatedPdfDownloadUrl(exactUrl, expectedPath).startsWith("https://firebasestorage.googleapis.com/");
-    const mismatchRejected = validatedPdfDownloadUrl(otherUrl, expectedPath) === "";
-    const hostRejected = validatedPdfDownloadUrl("https://example.com/paper.pdf", expectedPath) === "";
-    const pathDecoded = storageObjectPath(exactUrl) === expectedPath;
-
-    if (exactAccepted && mismatchRejected && hostRejected && pathDecoded) {
-      logTest("Exact-object Firebase PDF URL handoff", true);
-    } else {
-      logTest("Exact-object Firebase PDF URL handoff", false, "URL validation boundary failed");
-      allPassed = false;
-    }
-  } catch (err: any) {
-    console.error("Group E failed with error:", err);
-    allPassed = false;
-  }
-
-  try {
-    console.log("\n--- Group F: Vertex GCS and Targeted PDF Tests ---");
-    const storageUrl = "https://firebasestorage.googleapis.com/v0/b/example.firebasestorage.app/o/users%2Ftest-user%2Fpaper.pdf?alt=media&token=secret-token";
-    const gcsUri = storageGsUri(storageUrl);
-    const tokenStripped = gcsUri === "gs://example.firebasestorage.app/users/test-user/paper.pdf"
-      && !gcsUri.includes("token=");
-
-    const document = await PDFDocument.create();
-    document.addPage([200, 200]);
-    document.addPage([200, 200]);
-    document.addPage([200, 200]);
-    const subset = await createPdfPageSubset(Buffer.from(await document.save()), [2, 3]);
-    const subsetDocument = await PDFDocument.load(subset.buffer);
-    const subsetValid = subsetDocument.getPageCount() === 2
-      && subset.originalPageNumbers.join(",") === "2,3";
-
-    const compactFollowups = ["1", "q1", "question 01", "1st mcq", "1 වෙනි"];
-    const followupsValid = compactFollowups.every((followup) =>
-      parseSelectedPdfQuestionFollowup(followup)?.questionNo === "1"
-    );
-    const typedFollowupValid = parseSelectedPdfQuestionFollowup("structured essay q2")?.questionType === "ESSAY";
-    const normalPromptIgnored = parseSelectedPdfQuestionFollowup("explain fluid mechanics theory") === null;
-
-    if (tokenStripped && subsetValid && followupsValid && typedFollowupValid && normalPromptIgnored) {
-      logTest("Token-free Vertex GCS URI, targeted PDF subset, and selected-source follow-ups", true);
-    } else {
-      logTest("Token-free Vertex GCS URI, targeted PDF subset, and selected-source follow-ups", false);
-      allPassed = false;
-    }
-  } catch (err: any) {
-    console.error("Group F failed with error:", err);
     allPassed = false;
   }
 

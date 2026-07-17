@@ -160,7 +160,7 @@ export function TopNav() {
               className="absolute left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden divide-y divide-slate-100 origin-top">
               {filteredResults.length === 0 ? (
                 <div className="p-3 text-center text-xs font-medium text-slate-400">
-                  No matching syllabus topics found.
+                  ගැළපෙන පාඩමක් හමු නොවුණි.
                 </div>
               ) : (
                 filteredResults.map((item, idx) => (
@@ -300,7 +300,7 @@ export function TopNav() {
               onClick={() => window.dispatchEvent(new CustomEvent('clora:new-chat'))}
               className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
             >
-              <Plus className="h-4 w-4" /> New chat
+              <Plus className="h-4 w-4" /> නව සංවාදය
             </button>
           ) : (
           <div className="flex items-center gap-3">
@@ -315,7 +315,7 @@ export function TopNav() {
               title="User Account Menu"
             >
               <img
-                src={profile?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profile?.username || 'LocalStudent')}`}
+                src={profile?.picture || user?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profile?.username || user?.email || 'LocalStudent')}`}
                 alt="Profile"
                 className="w-full h-full object-cover"
                 referrerPolicy="no-referrer"
@@ -338,7 +338,7 @@ export function TopNav() {
                   
                   <div className="flex items-center gap-3 px-3 py-3 mb-1 border-b border-slate-100/80 bg-slate-50/50 rounded-t-xl">
                     <img
-                      src={profile?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profile?.username || 'LocalStudent')}`}
+                      src={profile?.picture || user?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(profile?.username || user?.email || 'LocalStudent')}`}
                       alt="Profile"
                       className="w-10 h-10 rounded-full bg-slate-200 object-cover shadow-sm ring-2 ring-white"
                       referrerPolicy="no-referrer"

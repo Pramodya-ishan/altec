@@ -29,7 +29,6 @@ export type KnowledgeRouterResult = {
     | "marking_scheme_request"
     | "lesson_marks_intent"
     | "pdf_inventory_request"
-    | "past_paper_analysis"
     | "zscore_prediction";
 
   entities: {
@@ -67,40 +66,6 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
   const lower = prompt.toLowerCase();
   const lessonReference = resolveLessonReference(prompt);
 
-  // Multi-paper trend/guessing requests must never be treated as a literal
-  // lesson-PDF filename search. They use the exam intelligence pipeline and
-  // all accessible, relevant paper indexes.
-  const isPredictionRequest = /\b(?:guess|guessing|prediction|predict|likely|forecast)\b|අනුමාන|අපේක්ෂිත|පුරෝකථන/i.test(lower);
-  const isExamPrediction = isPredictionRequest && (
-    lower.includes("paper") || lower.includes("mcq") || lower.includes("essay") ||
-    lower.includes("විභාග") || lower.includes("ප්‍රශ්න පත්‍ර") || /\b20\d{2}\b/.test(lower)
-  );
-
-  if (isExamPrediction) {
-    let predictionSubject: "SFT" | "ET" | "ICT" | undefined;
-    if (/\bsft\b|science for technology|තාක්ෂණවේදය සඳහා විද්(?:‍ය|ය)ාව/i.test(lower)) predictionSubject = "SFT";
-    else if (/\bict\b|information and communication|තොරතුරු හා සන්නිවේදන/i.test(lower)) predictionSubject = "ICT";
-    else if (/\bet\b|engineering technology|ඉංජිනේරු තාක්ෂණවේදය/i.test(lower)) predictionSubject = "ET";
-    else if (["SFT", "ET", "ICT"].includes(String(activeSubject || "").toUpperCase())) predictionSubject = String(activeSubject).toUpperCase() as any;
-
-    return {
-      mode: "past_paper_analysis",
-      entities: {
-        subject: predictionSubject,
-        year: lower.match(/\b(20\d{2})\b/)?.[1],
-        paperType: lower.includes("mcq") ? "mcq" : lower.includes("essay") ? "essay" : "unknown",
-        needsClarification: !predictionSubject,
-        clarificationQuestion: !predictionSubject ? "2026 prediction එක හදන්න subject එක කියන්න: SFT, ET, නැත්නම් ICT?" : undefined,
-      },
-      answerHints: {
-        mustUseRag: true,
-        mustUseGoogleSearch: false,
-        mustUseUrlContext: false,
-        mustAskClarification: !predictionSubject,
-      },
-    };
-  }
-
   // PDF Inventory request check
   const isPdfInventory = lower.includes("give all pdfs") ||
     lower.includes("all pdfs") ||
@@ -118,16 +83,10 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
     lower.includes("tika ko");
   
   if (isPdfInventory) {
-    let inventorySubject: "SFT" | "ET" | "ICT" | undefined;
-    if (/\bsft\b|science for technology|තාක්ෂණවේදය සඳහා විද්(?:‍ය|ය)ාව/i.test(lower)) inventorySubject = "SFT";
-    else if (/\bict\b|information and communication|තොරතුරු හා සන්නිවේදන/i.test(lower)) inventorySubject = "ICT";
-    else if (/\bet\b|engineering technology|ඉංජිනේරු තාක්ෂණවේදය/i.test(lower)) inventorySubject = "ET";
-    else if (["SFT", "ET", "ICT"].includes(String(activeSubject || "").toUpperCase())) inventorySubject = String(activeSubject).toUpperCase() as any;
-
     return {
       mode: "pdf_inventory_request" as any,
       entities: {
-        subject: inventorySubject,
+        subject: activeSubject as any,
       },
       answerHints: {
         mustUseRag: true,
@@ -229,14 +188,11 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
   // 4. Extract Question Number
   let questionNo: string | undefined = undefined;
   const mcqMatch = lower.match(/\bmcq\s*[-_]?\s*(\d+)\b/);
-  const numberBeforeMcqMatch = lower.match(/\b(\d{1,2})\s*(?:(?:වෙනි|වැනි|weni|th|st|nd|rd)\s*)?mcq\b/i);
   const qMatch = lower.match(/\b(?:q|question)\s*[-_]?\s*(\d+)\b/);
   const sinhalaNoMatch = lower.match(/\b(\d+)\s*(?:වෙනි|වැනි|th|st|nd|rd)\b/i);
 
   if (mcqMatch) {
     questionNo = parseInt(mcqMatch[1]).toString();
-  } else if (numberBeforeMcqMatch) {
-    questionNo = parseInt(numberBeforeMcqMatch[1]).toString();
   } else if (qMatch) {
     questionNo = parseInt(qMatch[1]).toString();
   } else if (sinhalaNoMatch) {
@@ -391,10 +347,10 @@ export async function routeKnowledgeRequest({
       entities: deterministic.entities as any,
       contextBlocks: [],
       answerHints: {
-        mustUseGoogleSearch: deterministic.answerHints?.mustUseGoogleSearch ?? deterministic.mode === "web_search",
-        mustUseUrlContext: deterministic.answerHints?.mustUseUrlContext ?? false,
-        mustUseRag: deterministic.answerHints?.mustUseRag ?? true,
-        mustAskClarification: deterministic.answerHints?.mustAskClarification ?? false,
+        mustUseGoogleSearch: deterministic.mode === "web_search",
+        mustUseUrlContext: false,
+        mustUseRag: true,
+        mustAskClarification: false,
       }
     };
   }

@@ -4,8 +4,6 @@ import { useApp } from '../../context/AppContext';
 import { cn } from '../../lib/utils';
 import Markdown from 'react-markdown';
 import { useAIWorkflowStream } from '../../hooks/useAIWorkflowStream';
-import { AIWorkflowStatus } from '../ai/AIWorkflowStatus';
-import { SafeReasoningSummary } from '../ai/SafeReasoningSummary';
 import { apiFetch } from '../../lib/api';
 import { apiUrl } from '../../lib/apiBase';
 import { getRecommendedUploadMode } from '../../lib/uploadMode';
@@ -57,7 +55,6 @@ import { TtsComposerModal } from '../chat/TtsComposerModal';
 import { RealtimeLiveCallPanel } from '../ui/clora/RealtimeLiveCallPanel';
 import { VoiceAudioCard } from '../chat/VoiceAudioCard';
 import { parseChatCommand } from '../../lib/chatCommandParser';
-import { cleanAssistantResponse } from '../../../shared/text/assistantText';
 
 function generateUUID() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -95,118 +92,6 @@ function mergeMessages(existing: any[], incoming: any[]) {
   return result;
 }
 
-
-function ThoughtProcessPanel({ msg, isStreamingActive, status, tools }: any) {
-  const [expanded, setExpanded] = useState(false);
-
-  // Auto-expand while streaming, collapse when done
-  useEffect(() => {
-    if (isStreamingActive) setExpanded(true);
-  }, [isStreamingActive]);
-
-  // If there's no summary, no sources, and not streaming, hide completely
-  if (!isStreamingActive && !msg.summary?.length && !msg.sources?.length) return null;
-
-  return (
-    <div className="flex flex-col gap-2 mb-3 max-w-full">
-      <div className="flex flex-wrap items-center gap-2">
-        <AIWorkflowStatus
-          status={isStreamingActive && status ? status : { stage: 'done', label: 'Reasoning Process' }}
-          onClick={() => setExpanded(!expanded)}
-        />
-      </div>
-
-      <AnimatePresence>
-        {expanded && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="overflow-hidden"
-          >
-            <div className="p-3 sm:p-4 bg-slate-50 border border-slate-200/60 rounded-xl sm:rounded-2xl mt-1 space-y-3 sm:space-y-4 shadow-inner text-sm sm:text-base">
-              {msg.sources && msg.sources.length > 0 && (
-                <div className="space-y-2">
-                  <h4 className="text-[10px] font-black text-slate-500/80 uppercase tracking-widest flex items-center gap-1.5 border-b border-slate-200/40 pb-1">
-                    <Database className="w-3 h-3 text-slate-400" />
-                    Mapped Sources
-                  </h4>
-                  <div className="flex flex-wrap gap-1.5 sm:gap-2.5">
-                    {msg.sources.filter((s: any) => s.usedInAnswer !== false && (s.storagePath || s.url || s.id || s.sourceId)).map((src: any, i: number) => (
-                      <button
-                        key={i}
-                        className="flex items-center gap-2.5 bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50 text-left pl-2 pr-4 py-2 rounded-xl transition-all shadow-sm group active:scale-95"
-                        onClick={() => {
-                          if (src.url) {
-                            window.open(src.url, '_blank');
-                            return;
-                          }
-                          import('../../lib/sourceActions').then(m => {
-                            m.openSourcePdf(src).catch((e: any) => {
-                              console.error('Download trigger failed:', e);
-                              if (e.message?.includes('LOGIN_REQUIRED')) {
-                                 alert('PDF open කරන්න login අවශ්‍යයි. නැවත sign in කරන්න.');
-                              } else if (e.message?.includes('storage/unauthorized')) {
-                                 alert('PDF permission denied. Storage rules / App Check / login check කරන්න.');
-                              } else if (e.message?.includes('NOT_A_PDF_RESPONSE')) {
-                                 alert('PDF වෙනුවට server error response එකක් ආවා. Source route/auth fix කරන්න.');
-                              } else if (e.message?.includes('NO_OPENABLE_PDF_SOURCE')) {
-                                 alert('මේ source එකට storagePath හෝ public URL එකක් නැහැ.');
-                              } else {
-                                 alert('Error opening PDF: ' + e.message);
-                              }
-                            });
-                          });
-                        }}
-                      >
-                        <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0 group-hover:bg-indigo-100 transition-colors border border-indigo-100/50">
-                          <Globe className="w-4 h-4 text-indigo-500" />
-                        </div>
-                        <div className="min-w-0 flex flex-col justify-center">
-                          <p className="text-xs font-bold text-slate-700 truncate max-w-[200px] leading-tight flex items-center gap-1">
-                            {src.title || src.fileName || (src.url ? new URL(src.url).hostname : "Document")}
-                          </p>
-                          {(src.subject || src.year) ? (
-                            <p className="text-[9px] font-bold text-slate-400 mt-0.5 truncate max-w-[200px]">
-                              {src.subject} {src.year ? `• ${src.year}` : ''}
-                            </p>
-                          ) : src.url && (
-                            <p className="text-[9px] font-medium text-slate-400 mt-0.5 truncate max-w-[200px]">
-                              {src.url}
-                            </p>
-                          )}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {msg.summary && msg.summary.length > 0 && (
-                <div className="space-y-2.5">
-                  <h4 className="text-[10px] font-black text-slate-500/80 uppercase tracking-widest flex items-center gap-1.5 border-b border-slate-200/40 pb-1 mt-2">
-                    <BrainCircuit className="w-3 h-3 text-slate-400" />
-                    Internal Reasoning
-                  </h4>
-                  <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm text-xs leading-relaxed text-slate-600">
-                    <SafeReasoningSummary items={msg.summary} />
-                  </div>
-                </div>
-              )}
-
-              {isStreamingActive && (!msg.summary || msg.summary.length === 0) && (
-                <div className="text-xs text-slate-400 font-medium italic pl-1 flex items-center gap-2 mt-2">
-                  <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
-                  Analyzing query...
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
 
 export default function CloraXView() {
   const { currentSubject, showNotification, user } = useApp();
@@ -687,7 +572,6 @@ const [messages, setMessages] = useState<{
         body: JSON.stringify({
           sourceId: uploaded.sourceId,
           storagePath: uploaded.storagePath,
-          downloadUrl: uploaded.downloadUrl,
           title: file.name,
           fileName: file.name,
           subject: currentSubject,
@@ -708,7 +592,6 @@ const [messages, setMessages] = useState<{
           file,
           sourceId: uploaded.sourceId,
           storagePath: uploaded.storagePath,
-          downloadUrl: uploaded.downloadUrl,
           title: file.name,
           subject: currentSubject,
           resourceType: "uploaded_pdf",
@@ -934,32 +817,6 @@ const [messages, setMessages] = useState<{
             });
           }
         },
-        onReplace: (text) => {
-
-          if (activeStreamIdRef.current !== streamId) return;
-
-          const streamBuffer = (window as any)._cloraStreamBuffer;
-
-          if (streamBuffer?.frameId != null) {
-
-            cancelAnimationFrame(streamBuffer.frameId);
-
-            streamBuffer.frameId = null;
-
-          }
-
-          if (streamBuffer) streamBuffer.text = "";
-
-          const cleanText = cleanAssistantResponse(text);
-
-          setMessages(prev =>
-
-            prev.map(m => m.id === assistantMsgId ? { ...m, content: cleanText } : m)
-
-          );
-
-        },
-
         onSources: (newSources) => {
           if (activeStreamIdRef.current !== streamId) return;
           setMessages(prev =>
@@ -1022,11 +879,10 @@ const [messages, setMessages] = useState<{
           setMessages(prev => {
             return prev.map(m => {
               if (m.id === assistantMsgId) {
-                finalContent = cleanAssistantResponse(data?.answer || m.content || "");
+                finalContent = m.content || "";
                 const hasScanFailure = data?.finishReason === "direct_pdf_qa_failed" || data?.errorCode === "AI_CLIENT_RUNTIME_ERROR" || data?.errorCode === "EXACT_QUESTION_EVIDENCE_MISSING";
                 return {
                   ...m,
-                  content: finalContent,
                   status: hasScanFailure ? "error" : (data?.completed === false ? "incomplete" : "done"),
                   paperInfo: data?.paperInfo || m.paperInfo,
                   errorCode: data?.errorCode
@@ -1091,32 +947,6 @@ const [messages, setMessages] = useState<{
            )
          );
        },
-       onReplace: (text) => {
-
-         if (activeStreamIdRef.current !== streamId) return;
-
-         const streamBuffer = (window as any)._cloraStreamBuffer;
-
-         if (streamBuffer?.frameId != null) {
-
-           cancelAnimationFrame(streamBuffer.frameId);
-
-           streamBuffer.frameId = null;
-
-         }
-
-         if (streamBuffer) streamBuffer.text = "";
-
-         const cleanText = cleanAssistantResponse(text);
-
-         setMessages(prev =>
-
-           prev.map(m => m.id === assistantMsgId ? { ...m, content: cleanText } : m)
-
-         );
-
-       },
-
        onSources: (newSources) => {
          if (activeStreamIdRef.current !== streamId) return;
          setMessages(prev =>
@@ -1168,8 +998,8 @@ const [messages, setMessages] = useState<{
          setMessages(prev => {
            return prev.map(m => {
              if (m.id === assistantMsgId) {
-               finalContent = cleanAssistantResponse(data?.answer || m.content || "");
-               return { ...m, content: finalContent, status: data?.completed === false ? "incomplete" : "done" };
+               finalContent = m.content || "";
+               return { ...m, status: data?.completed === false ? "incomplete" : "done" };
              }
              return m;
            });
@@ -1372,32 +1202,6 @@ const [messages, setMessages] = useState<{
             )
           );
         },
-        onReplace: (text) => {
-
-          if (activeStreamIdRef.current !== streamId) return;
-
-          const streamBuffer = (window as any)._cloraStreamBuffer;
-
-          if (streamBuffer?.frameId != null) {
-
-            cancelAnimationFrame(streamBuffer.frameId);
-
-            streamBuffer.frameId = null;
-
-          }
-
-          if (streamBuffer) streamBuffer.text = "";
-
-          const cleanText = cleanAssistantResponse(text);
-
-          setMessages(prev =>
-
-            prev.map(m => m.id === assistantMsgId ? { ...m, content: cleanText } : m)
-
-          );
-
-        },
-
         onSources: (newSources) => {
           if (activeStreamIdRef.current !== streamId) return;
           setMessages(prev =>
@@ -1481,11 +1285,10 @@ const [messages, setMessages] = useState<{
           setMessages(prev => {
             return prev.map(m => {
               if (m.id === assistantMsgId) {
-                finalContent = cleanAssistantResponse(data?.answer || m.content || "");
+                finalContent = m.content || "";
                 const hasScanFailure = data?.finishReason === "direct_pdf_qa_failed" || data?.errorCode === "AI_CLIENT_RUNTIME_ERROR" || data?.errorCode === "EXACT_QUESTION_EVIDENCE_MISSING";
                 return {
                   ...m,
-                  content: finalContent,
                   status: hasScanFailure ? "error" : (data?.completed === false ? "incomplete" : "done"),
                   paperInfo: data?.paperInfo || m.paperInfo,
                   errorCode: data?.errorCode
@@ -1566,7 +1369,7 @@ const [messages, setMessages] = useState<{
                 isOpen={pdfModalOpen}
                 onClose={() => setPdfModalOpen(false)}
                 pdfUrl={pdfModalUrl}
-                title="Source Document"
+                title="මූලාශ්‍ර ලේඛනය"
               />
             </React.Suspense>
           )}
@@ -1574,7 +1377,7 @@ const [messages, setMessages] = useState<{
              isOpen={showTtsModal}
              onClose={() => setShowTtsModal(false)}
             onComplete={(url) => {
-              setMessages(prev => [...prev, { role: 'assistant', content: 'Generated Voice Audio', id: generateUUID(), audioUrl: url }]);
+              setMessages(prev => [...prev, { role: 'assistant', content: 'හඬ පිළිතුර සූදානම්.', id: generateUUID(), audioUrl: url }]);
             }}
           />
           <RealtimeLiveCallPanel
@@ -1592,10 +1395,10 @@ const [messages, setMessages] = useState<{
                   setInput(prompt);
                 }}
                 prompts={[
-                  { title: "2023 Paper Structure", icon: <FileText className="h-4 w-4"/>, prompt: "What is the structure of the 2023 SFT paper?" },
-                  { title: "Explain Z-Score", icon: <BrainCircuit className="h-4 w-4"/>, prompt: "How is the Z-score calculated in A/L exams?" },
-                  { title: "Review Mistakes", icon: <CheckCircle className="h-4 w-4"/>, prompt: "Can you quiz me on my recent mistakes?" },
-                  { title: "Summarize Notes", icon: <Database className="h-4 w-4"/>, prompt: "Provide a short summary on SFT main units." }
+                  { title: "2023 පත්‍ර ව්‍යුහය", icon: <FileText className="h-4 w-4"/>, prompt: "2023 SFT ප්‍රශ්න පත්‍රයේ ව්‍යුහය පැහැදිලි කරන්න." },
+                  { title: "Z-Score පැහැදිලි කිරීම", icon: <BrainCircuit className="h-4 w-4"/>, prompt: "A/L Z-Score එක ගණනය කරන ආකාරය සරලව පැහැදිලි කරන්න." },
+                  { title: "වැරදි නැවත බලමු", icon: <CheckCircle className="h-4 w-4"/>, prompt: "මගේ මෑත වැරදි අනුව කෙටි ප්‍රශ්න කිහිපයක් අහන්න." },
+                  { title: "සටහන් සාරාංශය", icon: <Database className="h-4 w-4"/>, prompt: "SFT ප්‍රධාන ඒකකවල කෙටි සාරාංශයක් දෙන්න." }
                 ]}
               />
             ) : (
@@ -1630,11 +1433,9 @@ const [messages, setMessages] = useState<{
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.95 }}
                 onClick={() => scrollToBottom('smooth')}
-                aria-label="Scroll to latest message"
-                title="Scroll to latest message"
-                className="absolute bottom-36 left-1/2 z-30 inline-flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-lg font-semibold leading-none text-slate-700 shadow-lg transition-colors hover:bg-slate-50"
+                className="absolute bottom-36 left-1/2 z-30 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg transition-colors hover:bg-slate-50"
               >
-                ↓
+                අලුත් පිළිතුර ↓
               </motion.button>
             )}
           </AnimatePresence>

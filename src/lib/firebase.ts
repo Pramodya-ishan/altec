@@ -1,11 +1,11 @@
 import { getApp, getApps, initializeApp } from 'firebase/app';
 import { browserLocalPersistence, getAuth, setPersistence } from 'firebase/auth';
-import { getFirestore, initializeFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
+import { initializeFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { initializeAppCheck, ReCaptchaV3Provider, getToken } from 'firebase/app-check';
 import localConfig from '../../firebase-applet-config.json';
 
-const configuredFirebaseConfig = {
+const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
@@ -15,24 +15,19 @@ const configuredFirebaseConfig = {
   firestoreDatabaseId: import.meta.env.VITE_FIRESTORE_DATABASE_ID,
 };
 
-const selectedConfig = (configuredFirebaseConfig.apiKey && configuredFirebaseConfig.apiKey.trim() !== "")
-  ? configuredFirebaseConfig
-  : localConfig;
-
-// Use Firebase's provisioned auth handler by default. Pointing authDomain at a
-// Vercel hostname without registering the exact /__/auth/handler URI in the
-// Google OAuth client causes the redirect_uri_mismatch shown by Google.
-// A custom auth domain is opt-in only after it has been configured in Firebase
-// Hosting and Google Cloud OAuth settings.
-const projectId = selectedConfig.projectId || localConfig.projectId;
-const defaultFirebaseAuthDomain = projectId ? `${projectId}.firebaseapp.com` : selectedConfig.authDomain;
-const useCustomAuthDomain = String(import.meta.env.VITE_FIREBASE_USE_CUSTOM_AUTH_DOMAIN || "").toLowerCase() === "true";
-const configuredAuthDomain = String(selectedConfig.authDomain || "").trim();
+const configuredFirebase = (firebaseConfig.apiKey && firebaseConfig.apiKey.trim() !== "") ? firebaseConfig : localConfig;
+// Firebase popup auth needs the handler and the application to share an
+// origin when the default firebaseapp.com Hosting site is not provisioned.
+// Vercel proxies /__/auth/* to Firebase below, so production can safely use
+// the real application domain and retain IndexedDB auth persistence.
+const configuredAuthDomain = String(configuredFirebase.authDomain || '')
+  .replace(/^https?:\/\//i, '')
+  .replace(/\/+$/, '');
 const activeConfig = {
-  ...selectedConfig,
-  authDomain: useCustomAuthDomain && configuredAuthDomain
-    ? configuredAuthDomain
-    : defaultFirebaseAuthDomain,
+  ...configuredFirebase,
+  authDomain: typeof window !== "undefined" && window.location.hostname === "tecal.vercel.app"
+    ? "tecal.vercel.app"
+    : configuredAuthDomain,
 };
 
 let firebaseApp: any = null;
@@ -41,10 +36,7 @@ let auth: any = null;
 let storage: any = null;
 let appCheck: any = null;
 let isFirebaseEnabled = false;
-let resolveAuthPersistence: () => void = () => {};
-export const authPersistenceReady = new Promise<void>((resolve) => {
-  resolveAuthPersistence = resolve;
-});
+let authPersistenceReady: Promise<void> = Promise.resolve();
 
 if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
   try {
@@ -55,9 +47,9 @@ if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
     }, dbId);
 
     auth = getAuth(firebaseApp);
-    void setPersistence(auth, browserLocalPersistence)
-      .catch((error) => console.warn('Firebase auth persistence could not be enabled', error))
-      .finally(resolveAuthPersistence);
+    authPersistenceReady = setPersistence(auth, browserLocalPersistence).catch((error) => {
+      console.warn('Firebase local auth persistence could not be enabled', error);
+    });
     storage = getStorage(firebaseApp);
     storage.maxOperationRetryTime = 2000;
     storage.maxUploadRetryTime = 5000;
@@ -73,11 +65,9 @@ if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
       console.info("Firebase client initialized successfully.");
     }
   } catch (error) {
-    resolveAuthPersistence();
     console.error("Failed to initialize Firebase:", error);
   }
 } else {
-  resolveAuthPersistence();
   console.info("Firebase API Key is missing. Operating in client-server DB file synchronization mode.");
 }
 
@@ -92,7 +82,7 @@ export async function getFirebaseAppCheckToken(): Promise<string | null> {
   }
 }
 
-export { firebaseApp, db, auth, storage, appCheck, isFirebaseEnabled };
+export { firebaseApp, db, auth, storage, appCheck, isFirebaseEnabled, authPersistenceReady };
 
 // Standardized Firestore error logger as specified in SKILL.md
 export enum OperationType {

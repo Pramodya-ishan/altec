@@ -2,38 +2,6 @@ import { getDownloadURL, ref } from "firebase/storage";
 import { auth, storage } from "./firebase";
 import { apiUrl as resolveApiUrl } from "./apiBase";
 
-const storagePdfCache = new Map<string, { url: string; expiresAt: number }>();
-const storagePdfRequests = new Map<string, Promise<string>>();
-const STORAGE_PDF_CACHE_MS = 10 * 60 * 1000;
-
-async function getStoragePdfUrl(storagePath: string) {
-  const cached = storagePdfCache.get(storagePath);
-  if (cached && cached.expiresAt > Date.now()) return cached.url;
-  storagePdfCache.delete(storagePath);
-
-  const pending = storagePdfRequests.get(storagePath);
-  if (pending) return pending;
-
-  const request = getDownloadURL(ref(storage, storagePath))
-    .then((url) => {
-      storagePdfCache.set(storagePath, { url, expiresAt: Date.now() + STORAGE_PDF_CACHE_MS });
-      return url;
-    })
-    .finally(() => storagePdfRequests.delete(storagePath));
-  storagePdfRequests.set(storagePath, request);
-  return request;
-}
-
-export async function prefetchSourcePdf(source: any) {
-  if (!source?.storagePath) return null;
-  try {
-    return await getStoragePdfUrl(source.storagePath);
-  } catch (error) {
-    if (import.meta.env.DEV) console.warn("[pdf-prefetch] URL unavailable", source.storagePath, error);
-    return null;
-  }
-}
-
 export async function getAuthTokenOrThrow() {
   const user = auth.currentUser;
   if (!user || user.isAnonymous) {
@@ -45,7 +13,7 @@ export async function getAuthTokenOrThrow() {
 export async function openFirebaseStoragePdf(storagePath: string) {
   if (!storagePath) throw new Error("MISSING_STORAGE_PATH");
 
-  const url = await getStoragePdfUrl(storagePath);
+  const url = await getDownloadURL(ref(storage, storagePath));
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
@@ -86,7 +54,7 @@ export async function openSourcePdf(source: any) {
 
   if (source.storagePath) {
     try {
-      const url = await getStoragePdfUrl(source.storagePath);
+      const url = await getDownloadURL(ref(storage, source.storagePath));
       window.open(url, "_blank", "noopener,noreferrer");
       return;
     } catch (e: any) {
@@ -118,7 +86,7 @@ export async function getPdfUrl(source: any): Promise<string> {
   if (!source) throw new Error("MISSING_SOURCE");
   if (source.storagePath) {
     try {
-      const url = await getStoragePdfUrl(source.storagePath);
+      const url = await getDownloadURL(ref(storage, source.storagePath));
       return url;
     } catch (e: any) {
       console.error("Failed to get Firebase Storage PDF url:", e);

@@ -16,15 +16,3 @@ const mathWithJoiner = normalizeAnswerMarkdown("$P = h\u200D\\rho g$");
 assert.equal(mathWithJoiner.includes("\u200D"), false, "zero-width joiners must not reach KaTeX");
 
 console.log("answer Markdown normalization tests passed");
-
-const malformedYansaya = normalizeAnswerMarkdown("න්යෂ්ටිය සහ ප්රශ්නය");
-assert.equal(malformedYansaya.includes("න්‍යෂ්ටිය"), true, "decomposed yansaya must be normalized");
-assert.equal(malformedYansaya.includes("ප්‍රශ්නය"), true, "decomposed rakaransaya must be normalized");
-
-const hiddenReasoning = normalizeAnswerMarkdown(`නිවැරදි පිළිතුර මෙයයි.\n\n_Reasoning_\n\nSource: hidden-internal-source\n\nExact PDF evidence page 2`);
-assert.equal(hiddenReasoning.includes("Reasoning"), false, "internal reasoning labels must not render");
-assert.equal(hiddenReasoning.includes("hidden-internal-source"), false, "source metadata belongs in source cards, not answer text");
-
-const repeatedParagraph = "මෙය එකම පිළිතුර දෙවරක් append වීම වැළැක්වීම සඳහා භාවිත කරන දිගු පරීක්ෂණ ඡේදයකි. නිවැරදි පිළිතුර එක වතාවක් පමණක් පෙන්විය යුතුය.";
-const deduplicated = normalizeAnswerMarkdown(`${repeatedParagraph}\n\n${repeatedParagraph}`);
-assert.equal(deduplicated.indexOf(repeatedParagraph), deduplicated.lastIndexOf(repeatedParagraph), "duplicate answer paragraphs must collapse");

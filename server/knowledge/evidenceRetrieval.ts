@@ -69,12 +69,18 @@ export async function retrieveEvidence(
       prompt
     });
     
-    if (intent === "continue_grounded_discussion" && activeConversationState?.selectedSourceId) {
-      selectedSource = allAvailableSources.find(s => s.id === activeConversationState.selectedSourceId || s.sourceId === activeConversationState.selectedSourceId);
+    const activeSourceId = route.entities?.activeSourceId
+      || activeConversationState?.selectedSourceId
+      || activeConversationState?.activeSourceIds?.[0];
+    if (["continue_grounded_discussion", "official_paper_question"].includes(intent) && activeSourceId) {
+      selectedSource = allAvailableSources.find(s => s.id === activeSourceId || s.sourceId === activeSourceId);
       if (selectedSource) {
-        evidenceStatus = "verified";
+        const hasIndex = selectedSource.textIndexed === true || Number(selectedSource.chunkCount || 0) > 0;
+        evidenceStatus = hasIndex
+          ? "verified"
+          : (selectedSource.needsOcr ? "ocr_required" : "index_required");
         allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
-        allowAnswerGeneration = true;
+        allowAnswerGeneration = hasIndex;
       }
     }
     if (strictRes.selectedSource) {

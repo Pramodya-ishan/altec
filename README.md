@@ -51,11 +51,3 @@ For production builds:
 npm run build
 npm run start
 ```
-
-## 300-feature platform catalog
-
-The project includes a typed catalog for all 300 requested capabilities. Admins
-can review it at `/feature-center`, while APIs expose capability and health
-status under `/api/platform`. Delivery states are `available`, `foundation`,
-and `planned`; see `docs/IMPLEMENTATION_STATUS_20260716.md` for the verified
-status and the newly added PDF intelligence, learning and reliability services.

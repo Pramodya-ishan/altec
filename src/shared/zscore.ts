@@ -127,8 +127,8 @@ export function buildPracticeZSnapshot(appData: any): PracticeZSnapshot {
     subjects,
     reliability,
     message: complete
-      ? "Practice estimate from actual saved paper totals. Official exam cohort statistics are not available."
-      : "Your Exam Score Predictor estimate will become more stable as you add marks and lesson progress.",
+      ? "සුරැකි ප්‍රශ්න පත්‍ර ලකුණු මත ගණනය කළ පුහුණු ඇස්තමේන්තුවකි. නිල විභාග කණ්ඩායමේ මධ්‍යන්‍යය සහ සම්මත අපගමනය මෙහි භාවිතා කර නැහැ."
+      : "SFT, ET සහ ICT සඳහා සුරැකි ප්‍රශ්න පත්‍ර ලකුණු එක් කළ විට පුහුණු Z-Score ඇස්තමේන්තුව පෙන්වයි.",
   };
 }
 

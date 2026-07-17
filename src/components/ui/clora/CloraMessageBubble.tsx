@@ -59,12 +59,12 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
       transition={{ duration: isStreaming ? 0 : 0.2 }}
       className="group mb-9 flex w-full justify-start px-4 sm:px-6"
     >
-      <div className="w-full">
-        <div className="min-w-0 space-y-4">
+      <div className="flex w-full gap-3 sm:gap-4">
+        <div className="min-w-0 flex-1 space-y-4">
           {message.status && (message.status === 'streaming' || message.status === 'searching') && (
             <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500">
               <Loader2 className="h-3 w-3 animate-spin" />
-              {message.status === 'searching' ? 'Checking sources' : 'Preparing answer'}
+              {message.status === 'searching' ? 'මූලාශ්‍ර සොයමින්' : 'පිළිතුර සකස් කරමින්'}
             </div>
           )}
 
@@ -87,16 +87,16 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
           {!isStreaming && (message.content || message.sources?.length > 0) && (
             <div className="flex items-center gap-1 pt-1 text-slate-400 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
               {message.content && (
-                <button type="button" onClick={copyMessage} className="rounded-lg p-2 hover:bg-slate-100 hover:text-slate-700" aria-label="Copy answer" title="Copy answer">
+                <button type="button" onClick={copyMessage} className="rounded-lg p-2 hover:bg-slate-100 hover:text-slate-700" aria-label="පිළිතුර copy කරන්න" title="පිළිතුර copy කරන්න">
                   {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                 </button>
               )}
               {message.sources?.length > 0 && (
                 <button type="button" onClick={() => onToolClick?.('sources')} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium hover:bg-slate-100 hover:text-slate-700">
-                  <FileText className="h-4 w-4" /> {message.sources.length} sources
+                  <FileText className="h-4 w-4" /> මූලාශ්‍ර {message.sources.length}
                 </button>
               )}
-              {message.status === 'done' && <CheckCircle2 className="ml-1 h-3.5 w-3.5 text-emerald-500" aria-label="Answer complete" />}
+              {message.status === 'done' && <CheckCircle2 className="ml-1 h-3.5 w-3.5 text-emerald-500" aria-label="පිළිතුර සම්පූර්ණයි" />}
             </div>
           )}
         </div>

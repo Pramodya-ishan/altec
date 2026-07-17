@@ -19,9 +19,10 @@ let visionClient: ImageAnnotatorClient | null = null;
 
 function getVisionClient(): ImageAnnotatorClient {
   if (!visionClient) {
-    const isEnabled = process.env.ENABLE_CLOUD_VISION_OCR === "true";
+    const isEnabled = process.env.ENABLE_CLOUD_VISION_OCR === "true"
+      || process.env.OCR_ENABLED === "true";
     if (!isEnabled) {
-      throw new Error("Cloud Vision OCR is not enabled (ENABLE_CLOUD_VISION_OCR is not true).");
+      throw new Error("Cloud Vision OCR is not enabled (ENABLE_CLOUD_VISION_OCR/OCR_ENABLED is not true).");
     }
     // Automatically picks up credentials via ADC (Application Default Credentials)
     visionClient = new ImageAnnotatorClient();
@@ -42,8 +43,12 @@ export async function runCloudVisionPdfOcr(params: {
 }> {
   const { sourceId, uid, buffer, languageHints = ["si", "en"] } = params;
 
-  const inputBucketName = process.env.VISION_OCR_INPUT_BUCKET || "al-ai-chat-ocr-input";
-  const outputBucketName = process.env.VISION_OCR_OUTPUT_BUCKET || "al-ai-chat-ocr-output";
+  const inputBucketName = process.env.VISION_OCR_INPUT_BUCKET
+    || process.env.OCR_INPUT_BUCKET
+    || "al-ai-chat-ocr-input";
+  const outputBucketName = process.env.VISION_OCR_OUTPUT_BUCKET
+    || process.env.OCR_OUTPUT_BUCKET
+    || "al-ai-chat-ocr-output";
 
   const client = getVisionClient();
   const storage = getAdminStorage();
@@ -209,7 +214,9 @@ export async function checkOcrJobStatus(sourceId: string): Promise<{
 }
 
 async function parseOcrOutputFromGcs(sourceId: string): Promise<OcrFullResult> {
-  const outputBucketName = process.env.VISION_OCR_OUTPUT_BUCKET || "al-ai-chat-ocr-output";
+  const outputBucketName = process.env.VISION_OCR_OUTPUT_BUCKET
+    || process.env.OCR_OUTPUT_BUCKET
+    || "al-ai-chat-ocr-output";
   const storage = getAdminStorage();
   const outputBucket = storage.bucket(outputBucketName);
 

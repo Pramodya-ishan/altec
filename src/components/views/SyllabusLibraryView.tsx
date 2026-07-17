@@ -13,8 +13,6 @@ import { cn } from '../../lib/utils';
 import { openSourcePdf, getPdfUrl } from '../../lib/sourceActions';
 const PdfViewerModal = React.lazy(() => import('../PdfViewerModal').then(m => ({ default: m.PdfViewerModal })));
 
-const MAX_INLINE_REINDEX_BYTES = 20 * 1024 * 1024;
-
 export default function SyllabusLibraryView() {
   const [resources, setResources] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,38 +32,20 @@ export default function SyllabusLibraryView() {
   const [pdfModalOpen, setPdfModalOpen] = useState(false);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pdfTitle, setPdfTitle] = useState("");
-  const [checkingAccess, setCheckingAccess] = useState(true);
 
   const { profile } = useApp();
 
   useEffect(() => {
-    let active = true;
-    const resolveAccess = async () => {
-      setCheckingAccess(true);
-      const localRoles = [profile?.role, ...(profile?.roles || [])].filter(Boolean);
-      let allowed = localRoles.some((role) => ['admin', 'teacher', 'content_editor', 'ops'].includes(String(role)));
-
-      try {
-        const response = await apiFetch('/api/auth/context');
-        const context = await response.json().catch(() => null);
-        const serverRoles = Array.isArray(context?.roles) ? context.roles : [];
-        allowed = response.ok && (
-          context?.capabilities?.canUploadVideo === true
-          || serverRoles.some((role: string) => ['admin', 'content_editor', 'ops'].includes(role))
-        );
-      } catch {
-        // Keep the profile-role result when the context endpoint is temporarily unavailable.
-      }
-
-      if (!active) return;
-      setIsOwner(allowed);
-      setCheckingAccess(false);
-      if (allowed) await fetchResources();
-      else setLoading(false);
-    };
-
-    void resolveAccess();
-    return () => { active = false; };
+    const isSyllabusEditor = profile?.role === 'admin' || profile?.roles?.includes('admin') ||
+                             profile?.role === 'teacher' || profile?.roles?.includes('teacher') ||
+                             profile?.role === 'content_editor' || profile?.roles?.includes('content_editor');
+    if (isSyllabusEditor) {
+      setIsOwner(true);
+      fetchResources();
+    } else {
+      setIsOwner(false);
+      setLoading(false);
+    }
   }, [profile]);
 
   const fetchResources = async () => {
@@ -107,7 +87,6 @@ export default function SyllabusLibraryView() {
         body: JSON.stringify({
           sourceId: uploaded.sourceId,
           storagePath: uploaded.storagePath,
-          downloadUrl: uploaded.downloadUrl,
           title: form.title || file.name,
           fileName: file.name,
           subject: form.subject,
@@ -116,8 +95,7 @@ export default function SyllabusLibraryView() {
           sourceType: form.resourceType,
           sourceScope: "owner_syllabus",
           year: form.year || "",
-          medium: form.medium || "Sinhala",
-          deferProcessing: file.size <= MAX_INLINE_REINDEX_BYTES,
+          medium: form.medium || "Sinhala"
         })
       });
 
@@ -127,28 +105,6 @@ export default function SyllabusLibraryView() {
         setUploadError(finalData?.message || finalData?.error || finalData?.code || ingestRes.statusText || "Upload ingest failed");
         setUploading(false);
         return;
-      }
-
-      // Reuse the File that is already in the browser. This avoids a second
-      // privileged Storage download and gives Direct PDF QA usable chunks
-      // immediately for normal-sized syllabus documents.
-      if (file.size <= MAX_INLINE_REINDEX_BYTES) {
-        const reindexForm = new FormData();
-        reindexForm.append('file', file);
-        reindexForm.append('sourceId', uploaded.sourceId);
-        reindexForm.append('mode', 'auto');
-        if (uploaded.downloadUrl) reindexForm.append('downloadUrl', uploaded.downloadUrl);
-
-        const reindexRes = await apiFetch('/api/rag/reindex-uploaded', {
-          method: 'POST',
-          body: reindexForm,
-        });
-        const reindexData = await reindexRes.json().catch(() => null);
-        if (reindexRes.ok && reindexData?.ok) {
-          finalData = { ...finalData, ...reindexData };
-        } else {
-          console.warn('Immediate syllabus indexing failed; the registered token URL remains available for retry.');
-        }
       }
 
       setUploadResult({
@@ -206,14 +162,6 @@ export default function SyllabusLibraryView() {
     if (activeTab === 'ALL') return resources;
     return resources.filter(r => r.subject?.toUpperCase() === activeTab);
   }, [resources, activeTab]);
-
-  if (checkingAccess) {
-    return (
-      <div className="min-h-[60vh] flex items-center justify-center" role="status" aria-label="Checking syllabus access">
-        <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
-      </div>
-    );
-  }
 
   if (!isOwner) {
     return (

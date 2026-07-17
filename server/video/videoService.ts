@@ -181,50 +181,33 @@ export async function startTranscode(video: VideoDocument) {
 }
 
 export async function refreshTranscodeStatus(video: VideoDocument): Promise<VideoDocument> {
-  const updatedAtMs = Date.parse(video.updatedAt || video.createdAt || "");
-  // A failed transcode is terminal. The original object was already validated
-  // during upload-complete, so recover it through the authenticated direct
-  // playback path even when an old Transcoder job name is still stored.
-  const failedWithoutUsableJob = video.status === "failed";
-  const uploadedWithoutActiveJob = video.status === "uploaded"
-    && !video.transcoderJobName
-    && Number.isFinite(updatedAtMs)
-    && Date.now() - updatedAtMs > 30_000;
-
-  if (
-    env.VIDEO_ALLOW_DIRECT_PLAYBACK
-    && (failedWithoutUsableJob || uploadedWithoutActiveJob)
-    && video.inputObjectPath
-  ) {
+  if (!env.ENABLE_VIDEO_TRANSCODING && video.status === "uploaded") {
     const updates = {
       status: "ready" as VideoStatus,
       isPublished: true,
       allowPlayback: true,
       playbackMode: "direct" as const,
-      transcoderErrorCode: video.status === "failed" ? "TRANSCODER_FAILED_DIRECT_RECOVERY" : undefined,
+      publishedAt: video.updatedAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    await getAdminDb().collection("videos").doc(video.id).set({
-      ...updates,
-      transcoderErrorCode: updates.transcoderErrorCode || null,
-    }, { merge: true });
-    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: updates.status, lastErrorCode: updates.transcoderErrorCode || null, updatedAt: updates.updatedAt }, { merge: true });
+    await getAdminDb().collection("videos").doc(video.id).set(updates, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "ready", updatedAt: updates.updatedAt }, { merge: true });
     return { ...video, ...updates };
   }
   if (!video.transcoderJobName || !["queued", "transcoding"].includes(video.status)) return video;
   const queuedAt = Date.parse(video.updatedAt || video.createdAt || "");
   const fallbackToDirect = async (reason: string) => {
-    const allowDirect = env.VIDEO_ALLOW_DIRECT_PLAYBACK;
     const updates = {
-      status: (allowDirect ? "ready" : "failed") as VideoStatus,
-      isPublished: allowDirect,
-      allowPlayback: allowDirect,
-      playbackMode: (allowDirect ? "direct" : "hls") as "direct" | "hls",
+      status: "ready" as VideoStatus,
+      isPublished: true,
+      allowPlayback: true,
+      playbackMode: "direct" as const,
       transcoderErrorCode: reason,
+      publishedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
     await getAdminDb().collection("videos").doc(video.id).set(updates, { merge: true });
-    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: updates.status, lastErrorCode: reason, updatedAt: updates.updatedAt }, { merge: true });
+    await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "ready", updatedAt: updates.updatedAt }, { merge: true });
     return { ...video, ...updates };
   };
 
@@ -248,17 +231,31 @@ export async function refreshTranscodeStatus(video: VideoDocument): Promise<Vide
   if (state === "FAILED") return fallbackToDirect("TRANSCODER_FAILED_DIRECT_FALLBACK");
   if (status === video.status) return video;
 
-  const updates = {
-    status,
-    allowPlayback: status === "ready" ? video.allowPlayback : false,
-    transcoderErrorCode: job.error?.code ? String(job.error.code) : undefined,
-    updatedAt: new Date().toISOString(),
-  };
+  const now = new Date().toISOString();
+  // RUNNING intentionally disables playback. Never reuse that persisted flag
+  // after SUCCEEDED; doing so left completed videos permanently hidden.
+  const updates: Partial<VideoDocument> & { publishedAt?: string } = status === "ready"
+    ? {
+        status,
+        isPublished: true,
+        allowPlayback: true,
+        playbackMode: "hls",
+        publishedAt: (video as any).publishedAt || now,
+        updatedAt: now,
+      }
+    : {
+        status,
+        allowPlayback: false,
+        updatedAt: now,
+      };
+  // Firestore rejects undefined values, so only persist this optional field
+  // when the Transcoder API actually returned one.
+  if (job.error?.code) updates.transcoderErrorCode = String(job.error.code);
   await getAdminDb().collection("videos").doc(video.id).set(updates, { merge: true });
   await getAdminDb().collection("sources").doc(video.sourceId).set({
     processingStatus: status === "ready" ? "ready" : status,
     lastErrorCode: updates.transcoderErrorCode || null,
-    updatedAt: updates.updatedAt,
+    updatedAt: now,
   }, { merge: true });
   return { ...video, ...updates };
 }
@@ -291,7 +288,10 @@ export function createSignedPlaybackCookie(video: VideoDocument) {
 
 export async function createDirectPlaybackUrl(video: VideoDocument) {
   const bucket = getAdminBucketByName(video.inputBucket);
-  const expiresAtMs = Date.now() + env.VIDEO_SESSION_TTL_SECONDS * 1000;
+  // Direct fallback lessons can be several hours long. The URL remains
+  // expiring and request-scoped, but must not expire in the middle of class.
+  const directTtlSeconds = Math.max(env.VIDEO_SESSION_TTL_SECONDS, 6 * 60 * 60);
+  const expiresAtMs = Date.now() + directTtlSeconds * 1000;
   const [url] = await bucket.file(video.inputObjectPath).getSignedUrl({
     action: "read",
     expires: expiresAtMs,

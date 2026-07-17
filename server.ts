@@ -20,8 +20,6 @@ import { pdfRoutes } from "./server/pdf/routes";
 import examIntelRoutes from "./server/routes/examIntelRoutes";
 import studentRoutes from "./server/routes/studentRoutes";
 import reportRoutes from "./server/routes/reportRoutes";
-import learningRoutes from "./server/routes/learningRoutes";
-import platformRoutes from "./server/platform/routes";
 
 
 import { ttsRoutes } from "./server/tts/routes";
@@ -29,10 +27,8 @@ import { voiceRoutes } from "./server/voice/routes";
 import { videoRoutes } from "./server/video/routes";
 
 import { globalLimiter, aiLimiter, adminLimiter } from "./server/utils/rateLimiter";
-import { requestContextMiddleware } from "./server/utils/requestContext";
 
 const app = express();
-app.use(requestContextMiddleware);
 const PORT = env.PORT;
 const videoCdnOrigin = (() => {
   try { return env.VIDEO_CDN_BASE_URL ? new URL(env.VIDEO_CDN_BASE_URL).origin : ""; }
@@ -115,29 +111,12 @@ app.use("/api", globalLimiter);
 
 // API Routes
 
-// Firebase's redirect helper requests this same-origin public configuration.
-// Only browser Firebase identifiers are returned; service-account credentials
-// and all server secrets are deliberately excluded.
-app.get("/api/firebase/init", (_req, res) => {
-  res.setHeader("Cache-Control", "public, max-age=300, s-maxage=300");
-  res.json({
-    apiKey: process.env.VITE_FIREBASE_API_KEY || "",
-    authDomain: "tecal.vercel.app",
-    projectId: process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || "",
-    storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET || "",
-    messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
-    appId: process.env.VITE_FIREBASE_APP_ID || "",
-  });
-});
-
 app.use("/api/rag", ragRoutes);
 app.use("/api/syllabus", syllabusRoutes);
 app.use("/api/pdf", pdfRoutes);
 app.use("/api/exam-intel", examIntelRoutes);
 app.use("/api/student", studentRoutes);
 app.use("/api/reports", reportRoutes);
-app.use("/api/learning", learningRoutes);
-app.use("/api/platform", platformRoutes);
 app.use("/api/tts", ttsRoutes);
 app.use("/api/voice", voiceRoutes);
 app.use("/api", videoRoutes);
@@ -477,15 +456,7 @@ app.post("/api/admin/support/data", requireFirebaseUser, requireRole("admin"), a
 });
 
 app.get("/api/quota", async (req, res) => {
-  res.json({ ok: true, rpmUsed: 0, rpmLimit: 60, rpdUsed: 0, rpdLimit: 1500 });
-});
-
-// Keep the platform liveness probe deliberately dependency-free. The richer
-// AI health endpoint is available under /api/ai/health, but must never make a
-// Vercel function liveness check depend on Firestore credentials or network
-// metadata discovery.
-app.get("/api/health", (_req, res) => {
-  res.status(200).json({ ok: true, status: "ok" });
+  res.status(501).json({ ok: false, error: "not_implemented" });
 });
 
 
@@ -619,7 +590,7 @@ app.get(["/manifest.json", "/manifest.webmanifest"], (req, res) => {
 });
 
 // Explicit PDF worker route to serve correct MIME type
-app.get(["/pdf.worker.min.mjs", "/pdf.worker.mjs", "/pdf.worker.min.js"], (req, res) => {
+app.get(["/pdf.worker.mjs", "/pdf.worker.min.mjs", "/pdf.worker.min.js"], (req, res) => {
   const file = getPublicOrDistFile(req.path.substring(1));
   if (file) {
     res.type("text/javascript");

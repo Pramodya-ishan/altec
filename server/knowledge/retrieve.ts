@@ -668,7 +668,6 @@ export async function retrieveExactPaperQuestion({
     return {
       source: null,
       chunks: [],
-      allChunks: [],
       hasExactQuestionText: false,
       badTextQuality: false,
       needsOcr: false,
@@ -677,20 +676,20 @@ export async function retrieveExactPaperQuestion({
     };
   }
 
+  const chunkCount = Number(sourceData.chunkCount || 0);
   const hasLegacyTextLayer = String(sourceData.textEncoding || "").startsWith("legacy_");
   const needsOcr = !hasLegacyTextLayer && (sourceData.needsOcr === true || sourceData.indexStatus === "needs_ocr");
   const needsLegacyConversion = sourceData.needsLegacyConversion === true || sourceData.indexStatus === "needs_legacy_conversion";
 
-  if (needsOcr) {
+  if (needsOcr || chunkCount === 0) {
     return {
       source: sourceData,
       chunks: [],
-      allChunks: [],
       hasExactQuestionText: false,
-      badTextQuality: hasLegacyTextLayer,
+      badTextQuality: false,
       needsOcr,
       needsLegacyConversion,
-      reason: "This source has no searchable text layer."
+      reason: needsOcr ? "This source has no searchable text layer." : "No searchable chunks are indexed; use direct PDF reading."
     };
   }
 
@@ -708,10 +707,7 @@ export async function retrieveExactPaperQuestion({
   // Filter chunks for exact MCQ matching
   let matchedChunks: any[] = [];
   let hasExactQuestionText = false;
-  // Legacy font-encoded text can look like valid ASCII while representing
-  // unreadable Sinhala glyph codes. Never trust it as exact question evidence;
-  // force the original-PDF path instead of letting an LLM infer a question.
-  let badTextQuality = hasLegacyTextLayer;
+  let badTextQuality = false;
 
   const numOnly = questionNo ? questionNo.replace(/\D/g, "") : "";
 
@@ -749,28 +745,6 @@ export async function retrieveExactPaperQuestion({
       if (allGarbage) {
         badTextQuality = true;
       }
-
-      // The marker and MCQ options frequently cross 1,000-character chunk
-      // boundaries. Include neighbouring chunks from the same pages so the
-      // evidence extractor sees the complete question without guessing.
-      const orderedChunks = [...chunks].sort(
-        (a, b) => Number(a.chunkIndex || 0) - Number(b.chunkIndex || 0),
-      );
-      const selectedIds = new Set(matchedChunks.map((chunk) => String(chunk.id || chunk.chunkIndex)));
-      for (const matched of [...matchedChunks]) {
-        const index = orderedChunks.findIndex((chunk) =>
-          String(chunk.id || chunk.chunkIndex) === String(matched.id || matched.chunkIndex),
-        );
-        if (index < 0) continue;
-        for (let offset = -2; offset <= 2; offset += 1) {
-          const neighbour = orderedChunks[index + offset];
-          if (!neighbour) continue;
-          const key = String(neighbour.id || neighbour.chunkIndex);
-          if (selectedIds.has(key)) continue;
-          selectedIds.add(key);
-          matchedChunks.push(neighbour);
-        }
-      }
     }
   } else {
     // If no specific questionNo, return top chunks
@@ -789,7 +763,6 @@ export async function retrieveExactPaperQuestion({
       ...sourceData
     },
     chunks: matchedChunks,
-    allChunks: chunks,
     hasExactQuestionText,
     badTextQuality,
     needsOcr,

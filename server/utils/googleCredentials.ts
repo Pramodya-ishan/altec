@@ -1,3 +1,5 @@
+import { createPrivateKey } from "node:crypto";
+
 export interface GoogleServiceAccount {
   type?: string;
   project_id: string;
@@ -90,10 +92,19 @@ export function parseGoogleServiceAccountJson(
     // one extra JSON-encoding layer around a pasted secret.
     if (typeof parsed === "string") parsed = JSON.parse(parsed);
   } catch {
-    return configurationError(
-      source,
-      "is not valid JSON; paste the entire downloaded file from the first { to the final }",
-    );
+    // Vercel CLI and some secret managers export multiline JSON as Base64.
+    // Accept that representation as well, while still validating every
+    // service-account field and the PKCS#8 key below.
+    try {
+      const decoded = Buffer.from(raw, "base64").toString("utf8").trim();
+      if (!decoded.startsWith("{")) throw new Error("not base64 JSON");
+      parsed = JSON.parse(decoded);
+    } catch {
+      return configurationError(
+        source,
+        "is not valid JSON or Base64 JSON; paste the complete downloaded service-account file",
+      );
+    }
   }
 
   return validateServiceAccountObject(parsed, source);
@@ -140,4 +151,3 @@ export function toFirebaseAdminServiceAccount(serviceAccount: GoogleServiceAccou
     privateKey: serviceAccount.private_key,
   };
 }
-import { createPrivateKey } from "node:crypto";

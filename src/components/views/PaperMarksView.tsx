@@ -13,9 +13,11 @@ export default function PaperMarksView() {
  const marks = data[currentSubject].paperMarks || [];
 
  const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
- const [chartsCollapsed, setChartsCollapsed] = useState(true);
  const [collapsedLog, setCollapsedLog] = useState(() => {
  return data.collapsedStates?.history_database ?? true;
+ });
+ const [collapsedBreakdown, setCollapsedBreakdown] = useState(() => {
+ return data.collapsedStates?.marks_breakdown ?? true;
  });
 
  React.useEffect(() => {
@@ -24,17 +26,34 @@ export default function PaperMarksView() {
  }
  }, [data.collapsedStates?.history_database]);
 
+ React.useEffect(() => {
+ if (data.collapsedStates?.marks_breakdown !== undefined) {
+ setCollapsedBreakdown(data.collapsedStates.marks_breakdown);
+ }
+ }, [data.collapsedStates?.marks_breakdown]);
+
  const toggleCollapsedLog = () => {
  const nextCollapsed = !collapsedLog;
  setCollapsedLog(nextCollapsed);
- const nextData = {
+ saveData({
  ...data,
  collapsedStates: {
  ...data.collapsedStates,
  history_database: nextCollapsed
  }
+ });
  };
- saveData(nextData);
+
+ const toggleCollapsedBreakdown = () => {
+ const nextCollapsed = !collapsedBreakdown;
+ setCollapsedBreakdown(nextCollapsed);
+ saveData({
+ ...data,
+ collapsedStates: {
+ ...data.collapsedStates,
+ marks_breakdown: nextCollapsed
+ }
+ });
  };
 
  const maxScale = 100;
@@ -53,7 +72,7 @@ export default function PaperMarksView() {
  nextData[currentSubject].paperMarks.splice(index, 1);
  saveData(nextData);
  setConfirmDeleteIdx(null);
- showNotification('Paper log deleted safely.', 'info');
+ showNotification('ලකුණු වාර්තාව ඉවත් කළා.', 'info');
  };
 
  const handleEdit = (index: number) => {
@@ -71,7 +90,7 @@ export default function PaperMarksView() {
  return (
  <p key={i} style={{ color: entry.color }} className="font-medium flex gap-2">
  <span>{entry.name}: {entry.value}</span>
- {entry.name === 'Total Marks' && dataPoint.grade && (
+ {entry.dataKey === 'total' && dataPoint.grade && (
  <span className="text-slate-300">({dataPoint.grade})</span>
  )}
  </p>
@@ -93,13 +112,13 @@ export default function PaperMarksView() {
  {/* TOTAL MARKS CHART */}
  <div className="bg-white p-6 border border-slate-200 rounded-[1.8rem] shadow-sm h-[360px] relative hover:shadow-[0_8px_30px_rgb(0,0,0,0.04)] transition-all duration-300">
  <div className="flex justify-between items-center mb-6">
- <h3 className="text-sm font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
- <div className="w-1.5 h-4 bg-primary-500 rounded-full"></div> Total Marks Progression
+ <h3 className="text-sm font-black text-slate-500 tracking-wide flex items-center gap-2">
+ <div className="w-1.5 h-4 bg-slate-700 rounded-full"></div> මුළු ලකුණු ප්‍රගතිය
  </h3>
  <button
  onClick={() => setModals(prev => ({ ...prev, addPaperMark: { open: true, editIndex: -1 } }))}
  className="bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg w-8 h-8 flex items-center justify-center transition-colors shadow-sm cursor-pointer"
- title="Add Marks"
+ title="ලකුණු එකතු කරන්න"
  >
  <i className="fa-solid fa-plus text-sm"></i>
  </button>
@@ -113,7 +132,7 @@ export default function PaperMarksView() {
  <YAxis domain={[0, maxScale]} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }} />
  <Tooltip cursor={{ stroke: '#e2e8f0', strokeWidth: 2, strokeDasharray: '4 4' }} content={<ChartTooltip />} />
  <Legend verticalAlign="top" height={36} iconType="circle" wrapperStyle={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }} />
- <Line connectNulls type="monotone" dataKey="total" name="Total Marks" stroke="var(--primary-600)" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: '#fff', strokeWidth: 2 }} activeDot={{ r: 6, stroke: '#fff', strokeWidth: 2 }} />
+ <Line connectNulls type="monotone" dataKey="total" name="මුළු ලකුණු" stroke="var(--primary-600)" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: '#fff', strokeWidth: 2 }} activeDot={{ r: 6, stroke: '#fff', strokeWidth: 2 }} />
  </LineChart>
  </ResponsiveContainer>
  </ResponsiveChartShell>
@@ -122,16 +141,28 @@ export default function PaperMarksView() {
 
  {/* SUB MARKS CHARTS */}
  <div className="overflow-hidden rounded-[1.8rem] border border-slate-200 bg-white shadow-sm">
- <button type="button" onClick={() => setChartsCollapsed((value) => !value)} className="flex w-full items-center justify-between px-6 py-5 text-left transition hover:bg-slate-50">
- <span className="text-sm font-black text-slate-800">MCQ &amp; Essay</span>
- <i className={cn("fa-solid fa-chevron-up text-xs text-slate-400 transition-transform", chartsCollapsed && "rotate-180")} />
+ <button
+ type="button"
+ onClick={toggleCollapsedBreakdown}
+ className="flex w-full items-center justify-between px-6 py-5 text-left transition-colors hover:bg-slate-50"
+ aria-expanded={!collapsedBreakdown}
+ >
+ <span className="text-sm font-black text-slate-800">MCQ සහ Essay ලකුණු විස්තර</span>
+ <i className={cn("fa-solid text-xs text-slate-400 transition-transform", collapsedBreakdown ? "fa-chevron-down" : "fa-chevron-up")}></i>
  </button>
  <AnimatePresence initial={false}>
- {!chartsCollapsed && (
- <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="grid grid-cols-1 divide-y divide-slate-100 overflow-hidden border-t border-slate-100 md:grid-cols-2 md:divide-x md:divide-y-0">
+ {!collapsedBreakdown && (
+ <motion.div
+ initial={{ height: 0, opacity: 0 }}
+ animate={{ height: "auto", opacity: 1 }}
+ exit={{ height: 0, opacity: 0 }}
+ transition={{ duration: 0.22 }}
+ className="overflow-hidden border-t border-slate-100"
+ >
+ <div className="grid grid-cols-1 divide-y divide-slate-100 md:grid-cols-2 md:divide-x md:divide-y-0">
  <div className="p-6 h-[280px] hover:bg-slate-50/50 transition-colors">
  <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
- <i className="fa-solid fa-circle text-[8px] text-amber-500"></i> MCQ Marks <span className="text-slate-300">/</span> {maxSubScale}
+ <i className="fa-solid fa-circle text-[8px] text-amber-500"></i> MCQ ලකුණු <span className="text-slate-300">/</span> {maxSubScale}
  </h3>
  <div className="w-full h-[200px]">
  <ResponsiveChartShell minHeight={200}>
@@ -149,7 +180,7 @@ export default function PaperMarksView() {
  </div>
  <div className="p-6 h-[280px] hover:bg-slate-50/50 transition-colors">
  <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
- <i className="fa-solid fa-circle text-[8px] text-emerald-500"></i> Essay Marks <span className="text-slate-300">/</span> {maxSubScale}
+ <i className="fa-solid fa-circle text-[8px] text-emerald-500"></i> රචනා ලකුණු <span className="text-slate-300">/</span> {maxSubScale}
  </h3>
  <div className="w-full h-[200px]">
  <ResponsiveChartShell minHeight={200}>
@@ -165,6 +196,7 @@ export default function PaperMarksView() {
  </ResponsiveChartShell>
  </div>
  </div>
+ </div>
  </motion.div>
  )}
  </AnimatePresence>
@@ -177,7 +209,7 @@ export default function PaperMarksView() {
  className="w-full flex justify-between items-center px-6 py-5 bg-slate-50/55 hover:bg-slate-50 border-b border-slate-100 transition-colors cursor-pointer"
  >
  <span className="text-sm font-black text-slate-800 tracking-tight flex items-center gap-2">
- <i className="fa-solid fa-clock-rotate-left text-slate-400"></i> History ({marks.length})
+ <i className="fa-solid fa-clock-rotate-left text-slate-400"></i> ඉතිහාසය ({marks.length})
  </span>
  <i className={cn("fa-solid text-xs text-slate-400 transition-transform", collapsedLog ? "fa-chevron-down" : "fa-chevron-up")}></i>
  </button>
@@ -193,20 +225,20 @@ export default function PaperMarksView() {
  >
  {marks.length === 0 ? (
  <div className="p-12 text-center text-slate-400 font-semibold text-sm">
- No past paper logs recorded yet. Click the "+" icon to get started.
+ තවම ලකුණු වාර්තා නැහැ. ආරම්භ කිරීමට “+” ලකුණ ඔබන්න.
  </div>
  ) : (
  <div className="overflow-x-auto">
  <table className="w-full text-left text-sm border-collapse">
  <thead>
  <tr className="bg-slate-50/50 border-b border-slate-100 text-[11px] font-black uppercase text-slate-400 tracking-wider">
- <th className="py-4 px-6">Exam Title</th>
+ <th className="py-4 px-6">විභාගයේ නම</th>
  <th className="py-4 px-4 text-center">MCQ ({maxSubScale})</th>
- <th className="py-4 px-4 text-center">Essay ({maxSubScale})</th>
- {currentSubject === 'et' && <th className="py-4 px-4 text-center">Practical (25)</th>}
- <th className="py-4 px-4 text-center">Total ({maxScale})</th>
- <th className="py-4 px-4 text-center">Grade</th>
- <th className="py-4 px-6 text-right">Actions</th>
+ <th className="py-4 px-4 text-center">රචනා ({maxSubScale})</th>
+ {currentSubject === 'et' && <th className="py-4 px-4 text-center">ප්‍රායෝගික (25)</th>}
+ <th className="py-4 px-4 text-center">මුළු ලකුණු ({maxScale})</th>
+ <th className="py-4 px-4 text-center">ශ්‍රේණිය</th>
+ <th className="py-4 px-6 text-right">ක්‍රියා</th>
  </tr>
  </thead>
  <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
@@ -239,16 +271,16 @@ export default function PaperMarksView() {
  <td className="py-4.5 px-6 text-right print-hide">
  {confirmDeleteIdx === idx ? (
  <div className="flex items-center justify-end gap-1.5">
- <span className="text-xs text-rose-600 font-extrabold">Delete?</span>
- <button onClick={() => confirmDelete(idx)} className="px-2 py-1 bg-rose-600 text-white text-xs font-bold rounded-lg hover:bg-rose-700 cursor-pointer">Yes</button>
- <button onClick={() => setConfirmDeleteIdx(null)} className="px-2 py-1 bg-slate-200 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-300 cursor-pointer">No</button>
+ <span className="text-xs text-rose-600 font-extrabold">ඉවත් කරන්නද?</span>
+ <button onClick={() => confirmDelete(idx)} className="px-2 py-1 bg-rose-600 text-white text-xs font-bold rounded-lg hover:bg-rose-700 cursor-pointer">ඔව්</button>
+ <button onClick={() => setConfirmDeleteIdx(null)} className="px-2 py-1 bg-slate-200 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-300 cursor-pointer">නැහැ</button>
  </div>
  ) : (
  <div className="flex items-center justify-end gap-2 text-slate-400">
  <button onClick={() => handleEdit(idx)} className="hover:text-primary-600 p-1 cursor-pointer transition-colors" title="Edit Log">
  <i className="fa-solid fa-pen-to-square"></i>
  </button>
- <button onClick={() => setConfirmDeleteIdx(idx)} className="hover:text-rose-600 p-1 cursor-pointer transition-colors" title="Delete Log">
+ <button onClick={() => setConfirmDeleteIdx(idx)} className="hover:text-rose-600 p-1 cursor-pointer transition-colors" title="වාර්තාව ඉවත් කරන්න">
  <i className="fa-solid fa-trash-can"></i>
  </button>
  </div>

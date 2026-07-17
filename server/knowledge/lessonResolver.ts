@@ -24,7 +24,7 @@ export function normalizeLessonText(value: unknown) {
     .normalize("NFKC")
     .toLowerCase()
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
-    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 }
 
