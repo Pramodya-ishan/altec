@@ -1,19 +1,22 @@
-Tec A/L production repair verification
+Tec A/L production repair V2 verification
 Date: 2026-07-17
 
-PASS  npm ci --include=dev
 PASS  npm run typecheck
 PASS  npm test
   PASS source registry and Z-score regression tests
   PASS Markdown normalization tests
   PASS source authorization tests
-  PASS authentication strategy tests
+  PASS redirect-only Firebase authentication strategy tests
   PASS PDF extraction state tests
-  PASS lesson resolver tests
+  PASS Assistant response and display hygiene tests
+  PASS Vercel nested API path restoration tests
+  PASS lesson resolver and Singlish PDF-inventory routing tests
   PASS security and configured-role tests
-  PASS content-manager permission tests
+  PASS content-manager and legacy shared-resource visibility tests
   PASS secure video tests
 PASS  npm run build:vercel
+  PASS isolated /api/pdf/direct-qa-file route smoke test
+  PASS isolated /api?__path=pdf%2Fdirect-qa-file compatibility route smoke test
 PASS  npm run verify:repair
 
 Verified runtime artifacts:
@@ -21,4 +24,6 @@ Verified runtime artifacts:
 - vercel-runtime/pdf.worker.mjs
 - vercel-runtime/google-gax-protos/
 
-Browser automation against localhost was unavailable in this sandbox, so live multi-viewport and real-account cloud acceptance tests must be performed in the preview deployment. See PRODUCTION_REPAIR_REPORT.md.
+The project was not deployed to the live Vercel project because no linked
+.vercel configuration, deployment token, or Google Cloud credentials were
+included. See PRODUCTION_REPAIR_REPORT.md.

@@ -58,19 +58,29 @@ await access(protoAssetPath);
 await access(pdfWorkerPath);
 
 const functionEntries = Object.entries(vercelConfig.functions || {});
-if (functionEntries.length !== 1 || functionEntries[0][0] !== "api/index.ts") {
-  throw new Error("Vercel must package exactly one API function (api/index.ts).");
+const expectedFunctions = new Set(["api/index.ts"]);
+if (functionEntries.length !== expectedFunctions.size || functionEntries.some(([name]) => !expectedFunctions.has(name))) {
+  throw new Error("Vercel must package one self-contained Express API function.");
 }
 
-const functionConfig = functionEntries[0][1];
-const includeFiles = Array.isArray(functionConfig.includeFiles)
-  ? functionConfig.includeFiles
-  : [functionConfig.includeFiles];
-if (!includeFiles.includes("vercel-runtime/**")) {
-  throw new Error("The Vercel API function must include every bundled runtime asset.");
+for (const [functionName, functionConfig] of functionEntries) {
+  const includeFiles = Array.isArray(functionConfig.includeFiles)
+    ? functionConfig.includeFiles
+    : [functionConfig.includeFiles];
+  if (!includeFiles.includes("vercel-runtime/**")) {
+    throw new Error(`${functionName} must include every bundled runtime asset.`);
+  }
+  if (functionConfig.excludeFiles !== "node_modules/**") {
+    throw new Error(`${functionName} must exclude node_modules after bundling.`);
+  }
 }
-if (functionConfig.excludeFiles !== "node_modules/**") {
-  throw new Error("The Vercel API function must exclude node_modules after bundling.");
+
+const apiRewrite = (vercelConfig.rewrites || []).find((rewrite) => rewrite.source === "/api/:path*");
+if (!apiRewrite || apiRewrite.destination !== "/api?__path=:path*") {
+  throw new Error("Nested API requests must be forwarded to the single Express function with the original path suffix.");
+}
+if ((vercelConfig.rewrites || []).some((rewrite) => rewrite.destination === "/api/index")) {
+  throw new Error("The legacy /api/index rewrite discards the Express route and must not return.");
 }
 
 const bundledInputs = Object.keys(metafile.inputs || {});

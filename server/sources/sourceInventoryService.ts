@@ -1,4 +1,5 @@
 import { getAdminDb } from "../firebase/admin";
+import { isStudentVisibleSource } from "../utils/contentPermissions";
 
 interface CacheEntry {
   data: any;
@@ -129,6 +130,22 @@ export async function getSourceInventory(params: {
     console.warn("Failed to query syllabus_resources for inventory", e);
   }
 
+  // D. Query authoritative shared lesson resources. These records own
+  // publication/visibility metadata while rag_sources owns extracted text.
+  let lessonResourceDocs: any[] = [];
+  try {
+    const lessonSnapshot = await db.collection("lesson_resources").get();
+    lessonResourceDocs = lessonSnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
+  } catch (e) {
+    console.warn("Failed to query lesson_resources for inventory", e);
+  }
+
+  const ragBySourceId = new Map<string, any>();
+  for (const source of ragDocs) {
+    const key = String(source.sourceId || source.id || "");
+    if (key) ragBySourceId.set(key, source);
+  }
+
   const subjectQuery = subject ? String(subject).toUpperCase() : null;
   const yearQuery = year ? String(year) : null;
   const typeQuery = resourceType ? String(resourceType).toLowerCase() : null;
@@ -156,17 +173,20 @@ export async function getSourceInventory(params: {
     // Type Filter
     if (typeQuery && normResourceType !== typeQuery) return;
 
-    // Access Filter: must be owner, or admin, or public/shared/official
-    const isOwner = src.ownerUid === uid;
-    const isPublic = ["official", "shared", "public"].includes(src.visibility);
-    if (!isOwner && !isPublic && !isAdmin) return;
+    // Access filter. Legacy administrator resources may still say
+    // visibility=private, but their shared sourceScope proves they were meant
+    // for students. Personal/chat uploads never pass isStudentVisibleSource.
+    const isOwner = src.ownerUid === uid || src.createdBy === uid;
+    const isVisibleToStudents = isStudentVisibleSource(src);
+    if (!isOwner && !isVisibleToStudents && !isAdmin) return;
+    if (String(src.processingStatus || "").toLowerCase() === "archived") return;
 
     const calcStatus = computeIndexStatus({
       chunkCount: Number(src.chunkCount || 0),
       needsOcr: src.needsOcr === true,
       needsLegacyConversion: src.needsLegacyConversion === true,
       textEncoding: src.textEncoding,
-      indexStatus: src.indexStatus
+      indexStatus: src.indexStatus || src.processingStatus
     });
 
     const hasLegacyTextLayer = String(src.textEncoding || "").startsWith("legacy_");
@@ -177,24 +197,49 @@ export async function getSourceInventory(params: {
       title: src.title || src.fileName || "Untitled PDF",
       fileName: src.fileName || src.title || "untitled.pdf",
       subject: normSubject || null,
-      lesson: src.lesson || src.topic || lessonFromStoragePath(src.storagePath) || null,
+      lesson: src.lessonTitle || src.lesson || src.topic || lessonFromStoragePath(src.storagePath) || null,
+      lessonId: src.lessonId || null,
+      lessonTitle: src.lessonTitle || src.lesson || src.topic || null,
       year: normYear || null,
       resourceType: normResourceType || "uploaded_pdf",
       sourceScope: normSourceScope || null,
       storagePath: src.storagePath || null,
-      ownerUid: src.ownerUid || null,
+      ownerUid: src.ownerUid || src.createdBy || null,
       chunkCount: Number(src.chunkCount || 0),
       needsOcr: normalizedNeedsOcr,
       needsLegacyConversion: src.needsLegacyConversion === true,
       textEncoding: src.textEncoding || "unknown",
       indexStatus: calcStatus,
+      processingStatus: src.processingStatus || calcStatus,
       visibility: src.visibility || "private",
+      published: src.published === true,
+      mediaKind: src.mediaKind || (normResourceType === "image" ? "image" : "pdf"),
+      videoId: src.videoId || null,
       sourceType: src.sourceType || normResourceType || null,
       tags: Array.isArray(src.tags) ? src.tags : [],
-      textIndexed: Number(src.chunkCount || 0) > 0 && !normalizedNeedsOcr,
+      textIndexed: src.textIndexed === true || (Number(src.chunkCount || 0) > 0 && !normalizedNeedsOcr),
       createdAt: src.createdAt || null,
     });
   }
+
+  // Process D first so shared publication metadata wins over legacy private
+  // rag_sources rows with the same sourceId.
+  lessonResourceDocs.forEach((doc: any) => {
+    const sourceId = String(doc.sourceId || doc.id || "");
+    const extracted = ragBySourceId.get(sourceId) || {};
+    addSource({
+      ...extracted,
+      ...doc,
+      id: sourceId || doc.id,
+      sourceId: sourceId || doc.id,
+      indexStatus: extracted.indexStatus || doc.processingStatus,
+      chunkCount: Number(extracted.chunkCount || doc.chunkCount || 0),
+      textEncoding: extracted.textEncoding || doc.textEncoding,
+      needsLegacyConversion: extracted.needsLegacyConversion === true,
+      needsOcr: doc.needsOcr === true || extracted.needsOcr === true,
+      textIndexed: doc.textIndexed === true || extracted.textIndexed === true || Number(extracted.chunkCount || 0) > 0,
+    });
+  });
 
   // Process C (Syllabus resources)
   syllabusDocs.forEach((doc: any) => {
@@ -218,14 +263,17 @@ export async function getSourceInventory(params: {
     syllabus: [],
     paperStructure: [],
     uploadedPdfs: [],
-    images: []
+    images: [],
+    videos: []
   };
 
   allSources.forEach(src => {
     const rt = src.resourceType;
     const ss = src.sourceScope;
 
-    if (rt === "marking_scheme" || rt === "marking") {
+    if (src.mediaKind === "video") {
+      groups.videos.push(src);
+    } else if (rt === "marking_scheme" || rt === "marking") {
       groups.markingSchemes.push(src);
     } else if (rt === "syllabus" || ss === "owner_syllabus") {
       groups.syllabus.push(src);

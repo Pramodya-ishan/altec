@@ -1,33 +1,95 @@
-# Tec A/L Production Repair Report
+# Tec A/L Production Repair V2
 
-## Implemented
+Date: 2026-07-17
+Source baseline: `altec-fixed-403db97.zip`
 
-- Reworked the mobile and desktop navigation labels, safe-area bottom bar, compact top navigation, icon-only New Chat action, and mobile overflow protection.
-- Repaired the Assistant chat layout, English application chrome, message wrapping, attachment restrictions, composer spacing, and latest-answer control.
-- Rebuilt the lesson-resource modal as a mobile bottom sheet backed by authenticated server capabilities and the global `lesson_resources` collection.
-- Added server-enforced content-manager authorization for shared lesson files, past papers, OCR/reindex actions, videos, publication, deletion, and cache review.
-- Added a global lesson-resource API and migration script so published administrator content is visible to students while personal Assistant uploads remain private.
-- Rebuilt the secure video player without the white header, added direct signed playback retry handling, normalized repeated extensions, validated uploaded containers, and added a GCS CORS configuration script.
-- Repaired PDF.js packaging by copying `pdf.worker.mjs` into the Vercel runtime, explicitly configuring the worker, and separating parser failures from genuine scanned-PDF OCR states.
-- Changed scanned-PDF processing to asynchronous OCR with `202 OCR_QUEUED`, status polling, cached results, and automatic Direct PDF QA retry.
-- Reworked chart measurement to mount charts only after valid visible dimensions are available.
-- Changed Firebase Google authentication to popup on desktop and redirect on mobile/PWA, with a single in-flight auth attempt and a single redirect-result bootstrap.
-- Repaired toast deduplication, timers, queue limits, animations, and safe-area placement.
-- Tightened Firestore and Storage rules for private attachments, shared content, videos, OCR text, and cached-question review.
+## Production failures addressed
 
-## Verification completed locally
+### Vercel `API_NOT_FOUND` for Direct PDF QA
 
-The following commands completed successfully:
+The production request `POST /api/pdf/direct-qa-file` was reaching the Express API catch-all after Vercel lost the nested path. The project now deploys one Express function at `api/index.ts`, rewrites `/api/:path*` to `/api?__path=:path*`, and restores the original nested path in middleware before routers run. The browser also performs one compatible fallback request when an older deployment returns `API_NOT_FOUND`.
+
+The isolated Vercel-runtime smoke test now verifies that both of these paths reach the authenticated Direct PDF QA route rather than the API catch-all:
 
 ```text
-npm ci --include=dev
+/api/pdf/direct-qa-file
+/api?__path=pdf%2Fdirect-qa-file
+```
+
+Without a login they correctly return `401 LOGIN_REQUIRED`, proving that the route exists and authentication middleware is running.
+
+### Firebase COOP `window.closed` warnings
+
+Google login is redirect-only on every device. The application no longer imports or invokes `signInWithPopup`, so Firebase does not create or poll a popup window. Redirect results are restored once during authentication initialization, duplicate login attempts are blocked, and a temporary server-session bootstrap failure does not discard a valid Firebase user.
+
+The existing security headers remain:
+
+```text
+Cross-Origin-Opener-Policy: same-origin-allow-popups
+Cross-Origin-Embedder-Policy: unsafe-none
+```
+
+The new build also unregisters old service workers and removes prior Workbox/Clora caches so an older popup-auth JavaScript bundle is not kept after release.
+
+### Assistant greeting and internal-text leakage
+
+A simple greeting such as `hi` now receives one short response instead of a long product introduction:
+
+```text
+Hi! අද බලන්න ඕනේ පාඩම හෝ ප්‍රශ්නය මොකක්ද?
+```
+
+Server, stream, voice, saved-message, and client-display sanitizers remove hidden control tags, machine-style directives, and the reported router-light directive. The assistant prompt now requires direct answers, source-grounding, minimal filler, no tool/system traces, and natural Sinhala or Singlish matching.
+
+### PDF inventory and saved-resource logic
+
+The Singlish request:
+
+```text
+oyt answers denna puluwn pdf mond kiyl check krnn
+```
+
+is routed deterministically to the real saved-PDF inventory. A generic query checks every accessible subject unless the student explicitly names SFT, ET, or ICT.
+
+The inventory now merges:
+
+- `past_papers`
+- `rag_sources`
+- the signed-in user's syllabus resources
+- authoritative `lesson_resources`
+
+A PDF is reported as answerable when it has either a usable text index or a valid stored source file that can be sent through secure Direct PDF QA. It no longer returns the lesson-resource-missing template merely because indexed chunks are absent.
+
+Legacy administrator resources affected by the old `visibility: private` bug are safely recognized through shared scopes such as `paper_structure`, `past_paper`, `owner_syllabus`, `shared_lesson`, and `official`. Personal `chat_upload` and `personal` sources remain private. Explicitly unpublished or archived resources remain hidden.
+
+Direct PDF QA also merges `lesson_resources` publication metadata with extracted `rag_sources` data before access checks, allowing students to use published administrator PDFs without exposing another user's private files.
+
+### Sinhala Unicode display
+
+Server output, streamed text, stored replies, notifications, and rendered Assistant messages normalize common malformed conjuncts. For example:
+
+```text
+ප්රගතිය -> ප්‍රගතිය
+ප්රශ්නය -> ප්‍රශ්නය
+අධ්යයනය -> අධ්‍යයනය
+```
+
+## Previously completed production repairs retained
+
+The project also retains the mobile UI repair, English application chrome, responsive chart measurement, safe-area bottom navigation, lesson-resource capability enforcement, global shared-resource model, PDF.js worker packaging, asynchronous OCR states, secure video playback fallback, upload restrictions, notification deduplication, Firestore/Storage rule updates, migration tooling, and build-runtime checks from the first production repair.
+
+## Local verification
+
+The following commands passed after the V2 changes:
+
+```text
 npm run typecheck
 npm test
 npm run build:vercel
 npm run verify:repair
 ```
 
-Verified build output:
+Verified runtime artifacts:
 
 ```text
 vercel-runtime/server.mjs
@@ -35,27 +97,12 @@ vercel-runtime/pdf.worker.mjs
 vercel-runtime/google-gax-protos/
 ```
 
-The build completed with only Vite bundle-size warnings. The isolated Vercel runtime smoke test passed.
+The production build completed with Vite bundle-size warnings only. The isolated API runtime booted without root `node_modules`, and all tested API paths returned typed JSON responses.
 
-## External deployment operations still require project credentials
+## Deployment still required
 
-The source archive does not include a linked `.vercel` project or deployment token, and this environment cannot modify the connected Vercel environment variables or Google Cloud IAM. Before production release, apply these operations in the real project account:
+This ZIP contains the repaired source and built runtime, but it has not been promoted to `tecal.vercel.app`. The uploaded archive does not contain a linked `.vercel/project.json`, a deployment token, or Google Cloud credentials.
 
-1. Set Vercel Production, Preview, and Development variables:
+Deploy this project as a preview first, then promote it to production. Configure the OCR environment and cloud resources documented in `.env.example`, deploy `firestore.rules` and `storage.rules`, and run the lesson-resource migration once where required.
 
-```text
-OCR_ENABLED=true
-ENABLE_CLOUD_VISION_OCR=true
-OCR_INPUT_BUCKET=al-ai-chat-ocr-input
-OCR_OUTPUT_BUCKET=al-ai-chat-ocr-output
-VISION_OCR_INPUT_BUCKET=al-ai-chat-ocr-input
-VISION_OCR_OUTPUT_BUCKET=al-ai-chat-ocr-output
-```
-
-2. Create the OCR buckets in `al-ai-chat`, enable Cloud Vision, and grant the runtime service account read/write access to both buckets and permission to invoke Vision document OCR.
-3. Deploy `firestore.rules` and `storage.rules`.
-4. Run `npm run migrate:lesson-resources` once with production Firebase Admin credentials.
-5. Run `npm run configure:video-cors` with `VIDEO_ALLOWED_ORIGINS` containing the production and preview origins.
-6. Deploy a preview, run the user-role acceptance checks with separate administrator and student accounts, then promote to production.
-
-These external operations are intentionally not marked as completed because no production cloud credentials were available in the uploaded project.
+After production promotion, open the site in a new tab or hard-refresh once. The new asset hashes should replace the old `firebase-TbtXCjiz.js` and `index-B87-hrzB.js` bundles.

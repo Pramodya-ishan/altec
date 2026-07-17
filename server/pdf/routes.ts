@@ -7,7 +7,7 @@ import { checkOcrJobStatus } from "../ocr/cloudVisionOcr";
 import { askGeminiDirectPdf } from "./directPdfQa";
 import { stripRawVisualBlocks } from "../ai-core/answer/stripVisualBlocks";
 import { extractPdfText } from "./extractText";
-import { assertContentManager, isContentManager, isSharedSourceScope } from "../utils/contentPermissions";
+import { assertContentManager, isContentManager, isSharedSourceScope, isStudentVisibleSource } from "../utils/contentPermissions";
 import { normalizeLessonId, updateLessonResourceProcessing, upsertLessonResource } from "../lessonResources/service";
 import { invalidateInventoryCache } from "../sources/sourceInventoryService";
 
@@ -46,7 +46,8 @@ function canUseStoragePath(user: any, path: string) {
 function canViewSource(user: any, source: any) {
   return isContentManager(user)
     || source?.ownerUid === user?.uid
-    || ["public", "official", "shared", "class", "institution"].includes(String(source?.visibility || ""));
+    || source?.createdBy === user?.uid
+    || isStudentVisibleSource(source);
 }
 
 function canReviewQuestionCache(user: any) {
@@ -59,12 +60,26 @@ async function resolveDirectQaSource(user: any, sourceId: string, submittedPath:
   const snapshots = await Promise.all([
     sourceId ? db.collection("rag_sources").doc(sourceId).get() : Promise.resolve(null),
     sourceId ? db.collection("past_papers").doc(sourceId).get() : Promise.resolve(null),
+    sourceId ? db.collection("lesson_resources").doc(sourceId).get() : Promise.resolve(null),
     sourceId ? db.collection("users").doc(user.uid).collection("syllabus_resources").doc(sourceId).get() : Promise.resolve(null),
   ]);
   const candidates = snapshots
     .filter((snapshot: any) => snapshot?.exists)
     .map((snapshot: any) => snapshot.data?.() || null)
     .filter(Boolean);
+
+  // Merge the authoritative lesson_resources publication metadata with the
+  // corresponding extracted rag_sources data. This keeps legacy private rows
+  // answerable for students without exposing personal chat uploads.
+  const extractedSource = snapshots[0] && (snapshots[0] as any).exists
+    ? (snapshots[0] as any).data?.() || null
+    : null;
+  const lessonResource = snapshots[2] && (snapshots[2] as any).exists
+    ? (snapshots[2] as any).data?.() || null
+    : null;
+  if (extractedSource && lessonResource) {
+    candidates.unshift({ ...extractedSource, ...lessonResource, sourceId });
+  }
   // A legacy rag_sources row may exist without its storagePath while the
   // complete lesson-resource row lives under users/{uid}/syllabus_resources.
   // Prefer a complete row so terse follow-ups such as “q1” keep using the
@@ -77,8 +92,8 @@ async function resolveDirectQaSource(user: any, sourceId: string, submittedPath:
 
   const roles = Array.isArray(user?.roles) ? user.roles : [];
   const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "teacher", "ops"].includes(role));
-  const visible = ["public", "official", "shared", "class", "institution"].includes(String(source?.visibility || ""));
-  const owned = source?.ownerUid === user.uid || canUseStoragePath(user, path);
+  const visible = isStudentVisibleSource(source);
+  const owned = source?.ownerUid === user.uid || source?.createdBy === user.uid || canUseStoragePath(user, path);
   if (!privileged && !visible && !owned) {
     throw Object.assign(new Error("You do not have access to this PDF source."), { status: 403, code: "DIRECT_QA_SOURCE_FORBIDDEN" });
   }
@@ -765,6 +780,46 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
               canRetry: true,
               retryAfterMs: indexingResult.status === "ready" ? 1000 : 12000,
             };
+          }
+
+          // OCR infrastructure may be temporarily unavailable in a preview or
+          // during a configuration rollout. A bounded saved PDF can still be
+          // answered through Gemini's native PDF understanding instead of
+          // returning an environment/configuration template to the student.
+          const fallbackLimit = Number(process.env.DIRECT_PDF_INLINE_MAX_BYTES || 10 * 1024 * 1024);
+          if (buffer.length <= fallbackLimit) {
+            const fallbackResult = await askGeminiDirectPdfStructured({
+              uid: req.user.uid,
+              sourceId,
+              pdfBuffer: buffer,
+              year: year || resolvedSource.year || "unknown",
+              subject: subject || resolvedSource.subject || "unknown",
+              questionType,
+              questionNo,
+              prompt: effectivePrompt,
+              allowOfficialAnswer: [
+                resolvedSource?.resourceType,
+                resolvedSource?.sourceType,
+                resolvedSource?.sourceScope,
+              ].some((value) => String(value || "").toLowerCase().includes("marking"))
+                || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
+            });
+            if (fallbackResult.ok && fallbackResult.found && fallbackResult.sourceEvidence?.questionText) {
+              return { ok: true, ...fallbackResult, fallbackMode: "gemini_pdf" };
+            }
+            if (fallbackResult.errorCode === "AI_BILLING_EXHAUSTED" || fallbackResult.errorCode === "AI_RATE_LIMITED") {
+              return {
+                ok: false,
+                status: fallbackResult.errorCode === "AI_RATE_LIMITED" ? 429 : 503,
+                found: false,
+                errorCode: fallbackResult.errorCode,
+                stage: "MODEL_CALL",
+                message: fallbackResult.errorCode === "AI_RATE_LIMITED"
+                  ? "The PDF service is busy. Please retry shortly."
+                  : "The PDF answer service is temporarily unavailable.",
+                canRetry: fallbackResult.errorCode === "AI_RATE_LIMITED",
+              };
+            }
           }
 
           return {

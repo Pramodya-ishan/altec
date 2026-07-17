@@ -39,14 +39,25 @@ try {
     throw new Error("The Vercel runtime smoke server did not expose a local port.");
   }
 
-  const response = await fetch(`http://127.0.0.1:${address.port}/api/auth/context`);
-  const contentType = response.headers.get("content-type") || "";
-  const payload = await response.json();
-  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  const checks = [
+    { path: "/api/auth/context", method: "GET" },
+    { path: "/api/pdf/direct-qa-file", method: "POST" },
+    { path: "/api?__path=pdf%2Fdirect-qa-file", method: "POST" },
+  ];
 
-  if (response.status !== 401 || !contentType.includes("application/json") || payload?.code !== "LOGIN_REQUIRED") {
-    throw new Error(`Unexpected API smoke response: ${response.status} ${contentType} ${JSON.stringify(payload)}`);
+  for (const check of checks) {
+    const response = await fetch(`http://127.0.0.1:${address.port}${check.path}`, { method: check.method });
+    const contentType = response.headers.get("content-type") || "";
+    const payload = await response.json();
+    if (response.status !== 401 || !contentType.includes("application/json") || payload?.code !== "LOGIN_REQUIRED") {
+      throw new Error(`Unexpected API smoke response for ${check.path}: ${response.status} ${contentType} ${JSON.stringify(payload)}`);
+    }
+    if (payload?.code === "API_NOT_FOUND") {
+      throw new Error(`API path was lost before Express routing: ${check.path}`);
+    }
   }
+
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 
   clearTimeout(timeout);
   console.log("Verified isolated pure-ESM boot and JSON API handling without root node_modules.");

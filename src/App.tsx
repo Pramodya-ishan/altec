@@ -134,7 +134,7 @@ function NotFoundView() {
 }
 
 function AuthOverlay() {
-  const { user, loginWithGooglePopup, isAuthLoading } = useApp();
+  const { user, loginWithGoogle, isAuthLoading } = useApp();
   const [actionLoading, setActionLoading] = React.useState(false);
   const [authWaitSeconds, setAuthWaitSeconds] = React.useState(0);
 
@@ -151,7 +151,7 @@ function AuthOverlay() {
   const handleGoogleLogin = async () => {
     setActionLoading(true);
     try {
-      await loginWithGooglePopup();
+      await loginWithGoogle();
     } finally {
       setActionLoading(false);
     }

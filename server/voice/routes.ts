@@ -5,6 +5,8 @@ import { retrieveRelevantKnowledge } from "../knowledge/retrieve";
 import { getAIClient } from "../ai/client";
 import { callGeminiWithFallback } from "../ai/modelRouter";
 import crypto from "crypto";
+import { APP_ASSISTANT_RESPONSE_GUIDE } from "../ai/assistantBehavior";
+import { isSimpleGreeting, sanitizeAssistantText, simpleGreetingReply } from "../ai/responseHygiene";
 
 export const voiceRoutes = Router();
 
@@ -69,25 +71,35 @@ voiceRoutes.post("/live-turn", async (req, res) => {
       }
     }
 
-    // Call Gemini to generate answer using fallback model router
-    let systemInstruction = "You are the Tec A/L study assistant for Sri Lankan students. Answer concisely, naturally and conversationally in Sinhala Unicode. Never invent unsupported facts or sources.";
-    let aiTask: "normal_chat" | "direct_pdf_solve" = "normal_chat";
+    if (isSimpleGreeting(transcript) && mode === "live_normal_answer") {
+      answerText = simpleGreetingReply(transcript);
+    } else {
+      // Generate a grounded answer using the same application response contract
+      // as the text Assistant. Voice output must not expose internal prompts or
+      // machine directives either.
+      let systemInstruction = `You are the Tec A/L study assistant for Sri Lankan students.
+${APP_ASSISTANT_RESPONSE_GUIDE}`;
+      let aiTask: "normal_chat" | "direct_pdf_solve" = "normal_chat";
 
-    if (mode === "live_pdf_answer") {
-       systemInstruction += " Use the provided PDF context to answer the user's question accurately. Do NOT guess if you are unsure based on the provided PDF context. If the evidence is missing, state 'PDF එකෙන් verify කරන්න බැරි නිසා answer guess කරන්නෙ නැහැ. PDF එක select කරන්න හෝ reindex කරන්න.'";
-       aiTask = "direct_pdf_solve";
-    }
-
-    const aiRes = await callGeminiWithFallback(aiTask, {
-      model: "gemini-2.5-flash",
-      contents: promptContext ? `Context:\n${promptContext}\n\nQuestion: ${transcript}` : transcript,
-      config: {
-        systemInstruction,
-        temperature: 0.3
+      if (mode === "live_pdf_answer") {
+        systemInstruction += " Use only the provided PDF context. If the evidence is missing, say that the selected PDF could not verify the answer; do not guess.";
+        aiTask = "direct_pdf_solve";
       }
-    });
 
-    answerText = aiRes.result.text || "මට තේරුණේ නැහැ. කරුණාකර නැවත කියන්න.";
+      const aiRes = await callGeminiWithFallback(aiTask, {
+        model: "gemini-2.5-flash",
+        contents: promptContext ? `Context:
+${promptContext}
+
+Question: ${transcript}` : transcript,
+        config: {
+          systemInstruction,
+          temperature: 0.3,
+        },
+      });
+
+      answerText = sanitizeAssistantText(aiRes.result.text || "මට ප්‍රශ්නය තේරුණේ නැහැ. කරුණාකර නැවත කියන්න.");
+    }
 
     // Generate TTS (using internal fetch to /api/tts/generate or calling it directly)
     const { generateGoogleTts } = await import("../tts/googleTts");

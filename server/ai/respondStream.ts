@@ -21,6 +21,7 @@ import { generateContentStreamWithFallback, callGeminiWithFallback, AITask } fro
 import { resolveAnswerPolicy } from "./answerPolicy";
 import { scoreSource } from "../sources/sourceScoring";
 import { isLessonEvidenceMode } from "../knowledge/lessonResolver";
+import { createAssistantStreamSanitizer, isSimpleGreeting, sanitizeAssistantText, simpleGreetingReply } from "./responseHygiene";
 
 interface StreamTrace {
   requestId: string;
@@ -110,7 +111,7 @@ export type SaveChatResult = {
 
 export async function saveFinalChat(params: {uid: string, email?: string, userText: string, assistantText: string, mode: string, subject?: string, sources?: any[]}): Promise<SaveChatResult> {
   // Always strip visual blocks before saving to history
-  params.assistantText = stripRawVisualBlocks(params.assistantText);
+  params.assistantText = sanitizeAssistantText(stripRawVisualBlocks(params.assistantText));
 
   try {
     const db = getAdminDb();
@@ -202,8 +203,36 @@ export async function aiRespondStream(req: any, res: any) {
 
     let allSources: any[] = [];
 
-    emitSse(res, "status", { step: "started", message: "පිළිතුර සකස් කරමින්..." });
-    emitSse(res, "status", { label: "සොයමින්..." });
+    if (isSimpleGreeting(prompt) && !image && (!attachments || attachments.length === 0)) {
+      const answer = simpleGreetingReply(prompt);
+      emitSse(res, "token", { text: answer });
+      const chatRes = await saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: answer,
+        mode: "normal_chat",
+        subject: activeSubject,
+        sources: [],
+      });
+      trace.chatSaved = chatRes.chatSaved;
+      trace.messageId = chatRes.messageId;
+      trace.completed = true;
+      emitSse(res, "done", {
+        ok: true,
+        completed: true,
+        requestId,
+        messageId: chatRes.messageId || null,
+        chatSaved: chatRes.chatSaved,
+        sources: [],
+        finishReason: "simple_greeting",
+      });
+      trace.doneSent = true;
+      return;
+    }
+
+    emitSse(res, "status", { step: "started", message: "Preparing answer…" });
+    emitSse(res, "status", { label: "Searching sources…" });
 
     // 1. Route Request
     const { detectOfficialPaperCandidate } = await import("../ai-core/intent/paperQuestionParser");
@@ -390,10 +419,11 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     // A lesson PDF lookup is an inventory operation, not a generative answer.
-    // Return exact Firebase matches so the model cannot invent a web source.
+    // Return exact Firebase matches. If the lesson classifier is uncertain,
+    // fall back to the real subject inventory instead of claiming no PDF exists.
     if (route.mode === "lesson_pdf_search") {
       const lessonName = route.entities.lesson || evidence.lessonIds[0] || "requested lesson";
-      const lessonSources = (evidence.candidates || []).map((source: any) => {
+      let lessonSources = (evidence.candidates || []).map((source: any) => {
         const id = source.sourceId || source.id;
         return {
           ...source,
@@ -404,18 +434,65 @@ export async function aiRespondStream(req: any, res: any) {
           usedInAnswer: true,
         };
       });
-      const answer = lessonSources.length > 0
-        ? [
-            `**${lessonName}** lesson එකට match වෙන saved PDF resource${lessonSources.length === 1 ? " එක" : "s"}:`,
-            "",
-            ...lessonSources.map((source: any, index: number) => {
-              return `${index + 1}. [${source.title}](${source.url})`;
-            }),
-            "",
-            "මෙය saved lesson resources වල exact result එකයි. Web candidate PDFs හෝ source එකේ නැති exam details add කරන්නේ නැහැ.",
-          ].join("\n")
-        : `**${lessonName}** lesson එකට match වෙන saved PDF resource එකක් හමු වුණේ නැහැ. Lesson resource එක නිවැරදි lesson name එක යටතේ upload කර index කරන්න.`;
 
+      let usedSubjectFallback = false;
+      if (lessonSources.length === 0) {
+        const { getSourceInventory } = await import("../sources/sourceInventoryService");
+        const inventory = await getSourceInventory({
+          uid: user.uid,
+          subject: route.entities.subject || activeSubject || undefined,
+          isAdmin: user.roles?.includes("admin") || user.admin === true,
+        });
+        lessonSources = (inventory.all || [])
+          .filter((source: any) => {
+            const kind = String(source.mediaKind || "pdf").toLowerCase();
+            const name = String(source.fileName || source.title || "").toLowerCase();
+            return kind === "pdf" || name.endsWith(".pdf");
+          })
+          .slice(0, 20)
+          .map((source: any) => {
+            const id = source.sourceId || source.id;
+            return {
+              ...source,
+              id,
+              sourceId: id,
+              url: source.url || `/api/rag/sources/${id}/download`,
+              badge: "Saved PDF",
+              usedInAnswer: true,
+            };
+          });
+        usedSubjectFallback = lessonSources.length > 0;
+      }
+
+      const readyCount = lessonSources.filter((source: any) => (
+        source.textIndexed === true || Number(source.chunkCount || 0) > 0 || source.indexStatus === "ready"
+      )).length;
+
+      let answer: string;
+      if (lessonSources.length > 0) {
+        answer = [
+          usedSubjectFallback
+            ? `**${lessonName}** සඳහා exact lesson-name match එකක් නොලැබුණත්, මේ accessible saved PDFs හමු වුණා:`
+            : `**${lessonName}** lesson එකට match වෙන saved PDFs:`,
+          "",
+          ...lessonSources.map((source: any, index: number) => {
+            const status = source.textIndexed || Number(source.chunkCount || 0) > 0 || source.indexStatus === "ready"
+              ? "Ready for questions"
+              : source.needsOcr
+                ? "OCR pending"
+                : "Index pending";
+            return `${index + 1}. [${source.title}](${source.url}) — ${status}`;
+          }),
+          "",
+          readyCount > 0
+            ? "Ready ලෙස පෙන්වන PDF එකක් තෝරලා ප්‍රශ්නය අහන්න. මම එහි indexed text evidence එක AI answer එකට යොදාගන්නම්."
+            : "PDF files save වෙලා තිබුණත් searchable index එක තවම සූදානම් නැහැ.",
+        ].join("\n");
+      } else {
+        answer = `**${lessonName}** සඳහා ඔබට access තියෙන saved PDF එකක් දැනට හමු වුණේ නැහැ.`;
+      }
+
+      answer = sanitizeAssistantText(answer);
       if (lessonSources.length > 0) emitSse(res, "sources", { sources: lessonSources });
       emitSse(res, "token", { text: answer });
       const chatRes = await saveFinalChat({
@@ -544,112 +621,134 @@ export async function aiRespondStream(req: any, res: any) {
 
     // D. PDF INVENTORY REQUEST
     if (route.mode === "pdf_inventory_request") {
-      emitSse(res, "status", { step: "sources_db", status: "searching" });
+      emitSse(res, "status", { step: "sources_db", status: "searching", message: "Checking saved PDFs…" });
       const requestedSubject = route.entities.subject || activeSubject || undefined;
-
-      const uid = user.uid;
-      const userEmail = (user.email || "").toLowerCase();
+      const wantsAnswerable = route.entities.inventoryMode === "answerable";
       const isAdmin = user.roles?.includes("admin") || user.admin === true;
 
       const { getSourceInventory } = await import("../sources/sourceInventoryService");
       const inventory = await getSourceInventory({
-        uid,
+        uid: user.uid,
         subject: requestedSubject,
-        isAdmin
+        isAdmin,
       });
 
-      const allSources: any[] = [];
       const groups = inventory.groups;
-      allSources.push(
+      const pdfSources = [
         ...groups.pastPapers,
         ...groups.markingSchemes,
         ...groups.syllabus,
         ...groups.paperStructure,
         ...groups.uploadedPdfs,
-        ...groups.images
-      );
+      ].filter((source: any) => {
+        const kind = String(source.mediaKind || "pdf").toLowerCase();
+        const mime = String(source.mimeType || "").toLowerCase();
+        const name = String(source.fileName || source.title || "").toLowerCase();
+        return kind === "pdf" || mime === "application/pdf" || name.endsWith(".pdf");
+      });
 
-      const pastPapers = groups.pastPapers;
-      const markingSchemes = groups.markingSchemes;
-      const syllabusList = groups.syllabus;
-      const paperStructureList = groups.paperStructure;
-      const imagesList = groups.images;
-      const uploadedList = groups.uploadedPdfs;
+      const indexedSources = pdfSources.filter((source: any) => (
+        source.textIndexed === true
+        || Number(source.chunkCount || 0) > 0
+        || String(source.indexStatus || source.processingStatus || "").toLowerCase() === "ready"
+      ));
+      const directPdfSources = pdfSources.filter((source: any) => {
+        const status = String(source.indexStatus || source.processingStatus || "").toLowerCase();
+        return Boolean(source.storagePath) && !["failed", "archived"].includes(status);
+      });
+      const answerableSources = Array.from(new Map(
+        [...indexedSources, ...directPdfSources].map((source: any) => [String(source.sourceId || source.id), source]),
+      ).values()) as any[];
+      const pendingSources = pdfSources.filter((source: any) => !answerableSources.includes(source));
+      const displayedSources = wantsAnswerable
+        ? (answerableSources.length > 0 ? answerableSources : pdfSources)
+        : pdfSources;
 
-      const sseSources = allSources.map(s => ({
-        id: s.id,
-        title: s.title,
-        url: s.url || `/api/rag/sources/${s.id}/download`,
-        storagePath: s.storagePath,
-        badge: s.resourceType === "past_paper" ? "Past Paper" : s.resourceType === "marking_scheme" ? "Marking Scheme" : "PDF Store",
-        confidence: 1.0,
-        sourceType: s.resourceType,
-        sourceScope: s.sourceScope
-      }));
+      const sseSources = displayedSources.map((source: any) => {
+        const id = source.sourceId || source.id;
+        return {
+          id,
+          sourceId: id,
+          title: source.title,
+          url: source.url || `/api/rag/sources/${id}/download`,
+          storagePath: source.storagePath,
+          badge: source.resourceType === "past_paper"
+            ? "Past Paper"
+            : source.resourceType === "marking_scheme"
+              ? "Marking Scheme"
+              : source.resourceType === "paper_structure"
+                ? "Paper Structure"
+                : "Saved PDF",
+          confidence: 1,
+          sourceType: source.resourceType,
+          sourceScope: source.sourceScope,
+          subject: source.subject,
+          year: source.year,
+          textIndexed: source.textIndexed,
+          indexStatus: source.indexStatus,
+          usedInAnswer: true,
+        };
+      });
 
-      emitSse(res, "sources", { sources: sseSources });
+      if (sseSources.length > 0) emitSse(res, "sources", { sources: sseSources });
 
-      let answer = `📚 **මම සොයාගත් PDF සහ ප්‍රභවයන් (Sources) මෙන්න:**\n\n`;
-      let count = 1;
-
-      if (pastPapers.length > 0) {
-        answer += `🏛️ **Past Papers**\n`;
-        pastPapers.forEach((p: any) => {
-          answer += `${count++}. **${p.title}** (${p.year || "Year N/A"}) - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
-        });
-        answer += `\n`;
-      }
-
-      if (markingSchemes.length > 0) {
-        answer += `📝 **Marking Schemes**\n`;
-        markingSchemes.forEach((p: any) => {
-          answer += `${count++}. **${p.title}** (${p.year || "Year N/A"}) - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
-        });
-        answer += `\n`;
-      }
-
-      if (syllabusList.length > 0) {
-        answer += `📖 **Syllabus Library**\n`;
-        syllabusList.forEach((p: any) => {
-          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
-        });
-        answer += `\n`;
-      }
-
-      if (paperStructureList.length > 0) {
-        answer += `📐 **Paper Structure**\n`;
-        paperStructureList.forEach((p: any) => {
-          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
-        });
-        answer += `\n`;
-      }
-
-      if (uploadedList.length > 0) {
-        answer += `📤 **Uploaded PDFs**\n`;
-        uploadedList.forEach((p: any) => {
-          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
-        });
-        answer += `\n`;
-      }
-
-      if (imagesList.length > 0) {
-        answer += `🖼️ **Images**\n`;
-        imagesList.forEach((p: any) => {
-          answer += `${count++}. **${p.title}** - [Open](${p.url || `/api/rag/sources/${p.id}/download`})\n`;
-        });
-        answer += `\n`;
-      }
-
-      if (allSources.length === 0) {
-        answer = `❌ Firebase එකේ PDFs තවම හම්බුණේ නැහැ. Upload කළා නම් index/reload කරන්න.`;
+      let answer = "";
+      if (pdfSources.length === 0) {
+        answer = requestedSubject
+          ? `${requestedSubject} සඳහා ඔබට access තියෙන saved PDF එකක් දැනට හමු වුණේ නැහැ.`
+          : "ඔබට access තියෙන saved PDF එකක් දැනට හමු වුණේ නැහැ.";
+      } else if (wantsAnswerable && answerableSources.length > 0) {
+        answer = [
+          `මේ PDF${answerableSources.length === 1 ? " එකෙන්" : " වලින්"} මට දැන්ම evidence-based පිළිතුරු දෙන්න පුළුවන්:`,
+          "",
+          ...answerableSources.map((source: any, index: number) => {
+            const id = source.sourceId || source.id;
+            const meta = [source.subject, source.year, source.lesson].filter(Boolean).join(" · ");
+            const indexed = source.textIndexed === true
+              || Number(source.chunkCount || 0) > 0
+              || String(source.indexStatus || source.processingStatus || "").toLowerCase() === "ready";
+            const status = indexed ? "Indexed and ready" : "Ready for secure direct PDF scan";
+            return `${index + 1}. [${source.title}](/api/rag/sources/${id}/download)${meta ? ` — ${meta}` : ""} — ${status}`;
+          }),
+          "",
+          "PDF නමත් ප්‍රශ්න අංකයත් කියන්න. Indexed text නැත්නම් source file එක secure Direct PDF QA වෙත යවලා evidence එකෙන් පිළිතුරු දෙන්නම්.",
+        ].join("\n");
+      } else if (wantsAnswerable) {
+        answer = [
+          "Saved PDF files හමු වුණා, නමුත් source file path හෝ usable text index එකක් නැති නිසා ඒවායෙන් තවම පිළිතුරු දෙන්න බැහැ:",
+          "",
+          ...pendingSources.map((source: any, index: number) => {
+            const status = source.needsOcr ? "OCR required" : (source.indexStatus || source.processingStatus || "index pending");
+            return `${index + 1}. ${source.title} — ${status}`;
+          }),
+          "",
+          "Admin reprocess/index action එක අවසන් වූ පසු ඒ PDF අන්තර්ගතයෙන් පිළිතුරු දෙන්න පුළුවන්.",
+        ].join("\n");
       } else {
-        answer += `💡 මෙම ඕනෑම PDF එකක් මත ක්ලික් කර එය කියවිය හැක. එමෙන්ම එම ප්‍රශ්න පත්‍රවලින් ඕනෑම ප්‍රශ්නයක් මගෙන් විමසන්න!`;
+        const sections: string[] = [];
+        const addSection = (title: string, items: any[]) => {
+          if (!items.length) return;
+          sections.push(`### ${title}`);
+          sections.push(...items.map((source: any, index: number) => {
+            const id = source.sourceId || source.id;
+            const status = source.textIndexed || Number(source.chunkCount || 0) > 0 ? "Ready" : (source.indexStatus || "Not indexed");
+            return `${index + 1}. [${source.title}](/api/rag/sources/${id}/download) — ${status}`;
+          }));
+          sections.push("");
+        };
+        addSection("Past papers", groups.pastPapers);
+        addSection("Marking schemes", groups.markingSchemes);
+        addSection("Syllabus PDFs", groups.syllabus);
+        addSection("Paper structure PDFs", groups.paperStructure);
+        addSection("Other uploaded PDFs", groups.uploadedPdfs);
+        answer = sections.join("\n").trim();
       }
 
-      emitSse(res, "token", { text: stripRawVisualBlocks(answer) });
+      answer = sanitizeAssistantText(answer);
+      emitSse(res, "token", { text: answer });
       trace.lastEvent = "token";
 
-      let chatRes = await saveFinalChat({
+      const chatRes = await saveFinalChat({
         uid: user.uid,
         email: user.email,
         userText: prompt,
@@ -659,12 +758,18 @@ export async function aiRespondStream(req: any, res: any) {
         sources: sseSources,
       });
 
-      if (chatRes && chatRes.chatSaved) {
-        trace.chatSaved = true;
-        trace.messageId = chatRes.messageId;
-      }
+      trace.chatSaved = chatRes.chatSaved;
+      trace.messageId = chatRes.messageId;
       trace.completed = true;
-      emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes?.messageId || null, chatSaved: trace.chatSaved, sources: sseSources });
+      emitSse(res, "done", {
+        ok: pdfSources.length > 0,
+        completed: true,
+        requestId,
+        messageId: chatRes.messageId || null,
+        chatSaved: chatRes.chatSaved,
+        sources: sseSources,
+        finishReason: answerableSources.length > 0 ? "answerable_pdf_inventory" : "pdf_inventory",
+      });
       trace.doneSent = true;
       trace.lastEvent = "done";
       return;
@@ -1361,21 +1466,29 @@ export async function aiRespondStream(req: any, res: any) {
     let isInterrupted = false;
     let fullText = "";
     let chunkBuffer = "";
+    const responseSanitizer = createAssistantStreamSanitizer();
     try {
       for await (const chunk of stream) {
         const text = chunk.text || "";
-        if (text) {
-          fullText += text;
-          chunkBuffer += text;
-          trace.totalChars += text.length;
-          trace.tokenCount++;
+        if (!text) continue;
+        const sanitized = responseSanitizer.push(text);
+        if (!sanitized) continue;
+        fullText += sanitized;
+        chunkBuffer += sanitized;
+        trace.totalChars += sanitized.length;
+        trace.tokenCount++;
 
-          if (chunkBuffer.length >= 50 || /[\n\r\.\?!,;]/.test(chunkBuffer)) {
-            emitSse(res, "token", { text: chunkBuffer });
-            trace.lastEvent = "token";
-            chunkBuffer = "";
-          }
+        if (chunkBuffer.length >= 50 || /[\n\r\.\?!,;]/.test(chunkBuffer)) {
+          emitSse(res, "token", { text: chunkBuffer });
+          trace.lastEvent = "token";
+          chunkBuffer = "";
         }
+      }
+      const finalSanitized = responseSanitizer.flush();
+      if (finalSanitized) {
+        fullText += finalSanitized;
+        chunkBuffer += finalSanitized;
+        trace.totalChars += finalSanitized.length;
       }
       if (chunkBuffer.length > 0) {
         emitSse(res, "token", { text: chunkBuffer });

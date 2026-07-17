@@ -62,7 +62,7 @@
     },
     {
       "source": "/api/:path*",
-      "destination": "/api/index"
+      "destination": "/api?__path=:path*"
     },
     {
       "source": "/manifest.json",

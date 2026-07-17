@@ -18,3 +18,24 @@ export function assertContentManager(user: { admin?: boolean; roles?: string[] }
 export function isSharedSourceScope(scope: unknown) {
   return SHARED_SOURCE_SCOPES.has(String(scope || "").trim().toLowerCase());
 }
+
+/**
+ * Returns true when a source is intentionally shared with students.
+ *
+ * Older administrator uploads were incorrectly persisted with
+ * `visibility: "private"`. Their `sourceScope` still identifies them as
+ * shared curriculum content. Treat those legacy rows as visible unless an
+ * administrator has explicitly unpublished them. Personal/chat uploads never
+ * match SHARED_SOURCE_SCOPES and therefore remain private.
+ */
+export function isStudentVisibleSource(source: Record<string, unknown> | null | undefined) {
+  if (!source) return false;
+  const visibility = String(source.visibility || "").trim().toLowerCase();
+  if (["public", "official", "shared", "class", "institution"].includes(visibility)) {
+    return source.published !== false;
+  }
+
+  return isSharedSourceScope(source.sourceScope)
+    && source.published !== false
+    && String(source.processingStatus || "").toLowerCase() !== "archived";
+}

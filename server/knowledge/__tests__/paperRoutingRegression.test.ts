@@ -25,11 +25,19 @@ assert.equal(prediction.entities.year, "2026");
 
 const inventory = await routeKnowledgeRequest({ prompt: "give all pdfs", activeSubject: "SFT" });
 assert.equal(inventory.mode, "pdf_inventory_request");
-assert.equal(inventory.entities.subject, "SFT");
+assert.equal(inventory.entities.subject, undefined);
 
 const explicitInventory = await routeKnowledgeRequest({ prompt: "give all SFT pdfs" });
 assert.equal(explicitInventory.mode, "pdf_inventory_request");
 assert.equal(explicitInventory.entities.subject, "SFT");
+
+const answerableInventory = await routeKnowledgeRequest({
+  prompt: "oyt answers denna puluwn pdf mond kiyl check krnn",
+  activeSubject: "SFT",
+});
+assert.equal(answerableInventory.mode, "pdf_inventory_request");
+assert.equal(answerableInventory.entities.inventoryMode, "answerable");
+assert.equal(answerableInventory.entities.subject, undefined);
 
 assert.equal(inferSubject("**2025 sft paper **"), "SFT");
 assert.equal(extractTitleYear("2025 Science for Technology Full SM (1).pdf"), "2025");

@@ -1,6 +1,7 @@
 import { getAdminDb } from "../firebase/admin";
 import { GoogleGenAI, Type } from "@google/genai";
 import { getAIClient, AI_MODELS } from "./client";
+import { sanitizeAssistantText } from "./responseHygiene";
 
 export async function answerFromPdfEvidence({
   uid,
@@ -107,8 +108,8 @@ Output valid JSON.`;
       return {
         ok: false,
         code: "PDF_SOURCE_REQUIRED",
-        message: parsed.answer,
-        answer: parsed.answer,
+        message: sanitizeAssistantText(parsed.answer),
+        answer: sanitizeAssistantText(parsed.answer),
         sources: finalSources,
         evidenceLevel: "blocked"
       };
@@ -116,7 +117,7 @@ Output valid JSON.`;
 
     return {
       ok: true,
-      answer: parsed.answer,
+      answer: sanitizeAssistantText(parsed.answer),
       sources: finalSources,
       evidenceLevel: parsed.evidenceLevel || "high"
     };

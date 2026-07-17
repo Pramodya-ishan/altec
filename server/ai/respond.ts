@@ -5,6 +5,7 @@ import { getCloraSystemPrompt } from "./prompts";
 import { loadUserAIContext } from "../firebase/userContext";
 import { retrieveRelevantKnowledge } from "../rag/retrieve";
 import { getAdminDb } from "../firebase/admin";
+import { isSimpleGreeting, sanitizeAssistantText, simpleGreetingReply } from "./responseHygiene";
 
 export async function processAIRequest(req: any) {
   try {
@@ -12,6 +13,12 @@ export async function processAIRequest(req: any) {
     const uid = req.user.uid;
 
     if (!prompt) throw new Error("Prompt is required");
+
+    if (isSimpleGreeting(prompt)) {
+      const greeting = simpleGreetingReply(prompt);
+      void saveChatToHistory(uid, prompt, greeting, "normal_chat", activeSubject);
+      return { ok: true, text: greeting, response: greeting, mode: "normal_chat", model: "deterministic", sources: [] };
+    }
 
     // 1. Load context
     const contextData = await loadUserAIContext(uid, req.user?.email);
@@ -86,12 +93,13 @@ export async function processAIRequest(req: any) {
 
     // 8. Save final message (only for important modes, or handle outside)
     // We can do this asynchronously
-    saveChatToHistory(uid, prompt, response.text || "", mode, activeSubject);
+    const safeResponseText = sanitizeAssistantText(response.text || "No response generated.");
+    saveChatToHistory(uid, prompt, safeResponseText, mode, activeSubject);
 
     return {
       ok: true,
-      text: response.text || "No response generated.",
-      response: response.text || "No response generated.",
+      text: safeResponseText,
+      response: safeResponseText,
       mode,
       model: modelUsed,
       sources: knowledgeChunks,

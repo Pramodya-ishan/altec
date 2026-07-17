@@ -44,6 +44,7 @@ export type KnowledgeRouterResult = {
     lesson?: string;
     uploadedFileName?: string;
     requestedAnswerType?: "essay" | "mcq";
+    inventoryMode?: "all" | "answerable";
   };
 
   contextBlocks: Array<{
@@ -68,7 +69,16 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
   const lessonReference = resolveLessonReference(prompt);
 
   // PDF Inventory request check
-  const isPdfInventory = lower.includes("give all pdfs") ||
+  const asksWhichPdfCanAnswer =
+    /(?:which|what|mona|monawada|mond)\s+(?:saved\s+)?pdfs?/i.test(lower)
+    || /pdfs?.{0,45}(?:answer|uththara|පිළිතුරු).{0,25}(?:can|puluwan|puluwn|දෙන්න)/i.test(lower)
+    || /(?:answer|uththara|පිළිතුරු).{0,45}(?:can|puluwan|puluwn|දෙන්න).{0,25}pdfs?/i.test(lower)
+    || /oy(?:a|t|ata)?.{0,30}(?:answer|uththara).{0,30}pdf/i.test(lower)
+    || /මොන\s*(?:pdf|පීඩීඑෆ්).{0,30}(?:පිළිතුරු|උත්තර)/i.test(lower)
+    || /(?:pdf|පීඩීඑෆ්).{0,30}මොනවද/i.test(lower);
+
+  const isPdfInventory = asksWhichPdfCanAnswer ||
+    lower.includes("give all pdfs") ||
     /\b(?:give|show|list)?\s*all\s+(?:sft|et|ict)\s+pdfs?\b/i.test(lower) ||
     lower.includes("all pdfs") ||
     lower.includes("mage pdf") ||
@@ -85,17 +95,20 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
     lower.includes("tika ko");
   
   if (isPdfInventory) {
+    // A generic inventory question means every accessible PDF. Only scope the
+    // result to a subject when the student explicitly names that subject.
     const inventorySubject = /\bsft\b|science for technology|තාක්ෂණවේදය සඳහා විද්‍යාව/i.test(prompt)
       ? "SFT"
       : /\bict\b|information (?:and|&) communication technology|තොරතුරු හා සන්නිවේදන/i.test(prompt)
         ? "ICT"
         : /\bet\b|engineering technology|ඉංජිනේරු තාක්ෂණවේදය/i.test(prompt)
           ? "ET"
-          : activeSubject;
+          : undefined;
     return {
       mode: "pdf_inventory_request" as any,
       entities: {
         subject: inventorySubject as any,
+        inventoryMode: asksWhichPdfCanAnswer ? "answerable" : "all",
       },
       answerHints: {
         mustUseRag: true,

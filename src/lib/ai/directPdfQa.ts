@@ -98,16 +98,30 @@ export async function askDirectPdfQa(params: {
     }
     const backendTimeout = window.setTimeout(() => backendController.abort(), 150000);
 
+    const postDirectQa = (url: string) => fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token || ""}`,
+      },
+      body: formData,
+      signal: backendController.signal,
+    });
+
     let response;
     try {
-      response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token || ""}`,
-        },
-        body: formData,
-        signal: backendController.signal,
-      });
+      response = await postDirectQa(endpoint);
+      // Older Vercel routing configurations could deliver the request to the
+      // Express catch-all as /api/index and return API_NOT_FOUND. The direct
+      // /api function alias carries the original path explicitly, so one safe
+      // retry reaches the same authenticated route without uploading twice to
+      // Storage or invoking a different backend.
+      if (response.status === 404 || response.status === 503) {
+        const routeError = await response.clone().json().catch(() => null) as any;
+        if (routeError?.code === "API_NOT_FOUND") {
+          const fallbackEndpoint = getLargeEndpointUrl("/api?__path=pdf%2Fdirect-qa-file");
+          response = await postDirectQa(fallbackEndpoint);
+        }
+      }
     } catch (e: any) {
       throw makeDirectQaError("DIRECT_QA_BACKEND_ERROR", source, { message: e.name === "AbortError" ? "The PDF request timed out. Reprocess the document and try again." : e.message });
     } finally {

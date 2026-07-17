@@ -28,8 +28,12 @@ import { videoRoutes } from "./server/video/routes";
 import { lessonResourceRoutes } from "./server/lessonResources/routes";
 
 import { globalLimiter, aiLimiter, adminLimiter } from "./server/utils/rateLimiter";
+import { restoreVercelApiPathMiddleware } from "./server/utils/vercelApiPath";
 
 const app = express();
+// Restore the original nested API path before security headers, parsers, rate
+// limiters, authentication, and Express routers inspect req.path.
+app.use(restoreVercelApiPathMiddleware);
 const PORT = env.PORT;
 const videoCdnOrigin = (() => {
   try { return env.VIDEO_CDN_BASE_URL ? new URL(env.VIDEO_CDN_BASE_URL).origin : ""; }

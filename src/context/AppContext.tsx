@@ -1,9 +1,9 @@
 import { calculateCurrentGradeFromData } from '../lib/utils';
 import { apiFetch } from "../lib/api";
+import { normalizeSinhalaDisplayText } from "../lib/assistantTextHygiene";
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
 import { isFirebaseEnabled, auth, authPersistenceReady } from '../lib/firebase';
-import { shouldUseRedirectAuth } from '../lib/authStrategy';
 import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
@@ -11,7 +11,6 @@ import {
   onAuthStateChanged,
   signInWithCredential,
   signInWithEmailAndPassword,
-  signInWithPopup,
   signInWithRedirect,
   signOut,
 } from 'firebase/auth';
@@ -89,7 +88,7 @@ type AppContextType = {
   stars: StarItem[];
   triggerStars: () => void;
   fetchUserInfo: (token: string) => Promise<void>;
-  loginWithGooglePopup: () => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
   isAuthLoading: boolean;
   isUserDataLoading: boolean;
   hasHydratedUserData: boolean;
@@ -171,6 +170,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const googleLoginInFlightRef = useRef(false);
+  const serverSessionBootstrappedUidRef = useRef<string | null>(null);
   const [isUserDataLoading, setIsUserDataLoading] = useState(false);
   const [hasHydratedUserData, setHasHydratedUserData] = useState(false);
   const [youtubeCookies, setYoutubeCookies] = useState<string>('');
@@ -588,20 +588,46 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const bootstrapServerSession = async (firebaseUser: any) => {
+    if (!firebaseUser || firebaseUser.isAnonymous) return;
+    if (serverSessionBootstrappedUidRef.current === firebaseUser.uid) return;
+    serverSessionBootstrappedUidRef.current = firebaseUser.uid;
+    try {
+      const idToken = await firebaseUser.getIdToken();
+      const response = await apiFetch("/api/auth/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idToken }),
+      });
+      if (!response.ok) {
+        serverSessionBootstrappedUidRef.current = null;
+        return;
+      }
+      const payload = await response.json().catch(() => null);
+      if (payload?.profile) {
+        setProfile(payload.profile);
+        localStorage.setItem("email_user_profile", JSON.stringify(payload.profile));
+      }
+    } catch (sessionError) {
+      serverSessionBootstrappedUidRef.current = null;
+      if (import.meta.env.DEV) console.warn("Server session bootstrap skipped", sessionError);
+    }
+  };
+
   useEffect(() => {
     let unsubscribeAutoAuth = () => {};
     let disposed = false;
     
     if (isFirebaseEnabled && auth) {
       // Wait for local persistence before subscribing. Otherwise the first
-      // transient null event after the popup can replace a valid user with the
+      // transient null event during redirect restoration can replace a valid user with the
       // sign-in screen while Firebase is restoring its IndexedDB session.
       void authPersistenceReady.then(() => {
         if (disposed) return;
 
         // Complete the redirect fallback before subscribing to the stable
-        // auth state. This is used on mobile browsers and when popup windows
-        // are blocked. The same-origin /__/auth handler keeps the result in
+        // auth state. The application deliberately uses top-level redirect auth
+        // on every device so Firebase never polls popupWindow.closed. The same-origin /__/auth handler keeps the result in
         // Firebase's persistent browser session.
         void getRedirectResultOnce().then((redirectResult) => {
           if (!redirectResult || disposed) return;
@@ -617,6 +643,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             emailVerified: redirectResult.user.emailVerified,
           };
           setUser(redirectedUser);
+          void bootstrapServerSession(redirectResult.user);
         }).catch((redirectError) => {
           if (import.meta.env.DEV) console.warn('Google redirect result could not be restored', redirectError);
         });
@@ -626,8 +653,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (firebaseUser.isAnonymous) {
             // Never promote an anonymous Firebase identity to a cached email
             // session. Do not call signOut here: an asynchronous anonymous
-            // cleanup can race with signInWithPopup and sign out the newly
-            // authenticated Google user after the account chooser closes.
+            // cleanup can race with redirect restoration and sign out the newly
+            // authenticated Google user after the account flow returns.
             // apiFetch already refuses anonymous ID tokens, so leaving the
             // anonymous identity in place until the explicit sign-in is safe.
             setUser(null);
@@ -643,6 +670,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             token: savedToken,
             emailVerified: firebaseUser.emailVerified
           });
+          void bootstrapServerSession(firebaseUser);
 
           const savedData = localStorage.getItem(`student_progress_data_${(firebaseUser.email || '').toLowerCase()}`);
           if (savedData) {
@@ -685,7 +713,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [isFirebaseEnabled]);
 
   
-  const loginWithGooglePopup = async () => {
+  // Top-level redirect auth avoids Firebase popup window polling and the
+  // resulting Cross-Origin-Opener-Policy window.closed warnings.
+  const loginWithGoogle = async () => {
     if (googleLoginInFlightRef.current) return;
     googleLoginInFlightRef.current = true;
     setIsAuthLoading(true);
@@ -702,64 +732,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       provider.addScope("https://www.googleapis.com/auth/userinfo.profile");
       provider.setCustomParameters({ prompt: "select_account" });
       await authPersistenceReady;
-
-      if (shouldUseRedirectAuth()) {
-        await signInWithRedirect(auth, provider);
-        return;
-      }
-
-      const result = await signInWithPopup(auth, provider);
-      const credential = GoogleAuthProvider.credentialFromResult(result);
-      const accessToken = credential?.accessToken || "";
-      if (accessToken) localStorage.setItem("google_access_token", accessToken);
-
-      const signedInUser: User = {
-        email: result.user.email || "",
-        name: result.user.displayName || "",
-        picture: result.user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(result.user.email || "")}`,
-        token: accessToken,
-        emailVerified: result.user.emailVerified,
-      };
-      setUser(signedInUser);
-      showNotification("Signed in with Google.", "success");
-
-      const savedData = localStorage.getItem(`student_progress_data_${signedInUser.email.toLowerCase()}`);
-      if (savedData) {
-        try { setData(JSON.parse(savedData)); } catch { /* ignore corrupt cache */ }
-      }
-      void fetchUserDataFromDB(signedInUser.email, { showLoading: !savedData });
-      void fetchYoutubeCookies(signedInUser.email).catch(() => undefined);
-
-      // Firebase remains the browser source of truth. A temporary session
-      // bootstrap failure must not sign the user out or discard Firebase state.
-      void result.user.getIdToken(true).then(async (idToken) => {
-        const response = await apiFetch("/api/auth/session", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ idToken }),
-        });
-        if (!response.ok) return;
-        const payload = await response.json().catch(() => null);
-        if (payload?.profile) {
-          setProfile(payload.profile);
-          localStorage.setItem("email_user_profile", JSON.stringify(payload.profile));
-        }
-      }).catch((sessionError) => {
-        if (import.meta.env.DEV) console.warn("Server session bootstrap skipped", sessionError);
-      });
+      await signInWithRedirect(auth, provider);
     } catch (error: any) {
       const code = String(error?.code || "");
-      if (code === "auth/popup-blocked" || code === "auth/web-storage-unsupported") {
-        const provider = new GoogleAuthProvider();
-        provider.setCustomParameters({ prompt: "select_account" });
-        await signInWithRedirect(auth!, provider);
-        return;
-      }
-      const message = code === "auth/popup-closed-by-user"
-        ? "The Google sign-in window was closed."
-        : code === "auth/unauthorized-domain"
-          ? "This domain is not authorized in Firebase Authentication."
-          : "Google sign-in could not be completed. Please try again.";
+      const message = code === "auth/unauthorized-domain"
+        ? "This domain is not authorized in Firebase Authentication."
+        : code === "auth/web-storage-unsupported"
+          ? "This browser cannot save the Google sign-in session."
+          : "Google sign-in could not be started. Please try again.";
       showNotification(message, "error");
     } finally {
       googleLoginInFlightRef.current = false;
@@ -932,7 +912,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const showNotification = React.useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
-    const normalizedMessage = String(message || '').trim();
+    const normalizedMessage = normalizeSinhalaDisplayText(message).trim();
     if (!normalizedMessage) return;
     const now = Date.now();
     const dedupeKey = `${type}:${normalizedMessage}`;
@@ -1324,7 +1304,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     stars,
     triggerStars,
     fetchUserInfo,
-    loginWithGooglePopup,
+    loginWithGoogle,
     isAuthLoading,
     isUserDataLoading,
     hasHydratedUserData,

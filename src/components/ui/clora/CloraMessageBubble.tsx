@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Check, CheckCircle2, Copy, FileText, Loader2 } from 'lucide-react';
 import { MathMarkdown } from '../../chat/MathMarkdown';
 import { VisualBlockRenderer } from '../VisualBlockRenderer';
+import { sanitizeAssistantDisplayText } from '../../../lib/assistantTextHygiene';
 
 interface CloraMessageBubbleProps {
   message: any;
@@ -12,6 +13,7 @@ interface CloraMessageBubbleProps {
 
 export const CloraMessageBubble = React.memo(function CloraMessageBubble({ message, isStreaming, onToolClick }: CloraMessageBubbleProps) {
   const isUser = message.role === 'user';
+  const displayContent = isUser ? String(message.content || '') : sanitizeAssistantDisplayText(message.content);
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<number | null>(null);
 
@@ -20,9 +22,9 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
   }, []);
 
   const copyMessage = async () => {
-    if (!message.content) return;
+    if (!displayContent) return;
     try {
-      await navigator.clipboard.writeText(message.content);
+      await navigator.clipboard.writeText(displayContent);
       setCopied(true);
       if (copyTimeoutRef.current !== null) window.clearTimeout(copyTimeoutRef.current);
       copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1400);
@@ -70,7 +72,7 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
 
           {message.content && (
             <div className="prose prose-slate min-w-0 max-w-none text-[15px] leading-7 text-slate-800 [overflow-wrap:anywhere] [word-break:normal] prose-headings:mb-3 prose-headings:mt-6 prose-p:my-2 prose-pre:max-w-full prose-pre:overflow-x-auto prose-table:block prose-table:max-w-full prose-table:overflow-x-auto">
-              <MathMarkdown content={message.content} isStreaming={isStreaming} />
+              <MathMarkdown content={displayContent} isStreaming={isStreaming} />
             </div>
           )}
 
