@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { calculateGrade, cn } from '../../lib/utils';
 import { SubjectKey, PaperMark } from '../../types';
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend
 } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
 import { ResponsiveChartShell } from '../ui/ResponsiveChartShell';
@@ -72,7 +72,7 @@ export default function PaperMarksView() {
  nextData[currentSubject].paperMarks.splice(index, 1);
  saveData(nextData);
  setConfirmDeleteIdx(null);
- showNotification('ලකුණු වාර්තාව ඉවත් කළා.', 'info');
+ showNotification('Marks record removed.', 'info');
  };
 
  const handleEdit = (index: number) => {
@@ -110,31 +110,31 @@ export default function PaperMarksView() {
 
  <div className="space-y-8 flex flex-col">
  {/* TOTAL MARKS CHART */}
- <div className="bg-white p-6 border border-slate-200 rounded-[1.8rem] shadow-sm h-[360px] relative hover:shadow-[0_8px_30px_rgb(0,0,0,0.04)] transition-all duration-300">
+ <div className="relative h-[360px] min-w-0 overflow-hidden rounded-[1.8rem] border border-slate-200 bg-white p-6 shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.04)] transition-all duration-300">
  <div className="flex justify-between items-center mb-6">
  <h3 className="text-sm font-black text-slate-500 tracking-wide flex items-center gap-2">
- <div className="w-1.5 h-4 bg-slate-700 rounded-full"></div> මුළු ලකුණු ප්‍රගතිය
+ <div className="w-1.5 h-4 bg-slate-700 rounded-full"></div> Total marks progress
  </h3>
  <button
  onClick={() => setModals(prev => ({ ...prev, addPaperMark: { open: true, editIndex: -1 } }))}
  className="bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg w-8 h-8 flex items-center justify-center transition-colors shadow-sm cursor-pointer"
- title="ලකුණු එකතු කරන්න"
+ title="Add marks"
  >
  <i className="fa-solid fa-plus text-sm"></i>
  </button>
  </div>
  <div className="w-full h-[280px]">
  <ResponsiveChartShell minHeight={280}>
- <ResponsiveContainer width="100%" height="100%">
- <LineChart data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
+ {({ width, height }) => (
+ <LineChart width={width} height={height} data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
  <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 12 ? v.substring(0, 12) + '...' : v} dy={10} />
  <YAxis domain={[0, maxScale]} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }} />
  <Tooltip cursor={{ stroke: '#e2e8f0', strokeWidth: 2, strokeDasharray: '4 4' }} content={<ChartTooltip />} />
  <Legend verticalAlign="top" height={36} iconType="circle" wrapperStyle={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }} />
- <Line connectNulls type="monotone" dataKey="total" name="මුළු ලකුණු" stroke="var(--primary-600)" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: '#fff', strokeWidth: 2 }} activeDot={{ r: 6, stroke: '#fff', strokeWidth: 2 }} />
+ <Line connectNulls type="monotone" dataKey="total" name="Total marks" stroke="var(--primary-600)" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: 'currentColor', strokeWidth: 2 }} activeDot={{ r: 6, strokeWidth: 2 }} />
  </LineChart>
- </ResponsiveContainer>
+ )}
  </ResponsiveChartShell>
  </div>
  </div>
@@ -147,7 +147,7 @@ export default function PaperMarksView() {
  className="flex w-full items-center justify-between px-6 py-5 text-left transition-colors hover:bg-slate-50"
  aria-expanded={!collapsedBreakdown}
  >
- <span className="text-sm font-black text-slate-800">MCQ සහ Essay ලකුණු විස්තර</span>
+ <span className="text-sm font-black text-slate-800">MCQ and essay breakdown</span>
  <i className={cn("fa-solid text-xs text-slate-400 transition-transform", collapsedBreakdown ? "fa-chevron-down" : "fa-chevron-up")}></i>
  </button>
  <AnimatePresence initial={false}>
@@ -162,37 +162,37 @@ export default function PaperMarksView() {
  <div className="grid grid-cols-1 divide-y divide-slate-100 md:grid-cols-2 md:divide-x md:divide-y-0">
  <div className="p-6 h-[280px] hover:bg-slate-50/50 transition-colors">
  <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
- <i className="fa-solid fa-circle text-[8px] text-amber-500"></i> MCQ ලකුණු <span className="text-slate-300">/</span> {maxSubScale}
+ <i className="fa-solid fa-circle text-[8px] text-amber-500"></i> MCQ marks <span className="text-slate-300">/</span> {maxSubScale}
  </h3>
  <div className="w-full h-[200px]">
  <ResponsiveChartShell minHeight={200}>
- <ResponsiveContainer width="100%" height="100%">
- <LineChart data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
+ {({ width, height }) => (
+ <LineChart width={width} height={height} data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
  <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 10 ? v.substring(0, 10) + '...' : v} dy={10} />
  <YAxis domain={[0, maxSubScale]} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }} />
  <Tooltip cursor={{ stroke: '#e2e8f0', strokeWidth: 2, strokeDasharray: '4 4' }} content={<ChartTooltip />} />
- <Line connectNulls type="monotone" dataKey="mcq" name="MCQ" stroke="#f59e0b" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: '#fff', strokeWidth: 2 }} activeDot={{ r: 6, stroke: '#fff', strokeWidth: 2 }} />
+ <Line connectNulls type="monotone" dataKey="mcq" name="MCQ" stroke="#f59e0b" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: 'currentColor', strokeWidth: 2 }} activeDot={{ r: 6, strokeWidth: 2 }} />
  </LineChart>
- </ResponsiveContainer>
+ )}
  </ResponsiveChartShell>
  </div>
  </div>
  <div className="p-6 h-[280px] hover:bg-slate-50/50 transition-colors">
  <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
- <i className="fa-solid fa-circle text-[8px] text-emerald-500"></i> රචනා ලකුණු <span className="text-slate-300">/</span> {maxSubScale}
+ <i className="fa-solid fa-circle text-[8px] text-emerald-500"></i> Essay marks <span className="text-slate-300">/</span> {maxSubScale}
  </h3>
  <div className="w-full h-[200px]">
  <ResponsiveChartShell minHeight={200}>
- <ResponsiveContainer width="100%" height="100%">
- <LineChart data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
+ {({ width, height }) => (
+ <LineChart width={width} height={height} data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
  <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 10 ? v.substring(0, 10) + '...' : v} dy={10} />
  <YAxis domain={[0, maxSubScale]} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }} />
  <Tooltip cursor={{ stroke: '#e2e8f0', strokeWidth: 2, strokeDasharray: '4 4' }} content={<ChartTooltip />} />
- <Line connectNulls type="monotone" dataKey="essay" name="Essay" stroke="#10b981" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: '#fff', strokeWidth: 2 }} activeDot={{ r: 6, stroke: '#fff', strokeWidth: 2 }} />
+ <Line connectNulls type="monotone" dataKey="essay" name="Essay" stroke="#10b981" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: 'currentColor', strokeWidth: 2 }} activeDot={{ r: 6, strokeWidth: 2 }} />
  </LineChart>
- </ResponsiveContainer>
+ )}
  </ResponsiveChartShell>
  </div>
  </div>
@@ -209,7 +209,7 @@ export default function PaperMarksView() {
  className="w-full flex justify-between items-center px-6 py-5 bg-slate-50/55 hover:bg-slate-50 border-b border-slate-100 transition-colors cursor-pointer"
  >
  <span className="text-sm font-black text-slate-800 tracking-tight flex items-center gap-2">
- <i className="fa-solid fa-clock-rotate-left text-slate-400"></i> ඉතිහාසය ({marks.length})
+ <i className="fa-solid fa-clock-rotate-left text-slate-400"></i> History ({marks.length})
  </span>
  <i className={cn("fa-solid text-xs text-slate-400 transition-transform", collapsedLog ? "fa-chevron-down" : "fa-chevron-up")}></i>
  </button>
@@ -225,20 +225,20 @@ export default function PaperMarksView() {
  >
  {marks.length === 0 ? (
  <div className="p-12 text-center text-slate-400 font-semibold text-sm">
- තවම ලකුණු වාර්තා නැහැ. ආරම්භ කිරීමට “+” ලකුණ ඔබන්න.
+ No marks have been recorded yet. Press “+” to get started.
  </div>
  ) : (
  <div className="overflow-x-auto">
  <table className="w-full text-left text-sm border-collapse">
  <thead>
  <tr className="bg-slate-50/50 border-b border-slate-100 text-[11px] font-black uppercase text-slate-400 tracking-wider">
- <th className="py-4 px-6">විභාගයේ නම</th>
+ <th className="py-4 px-6">Paper name</th>
  <th className="py-4 px-4 text-center">MCQ ({maxSubScale})</th>
- <th className="py-4 px-4 text-center">රචනා ({maxSubScale})</th>
- {currentSubject === 'et' && <th className="py-4 px-4 text-center">ප්‍රායෝගික (25)</th>}
- <th className="py-4 px-4 text-center">මුළු ලකුණු ({maxScale})</th>
- <th className="py-4 px-4 text-center">ශ්‍රේණිය</th>
- <th className="py-4 px-6 text-right">ක්‍රියා</th>
+ <th className="py-4 px-4 text-center">Essay ({maxSubScale})</th>
+ {currentSubject === 'et' && <th className="py-4 px-4 text-center">Practical (25)</th>}
+ <th className="py-4 px-4 text-center">Total marks ({maxScale})</th>
+ <th className="py-4 px-4 text-center">Grade</th>
+ <th className="py-4 px-6 text-right">Actions</th>
  </tr>
  </thead>
  <tbody className="divide-y divide-slate-100 font-semibold text-slate-700">
@@ -271,16 +271,16 @@ export default function PaperMarksView() {
  <td className="py-4.5 px-6 text-right print-hide">
  {confirmDeleteIdx === idx ? (
  <div className="flex items-center justify-end gap-1.5">
- <span className="text-xs text-rose-600 font-extrabold">ඉවත් කරන්නද?</span>
- <button onClick={() => confirmDelete(idx)} className="px-2 py-1 bg-rose-600 text-white text-xs font-bold rounded-lg hover:bg-rose-700 cursor-pointer">ඔව්</button>
- <button onClick={() => setConfirmDeleteIdx(null)} className="px-2 py-1 bg-slate-200 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-300 cursor-pointer">නැහැ</button>
+ <span className="text-xs text-rose-600 font-extrabold">Remove this record?</span>
+ <button onClick={() => confirmDelete(idx)} className="px-2 py-1 bg-rose-600 text-white text-xs font-bold rounded-lg hover:bg-rose-700 cursor-pointer">Yes</button>
+ <button onClick={() => setConfirmDeleteIdx(null)} className="px-2 py-1 bg-slate-200 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-300 cursor-pointer">No</button>
  </div>
  ) : (
  <div className="flex items-center justify-end gap-2 text-slate-400">
  <button onClick={() => handleEdit(idx)} className="hover:text-primary-600 p-1 cursor-pointer transition-colors" title="Edit Log">
  <i className="fa-solid fa-pen-to-square"></i>
  </button>
- <button onClick={() => setConfirmDeleteIdx(idx)} className="hover:text-rose-600 p-1 cursor-pointer transition-colors" title="වාර්තාව ඉවත් කරන්න">
+ <button onClick={() => setConfirmDeleteIdx(idx)} className="hover:text-rose-600 p-1 cursor-pointer transition-colors" title="Remove record">
  <i className="fa-solid fa-trash-can"></i>
  </button>
  </div>

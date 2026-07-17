@@ -8,6 +8,7 @@ import {
   getAdminDb,
   getGoogleAccessToken,
 } from "../firebase/admin";
+import { updateLessonResourceProcessing } from "../lessonResources/service";
 
 export type VideoStatus =
   | "draft"
@@ -29,6 +30,7 @@ export type VideoDocument = {
   description?: string;
   subject?: string;
   lesson?: string;
+  lessonId?: string;
   concept?: string;
   status: VideoStatus;
   visibility: "private" | "class" | "institution" | "public";
@@ -68,8 +70,17 @@ const QUALITY_LADDER = [
   { key: "2160p", width: 3840, height: 2160, bitrate: 16_000_000 },
 ] as const;
 
+export function normalizeRepeatedFileExtension(value: string) {
+  const trimmed = String(value || "video.mp4").trim();
+  const match = trimmed.match(/(\.[a-z0-9]{2,5})(?:\1)+$/i);
+  return match ? trimmed.slice(0, match.index) + match[1] : trimmed;
+}
+
 export function safeVideoFileName(value: string) {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/_+/g, "_").slice(0, 120);
+  return normalizeRepeatedFileExtension(value)
+    .replace(/[^a-zA-Z0-9._-]+/g, "_")
+    .replace(/_+/g, "_")
+    .slice(0, 120);
 }
 
 export async function verifyVideoAppCheck(req: Request) {
@@ -97,10 +108,15 @@ export async function validateUploadedVideo(video: VideoDocument) {
   const isWebm = head.length >= 4 && head.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
   if (!isIsoMedia && !isWebm) throw new Error("VIDEO_CONTAINER_UNSUPPORTED");
 
+  const detectedContentType = isWebm ? "video/webm" : (video.mimeType === "video/quicktime" ? "video/quicktime" : "video/mp4");
+  if (metadata.contentType !== detectedContentType) {
+    await file.setMetadata({ contentType: detectedContentType });
+  }
+
   return {
     sizeBytes: size,
     generation: metadata.generation,
-    contentType: metadata.contentType || video.mimeType,
+    contentType: detectedContentType,
   };
 }
 
@@ -192,6 +208,7 @@ export async function refreshTranscodeStatus(video: VideoDocument): Promise<Vide
     };
     await getAdminDb().collection("videos").doc(video.id).set(updates, { merge: true });
     await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "ready", updatedAt: updates.updatedAt }, { merge: true });
+    await updateLessonResourceProcessing(video.sourceId, { processingStatus: "ready", published: true }).catch(() => undefined);
     return { ...video, ...updates };
   }
   if (!video.transcoderJobName || !["queued", "transcoding"].includes(video.status)) return video;
@@ -208,6 +225,7 @@ export async function refreshTranscodeStatus(video: VideoDocument): Promise<Vide
     };
     await getAdminDb().collection("videos").doc(video.id).set(updates, { merge: true });
     await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "ready", updatedAt: updates.updatedAt }, { merge: true });
+    await updateLessonResourceProcessing(video.sourceId, { processingStatus: "ready", published: true }).catch(() => undefined);
     return { ...video, ...updates };
   };
 
@@ -257,6 +275,10 @@ export async function refreshTranscodeStatus(video: VideoDocument): Promise<Vide
     lastErrorCode: updates.transcoderErrorCode || null,
     updatedAt: now,
   }, { merge: true });
+  await updateLessonResourceProcessing(video.sourceId, {
+    processingStatus: status,
+    published: status === "ready",
+  }).catch(() => undefined);
   return { ...video, ...updates };
 }
 

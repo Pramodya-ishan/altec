@@ -6,7 +6,7 @@ process.env.VIDEO_CDN_KEY_NAME = "test-key";
 process.env.VIDEO_CDN_SIGNING_KEY = Buffer.from("0123456789abcdef").toString("base64url");
 process.env.VIDEO_COOKIE_TTL_SECONDS = "300";
 
-const { canUserPlayVideo, createSignedPlaybackCookie, safeVideoFileName } = await import("../videoService");
+const { canUserPlayVideo, createSignedPlaybackCookie, safeVideoFileName, normalizeRepeatedFileExtension } = await import("../videoService");
 
 const baseVideo = {
   id: "video_123",
@@ -34,6 +34,8 @@ const baseVideo = {
 };
 
 assert.equal(safeVideoFileName("lesson 01 (final).mp4"), "lesson_01_final_.mp4");
+assert.equal(normalizeRepeatedFileExtension("lesson.mp4.mp4"), "lesson.mp4");
+assert.equal(safeVideoFileName("lesson.mp4.mp4"), "lesson.mp4");
 assert.equal(canUserPlayVideo(baseVideo, { uid: "student", roles: ["student"] }), true);
 assert.equal(canUserPlayVideo({ ...baseVideo, visibility: "private" }, { uid: "student", roles: ["student"] }), false);
 assert.equal(canUserPlayVideo({ ...baseVideo, visibility: "private", allowedRoles: ["teacher"] }, { uid: "teacher", roles: ["teacher"] }), true);

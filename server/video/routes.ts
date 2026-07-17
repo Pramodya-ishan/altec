@@ -12,6 +12,7 @@ import {
   createDirectPlaybackUrl,
   createSignedPlaybackCookie,
   refreshTranscodeStatus,
+  normalizeRepeatedFileExtension,
   safeVideoFileName,
   startTranscode,
   validateUploadedVideo,
@@ -19,10 +20,21 @@ import {
   type VideoDocument,
 } from "./videoService";
 import { removeUndefinedDeep } from "../ai-core/memory/chatSanitizer";
+import { normalizeLessonId, updateLessonResourceProcessing, upsertLessonResource } from "../lessonResources/service";
+import { invalidateInventoryCache } from "../sources/sourceInventoryService";
 
 export const videoRoutes = express.Router();
 
 const VIDEO_MIME_TYPES = new Set(["video/mp4", "video/quicktime", "video/webm", "application/octet-stream"]);
+
+function normalizeVideoMimeType(fileName: string, mimeType: string) {
+  if (mimeType !== "application/octet-stream") return mimeType;
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith(".mp4") || lower.endsWith(".m4v")) return "video/mp4";
+  if (lower.endsWith(".mov")) return "video/quicktime";
+  if (lower.endsWith(".webm")) return "video/webm";
+  return mimeType;
+}
 
 function publicVideo(video: VideoDocument) {
   const { inputBucket, inputObjectPath, transcoderJobName, ...safe } = video;
@@ -72,6 +84,7 @@ videoRoutes.post("/admin/videos", async (req, res) => {
       description,
       subject,
       lesson,
+      lessonId,
       concept,
       visibility = "private",
       originalFileName,
@@ -85,7 +98,8 @@ videoRoutes.post("/admin/videos", async (req, res) => {
     if (!title || !originalFileName || !mimeType || !Number.isFinite(Number(sizeBytes))) {
       return res.status(400).json({ ok: false, code: "VIDEO_METADATA_INVALID", message: "Missing video metadata." });
     }
-    if (!VIDEO_MIME_TYPES.has(mimeType)) {
+    const effectiveMimeType = normalizeVideoMimeType(String(originalFileName), String(mimeType));
+    if (!VIDEO_MIME_TYPES.has(effectiveMimeType) || effectiveMimeType === "application/octet-stream") {
       return res.status(415).json({ ok: false, code: "VIDEO_MIME_UNSUPPORTED", message: "Use MP4, MOV, or WebM video." });
     }
     if (Number(sizeBytes) > env.VIDEO_UPLOAD_MAX_MB * 1024 * 1024) {
@@ -106,10 +120,11 @@ videoRoutes.post("/admin/videos", async (req, res) => {
     const video: VideoDocument = {
       id: videoRef.id,
       sourceId: sourceRef.id,
-      title: String(title).trim().slice(0, 180),
+      title: normalizeRepeatedFileExtension(String(title).trim()).slice(0, 180),
       description: description ? String(description).trim().slice(0, 2000) : undefined,
       subject: subject ? String(subject).toUpperCase().slice(0, 20) : undefined,
       lesson: lesson ? String(lesson).slice(0, 180) : undefined,
+      lessonId: normalizeLessonId(lessonId || lesson),
       concept: concept ? String(concept).slice(0, 180) : undefined,
       status: "draft",
       visibility: ["private", "class", "institution", "public"].includes(visibility) ? visibility : "private",
@@ -123,7 +138,7 @@ videoRoutes.post("/admin/videos", async (req, res) => {
       sourceWidth: Number(width) || undefined,
       sourceHeight: Number(height) || undefined,
       durationMs: Number(durationMs) || undefined,
-      mimeType,
+      mimeType: effectiveMimeType,
       createdBy: admin.uid,
       createdAt: now,
       updatedAt: now,
@@ -143,19 +158,22 @@ videoRoutes.post("/admin/videos", async (req, res) => {
         notebookIds: [],
         visibility: video.visibility,
         displayTitle: video.title,
-        originalFileName,
+        originalFileName: normalizeRepeatedFileExtension(originalFileName),
         normalizedName: safeVideoFileName(originalFileName).toLowerCase(),
         normalizedStem: safeVideoFileName(originalFileName).replace(/\.[^.]+$/, "").toLowerCase(),
         aliases: [video.title],
         sha256: "0".repeat(64),
         sourceVersion: version,
         processingVersion: 1,
-        mimeType,
+        mimeType: effectiveMimeType,
         mediaKind: "video",
         resourceRole: "video",
         sizeBytes: Number(sizeBytes),
         durationMs: video.durationMs,
         subject: video.subject,
+        lesson: video.lesson,
+        lessonId: video.lessonId,
+        published: false,
         storagePath: inputObjectPath,
         hlsPrefix,
         masterManifestPath: video.masterManifestPath,
@@ -165,6 +183,28 @@ videoRoutes.post("/admin/videos", async (req, res) => {
         updatedAt: now,
       }));
     });
+    await upsertLessonResource({
+      id: video.sourceId,
+      sourceId: video.sourceId,
+      videoId: video.id,
+      subject: video.subject || "GENERAL",
+      lessonId: video.lessonId || normalizeLessonId(video.lesson),
+      lessonTitle: video.lesson || "General",
+      resourceType: "video",
+      mediaKind: "video",
+      title: video.title,
+      fileName: normalizeRepeatedFileExtension(originalFileName),
+      storagePath: inputObjectPath,
+      mimeType: effectiveMimeType,
+      sizeBytes: Number(sizeBytes),
+      visibility: video.visibility === "public" ? "public" : "class",
+      published: false,
+      processingStatus: "draft",
+      createdBy: admin.uid,
+      ownerUid: admin.uid,
+      createdAt: now,
+    });
+    invalidateInventoryCache(admin.uid);
     res.status(201).json({ ok: true, videoId: video.id, sourceId: video.sourceId, version });
   } catch (error: any) {
     const status = String(error?.message).includes("Forbidden") ? 403 : 500;
@@ -217,7 +257,7 @@ videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
   try {
     requireVideoEnabled();
     await verifyVideoAppCheck(req);
-    await requireAdmin(req);
+    const admin = await requireAdmin(req);
     const video = await loadVideo(req.params.videoId);
     if (["queued", "transcoding", "ready"].includes(video.status)) {
       return res.json({
@@ -287,6 +327,13 @@ videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
         updatedAt: now,
       }, { merge: true });
     }
+
+    await updateLessonResourceProcessing(video.sourceId, {
+      processingStatus: transcode.enabled ? "queued" : "ready",
+      published: true,
+      visibility: video.visibility === "public" ? "public" : "class",
+    }).catch(() => undefined);
+    invalidateInventoryCache(admin.uid);
 
     res.json({
       ok: true,
@@ -358,11 +405,22 @@ videoRoutes.post("/admin/videos/:videoId/reprocess", async (req, res) => {
 videoRoutes.patch("/admin/videos/:videoId", async (req, res) => {
   try {
     await verifyVideoAppCheck(req);
-    await requireAdmin(req);
+    const admin = await requireAdmin(req);
+    const video = await loadVideo(req.params.videoId);
     const allowed = ["title", "description", "subject", "lesson", "concept", "visibility", "allowedRoles", "allowedUserIds", "watermarkEnabled", "maxConcurrentSessions", "qualityProfiles"];
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
     for (const key of allowed) if (req.body?.[key] !== undefined) updates[key] = req.body[key];
-    await getAdminDb().collection("videos").doc(req.params.videoId).set(updates, { merge: true });
+    if (req.body?.title) updates.title = normalizeRepeatedFileExtension(String(req.body.title)).slice(0, 180);
+    if (req.body?.lesson) updates.lessonId = normalizeLessonId(req.body.lessonId || req.body.lesson);
+    await getAdminDb().collection("videos").doc(video.id).set(updates, { merge: true });
+    await getAdminDb().collection("lesson_resources").doc(video.sourceId).set({
+      ...(updates.title ? { title: updates.title, fileName: updates.title } : {}),
+      ...(updates.subject ? { subject: String(updates.subject).toUpperCase() } : {}),
+      ...(updates.lesson ? { lessonTitle: updates.lesson, lessonId: updates.lessonId } : {}),
+      ...(updates.visibility ? { visibility: updates.visibility === "public" ? "public" : "class" } : {}),
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+    invalidateInventoryCache(admin.uid);
     res.json({ ok: true });
   } catch (error: any) {
     res.status(400).json({ ok: false, code: "VIDEO_UPDATE_FAILED", message: error.message });
@@ -383,6 +441,10 @@ for (const action of ["publish", "unpublish"] as const) {
         publishedAt: action === "publish" ? new Date().toISOString() : null,
         updatedAt: new Date().toISOString(),
       }, { merge: true });
+      await updateLessonResourceProcessing(video.sourceId, {
+        published: action === "publish",
+        processingStatus: action === "publish" ? "ready" : "unpublished",
+      });
       res.json({ ok: true, published: action === "publish" });
     } catch (error: any) {
       res.status(400).json({ ok: false, code: `VIDEO_${action.toUpperCase()}_FAILED`, message: error.message });
@@ -397,6 +459,7 @@ videoRoutes.delete("/admin/videos/:videoId", async (req, res) => {
     const video = await loadVideo(req.params.videoId);
     await getAdminDb().collection("videos").doc(video.id).set({ status: "archived", isPublished: false, allowPlayback: false, updatedAt: new Date().toISOString() }, { merge: true });
     await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "deleted", deletedAt: new Date().toISOString() }, { merge: true });
+    await updateLessonResourceProcessing(video.sourceId, { processingStatus: "archived", published: false });
     res.json({ ok: true, archived: true });
   } catch (error: any) {
     res.status(400).json({ ok: false, code: "VIDEO_DELETE_FAILED", message: error.message });
@@ -487,7 +550,7 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
     });
     if (active.docs.length !== liveSessions.length) await cleanupBatch.commit();
     if (liveSessions.length >= video.maxConcurrentSessions) {
-      return res.status(409).json({ ok: false, code: "PLAYBACK_SESSION_LIMIT", message: "මෙම ගිණුමෙන් දැනටමත් වෙනත් උපාංගයක වීඩියෝවක් නරඹමින් පවතී." });
+      return res.status(409).json({ ok: false, code: "PLAYBACK_SESSION_LIMIT", message: "This account is already playing a video on another device." });
     }
 
     const directPlayback = !video.transcoderJobName || (video as any).playbackMode === "direct";

@@ -1,0 +1,24 @@
+Tec A/L production repair verification
+Date: 2026-07-17
+
+PASS  npm ci --include=dev
+PASS  npm run typecheck
+PASS  npm test
+  PASS source registry and Z-score regression tests
+  PASS Markdown normalization tests
+  PASS source authorization tests
+  PASS authentication strategy tests
+  PASS PDF extraction state tests
+  PASS lesson resolver tests
+  PASS security and configured-role tests
+  PASS content-manager permission tests
+  PASS secure video tests
+PASS  npm run build:vercel
+PASS  npm run verify:repair
+
+Verified runtime artifacts:
+- vercel-runtime/server.mjs
+- vercel-runtime/pdf.worker.mjs
+- vercel-runtime/google-gax-protos/
+
+Browser automation against localhost was unavailable in this sandbox, so live multi-viewport and real-account cloud acceptance tests must be performed in the preview deployment. See PRODUCTION_REPAIR_REPORT.md.

@@ -8,6 +8,8 @@ import { retryGoogleAuthOperation } from "../utils/retry";
 import multer from "multer";
 import { invalidateInventoryCache, computeIndexStatus } from "../sources/sourceInventoryService";
 import { isGeminiPdfOcrConfigured } from "../pdf/geminiPdfOcr";
+import { assertContentManager, isContentManager, isSharedSourceScope } from "../utils/contentPermissions";
+import { normalizeLessonId, upsertLessonResource } from "../lessonResources/service";
 
 export const ragRoutes = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -98,9 +100,9 @@ ragRoutes.get("/sources/:sourceId/download", requireFirebaseUser, async (req: an
       return res.status(404).json({ ok: false, error: "Storage path not found" });
     }
     
-    // Ensure only the owner of the source document can download the file
-    if (data.ownerUid !== user.uid) {
-      return res.status(403).json({ ok: false, error: "Unauthorized access to source. Only the owner of the source document can download the file." });
+    const visibleToStudents = ["official", "shared", "class", "institution", "public"].includes(String(data.visibility || ""));
+    if (data.ownerUid !== user.uid && !visibleToStudents && !isContentManager(user)) {
+      return res.status(403).json({ ok: false, code: "SOURCE_ACCESS_FORBIDDEN", message: "You do not have access to this source." });
     }
     
     const bucket = getAdminBucket();
@@ -173,14 +175,15 @@ ragRoutes.get("/past-papers", requireNonAnonymousUser, async (req: any, res) => 
       ok: false,
       code: isPermissionError(err) ? "FIRESTORE_ADMIN_PERMISSION_DENIED" : "PAST_PAPERS_LIST_FAILED",
       message: isPermissionError(err)
-        ? "Server Firebase අවසර සැකසුම නිවැරදි කරන්න."
-        : (err?.message || "ප්‍රශ්න පත්‍ර ලබාගත නොහැකි වුණා."),
+        ? "The server does not have permission to read past papers."
+        : (err?.message || "Past papers could not be loaded."),
     });
   }
 });
 
 ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) => {
   try {
+    assertContentManager(req.user);
     const {
       id,
       sourceId,
@@ -228,6 +231,11 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
       ownerUid: req.user.uid,
       ownerEmail: req.user.email || "unknown",
       uploaded: true,
+      visibility: "official",
+      published: true,
+      createdBy: req.user.uid,
+      lesson: String(req.body.lesson || "Past papers"),
+      lessonId: normalizeLessonId(req.body.lessonId || req.body.lesson || "Past papers"),
       chunkCount: alreadyProcessed ? Number(existing.chunkCount || 0) : Number(chunkCount || 0),
       needsOcr: alreadyProcessed ? existing.needsOcr === true : needsOcr === true,
       textIndexed: alreadyProcessed ? existing.textIndexed === true : Number(chunkCount || 0) > 0 && needsOcr !== true,
@@ -236,11 +244,33 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
     };
 
     await db.collection("past_papers").doc(finalId).set(paperDoc, { merge: true });
+    await db.collection("rag_sources").doc(finalId).set(paperDoc, { merge: true });
+    await upsertLessonResource({
+      id: finalId,
+      sourceId: finalId,
+      subject: normSubject,
+      lessonId: paperDoc.lessonId,
+      lessonTitle: paperDoc.lesson,
+      resourceType: "past_paper",
+      mediaKind: "pdf",
+      title: paperDoc.title,
+      fileName: paperDoc.fileName,
+      storagePath: paperDoc.storagePath,
+      visibility: "official",
+      published: true,
+      processingStatus: paperDoc.chunkCount > 0 ? "ready" : "queued",
+      needsOcr: paperDoc.needsOcr,
+      textIndexed: paperDoc.chunkCount > 0 && !paperDoc.needsOcr,
+      createdBy: req.user.uid,
+      ownerUid: req.user.uid,
+      createdAt: paperDoc.createdAt,
+    });
     invalidateInventoryCache(req.user.uid);
 
     res.json({ ok: true, doc: paperDoc });
   } catch (err: any) {
-    res.status(500).json({ ok: false, error: err.message });
+    const status = Number(err?.status) || 500;
+    res.status(status).json({ ok: false, code: err?.code || "PAST_PAPER_SAVE_FAILED", message: err?.message || "Past paper could not be saved." });
   }
 });
 
@@ -250,8 +280,8 @@ ragRoutes.delete("/past-papers/:id", requireNonAnonymousUser, async (req: any, r
     const sourceId = req.params.id;
     const db = getAdminDb();
     
-    // Verify user owns the paper or is admin
-    const isAdmin = req.user.roles?.includes("admin") || req.user.admin === true;
+    assertContentManager(req.user);
+    const isAdmin = true;
     
     let storagePath: string | null = null;
     let pastPaperDeleted = false;
@@ -304,6 +334,7 @@ ragRoutes.delete("/past-papers/:id", requireNonAnonymousUser, async (req: any, r
       batch.delete(syllabusResources.ref);
     }
     
+    batch.delete(db.collection("lesson_resources").doc(sourceId));
     await batch.commit();
 
     // Optionally delete from storage
@@ -342,7 +373,8 @@ ragRoutes.delete("/past-papers/:id", requireNonAnonymousUser, async (req: any, r
       }
     });
   } catch (err: any) {
-    res.status(500).json({ ok: false, error: err.message });
+    const status = Number(err?.status) || 500;
+    res.status(status).json({ ok: false, code: err?.code || "PAST_PAPER_DELETE_FAILED", message: err?.message || "Past paper could not be deleted." });
   }
 });
 
@@ -365,11 +397,11 @@ ragRoutes.delete("/sources/:sourceId", requireNonAnonymousUser, async (req: any,
       return res.status(404).json({ ok: false, error: "Source data not found." });
     }
 
-    const isAdmin = user.roles?.includes("admin") || user.admin === true;
-
-    // Check ownership
-    if (data.ownerUid !== user.uid && !isAdmin) {
-      return res.status(403).json({ ok: false, error: "ඔබට මෙම PDF එක මකා දැමීමට අවසර නැත." });
+    const manager = isContentManager(user);
+    if (isSharedSourceScope(data.sourceScope)) {
+      assertContentManager(user);
+    } else if (data.ownerUid !== user.uid && !manager) {
+      return res.status(403).json({ ok: false, code: "SOURCE_DELETE_FORBIDDEN", message: "You do not have permission to delete this source." });
     }
 
     const storagePath = data.storagePath;
@@ -398,8 +430,9 @@ ragRoutes.delete("/sources/:sourceId", requireNonAnonymousUser, async (req: any,
     // 2. Delete from DB using a batch write
     const batch = db.batch();
 
-    // Delete from rag_sources
+    // Delete from rag_sources and the global lesson catalog entry.
     batch.delete(docRef);
+    batch.delete(db.collection("lesson_resources").doc(sourceId));
 
     // If it was a syllabus resource, delete from user sub-collections
     if (data.sourceScope === "owner_syllabus" || data.sourceScope === "past_paper") {
@@ -476,9 +509,10 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
     }
 
     const sourceData = sourceSnap.data();
-    const isAdmin = user.roles?.includes("admin") || user.admin === true;
-    if (sourceData?.ownerUid !== user.uid && !isAdmin) {
-      return res.status(403).json({ ok: false, error: "Unauthorized to reindex this source." });
+    if (isSharedSourceScope(sourceData?.sourceScope)) {
+      assertContentManager(user);
+    } else if (sourceData?.ownerUid !== user.uid && !isContentManager(user)) {
+      return res.status(403).json({ ok: false, code: "SOURCE_REINDEX_FORBIDDEN", message: "You do not have permission to reindex this source." });
     }
 
     let chunkCount = 0;
@@ -862,7 +896,8 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
 
   } catch (err: any) {
     console.error("Error in reindex-uploaded endpoint:", err);
-    res.status(500).json({ ok: false, error: err.message });
+    const status = Number(err?.status) || 500;
+    res.status(status).json({ ok: false, code: err?.code || "SOURCE_REINDEX_FAILED", message: err?.message || "The source could not be reindexed." });
   }
 });
 
@@ -871,6 +906,15 @@ ragRoutes.get("/sources/:sourceId/chunks", requireFirebaseUser, async (req: any,
   try {
     const { sourceId } = req.params;
     const db = getAdminDb();
+    const sourceSnapshot = await db.collection("rag_sources").doc(sourceId).get();
+    if (!sourceSnapshot.exists) {
+      return res.status(404).json({ ok: false, code: "SOURCE_NOT_FOUND", message: "Source not found." });
+    }
+    const source = sourceSnapshot.data() || {};
+    const visible = ["public", "official", "shared", "class", "institution"].includes(String(source.visibility || ""));
+    if (!isContentManager(req.user) && source.ownerUid !== req.user.uid && !visible) {
+      return res.status(403).json({ ok: false, code: "SOURCE_CHUNKS_FORBIDDEN", message: "You do not have access to this source." });
+    }
     const chunksSnap = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
     const chunks = chunksSnap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
     chunks.sort((a: any, b: any) => (a.chunkIndex || 0) - (b.chunkIndex || 0));

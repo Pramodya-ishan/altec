@@ -8,7 +8,11 @@ export type LessonResourceStatus =
   | 'transcribing'
   | 'indexing'
   | 'ready'
-  | 'failed';
+  | 'failed'
+  | 'draft'
+  | 'unpublished'
+  | 'archived'
+  | 'needs_ocr';
 
 export type LessonResource = {
   id?: string;
@@ -26,6 +30,10 @@ export type LessonResource = {
   durationMs?: number;
   sizeBytes?: number;
   createdAt?: string;
+  lessonId?: string;
+  lessonTitle?: string;
+  visibility?: string;
+  published?: boolean;
 };
 
 export type Video = LessonResource;

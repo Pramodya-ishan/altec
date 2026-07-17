@@ -284,7 +284,7 @@ export async function requireUser(req: any) {
 
 export async function requireAdmin(req: any) {
   const user = await requireUser(req);
-  const canManageContent = user.admin || user.roles?.includes('content_editor') || user.roles?.includes('ops');
+  const canManageContent = user.admin || user.roles?.includes('content_editor') || user.roles?.includes('teacher') || user.roles?.includes('ops');
   if (!canManageContent && process.env.DEV_BYPASS_AUTH !== 'true') {
     throw new Error('Forbidden: Admin access required');
   }

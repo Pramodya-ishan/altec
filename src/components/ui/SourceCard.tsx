@@ -60,13 +60,13 @@ export const SourceCard: React.FC<SourceCardProps> = ({
     } catch (e: any) {
       console.error('Download trigger failed:', e);
       if (e.message?.includes('LOGIN_REQUIRED')) {
-         alert('PDF open කරන්න login අවශ්‍යයි. නැවත sign in කරන්න.');
+         alert('Sign in again to open this PDF.');
       } else if (e.message?.includes('storage/unauthorized')) {
-         alert('PDF permission denied. Storage rules / App Check / login check කරන්න.');
+         alert('PDF permission denied. Check your sign-in and access permissions.');
       } else if (e.message?.includes('NOT_A_PDF_RESPONSE')) {
-         alert('PDF වෙනුවට server error response එකක් ආවා. Source route/auth fix කරන්න.');
+         alert('The server returned an error instead of a PDF.');
       } else if (e.message?.includes('NO_OPENABLE_PDF_SOURCE')) {
-         alert('මේ source එකට storagePath හෝ public URL එකක් නැහැ.');
+         alert('This source has no available PDF file.');
       } else {
          alert('Error opening PDF: ' + e.message);
       }

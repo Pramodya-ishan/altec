@@ -252,15 +252,14 @@ export function TopNav() {
   const unreadCount = pushNotifications.filter(n => !n.read).length;
 
   return (
-    <nav className="bg-white/95 backdrop-blur-md px-6 py-3 sticky top-0 z-50 flex flex-col gap-3">
+    <nav className="sticky top-0 z-50 flex min-w-0 flex-col gap-3 bg-white/95 px-4 py-3 backdrop-blur-md sm:px-6">
       {/* Top Row: Menu & Countdown + Desktop Search + Right Controls */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-4">
           <button
             onClick={() => setSidebarOpen(true)}
             className="lg:hidden w-10 h-10 rounded-xl flex items-center justify-center border border-slate-200 text-slate-700 bg-white shadow-sm hover:!bg-primary-50 hover:!text-primary-600 hover:!border-primary-600 transition-all active:scale-95 cursor-pointer"
-            aria-label="Open Menu"
-            title="Open Menu"
+            aria-label="Open navigation"
           >
             <Menu className="w-5 h-5" />
           </button>
@@ -280,7 +279,7 @@ export function TopNav() {
         </div>
 
 
-        <div className="flex items-center gap-4">
+        <div className="flex min-w-0 shrink-0 items-center gap-2 sm:gap-4">
 
 
           {currentView !== 'admission-predictor' && currentView !== 'focus-todo' && currentView !== 'clora-x' && (
@@ -298,9 +297,11 @@ export function TopNav() {
             <button
               type="button"
               onClick={() => window.dispatchEvent(new CustomEvent('clora:new-chat'))}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+              aria-label="New chat"
+              title="New chat"
             >
-              <Plus className="h-4 w-4" /> New chat
+              <Plus className="h-4 w-4" />
             </button>
           ) : (
           <div className="flex items-center gap-3">

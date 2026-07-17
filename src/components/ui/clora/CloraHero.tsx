@@ -11,9 +11,9 @@ export function CloraHero({ onSelectPrompt, prompts = [] }: CloraHeroProps) {
   return (
     <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-5 py-10 sm:px-8">
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45 }}>
-        <h1 className="max-w-xl text-3xl font-semibold tracking-[-0.035em] text-slate-950 sm:text-4xl">අද මොනවද ඉගෙන ගන්නේ?</h1>
+        <h1 className="max-w-xl text-3xl font-semibold tracking-[-0.035em] text-slate-950 sm:text-4xl">What would you like to study?</h1>
         <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500 sm:text-base">
-          ශ්‍රී ලංකා උසස් පෙළ විෂයයන්, පසුගිය ප්‍රශ්න පත්‍ර, පාඩම් ගොනු සහ ඔබේ සටහන් සමඟ ඉගෙන ගන්න.
+          Study with A/L subjects, past papers, lesson resources, and your notes.
         </p>
 
         <div className="mt-7 grid gap-2 sm:grid-cols-2">

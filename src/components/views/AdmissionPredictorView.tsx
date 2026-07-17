@@ -48,7 +48,6 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
-  ResponsiveContainer,
   ReferenceLine,
   BarChart,
   Bar,
@@ -748,7 +747,7 @@ export default function AdmissionPredictorView() {
       const name = point.normalizedDate.toISOString().slice(0, 10);
       byDay.set(name, {
         name,
-        "ගණනය කළ Z අගය": Number(point.zScore),
+        "Calculated Z-score": Number(point.zScore),
         reason: point.reason,
       });
     });
@@ -764,7 +763,7 @@ export default function AdmissionPredictorView() {
       visiblePoints.unshift({
         ...visiblePoints[0],
         name: previousDate.toISOString().slice(0, 10),
-        reason: "ප්‍රගති සටහන් ආරම්භ කළා",
+        reason: "Progress tracking started",
       });
     }
     return visiblePoints;
@@ -805,7 +804,7 @@ export default function AdmissionPredictorView() {
           {payload[0] && payload[0].payload.reason && (
             <div className="mt-3 pt-3 border-t border-slate-100">
               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">
-                වෙනස්වීමට හේතුව
+                Reason for change
               </p>
               <p className="text-xs text-slate-700 font-medium leading-snug">
                 {payload[0].payload.reason}
@@ -846,7 +845,7 @@ export default function AdmissionPredictorView() {
                         <LineChart className="w-10 h-10 text-indigo-900" />
                       </div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 leading-tight relative">
-                        අනුමාන Z අගය
+                        Estimated Z-score
                       </p>
                       <p className="text-lg font-black text-slate-900 tracking-tight relative">
                         {formatZ(overallZScore, 4)}
@@ -857,7 +856,7 @@ export default function AdmissionPredictorView() {
                         <MapPin className="w-10 h-10 text-emerald-900" />
                       </div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 leading-tight relative">
-                        දිස්ත්‍රික් අනුමාන ස්ථානය
+                        Estimated district rank
                       </p>
                       <p className="text-sm font-black text-slate-900 relative">
                         ≈ {prediction.estimatedDistrictRank.toLocaleString()}
@@ -868,7 +867,7 @@ export default function AdmissionPredictorView() {
                         <Globe className="w-10 h-10 text-amber-900" />
                       </div>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1 leading-tight relative">
-                        දිවයින් අනුමාන ස්ථානය
+                        Estimated island rank
                       </p>
                       <p className="text-sm font-black text-slate-900 relative">
                         ≈ {prediction.estimatedIslandRank.toLocaleString()}
@@ -884,7 +883,7 @@ export default function AdmissionPredictorView() {
                           SFT
                         </span>
                         <span className="text-xs font-bold text-slate-800 leading-none truncate flex-1 pl-1">
-                          තාක්ෂණවේදය සඳහා විද්‍යාව
+                          Science for Technology
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between">
@@ -895,7 +894,7 @@ export default function AdmissionPredictorView() {
                         </div>
                         <div className="text-right">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            විෂය Z අගය
+                            Subject Z-score
                           </span>
                           <div className="text-xl font-mono font-black text-slate-700 leading-none">
                             {formatZ(sftZ)}
@@ -911,7 +910,7 @@ export default function AdmissionPredictorView() {
                           ET
                         </span>
                         <span className="text-xs font-bold text-slate-800 leading-none truncate flex-1 pl-1">
-                          ඉංජිනේරු තාක්ෂණවේදය
+                          Engineering Technology
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between">
@@ -922,7 +921,7 @@ export default function AdmissionPredictorView() {
                         </div>
                         <div className="text-right">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            විෂය Z අගය
+                            Subject Z-score
                           </span>
                           <div className="text-xl font-mono font-black text-slate-700 leading-none">
                             {formatZ(etZ)}
@@ -938,7 +937,7 @@ export default function AdmissionPredictorView() {
                           ICT
                         </span>
                         <span className="text-xs font-bold text-slate-800 leading-none truncate flex-1 pl-1">
-                          තොරතුරු හා සන්නිවේදන තාක්ෂණය
+                          Information and Communication Technology
                         </span>
                       </div>
                       <div className="flex items-baseline justify-between">
@@ -949,7 +948,7 @@ export default function AdmissionPredictorView() {
                         </div>
                         <div className="text-right">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">
-                            විෂය Z අගය
+                            Subject Z-score
                           </span>
                           <div className="text-xl font-mono font-black text-slate-700 leading-none">
                             {formatZ(ictZ)}
@@ -965,10 +964,10 @@ export default function AdmissionPredictorView() {
 
               {/* RIGHT COLUMN: CHRONOLOGICAL PROGRESSION AREA CHART (7 columns) */}
               <div className="lg:col-span-7 space-y-6">
-                <div className="bg-white rounded-[1.8rem] border border-slate-200 p-6 shadow-sm space-y-6">
+                <div className="min-w-0 overflow-hidden rounded-[1.8rem] border border-slate-200 bg-white p-6 shadow-sm space-y-6">
                   <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                     <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                      <LineChart className="w-5 h-5 text-primary-500" /> Z-Score ප්‍රගතිය
+                      <LineChart className="w-5 h-5 text-primary-500" /> Z-score progress
                     </h3>
                   </div>
 
@@ -977,18 +976,16 @@ export default function AdmissionPredictorView() {
                       <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
                         <div className="max-w-sm">
                           <LineChart className="mx-auto mb-3 h-7 w-7 text-slate-300" />
-                          <p className="text-sm font-bold text-slate-700">ප්‍රගති ඉතිහාසය මෙතැනින් ආරම්භ වේ</p>
-                          <p className="mt-1 text-xs leading-5 text-slate-500">පාඩම් සම්පූර්ණ කරන විට සත්‍ය ප්‍රගති සටහන් මෙහි පෙන්වයි.</p>
+                          <p className="text-sm font-bold text-slate-700">Your progress history starts here</p>
+                          <p className="mt-1 text-xs leading-5 text-slate-500">Progress records will appear as you complete lessons.</p>
                         </div>
                       </div>
                     ) : (
                     <ResponsiveChartShell minHeight={320}>
-                      <ResponsiveContainer
-                        width="100%"
-                        height={320}
-                        minWidth={0}
-                      >
+                      {({ width, height }) => (
                         <AreaChart
+                          width={width}
+                          height={height}
                           data={chartData}
                           margin={{ top: 15, right: 15, left: -25, bottom: 20 }}
                         >
@@ -1048,7 +1045,7 @@ export default function AdmissionPredictorView() {
                           />
                           <Area
                             type="monotone"
-                            dataKey="ගණනය කළ Z අගය"
+                            dataKey="Calculated Z-score"
                             stroke="var(--primary-500)"
                             strokeWidth={3}
                             fillOpacity={1}
@@ -1061,7 +1058,7 @@ export default function AdmissionPredictorView() {
                             strokeWidth={2}
                             strokeDasharray="4 4"
                             label={{
-                              value: `ඉලක්කය: +${targetZ.toFixed(2)}`,
+                              value: `Target: +${targetZ.toFixed(2)}`,
                               fill: "#ec4899",
                               fontSize: 10,
                               fontWeight: 800,
@@ -1069,7 +1066,7 @@ export default function AdmissionPredictorView() {
                             }}
                           />
                         </AreaChart>
-                      </ResponsiveContainer>
+                      )}
                     </ResponsiveChartShell>
                     )}
                   </div>
@@ -1207,15 +1204,15 @@ const DEFAULT_PLANNING_QUESTIONS: RequirementQuestion[] = [
   {
     id: "plan_scope",
     questionSi:
-      "ඔයාට full-day plan එකක්ද, A/L exam එක පටන් ගන්න දවස දක්වා day-by-day plan එකක්ද, නැත්නම් දෙකමද ඕනේ?",
+      "Do you need a full-day plan, a day-by-day plan until A/L, or both?",
     questionEn:
       "Do you need a full-day plan, a day-by-day plan until A/L, or both?",
     type: "single_choice",
     required: true,
     options: [
       { value: "full_day", labelSi: "Full-day plan" },
-      { value: "until_al", labelSi: "A/L වෙනකම් plan" },
-      { value: "both", labelSi: "දෙකම" },
+      { value: "until_al", labelSi: "Plan until A/L" },
+      { value: "both", labelSi: "Both" },
     ],
     recommendedValue: "both",
     whyNeeded: "The plan structure depends on the selected time range.",
@@ -1223,7 +1220,7 @@ const DEFAULT_PLANNING_QUESTIONS: RequirementQuestion[] = [
   {
     id: "weekday_hours",
     questionSi:
-      "School සහ tuition හැර weekday එකක study කරන්න පුළුවන් පැය ගණන කීයද?",
+      "How many hours can you study on a weekday, excluding school and tuition?",
     type: "number",
     required: true,
     recommendedValue: 5,
@@ -1231,7 +1228,7 @@ const DEFAULT_PLANNING_QUESTIONS: RequirementQuestion[] = [
   },
   {
     id: "weekend_hours",
-    questionSi: "Weekend දවසක study කරන්න පුළුවන් පැය ගණන කීයද?",
+    questionSi: "How many hours can you study on a weekend day?",
     type: "number",
     required: true,
     recommendedValue: 8,
@@ -1240,7 +1237,7 @@ const DEFAULT_PLANNING_QUESTIONS: RequirementQuestion[] = [
   {
     id: "fixed_commitments",
     questionSi:
-      "School, tuition, travel, sports, cadet, prefect duties සහ වෙනත් fixed times මොනවාද?",
+      "List school, tuition, travel, sports, cadet, prefect duties, and other fixed commitments.",
     type: "text",
     required: false,
     recommendedValue: "",
@@ -1248,7 +1245,7 @@ const DEFAULT_PLANNING_QUESTIONS: RequirementQuestion[] = [
   },
   {
     id: "sleep_schedule",
-    questionSi: "සාමාන්යයෙන් නිදාගන්න සහ නැගිටින වේලාව මොකක්ද?",
+    questionSi: "What time do you normally sleep and wake up?",
     type: "text",
     required: true,
     recommendedValue: "Sleep 10:30 PM, wake 5:30 AM",
@@ -1257,26 +1254,26 @@ const DEFAULT_PLANNING_QUESTIONS: RequirementQuestion[] = [
   {
     id: "scientific_methods",
     questionSi:
-      "Active Recall, Spaced Repetition, Interleaving, Blurting සහ Error Log plan එකට add කරන්නද?",
+      "Should the plan include Active Recall, Spaced Repetition, Interleaving, Blurting, and an Error Log?",
     type: "single_choice",
     required: true,
     options: [
-      { value: "all", labelSi: "Recommended methods සියල්ල add කරන්න" },
-      { value: "custom", labelSi: "Methods select කරන්න" },
-      { value: "simple", labelSi: "Simple plan එකක්" },
+      { value: "all", labelSi: "Add all recommended methods" },
+      { value: "custom", labelSi: "Choose methods" },
+      { value: "simple", labelSi: "Simple plan" },
     ],
     recommendedValue: "all",
     whyNeeded: "The selected methods change the revision workflow.",
   },
   {
     id: "past_papers",
-    questionSi: "2016–2025 past papers subject තුනටම complete කරන්න ඕනේද?",
+    questionSi: "Should all three subjects include the 2016–2025 past papers?",
     type: "single_choice",
     required: true,
     options: [
       {
         value: "all_sections",
-        labelSi: "Subject තුනටම MCQ, Structured සහ Essay",
+        labelSi: "MCQ, Structured, and Essay for all three subjects",
       },
       { value: "mcq_first", labelSi: "MCQ first" },
       { value: "custom", labelSi: "Custom selection" },
@@ -1286,13 +1283,13 @@ const DEFAULT_PLANNING_QUESTIONS: RequirementQuestion[] = [
   },
   {
     id: "language",
-    questionSi: "Final response එක ඕනේ මොන language එකෙන්ද?",
+    questionSi: "Which language should the final response use?",
     type: "single_choice",
     required: true,
     options: [
-      { value: "si", labelSi: "සිංහල" },
+      { value: "si", labelSi: "Sinhala" },
       { value: "en", labelSi: "English" },
-      { value: "mixed", labelSi: "සිංහල + English" },
+      { value: "mixed", labelSi: "Sinhala + English" },
     ],
     recommendedValue: "mixed",
     whyNeeded: "This controls the final response language.",

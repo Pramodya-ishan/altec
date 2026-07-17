@@ -28,54 +28,56 @@ const PdfIntelAdmin = lazy(() => import('./pages/PdfIntelAdmin.tsx'));
 import { AddPaperMarksModal } from './components/modals/AddPaperMarksModal';
 import { NotesModal } from './components/modals/NotesModal';
 import { SilencePlayerModal } from './components/modals/SilencePlayerModal';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { cn } from './lib/utils';
 import { CheckCircle2, XCircle, Info, X, CloudOff, GraduationCap, Loader2 } from 'lucide-react';
 import { PageSkeleton } from './components/ui/PageSkeleton';
 
 function ToastNotification() {
   const { notifications, removeNotification } = useApp();
+  const reduceMotion = useReducedMotion();
 
   return (
-    <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[99999] pointer-events-none flex flex-col items-center justify-start w-full max-w-sm gap-2" aria-live="polite">
-      <AnimatePresence>
-        {notifications.map((notif, i) => {
-          if (i < notifications.length - 1) return null; // Show only latest
-
-          return (
-            <motion.div
-              key={notif.id}
-              layout
-              initial={{ opacity: 0, y: -20, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95, y: -10 }}
-              transition={{ duration: 0.2 }}
-              className={cn(
-                "pointer-events-auto px-4 py-3 rounded-2xl shadow-xl font-medium bg-white text-slate-800 flex items-center gap-3 cursor-pointer min-w-[280px] max-w-[90vw] overflow-hidden border",
-                notif.type === 'error' ? 'border-rose-200' :
-                notif.type === 'success' ? 'border-emerald-200' :
-                'border-slate-200'
-              )}
-              onClick={() => removeNotification(notif.id)}
+    <div
+      className="pointer-events-none fixed left-1/2 top-[max(0.75rem,env(safe-area-inset-top))] z-[99999] flex w-[calc(100vw-24px)] max-w-[380px] -translate-x-1/2 flex-col items-center gap-2 sm:top-4"
+      aria-live="polite"
+      aria-atomic="false"
+    >
+      <AnimatePresence mode="popLayout" initial={false}>
+        {notifications.map((notification) => (
+          <motion.div
+            key={notification.id}
+            layout={!reduceMotion}
+            initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -10, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -8, scale: 0.98 }}
+            transition={{ duration: reduceMotion ? 0.08 : 0.2 }}
+            className={cn(
+              "pointer-events-auto flex w-full min-w-0 cursor-pointer items-center gap-3 overflow-hidden rounded-2xl border bg-white px-4 py-3 text-slate-800 shadow-lg",
+              notification.type === "error" ? "border-rose-200" :
+              notification.type === "success" ? "border-emerald-200" :
+              "border-slate-200",
+            )}
+            onClick={() => removeNotification(notification.id)}
+          >
+            <div className={cn("shrink-0", notification.type === "error" ? "text-rose-600" : notification.type === "success" ? "text-emerald-600" : "text-slate-500")}>
+              {notification.type === "success" && <CheckCircle2 className="h-5 w-5" />}
+              {notification.type === "error" && <XCircle className="h-5 w-5" />}
+              {notification.type === "info" && <Info className="h-5 w-5" />}
+            </div>
+            <div className="min-w-0 flex-1 break-words text-[14px] font-medium leading-tight [overflow-wrap:anywhere]">
+              {notification.message.replace(/\[RETRY:\d+\]/gi, "").replace(/(?:\(\s*|-?\s*)?retry in\s*(\d+(?:\.\d+)?)\s*(?:s|sec|seconds?)(?:\.\.\.|\.)?(?:\s*\))?/gi, "").trim() || "Network error. Please wait."}
+            </div>
+            <button
+              type="button"
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              onClick={(event) => { event.stopPropagation(); removeNotification(notification.id); }}
+              aria-label="Dismiss notification"
             >
-              <div className={cn("shrink-0 flex items-center justify-center", notif.type === 'error' ? 'text-rose-600' : notif.type === 'success' ? 'text-emerald-600' : 'text-slate-500')}>
-                 {notif.type === 'success' && <CheckCircle2 className="w-5 h-5" />}
-                 {notif.type === 'error' && <XCircle className="w-5 h-5" />}
-                 {notif.type === 'info' && <Info className="w-5 h-5" />}
-              </div>
-              <div className="text-[14px] leading-tight flex-1">
-                 {notif.message.replace(/\[RETRY:\d+\]/gi, '').replace(/(?:\(\s*|-?\s*)?retry in\s*(\d+(?:\.\d+)?)\s*(?:s|sec|seconds?)(?:\.\.\.|\.)?(?:\s*\))?/gi, '').trim() || "Network error. Please wait."}
-              </div>
-              <button 
-                 className="shrink-0 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors"
-                 onClick={(e) => { e.stopPropagation(); removeNotification(notif.id); }}
-                 aria-label="Dismiss notification"
-              >
-                 <X className="w-4 h-4" />
-              </button>
-            </motion.div>
-          );
-        })}
+              <X className="h-4 w-4" />
+            </button>
+          </motion.div>
+        ))}
       </AnimatePresence>
     </div>
   );
@@ -238,19 +240,19 @@ function AppContent() {
   }, [location.pathname]);
 
   return (
-    <div className="min-h-screen bg-white font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 relative">
+    <div className="min-h-[100dvh] overflow-x-hidden bg-white font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 relative">
       <OnlineStatus />
       <ToastNotification />
       <AuthOverlay />
       <AnimatePresence>{routeChanging && <motion.div initial={{ scaleX: 0, opacity: 0 }} animate={{ scaleX: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.28 }} className="fixed left-0 top-0 z-[100000] h-0.5 w-full origin-left bg-blue-600" />}</AnimatePresence>
       <Sidebar />
-      <div className={cn("flex flex-col transition-all duration-300", isChatRoute ? "h-[100dvh] overflow-hidden bg-white" : "min-h-screen bg-white", isSidebarOpen ? "lg:pl-72" : "lg:pl-[72px] pl-0")}>
+      <div className={cn("flex flex-col transition-all duration-300", isChatRoute ? "h-[100dvh] overflow-hidden bg-white" : "min-h-[100dvh] bg-white", isSidebarOpen ? "lg:pl-72" : "lg:pl-[72px] pl-0")}>
         <TopNav />
         <main
           className={cn(
             "relative w-full flex-1 flex flex-col min-h-0",
             isChatRoute
-              ? "max-w-none p-0 overflow-hidden"
+              ? "max-w-none overflow-hidden p-0 pb-[calc(60px+env(safe-area-inset-bottom))] lg:pb-0"
               : "max-w-7xl mx-auto px-4 pb-24 pt-6 sm:px-6 sm:py-8 lg:px-8"
           )}
         >

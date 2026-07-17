@@ -4,6 +4,7 @@ import { access, readFile, unlink } from "node:fs/promises";
 const runtimePath = new URL("../vercel-runtime/server.mjs", import.meta.url);
 const metafilePath = new URL("../vercel-runtime/server.meta.json", import.meta.url);
 const protoAssetPath = new URL("../vercel-runtime/google-gax-protos/google/longrunning/operations.proto", import.meta.url);
+const pdfWorkerPath = new URL("../vercel-runtime/pdf.worker.mjs", import.meta.url);
 const vercelConfigPath = new URL("../vercel.json", import.meta.url);
 const source = await readFile(runtimePath, "utf8");
 const metafile = JSON.parse(await readFile(metafilePath, "utf8"));
@@ -54,6 +55,7 @@ if (!source.includes("google-gax-protos")) {
 }
 
 await access(protoAssetPath);
+await access(pdfWorkerPath);
 
 const functionEntries = Object.entries(vercelConfig.functions || {});
 if (functionEntries.length !== 1 || functionEntries[0][0] !== "api/index.ts") {
@@ -64,8 +66,8 @@ const functionConfig = functionEntries[0][1];
 const includeFiles = Array.isArray(functionConfig.includeFiles)
   ? functionConfig.includeFiles
   : [functionConfig.includeFiles];
-if (!includeFiles.includes("vercel-runtime/google-gax-protos/**")) {
-  throw new Error("The Vercel API function must include bundled google-gax protobuf assets.");
+if (!includeFiles.includes("vercel-runtime/**")) {
+  throw new Error("The Vercel API function must include every bundled runtime asset.");
 }
 if (functionConfig.excludeFiles !== "node_modules/**") {
   throw new Error("The Vercel API function must exclude node_modules after bundling.");

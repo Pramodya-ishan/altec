@@ -15,7 +15,8 @@ authRoutes.get("/context", requireFirebaseUser, async (req: any, res) => {
         return res.status(401).json({ ok: false, error: "AuthContext not available" });
       }
       const capabilities = computeSourceCapabilities(authContext, {});
-      const canUploadVideo = authContext.roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
+      const canManageLessonResources = authContext.roles.some((role: string) => ["admin", "content_editor", "teacher", "ops"].includes(role));
+      const canUploadVideo = canManageLessonResources;
       res.json({
         ok: true,
         user: {
@@ -25,7 +26,7 @@ authRoutes.get("/context", requireFirebaseUser, async (req: any, res) => {
           isAnonymous: user.isAnonymous
         },
         roles: authContext.roles,
-        capabilities: { ...capabilities, canUploadVideo }
+        capabilities: { ...capabilities, canUploadVideo, canManageLessonResources }
       });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err.message });

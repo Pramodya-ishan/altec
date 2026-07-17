@@ -34,7 +34,7 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
   if (isUser) {
     return (
       <motion.div layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mb-7 flex w-full justify-end px-4 sm:px-6">
-        <div className="max-w-[88%] rounded-[22px] rounded-br-md bg-[#f4f4f4] px-4 py-3 text-[15px] leading-6 text-slate-900 sm:max-w-[75%]">
+        <div className="max-w-[88%] min-w-0 rounded-[22px] rounded-br-md bg-[#f4f4f4] px-4 py-3 text-[15px] leading-6 text-slate-900 [overflow-wrap:anywhere] [word-break:normal] sm:max-w-[75%]">
           <p className="whitespace-pre-wrap">{message.content}</p>
           {message.attachments?.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
@@ -57,19 +57,19 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
       initial={isStreaming ? { opacity: 1 } : { opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: isStreaming ? 0 : 0.2 }}
-      className="group mb-9 flex w-full justify-start px-4 sm:px-6"
+      className="group mb-9 flex w-full min-w-0 justify-start"
     >
-      <div className="flex w-full gap-3 sm:gap-4">
+      <div className="flex w-full min-w-0 gap-3 sm:gap-4">
         <div className="min-w-0 flex-1 space-y-4">
           {message.status && (message.status === 'streaming' || message.status === 'searching') && (
             <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500">
               <Loader2 className="h-3 w-3 animate-spin" />
-              {message.status === 'searching' ? 'මූලාශ්‍ර සොයමින්' : 'පිළිතුර සකස් කරමින්'}
+              {message.status === 'searching' ? 'Searching sources' : 'Preparing answer'}
             </div>
           )}
 
           {message.content && (
-            <div className="prose prose-slate max-w-none text-[15px] leading-7 text-slate-800 prose-headings:mb-3 prose-headings:mt-6 prose-p:my-2">
+            <div className="prose prose-slate min-w-0 max-w-none text-[15px] leading-7 text-slate-800 [overflow-wrap:anywhere] [word-break:normal] prose-headings:mb-3 prose-headings:mt-6 prose-p:my-2 prose-pre:max-w-full prose-pre:overflow-x-auto prose-table:block prose-table:max-w-full prose-table:overflow-x-auto">
               <MathMarkdown content={message.content} isStreaming={isStreaming} />
             </div>
           )}
@@ -87,16 +87,16 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
           {!isStreaming && (message.content || message.sources?.length > 0) && (
             <div className="flex items-center gap-1 pt-1 text-slate-400 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
               {message.content && (
-                <button type="button" onClick={copyMessage} className="rounded-lg p-2 hover:bg-slate-100 hover:text-slate-700" aria-label="පිළිතුර copy කරන්න" title="පිළිතුර copy කරන්න">
+                <button type="button" onClick={copyMessage} className="rounded-lg p-2 hover:bg-slate-100 hover:text-slate-700" aria-label="Copy answer" title="Copy answer">
                   {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                 </button>
               )}
               {message.sources?.length > 0 && (
                 <button type="button" onClick={() => onToolClick?.('sources')} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium hover:bg-slate-100 hover:text-slate-700">
-                  <FileText className="h-4 w-4" /> මූලාශ්‍ර {message.sources.length}
+                  <FileText className="h-4 w-4" /> Sources {message.sources.length}
                 </button>
               )}
-              {message.status === 'done' && <CheckCircle2 className="ml-1 h-3.5 w-3.5 text-emerald-500" aria-label="පිළිතුර සම්පූර්ණයි" />}
+              {message.status === 'done' && <CheckCircle2 className="ml-1 h-3.5 w-3.5 text-emerald-500" aria-label="Answer complete" />}
             </div>
           )}
         </div>

@@ -114,39 +114,11 @@ export async function runCloudVisionPdfOcr(params: {
     updatedAt: new Date().toISOString(),
   });
 
-  // Attempt to wait synchronously up to 25 seconds for small PDFs
-  console.log(`Started Cloud Vision OCR operation: ${operationName}. Polling for quick completion...`);
-  
-  const startTime = Date.now();
-  let completedResponse: any = null;
-  
-  while (Date.now() - startTime < 25000) {
-    try {
-      const [op] = await client.operationsClient.getOperation({ name: operationName } as any);
-      if (op.done) {
-        completedResponse = op;
-        break;
-      }
-    } catch (pollErr) {
-      console.warn("Polling operation error (ignoring and retrying):", pollErr);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-  }
-
-  if (completedResponse && completedResponse.done) {
-    console.log(`Cloud Vision OCR finished quickly! Downloading and parsing output...`);
-    const result = await parseOcrOutputFromGcs(sourceId);
-    
-    await db.collection("ocr_jobs").doc(sourceId).update({
-      status: "ready",
-      updatedAt: new Date().toISOString(),
-    });
-
-    return { queued: false, result };
-  }
-
-  // Otherwise, it takes longer. Return queued state.
+  // Cloud Vision PDF OCR is asynchronous. Return immediately so the API can
+  // respond with HTTP 202 and the client can poll the status endpoint without
+  // holding a serverless function open.
   return { queued: true, operationName };
+
 }
 
 export async function checkOcrJobStatus(sourceId: string): Promise<{

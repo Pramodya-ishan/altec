@@ -1,121 +1,141 @@
-import React from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { useApp } from '../../context/AppContext';
-import { cn } from '../../lib/utils';
-import { ViewKey } from '../../types';
-import { 
-  Layers, 
-  LineChart, 
-  FileText, 
-  GraduationCap, 
-  Bot, 
-  BookOpen, 
-  ShieldAlert,
+import React from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import {
+  BookOpen,
+  Bot,
+  FileText,
+  GraduationCap,
+  Layers,
+  LineChart,
   Menu,
-} from 'lucide-react';
+  ShieldAlert,
+  type LucideIcon,
+} from "lucide-react";
+import { useApp } from "../../context/AppContext";
+import { cn } from "../../lib/utils";
+import type { ViewKey } from "../../types";
+
+type MenuItem = {
+  id: ViewKey;
+  label: string;
+  mobileLabel: string;
+  icon: LucideIcon;
+};
+
+const primaryItems: MenuItem[] = [
+  { id: "paper-structure", label: "Paper structure", mobileLabel: "Paper", icon: Layers },
+  { id: "paper-marks", label: "Marks", mobileLabel: "Marks", icon: LineChart },
+  { id: "past-papers", label: "Past papers", mobileLabel: "Papers", icon: FileText },
+  { id: "admission-predictor", label: "Z-score", mobileLabel: "Z-score", icon: GraduationCap },
+  { id: "clora-x", label: "Assistant", mobileLabel: "Assistant", icon: Bot },
+];
 
 export function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   const { isSidebarOpen, setSidebarOpen, profile } = useApp();
-  
-  const menuItems: { id: ViewKey; label: string; icon: any }[] = [
-    { id: 'paper-structure', label: 'Paper structure', icon: Layers },
-    { id: 'paper-marks', label: 'Marks & analytics', icon: LineChart },
-    { id: 'past-papers', label: 'Past papers', icon: FileText },
-    { id: 'admission-predictor', label: 'Z-score analytics', icon: GraduationCap },
-    { id: 'clora-x', label: 'Study assistant', icon: Bot }
-  ];
 
-  const isAdminUser = profile?.role === 'admin' || profile?.roles?.includes('admin');
-  const isSyllabusEditor = isAdminUser || profile?.role === 'content_editor' || profile?.roles?.includes('content_editor') || profile?.role === 'teacher' || profile?.roles?.includes('teacher');
+  const roles = new Set([profile?.role, ...(profile?.roles || [])].filter(Boolean));
+  const isAdminUser = roles.has("admin");
+  const isSyllabusEditor = ["admin", "content_editor", "teacher", "ops"].some((role) => roles.has(role));
+  const menuItems = [...primaryItems];
 
   if (isSyllabusEditor) {
-    menuItems.push({ id: 'syllabus', label: 'Syllabus', icon: BookOpen } as any);
+    menuItems.push({ id: "syllabus", label: "Syllabus", mobileLabel: "Syllabus", icon: BookOpen } as MenuItem);
   }
   if (isAdminUser) {
-    menuItems.push({ id: 'pdf-sources', label: 'PDF Intelligence', icon: FileText } as any);
-    menuItems.push({ id: 'admin-dashboard', label: 'Admin Dashboard', icon: ShieldAlert } as any);
+    menuItems.push({ id: "pdf-sources", label: "PDF Intelligence", mobileLabel: "PDF", icon: FileText } as MenuItem);
+    menuItems.push({ id: "admin-dashboard", label: "Admin Dashboard", mobileLabel: "Admin", icon: ShieldAlert } as MenuItem);
   }
+
+  const isActiveItem = (id: ViewKey) => (
+    location.pathname.includes(id) || (location.pathname === "/" && id === "paper-structure")
+  );
 
   return (
     <>
-      {/* Mobile overlay */}
       <div
         className={cn(
-          "fixed inset-0 bg-slate-900/40 z-[98] backdrop-blur-sm transition-opacity duration-300 lg:hidden lg:pointer-events-none",
-          isSidebarOpen ? "opacity-100 visible" : "opacity-0 invisible"
+          "fixed inset-0 z-[98] bg-slate-900/40 backdrop-blur-sm transition-opacity duration-300 lg:hidden lg:pointer-events-none",
+          isSidebarOpen ? "visible opacity-100" : "invisible opacity-0",
         )}
         onClick={() => setSidebarOpen(false)}
       />
 
       <aside
         className={cn(
-          "fixed left-0 top-0 h-[100dvh] bg-white shadow-2xl lg:shadow-none lg:border-r lg:border-slate-200 z-[99] lg:z-40 flex flex-col transition-all duration-300 ease-[cubic-bezier(0.25,1,0.5,1)] pt-4",
-          isSidebarOpen ? "w-72 translate-x-0" : "w-72 lg:w-[72px] -translate-x-full lg:translate-x-0"
+          "fixed left-0 top-0 z-[99] flex h-[100dvh] w-72 flex-col bg-white pt-4 shadow-2xl transition-all duration-300 ease-[cubic-bezier(0.25,1,0.5,1)] lg:z-40 lg:border-r lg:border-slate-200 lg:shadow-none",
+          isSidebarOpen ? "translate-x-0" : "-translate-x-full lg:w-[72px] lg:translate-x-0",
         )}
       >
-        <div className={cn("px-3 mb-6 flex items-center", isSidebarOpen ? "justify-between px-6" : "justify-center")}>
-          {isSidebarOpen && <span className="font-extrabold text-lg tracking-tight text-slate-900">Tec A/L</span>}
+        <div className={cn("mb-6 flex items-center px-3", isSidebarOpen ? "justify-between px-6" : "justify-center")}>
+          {isSidebarOpen && <span className="text-lg font-extrabold tracking-tight text-slate-900">Tec A/L</span>}
           <button
+            type="button"
             onClick={() => setSidebarOpen(!isSidebarOpen)}
-            className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
             aria-label={isSidebarOpen ? "Collapse navigation" : "Expand navigation"}
           >
-            <Menu className="w-5 h-5" />
+            <Menu className="h-5 w-5" />
           </button>
         </div>
-        
-        <nav className="flex-1 overflow-y-auto py-2 px-3 flex flex-col gap-1.5 scrollbar-none">
+
+        <nav className="scrollbar-none flex flex-1 flex-col gap-1.5 overflow-y-auto px-3 py-2">
           {menuItems.map((item) => {
-            const isActive = location.pathname.includes(item.id) || (location.pathname === '/' && item.id === 'paper-structure');
+            const isActive = isActiveItem(item.id);
             const Icon = item.icon;
             return (
               <button
                 key={item.id}
+                type="button"
                 onClick={() => {
                   navigate(`/${item.id}`);
-                  if (window.innerWidth < 1024) {
-                    setSidebarOpen(false);
-                  }
+                  if (window.innerWidth < 1024) setSidebarOpen(false);
                 }}
                 className={cn(
-                  "w-full flex items-center rounded-xl font-semibold transition-all duration-200 cursor-pointer relative group outline-none",
-                  isSidebarOpen 
-                    ? "gap-3.5 px-4 py-3.5 text-left justify-start" 
-                    : "px-0 py-3.5 justify-center text-center mx-auto w-12",
-                  isActive
-                    ? "bg-indigo-50 text-indigo-700"
-                    : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+                  "group relative flex w-full items-center rounded-xl font-semibold outline-none transition-all duration-200",
+                  isSidebarOpen ? "justify-start gap-3.5 px-4 py-3.5 text-left" : "mx-auto w-12 justify-center px-0 py-3.5 text-center",
+                  isActive ? "bg-indigo-50 text-indigo-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900",
                 )}
-                aria-current={isActive ? 'page' : undefined}
+                aria-current={isActive ? "page" : undefined}
                 aria-label={item.label}
-                title={!isSidebarOpen ? item.label : undefined}
               >
-                <Icon className={cn("shrink-0 transition-transform duration-200", isActive ? "scale-110 text-indigo-600" : "group-hover:scale-110", isSidebarOpen ? "w-5 h-5" : "w-5 h-5")} />
-                
-                {isSidebarOpen ? (
-                  <span className="truncate font-bold tracking-tight text-[14px]">{item.label}</span>
-                ) : (
-                  <div className="absolute left-full ml-4 top-1/2 -translate-y-1/2 px-3 py-2 bg-slate-900 text-white border border-slate-800 text-xs font-bold rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 whitespace-nowrap shadow-xl z-[99]">
+                <Icon className={cn("h-5 w-5 shrink-0 transition-transform duration-200", isActive ? "scale-110 text-indigo-600" : "group-hover:scale-110")} />
+                {isSidebarOpen && <span className="truncate text-[14px] font-bold tracking-tight">{item.label}</span>}
+                {!isSidebarOpen && (
+                  <span className="pointer-events-none absolute left-full top-1/2 z-[99] ml-4 hidden -translate-y-1/2 whitespace-nowrap rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs font-bold text-white opacity-0 shadow-xl transition-all group-hover:visible group-hover:opacity-100 lg:block">
                     {item.label}
-                  </div>
+                  </span>
                 )}
               </button>
             );
           })}
         </nav>
+      </aside>
 
-        </aside>
-
-      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-slate-200 bg-white/95 px-1 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1.5 shadow-[0_-8px_24px_rgba(15,23,42,0.06)] backdrop-blur lg:hidden" aria-label="Mobile navigation">
-        {menuItems.slice(0, 5).map((item) => {
-          const isActive = location.pathname.includes(item.id) || (location.pathname === '/' && item.id === 'paper-structure');
+      <nav
+        className="fixed inset-x-0 bottom-0 z-40 grid h-[calc(60px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-slate-200 bg-white/95 px-1 pb-[max(.4rem,env(safe-area-inset-bottom))] pt-1 shadow-[0_-3px_12px_rgba(15,23,42,0.05)] backdrop-blur lg:hidden"
+        aria-label="Mobile navigation"
+      >
+        {primaryItems.map((item) => {
+          const isActive = isActiveItem(item.id);
           const Icon = item.icon;
-          return <button key={`mobile-${item.id}`} type="button" onClick={() => navigate(`/${item.id}`)} className={cn("flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl px-1 text-[9px] font-semibold transition", isActive ? "text-blue-700" : "text-slate-500")} aria-current={isActive ? 'page' : undefined} aria-label={item.label}>
-            <Icon className={cn("h-5 w-5", isActive && "text-blue-600")} />
-            <span className="max-w-full truncate">{item.label.replace(' & analytics', '')}</span>
-          </button>;
+          return (
+            <button
+              key={`mobile-${item.id}`}
+              type="button"
+              onClick={() => navigate(`/${item.id}`)}
+              className={cn(
+                "mx-0.5 flex min-h-10 min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl px-0.5 text-[10px] font-semibold leading-none transition",
+                isActive ? "bg-blue-50 text-blue-700" : "text-slate-500 active:bg-slate-100",
+              )}
+              aria-current={isActive ? "page" : undefined}
+              aria-label={item.label}
+            >
+              <Icon className={cn("h-5 w-5 shrink-0", isActive && "text-blue-600")} />
+              <span className="block w-full whitespace-nowrap text-center">{item.mobileLabel}</span>
+            </button>
+          );
         })}
       </nav>
     </>

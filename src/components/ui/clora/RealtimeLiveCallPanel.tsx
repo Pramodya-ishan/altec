@@ -25,13 +25,13 @@ function normalizeLiveError(err: any) {
   ) {
     return {
       code: "MIC_PERMISSION_DENIED",
-      message: "Microphone permission blocked. Browser site settings වලින් Microphone → Allow කරන්න."
+      message: "Microphone access is blocked. Allow microphone access in the browser site settings."
     };
   }
   if (msg.includes("PERMISSION_DENIED") || msg.includes("403")) {
     return {
       code: "GEMINI_PERMISSION_DENIED",
-      message: "Gemini Live permission denied. IAM/API/model config check කරන්න."
+      message: "Gemini Live permission was denied. Check the server IAM, API, and model configuration."
     };
   }
   return { code: "LIVE_ERROR", message: msg || "Live voice failed." };
@@ -110,7 +110,7 @@ export function RealtimeLiveCallPanel({
           signal: controller.signal,
         });
       } catch (fetchErr: any) {
-        throw new Error("SERVER_UNREACHABLE: server එක සම්බන්ධ කරගත නොහැක.");
+        throw new Error("SERVER_UNREACHABLE: The server could not be reached.");
       }
 
       const statusData = await statusResponse.json().catch(() => ({}));
@@ -119,8 +119,8 @@ export function RealtimeLiveCallPanel({
         setStatus("unavailable");
         setErrorMsg(
           statusData.reason === "gemini_api_key_missing"
-            ? "Gemini API key එක server එකට configure කරලා නැහැ. .env.example පරික්ෂා කරන්න."
-            : "Gemini Live voice දැනට අක්‍රිය කරලා තියෙන්නේ."
+            ? "Gemini is not configured on the server."
+            : "Gemini Live Voice is currently disabled."
         );
         return;
       }
@@ -138,7 +138,7 @@ export function RealtimeLiveCallPanel({
       // 3. Authenticate and fetch token
       const user = auth.currentUser;
       if (!user) {
-        throw new Error("AUTH_REQUIRED: කරුණාකර පළමුව login වන්න.");
+        throw new Error("AUTH_REQUIRED: Sign in before starting a live call.");
       }
 
       const firebaseToken = await user.getIdToken();
@@ -296,9 +296,9 @@ Rules:
               <Sparkles className="w-8 h-8 text-indigo-600" />
             </div>
             <div>
-              <h2 className="text-2xl font-bold text-slate-900 tracking-tight">සජීවී කටහඬ සාකච්ඡාව</h2>
+              <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Live voice discussion</h2>
               <p className="text-sm text-slate-500 mt-2 leading-relaxed">
-                Tec A/L සමඟ කටහඬින් සාකච්ඡා කරන්න. පාඩම් කරුණු, ගණනය කිරීම් සහ ගැටළු සෘජුවම විමසන්න.
+                Talk with Tec A/L about lessons, calculations, and questions.
               </p>
             </div>
             <button
@@ -306,7 +306,7 @@ Rules:
               className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl transition-all shadow-md hover:shadow-lg active:scale-95 flex items-center justify-center gap-2.5 cursor-pointer text-base"
             >
               <Play className="w-5 h-5 fill-current" />
-              සාකච්ඡාව අරඹන්න
+              Start discussion
             </button>
           </motion.div>
         )}
@@ -315,8 +315,8 @@ Rules:
         {status === "connecting" && (
           <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-10 shadow-xl border border-slate-200/80 text-center w-full flex flex-col items-center gap-6">
             <Loader2 className="w-12 h-12 animate-spin text-indigo-600" />
-            <p className="text-lg font-semibold tracking-tight text-slate-700">සජීවී කටහඬ සේවාවට සම්බන්ධ වෙමින්…</p>
-            <p className="text-xs text-slate-400">මයික්‍රෆෝනය සහ සේවාදායක සම්බන්ධතාවය තහවුරු කරමින් පවතී</p>
+            <p className="text-lg font-semibold tracking-tight text-slate-700">Connecting to live voice…</p>
+            <p className="text-xs text-slate-400">Checking the microphone and server connection.</p>
           </motion.div>
         )}
 
@@ -327,15 +327,15 @@ Rules:
               <AlertCircle className="w-8 h-8" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-900">සම්බන්ධ විය නොහැක</h3>
+              <h3 className="text-lg font-bold text-slate-900">Unable to connect</h3>
               <p className="text-sm text-slate-600 mt-2 leading-relaxed">{errorMsg}</p>
             </div>
             <div className="flex gap-3 w-full">
               <button onClick={handleStartCall} className="flex-1 py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-bold rounded-xl transition-all cursor-pointer text-sm border border-indigo-100">
-                නැවත උත්සාහ කරන්න
+                Try again
               </button>
               <button onClick={endCall} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl transition-all cursor-pointer text-sm">
-                වසන්න
+                Close
               </button>
             </div>
           </motion.div>
@@ -348,15 +348,15 @@ Rules:
               <AlertCircle className="w-8 h-8" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-900">දෝෂයක් ඇති වුණා</h3>
+              <h3 className="text-lg font-bold text-slate-900">An error occurred</h3>
               <p className="text-sm text-red-600 mt-2 leading-relaxed">{errorMsg}</p>
             </div>
             <div className="flex gap-3 w-full">
               <button onClick={handleStartCall} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all cursor-pointer text-sm shadow-md">
-                නැවත උත්සාහ කරන්න
+                Try again
               </button>
               <button onClick={endCall} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl transition-all cursor-pointer text-sm">
-                වසන්න
+                Close
               </button>
             </div>
           </motion.div>
@@ -368,8 +368,8 @@ Rules:
             {/* Top Status */}
             <div className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-full shadow-sm">
               <Sparkles className="w-4 h-4 text-emerald-600" />
-              <span className="text-xs font-bold tracking-wide">සජීවී සේවාව සම්බන්ධයි</span>
-              {activeSourceId && <span className="ml-2 px-2 py-0.5 bg-indigo-500/10 text-indigo-700 text-[10px] font-extrabold rounded-md border border-indigo-100">මූලාශ්‍රය සම්බන්ධයි</span>}
+              <span className="text-xs font-bold tracking-wide">Live voice connected</span>
+              {activeSourceId && <span className="ml-2 px-2 py-0.5 bg-indigo-500/10 text-indigo-700 text-[10px] font-extrabold rounded-md border border-indigo-100">Source connected</span>}
             </div>
 
             {/* Center Orb (Visualizer Placeholder) */}

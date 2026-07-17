@@ -25,6 +25,7 @@ import reportRoutes from "./server/routes/reportRoutes";
 import { ttsRoutes } from "./server/tts/routes";
 import { voiceRoutes } from "./server/voice/routes";
 import { videoRoutes } from "./server/video/routes";
+import { lessonResourceRoutes } from "./server/lessonResources/routes";
 
 import { globalLimiter, aiLimiter, adminLimiter } from "./server/utils/rateLimiter";
 
@@ -43,8 +44,8 @@ app.use((req, res, next) => {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob: https://*.googleusercontent.com https://api.dicebear.com https://*.firebaseapp.com https://*.firebasestorage.app",
-    `connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com wss://*.firebaseapp.com https://*.run.app wss://*.run.app ${videoCdnOrigin}`.trim(),
-    `media-src 'self' blob: ${videoCdnOrigin}`.trim(),
+    `connect-src 'self' https://*.googleapis.com https://storage.googleapis.com https://*.storage.googleapis.com https://*.firebasestorage.app https://*.firebaseio.com https://*.firebaseapp.com wss://*.firebaseapp.com https://*.run.app wss://*.run.app ${videoCdnOrigin}`.trim(),
+    `media-src 'self' blob: https://storage.googleapis.com https://*.storage.googleapis.com https://*.googleapis.com https://*.firebasestorage.app ${videoCdnOrigin}`.trim(),
     "frame-src 'self' https://*.firebaseapp.com https://*.google.com https://accounts.google.com",
     "object-src 'none'",
     "frame-ancestors 'self' https://ai.studio https://*.google.com"
@@ -120,6 +121,7 @@ app.use("/api/reports", reportRoutes);
 app.use("/api/tts", ttsRoutes);
 app.use("/api/voice", voiceRoutes);
 app.use("/api", videoRoutes);
+app.use("/api", lessonResourceRoutes);
 
 
 import { getSourceInventory } from "./server/sources/sourceInventoryService";

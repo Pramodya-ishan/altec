@@ -120,7 +120,7 @@ const [messages, setMessages] = useState<{
   }[]>([
     {
       role: 'assistant',
-      content: 'අද බලන්න ඕන පාඩම, paper question එක හෝ result එක ලියන්න.',
+      content: 'Ask about a lesson, paper, question, or result.',
       id: 'welcome'
     }
   ]);
@@ -354,9 +354,9 @@ const [messages, setMessages] = useState<{
 
   // Quick Action Chips
   const quickChips = [
-    { text: "මගේ Z-score එක", label: "මගේ Z-score එක" },
+    { text: "Show my Z-score", label: "My Z-score" },
     { text: "2023 SFT Paper structure", label: "2023 SFT Paper structure" },
-    { text: "ජෛවාණු notes", label: "ජෛවාණු notes" },
+    { text: "Summarize microorganism notes", label: "Microorganism notes" },
     { text: "SFT MCQ Weights", label: "SFT MCQ Weights" }
   ];
 
@@ -488,27 +488,43 @@ const [messages, setMessages] = useState<{
   };
 
   const processFile = async (file: File) => {
-    setUploading(true);
+    const allowedImageTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    const isImage = allowedImageTypes.has(file.type);
+    const maxBytes = isPdf ? 25 * 1024 * 1024 : 10 * 1024 * 1024;
+
     setUploadError(null);
     setIndexingFailed(false);
     setPendingIngestData(null);
+
+    if ((!isPdf && !isImage) || file.size <= 0 || file.size > maxBytes) {
+      const message = !isPdf && !isImage
+        ? "Only PDF, PNG, JPEG, and WebP files are allowed."
+        : `The selected ${isPdf ? "PDF" : "image"} exceeds the ${isPdf ? "25 MB" : "10 MB"} limit.`;
+      setUploadError(message);
+      setUploadedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
+    setUploading(true);
     beginUploadTelemetry(file);
 
-    if (file.type.startsWith("image/")) {
+    if (isImage) {
       const reader = new FileReader();
       reader.onload = () => {
-        const dataUrl = reader.result as string;
         setUploadedFile({
           name: file.name,
           size: file.size,
           isImage: true,
-          dataUrl: dataUrl
+          mimeType: file.type,
+          dataUrl: reader.result as string,
         });
         setUploading(false);
         setUploadTelemetry(null);
       };
       reader.onerror = () => {
-        setUploadError("Failed to read image file.");
+        setUploadError("The image could not be read.");
         setUploadedFile(null);
         setUploading(false);
         setUploadTelemetry(null);
@@ -518,36 +534,7 @@ const [messages, setMessages] = useState<{
       return;
     }
 
-    let previewUrl = "";
-    if (file.type.startsWith("video/") || file.type.startsWith("audio/")) {
-      previewUrl = URL.createObjectURL(file);
-    }
-
-    setUploadedFile({ name: file.name, size: file.size, dataUrl: previewUrl });
-
     try {
-      if (!file.type.includes("pdf") && !file.type.includes("text") && !file.name.endsWith(".pdf") && !file.name.endsWith(".txt")) {
-         const uploaded = await uploadAttachmentWithClientStorage({
-           file,
-           subject: currentSubject,
-           sourceScope: "chat_upload",
-           onProgress: trackUploadProgress(file.name),
-         });
-         setUploadedFile({
-            name: file.name,
-            size: file.size,
-            storagePath: uploaded.storagePath,
-            mimeType: file.type || "application/octet-stream",
-            isImage: file.type.startsWith("image/"),
-            dataUrl: previewUrl
-         });
-         setInput(prev => prev + `\n[Attached File: ${file.name}] Please analyze this file: `);
-         setUploading(false);
-         setUploadTelemetry((current) => current ? { ...current, progress: 1, remainingBytes: 0, etaSeconds: 0, phase: 'success' } : null);
-         if (fileInputRef.current) fileInputRef.current.value = "";
-         return;
-      }
-
       const uploaded = await uploadPdfWithClientStorage({
         file,
         subject: currentSubject,
@@ -560,11 +547,10 @@ const [messages, setMessages] = useState<{
         size: file.size,
         sourceId: uploaded.sourceId,
         storagePath: uploaded.storagePath,
-        mimeType: file.type || "application/pdf",
-        attachmentType: "pdf"
+        mimeType: "application/pdf",
+        attachmentType: "pdf",
       });
-      setUploadTelemetry((current) => current ? { ...current, progress: 1, remainingBytes: 0, etaSeconds: 0, phase: 'processing' } : null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      setUploadTelemetry((current) => current ? { ...current, progress: 1, remainingBytes: 0, etaSeconds: 0, phase: "processing" } : null);
 
       const ingestRes = await apiFetch("/api/pdf/process-uploaded", {
         method: "POST",
@@ -578,16 +564,15 @@ const [messages, setMessages] = useState<{
           resourceType: "uploaded_pdf",
           sourceType: "uploaded_pdf",
           sourceScope: "chat_upload",
-          medium: "Sinhala"
-        })
-
+          medium: "Sinhala",
+        }),
       });
 
       const data = await ingestRes.json().catch(() => null);
       if (!ingestRes.ok || !data?.ok) {
-        setUploadError("Uploaded, indexing failed. Retry indexing.");
+        setUploadError(data?.message || data?.error || "The PDF was uploaded, but indexing failed.");
         setIndexingFailed(true);
-        setUploadTelemetry((current) => current ? { ...current, phase: 'error' } : null);
+        setUploadTelemetry((current) => current ? { ...current, phase: "error" } : null);
         setPendingIngestData({
           file,
           sourceId: uploaded.sourceId,
@@ -597,19 +582,20 @@ const [messages, setMessages] = useState<{
           resourceType: "uploaded_pdf",
           sourceType: "uploaded_pdf",
           sourceScope: "chat_upload",
-          medium: "Sinhala"
+          medium: "Sinhala",
         });
       } else {
         const followUp = data.needsOcr
-          ? data.message || 'This document needs OCR before all text can be searched.'
-          : 'Please read this document and answer: ';
-        setInput((current) => `${current}\n[Uploaded PDF: ${file.name}] ${followUp}`);
-        setUploadTelemetry((current) => current ? { ...current, phase: 'success' } : null);
+          ? "This scanned document is being processed."
+          : "Please read this document and answer:";
+        setInput((current) => `${current}
+[Uploaded PDF: ${file.name}] ${followUp}`);
+        setUploadTelemetry((current) => current ? { ...current, phase: "success" } : null);
       }
     } catch (err: any) {
-      setUploadError(err.message || "Failed to upload file.");
+      setUploadError(err?.message || "The file could not be uploaded.");
       setUploadedFile(null);
-      setUploadTelemetry((current) => current ? { ...current, phase: 'error' } : null);
+      setUploadTelemetry((current) => current ? { ...current, phase: "error" } : null);
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -725,7 +711,7 @@ const [messages, setMessages] = useState<{
         }),
       });
       if (response.ok) {
-        showNotification("පිළිතුර වැරදි බව සටහන් කරගත්තා. ඊළඟ වතාවේ මෙය පරීක්ෂා කෙරේ.", "success");
+        showNotification("The answer was marked as incorrect and will be reviewed next time.", "success");
       }
     } catch (err) {
       console.error("Feedback failed", err);
@@ -749,7 +735,7 @@ const [messages, setMessages] = useState<{
       }
     }
 
-    const continuePrompt = "Continue the previous answer (ඉතිරි ටික කියන්න).";
+    const continuePrompt = "Continue the previous answer.";
     const userMsgId = generateUUID();
     const assistantMsgId = generateUUID();
 
@@ -1088,12 +1074,12 @@ const [messages, setMessages] = useState<{
           if (lastAssistant) {
             textToSpeak = lastAssistant.content;
           } else {
-            textToSpeak = "කිසිදු පණිවිඩයක් සොයාගැනීමට නොහැකි විය.";
+            textToSpeak = "No previous message was found.";
           }
        } else if (parsedCommand.text.trim() === 'file') {
-          textToSpeak = "ඔබ විසින් file එකක් ලබාදී ඇත්නම් එය විශ්ලේෂණය කරමින් පවතී.";
+          textToSpeak = "The attached file is being analyzed.";
           if (currentUpload && currentUpload.name) {
-             textToSpeak = `ඔබ ලබාදුන් ${currentUpload.name} ගොනුව කියවීමට හැකිවිය.`;
+             textToSpeak = `The attached file ${currentUpload.name} is ready.`;
              // In a real app we would extract text from the file here
           }
        } else if (parsedCommand.text.trim() === 'podcast') {
@@ -1312,7 +1298,7 @@ const [messages, setMessages] = useState<{
      if (isStreaming) {
        cancel();
      }
-     setMessages([{ role: 'assistant', content: 'අද බලන්න ඕන පාඩම, paper question එක හෝ result එක ලියන්න.', id: 'welcome' }]);
+     setMessages([{ role: 'assistant', content: 'Ask about a lesson, paper, question, or result.', id: 'welcome' }]);
      setInput('');
      setUploadedFile(null);
      setUploadError(null);
@@ -1351,7 +1337,7 @@ const [messages, setMessages] = useState<{
                   setPdfModalUrl(url);
                   setPdfModalOpen(true);
                 } catch (e) {
-                  showNotification("PDF preview open කරන්න බැහැ. Open in new tab try කරන්න.", "error");
+                  showNotification("The PDF preview could not be opened. Try opening it in a new tab.", "error");
                 }
              } else {
                 openSourcePdf(source).catch((e: any) => {
@@ -1369,7 +1355,7 @@ const [messages, setMessages] = useState<{
                 isOpen={pdfModalOpen}
                 onClose={() => setPdfModalOpen(false)}
                 pdfUrl={pdfModalUrl}
-                title="මූලාශ්‍ර ලේඛනය"
+                title="Source document"
               />
             </React.Suspense>
           )}
@@ -1377,7 +1363,7 @@ const [messages, setMessages] = useState<{
              isOpen={showTtsModal}
              onClose={() => setShowTtsModal(false)}
             onComplete={(url) => {
-              setMessages(prev => [...prev, { role: 'assistant', content: 'හඬ පිළිතුර සූදානම්.', id: generateUUID(), audioUrl: url }]);
+              setMessages(prev => [...prev, { role: 'assistant', content: 'Voice answer ready.', id: generateUUID(), audioUrl: url }]);
             }}
           />
           <RealtimeLiveCallPanel
@@ -1388,21 +1374,21 @@ const [messages, setMessages] = useState<{
             recentAttachmentIds={uploadedFile?.storagePath ? [uploadedFile.storagePath] : undefined}
           />
 
-          <div className="min-h-0 flex-1 overflow-y-auto bg-white clora-scrollbar" ref={scrollRef}>
+          <div className="clora-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-white" ref={scrollRef}>
             {isEmptyChat ? (
               <CloraHero
                 onSelectPrompt={(prompt) => {
                   setInput(prompt);
                 }}
                 prompts={[
-                  { title: "2023 පත්‍ර ව්‍යුහය", icon: <FileText className="h-4 w-4"/>, prompt: "2023 SFT ප්‍රශ්න පත්‍රයේ ව්‍යුහය පැහැදිලි කරන්න." },
-                  { title: "Z-Score පැහැදිලි කිරීම", icon: <BrainCircuit className="h-4 w-4"/>, prompt: "A/L Z-Score එක ගණනය කරන ආකාරය සරලව පැහැදිලි කරන්න." },
-                  { title: "වැරදි නැවත බලමු", icon: <CheckCircle className="h-4 w-4"/>, prompt: "මගේ මෑත වැරදි අනුව කෙටි ප්‍රශ්න කිහිපයක් අහන්න." },
-                  { title: "සටහන් සාරාංශය", icon: <Database className="h-4 w-4"/>, prompt: "SFT ප්‍රධාන ඒකකවල කෙටි සාරාංශයක් දෙන්න." }
+                  { title: "2023 paper structure", icon: <FileText className="h-4 w-4"/>, prompt: "2023 SFT ප්‍රශ්න පත්‍රයේ ව්‍යුහය පැහැදිලි කරන්න." },
+                  { title: "Explain Z-score", icon: <BrainCircuit className="h-4 w-4"/>, prompt: "A/L Z-Score එක ගණනය කරන ආකාරය සරලව පැහැදිලි කරන්න." },
+                  { title: "Review mistakes", icon: <CheckCircle className="h-4 w-4"/>, prompt: "මගේ මෑත වැරදි අනුව කෙටි ප්‍රශ්න කිහිපයක් අහන්න." },
+                  { title: "Summarize notes", icon: <Database className="h-4 w-4"/>, prompt: "SFT ප්‍රධාන ඒකකවල කෙටි සාරාංශයක් දෙන්න." }
                 ]}
               />
             ) : (
-              <div className="mx-auto max-w-3xl pb-8 pt-8">
+              <div className="mx-auto w-full min-w-0 max-w-3xl px-4 pb-6 pt-5 sm:px-6 sm:pt-8">
                 <AnimatePresence initial={false}>
                 {messages.map((msg, idx) => {
                   if (msg.id === 'welcome' && messages.length > 1) return null; // hide welcome if there are other messages
@@ -1433,14 +1419,16 @@ const [messages, setMessages] = useState<{
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 10, scale: 0.95 }}
                 onClick={() => scrollToBottom('smooth')}
-                className="absolute bottom-36 left-1/2 z-30 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg transition-colors hover:bg-slate-50"
+                className="absolute bottom-36 left-1/2 z-30 inline-flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-sm font-semibold text-slate-700 shadow-lg transition-colors hover:bg-slate-50"
+                aria-label="Jump to latest answer"
+                title="Jump to latest answer"
               >
-                අලුත් පිළිතුර ↓
+                ↓
               </motion.button>
             )}
           </AnimatePresence>
 
-          <div className="relative shrink-0 border-t border-slate-100 bg-white/95 pt-3 backdrop-blur">
+          <div className="relative shrink-0 bg-white/95 pt-2 backdrop-blur">
             <CloraComposer
               input={input}
               setInput={setInput}
@@ -1470,7 +1458,7 @@ const [messages, setMessages] = useState<{
             ref={fileInputRef}
             onChange={handleFileUpload}
             className="hidden"
-            accept=".pdf,.txt,.png,.jpg,.jpeg,.webp,.mp3,.mp4,.webm,.mov,.wav,.m4a"
+            accept="application/pdf,image/png,image/jpeg,image/webp"
           />
 
           <ErrorLogModal

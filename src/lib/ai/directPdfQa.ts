@@ -24,6 +24,9 @@ export type DirectPdfQaResult = {
   canRetry?: boolean;
   retryAfterMs?: number;
   sourceEvidence?: any;
+  pending?: boolean;
+  code?: string;
+  status?: string;
 };
 
 function makeDirectQaError(code: string, source: any, details: any = {}): Error {
@@ -58,7 +61,7 @@ export async function askDirectPdfQa(params: {
     return {
       ok: false,
       errorCode: "DIRECT_QA_SOURCE_MISSING_ID",
-      error: "තෝරාගත් PDF මූලාශ්‍රයේ හඳුනාගැනීමේ අංකය හමු වුණේ නැහැ."
+      error: "The selected PDF source does not have a valid identifier."
     };
   }
 
@@ -106,7 +109,7 @@ export async function askDirectPdfQa(params: {
         signal: backendController.signal,
       });
     } catch (e: any) {
-      throw makeDirectQaError("DIRECT_QA_BACKEND_ERROR", source, { message: e.name === "AbortError" ? "PDF scan එක නියමිත වේලාව තුළ අවසන් වුණේ නැහැ. PDF එක index කර නැවත උත්සාහ කරන්න." : e.message });
+      throw makeDirectQaError("DIRECT_QA_BACKEND_ERROR", source, { message: e.name === "AbortError" ? "The PDF request timed out. Reprocess the document and try again." : e.message });
     } finally {
       clearTimeout(backendTimeout);
     }

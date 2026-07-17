@@ -6,6 +6,8 @@ import { invalidateInventoryCache, computeIndexStatus } from "../sources/sourceI
 import { normalizeSubject, detectQuestionNo } from "../rag/routes";
 import { detectLessonForChunk } from "./lessonDetector";
 import { extractPdfPagesWithGemini, isGeminiPdfOcrConfigured } from "./geminiPdfOcr";
+import { isSharedSourceScope } from "../utils/contentPermissions";
+import { updateLessonResourceProcessing } from "../lessonResources/service";
 
 export interface ProcessUploadedPdfParams {
   uid: string;
@@ -75,6 +77,11 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
 
     // --- STEP A & B: Text Extraction & Quality Detection ---
     const extraction = await extractPdfText(buffer as Buffer);
+    if (extraction.status === "PDF_PARSER_UNAVAILABLE" || extraction.status === "PDF_PARSER_RUNTIME_ERROR") {
+      const parserError = new Error(extraction.message || "PDF parser failed.");
+      (parserError as any).code = extraction.status;
+      throw parserError;
+    }
     
     pages = extraction.pages || [];
     fullText = extraction.text || "";
@@ -469,7 +476,7 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
         medium: "Sinhala",
         tags: [title, subject].filter(Boolean),
         sourceScope,
-        visibility: sourceScope === "official" ? "official" : "private",
+        visibility: sourceScope === "official" || sourceScope === "past_paper" ? "official" : (isSharedSourceScope(sourceScope) ? "class" : "private"),
         embeddingStatus: "none",
         createdAt: new Date().toISOString()
       };
@@ -544,7 +551,7 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
     resourceType,
     sourceType: sourceType || resourceType,
     sourceScope,
-    visibility: sourceScope === "official" ? "official" : "private",
+    visibility: sourceScope === "official" || sourceScope === "past_paper" ? "official" : (isSharedSourceScope(sourceScope) ? "class" : "private"),
     ...metaUpdate,
   }, { merge: true });
 
@@ -579,6 +586,14 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
       status: finalIndexStatus,
       ...metaUpdate
     }, { merge: true }).catch(() => {});
+  }
+
+  if (isSharedSourceScope(sourceScope)) {
+    await updateLessonResourceProcessing(sourceId, {
+      processingStatus: finalIndexStatus,
+      needsOcr,
+      textIndexed,
+    }).catch(() => undefined);
   }
 
   invalidateInventoryCache(uid);
@@ -636,6 +651,14 @@ async function finalizeFailedProcessing(params: {
       status,
       ...metaUpdate
     }, { merge: true }).catch(() => {});
+  }
+
+  if (isSharedSourceScope(sourceScope)) {
+    await updateLessonResourceProcessing(sourceId, {
+      processingStatus: status,
+      needsOcr,
+      textIndexed: false,
+    }).catch(() => undefined);
   }
 
   invalidateInventoryCache(uid);

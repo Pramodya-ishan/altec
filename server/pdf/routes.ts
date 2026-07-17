@@ -7,6 +7,9 @@ import { checkOcrJobStatus } from "../ocr/cloudVisionOcr";
 import { askGeminiDirectPdf } from "./directPdfQa";
 import { stripRawVisualBlocks } from "../ai-core/answer/stripVisualBlocks";
 import { extractPdfText } from "./extractText";
+import { assertContentManager, isContentManager, isSharedSourceScope } from "../utils/contentPermissions";
+import { normalizeLessonId, updateLessonResourceProcessing, upsertLessonResource } from "../lessonResources/service";
+import { invalidateInventoryCache } from "../sources/sourceInventoryService";
 
 export const pdfRoutes = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -34,10 +37,21 @@ function storageObjectPath(input: unknown): string {
 
 function canUseStoragePath(user: any, path: string) {
   const roles = Array.isArray(user?.roles) ? user.roles : [];
-  const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
+  const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "teacher", "ops"].includes(role));
   return privileged
     || path.startsWith(`users/${user.uid}/`)
     || path.startsWith(`rag_uploads/${user.uid}/`);
+}
+
+function canViewSource(user: any, source: any) {
+  return isContentManager(user)
+    || source?.ownerUid === user?.uid
+    || ["public", "official", "shared", "class", "institution"].includes(String(source?.visibility || ""));
+}
+
+function canReviewQuestionCache(user: any) {
+  const roles = Array.isArray(user?.roles) ? user.roles.map(String) : [];
+  return isContentManager(user) || roles.includes("reviewer");
 }
 
 async function resolveDirectQaSource(user: any, sourceId: string, submittedPath: unknown) {
@@ -62,8 +76,8 @@ async function resolveDirectQaSource(user: any, sourceId: string, submittedPath:
   if (!path) throw Object.assign(new Error("PDF source has no valid storage path."), { status: 400, code: "DIRECT_QA_SOURCE_PATH_INVALID" });
 
   const roles = Array.isArray(user?.roles) ? user.roles : [];
-  const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
-  const visible = ["public", "official", "shared"].includes(String(source?.visibility || ""));
+  const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "teacher", "ops"].includes(role));
+  const visible = ["public", "official", "shared", "class", "institution"].includes(String(source?.visibility || ""));
   const owned = source?.ownerUid === user.uid || canUseStoragePath(user, path);
   if (!privileged && !visible && !owned) {
     throw Object.assign(new Error("You do not have access to this PDF source."), { status: 403, code: "DIRECT_QA_SOURCE_FORBIDDEN" });
@@ -71,7 +85,7 @@ async function resolveDirectQaSource(user: any, sourceId: string, submittedPath:
   return { source, path };
 }
 
-// 1. Process uploaded PDF immediately after upload
+// 1. Register and process an authenticated upload.
 pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (req: any, res) => {
   try {
     const user = req.user;
@@ -84,97 +98,156 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (
       year,
       resourceType,
       sourceType,
-      sourceScope,
+      sourceScope = "chat_upload",
       lesson,
+      lessonId,
       deferProcessing,
-    } = req.body;
+    } = req.body || {};
 
     if (!sourceId || !storagePath) {
-      return res.status(400).json({ ok: false, error: "Missing sourceId or storagePath." });
+      return res.status(400).json({ ok: false, code: "UPLOAD_METADATA_MISSING", message: "Missing sourceId or storagePath." });
     }
+
+    const shared = isSharedSourceScope(sourceScope);
+    if (shared) assertContentManager(user);
 
     const normalizedStoragePath = storageObjectPath(storagePath);
     if (!normalizedStoragePath || !canUseStoragePath(user, normalizedStoragePath)) {
-      return res.status(403).json({ ok: false, error: "Storage path is outside the signed-in user's upload area." });
+      return res.status(403).json({ ok: false, code: "UPLOAD_PATH_FORBIDDEN", message: "The storage path is outside the signed-in user's upload area." });
     }
 
-    // Create the metadata document before the asynchronous worker starts. New
-    // client-storage uploads do not have a rag_sources document yet, so update()
-    // raised Firestore NOT_FOUND and surfaced as /process-uploaded 500.
     const db = getAdminDb();
     const now = new Date().toISOString();
-    await db.collection("rag_sources").doc(sourceId).set({
+    const normalizedSubject = String(subject || "").toUpperCase();
+    const lessonTitle = String(lesson || "General").trim().slice(0, 180) || "General";
+    const normalizedLessonId = normalizeLessonId(lessonId || lessonTitle);
+    const inferredMediaKind = String(sourceType || "").toLowerCase().includes("image")
+      || /\.(png|jpe?g|webp)$/i.test(String(fileName || title || ""))
+      ? "image"
+      : "pdf";
+    const visibility = shared
+      ? (["official", "past_paper"].includes(String(sourceScope)) ? "official" : "class")
+      : "private";
+    const published = shared;
+    const displayTitle = title || fileName || (inferredMediaKind === "image" ? "Lesson image" : "Uploaded PDF");
+
+    const sourceRecord = {
       sourceId,
       ownerUid: user.uid,
+      createdBy: user.uid,
       storagePath: normalizedStoragePath,
-      title: title || fileName || "Uploaded PDF",
-      fileName: fileName || "upload.pdf",
-      subject: String(subject || "").toUpperCase(),
-      lesson: lesson ? String(lesson).trim().slice(0, 180) : null,
+      title: displayTitle,
+      fileName: fileName || (inferredMediaKind === "image" ? "image" : "upload.pdf"),
+      subject: normalizedSubject,
+      lesson: lessonTitle,
+      lessonId: normalizedLessonId,
       year: year ? String(year) : null,
-      resourceType: resourceType || "uploaded_pdf",
-      sourceType: sourceType || resourceType || "uploaded_pdf",
-      sourceScope: sourceScope || "personal",
-      visibility: "private",
-      indexStatus: "queued",
+      resourceType: resourceType || (shared ? "paper_structure" : "uploaded_pdf"),
+      sourceType: sourceType || resourceType || (inferredMediaKind === "image" ? "image" : "uploaded_pdf"),
+      sourceScope,
+      mediaKind: inferredMediaKind,
+      visibility,
+      published,
+      indexStatus: inferredMediaKind === "image" ? "ready" : "queued",
+      processingStatus: inferredMediaKind === "image" ? "ready" : "queued",
       chunkCount: 0,
       needsOcr: false,
       textIndexed: false,
       createdAt: now,
       updatedAt: now,
-    }, { merge: true });
+    };
+    await db.collection("rag_sources").doc(sourceId).set(sourceRecord, { merge: true });
 
-    if ((sourceScope || "") === "past_paper") {
-      await db.collection("past_papers").doc(sourceId).set({
-        id: sourceId,
-        sourceId,
-        ownerUid: user.uid,
-        storagePath: normalizedStoragePath,
-        title: title || fileName || "Uploaded PDF",
-        fileName: fileName || "upload.pdf",
-        subject: String(subject || "").toUpperCase(),
-        year: year ? String(year) : null,
-        resourceType: resourceType || "past_paper",
-        sourceType: sourceType || resourceType || "past_paper",
-        sourceScope: "past_paper",
-        indexStatus: "queued",
-        chunkCount: 0,
-        needsOcr: false,
-        textIndexed: false,
-        createdAt: now,
-        updatedAt: now,
-      }, { merge: true });
+    if (sourceScope === "past_paper") {
+      await db.collection("past_papers").doc(sourceId).set({ id: sourceId, ...sourceRecord }, { merge: true });
     }
 
-    // Small client-storage uploads immediately hand the same File to the
-    // multipart reindex route. Do not start a competing Storage download that
-    // could fail later and overwrite a successful client-buffer index.
-    if (deferProcessing !== true) setImmediate(() => {
-      processUploadedPdf({
-        uid: user.uid,
+    if (shared) {
+      await upsertLessonResource({
+        id: sourceId,
         sourceId,
+        subject: normalizedSubject,
+        lessonId: normalizedLessonId,
+        lessonTitle,
+        resourceType: sourceRecord.resourceType,
+        mediaKind: inferredMediaKind,
+        title: displayTitle,
+        fileName: sourceRecord.fileName,
         storagePath: normalizedStoragePath,
-        fileName: fileName || "upload.pdf",
-        title: title || fileName || "Uploaded PDF",
-        subject,
-        year: year || null,
-        resourceType: resourceType || "uploaded_pdf",
-        sourceType: sourceType || resourceType || "uploaded_pdf",
-        sourceScope: sourceScope || "personal",
-        lesson: lesson ? String(lesson).trim().slice(0, 180) : undefined,
-        forceOcr: false
-      }).catch(err => console.error("Async processUploadedPdf error:", err));
+        visibility: visibility as "class" | "official",
+        published: true,
+        processingStatus: sourceRecord.processingStatus,
+        needsOcr: false,
+        textIndexed: false,
+        createdBy: user.uid,
+        ownerUid: user.uid,
+        createdAt: now,
+      });
+    }
+
+    invalidateInventoryCache(user.uid);
+
+    if (inferredMediaKind === "image") {
+      return res.json({ ok: true, status: "ready", sourceId, needsOcr: false, message: "Lesson image is ready." });
+    }
+
+    if (deferProcessing === true) {
+      return res.json({ ok: true, status: "awaiting_client_file", message: "Source registered; awaiting direct client file hand-off.", sourceId });
+    }
+
+    const processing = await processUploadedPdf({
+      uid: user.uid,
+      sourceId,
+      storagePath: normalizedStoragePath,
+      fileName: sourceRecord.fileName,
+      title: displayTitle,
+      subject: normalizedSubject,
+      year: year || null,
+      resourceType: sourceRecord.resourceType,
+      sourceType: sourceRecord.sourceType,
+      sourceScope,
+      lesson: lessonTitle,
+      forceOcr: false,
     });
 
-    return res.json({
-      ok: true,
-      status: deferProcessing === true ? "awaiting_client_file" : "queued",
-      message: deferProcessing === true ? "Source registered; awaiting direct client file hand-off" : "Processing queued",
-      sourceId
+    if (shared) {
+      await updateLessonResourceProcessing(sourceId, {
+        processingStatus: processing.status,
+        needsOcr: processing.needsOcr,
+        textIndexed: processing.status === "ready" || processing.chunkCount > 0,
+      });
+    }
+
+    if (processing.status === "queued") {
+      return res.status(202).json({
+        ok: true,
+        pending: true,
+        code: "OCR_QUEUED",
+        sourceId,
+        status: "queued",
+        needsOcr: true,
+        message: "This scanned document is being processed.",
+      });
+    }
+
+    if (!processing.ok && processing.needsOcr) {
+      return res.status(503).json({
+        ok: false,
+        code: "OCR_PROCESSING_UNAVAILABLE",
+        sourceId,
+        needsOcr: true,
+        message: "We could not process this scanned document. Please try again later.",
+      });
+    }
+
+    return res.json({ ...processing, sourceId });
+  } catch (error: any) {
+    console.error("Error in process-uploaded route:", error);
+    return res.status(error.status || 500).json({
+      ok: false,
+      code: error.code || "UPLOAD_PROCESSING_FAILED",
+      message: error.status === 403 ? error.message : "The uploaded resource could not be processed.",
     });
-  } catch (err: any) {
-    console.error("Error in process-uploaded route:", err);
-    return res.status(500).json({ ok: false, error: err.message });
   }
 });
 
@@ -191,10 +264,10 @@ pdfRoutes.post("/reprocess/:sourceId", requireFirebaseUser, upload.single("file"
     }
 
     const srcData = sourceSnap.data()!;
-    const roles = Array.isArray(user?.roles) ? user.roles : [];
-    const privileged = user?.admin === true || roles.some((role: string) => ["admin", "content_editor", "ops"].includes(role));
-    if (srcData.ownerUid !== user.uid && !privileged) {
-      return res.status(403).json({ ok: false, error: "You do not have permission to reprocess this source." });
+    if (isSharedSourceScope(srcData.sourceScope)) {
+      assertContentManager(user);
+    } else if (srcData.ownerUid !== user.uid && !isContentManager(user)) {
+      return res.status(403).json({ ok: false, code: "SOURCE_REPROCESS_FORBIDDEN", message: "You do not have permission to reprocess this source." });
     }
     let buffer: Buffer;
 
@@ -231,7 +304,7 @@ pdfRoutes.post("/reprocess/:sourceId", requireFirebaseUser, upload.single("file"
     return res.json(result);
   } catch (err: any) {
     console.error("Error in reprocess route:", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(err.status || 500).json({ ok: false, code: err.code || "SOURCE_REPROCESS_FAILED", message: err.message });
   }
 });
 
@@ -247,6 +320,9 @@ pdfRoutes.get("/ocr-status/:sourceId", requireFirebaseUser, async (req: any, res
     }
 
     const src = sourceSnap.data()!;
+    if (!canViewSource(req.user, src)) {
+      return res.status(403).json({ ok: false, code: "SOURCE_ACCESS_FORBIDDEN", message: "You do not have access to this source." });
+    }
     const job = await checkOcrJobStatus(sourceId);
 
     // If background job finished, run the finalize step!
@@ -326,6 +402,9 @@ pdfRoutes.get("/ocr-text/:sourceId", requireFirebaseUser, async (req: any, res) 
     }
 
     const source = sourceSnap.data()!;
+    if (!canViewSource(req.user, source)) {
+      return res.status(403).json({ ok: false, code: "OCR_TEXT_FORBIDDEN", message: "You do not have access to this source." });
+    }
     const uid = source.ownerUid;
 
     const bucket = getAdminBucket();
@@ -396,7 +475,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         found: false,
         errorCode: "AI_BILLING_EXHAUSTED",
         stage: "AI_UNAVAILABLE",
-        message: "AI credits අවසන් නිසා Direct PDF QA run කරන්න බැහැ.",
+        message: "The AI service is temporarily unavailable.",
         canRetry: false,
         billing: getAiBillingState()
       });
@@ -424,7 +503,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
           found: false,
           errorCode: "DIRECT_QA_MISSING_STRUCTURED_INTENT",
           stage: "VALIDATION",
-          message: "ප්‍රශ්න අංකය සහ ප්‍රශ්න වර්ගය සඳහන් කරන්න."
+          message: "Provide a question number and question type."
         };
       }
 
@@ -448,7 +527,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
               sourceId,
               storagePath: String(resolvedSource.storagePath || storagePath || ""),
               fileName: String(resolvedSource.fileName || resolvedSource.title || `${sourceId}.pdf`),
-              title: String(resolvedSource.title || resolvedSource.fileName || "PDF ගොනුව"),
+              title: String(resolvedSource.title || resolvedSource.fileName || "PDF document"),
               subject: String(subject || resolvedSource.subject || ""),
               year: String(year || resolvedSource.year || "") || null,
               resourceType: String(resolvedSource.resourceType || "uploaded_pdf"),
@@ -474,9 +553,11 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
               ok: false,
               status: 202,
               found: false,
-              errorCode: "PDF_INDEXING_STARTED",
+              errorCode: "OCR_QUEUED",
+              code: "OCR_QUEUED",
+              pending: true,
               stage: "PDF_INDEXING",
-              message: "PDF අකුරු හඳුනාගැනීම තවම ක්‍රියාත්මකයි. අවසන් වූ විගස මෙම ප්‍රශ්නය ස්වයංක්‍රීයව නැවත පරීක්ෂා කරනවා.",
+              message: "This scanned document is being processed. The question will be retried automatically.",
               canRetry: true,
               retryAfterMs: 8_000,
             };
@@ -556,6 +637,17 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         // timeout seen in production. Scan-only documents continue to the
         // full-PDF/OCR fallback below.
         const localExtraction = await extractPdfText(buffer);
+        if (localExtraction.status === "PDF_PARSER_UNAVAILABLE" || localExtraction.status === "PDF_PARSER_RUNTIME_ERROR") {
+          return {
+            ok: false,
+            status: 500,
+            found: false,
+            errorCode: "PDF_PARSER_RUNTIME_ERROR",
+            stage: "PDF_PARSING",
+            message: "The PDF could not be parsed because of an internal server error.",
+            canRetry: true,
+          };
+        }
         if (localExtraction.text.trim().length >= 80) {
           const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
           const marker = new RegExp(`(?:^|\\s|\\n)(?:q(?:uestion)?\\s*)?0?${targetNo}(?:\\.|\\)|\\s|$)`, "i");
@@ -609,7 +701,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
               sourceId,
               storagePath: storageObjectPath(resolvedSource.storagePath || storagePath),
               fileName: String(resolvedSource.fileName || resolvedSource.title || `${sourceId}.pdf`),
-              title: String(resolvedSource.title || resolvedSource.fileName || "PDF ගොනුව"),
+              title: String(resolvedSource.title || resolvedSource.fileName || "PDF document"),
               subject: String(subject || resolvedSource.subject || ""),
               year: String(year || resolvedSource.year || "") || null,
               resourceType: String(resolvedSource.resourceType || "uploaded_pdf"),
@@ -663,11 +755,13 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
               ok: false,
               status: 202,
               found: false,
-              errorCode: indexingResult.status === "ready" ? "PDF_INDEX_READY_RETRY" : "PDF_INDEXING_STARTED",
+              errorCode: indexingResult.status === "ready" ? "PDF_INDEX_READY_RETRY" : "OCR_QUEUED",
+              code: indexingResult.status === "ready" ? "PDF_INDEX_READY_RETRY" : "OCR_QUEUED",
+              pending: indexingResult.status !== "ready",
               stage: "PDF_INDEXING",
               message: indexingResult.status === "ready"
-                ? "PDF එක index කර අවසන්. එම ප්‍රශ්නය නැවත යවන්න."
-                : "PDF එකේ අකුරු හඳුනාගැනීම ආරම්භ කළා. Index කිරීම අවසන් වූ පසු එම ප්‍රශ්නය නැවත යවන්න.",
+                ? "The document index is ready. Retrying the question."
+                : "This scanned document is being processed.",
               canRetry: true,
               retryAfterMs: indexingResult.status === "ready" ? 1000 : 12000,
             };
@@ -677,10 +771,10 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
             ok: false,
             status: 503,
             found: false,
-            errorCode: "PDF_OCR_NOT_CONFIGURED",
+            errorCode: "OCR_PROCESSING_UNAVAILABLE",
             stage: "PDF_INDEXING",
-            message: "මෙය scan කළ PDF එකක්. OCR_ENABLED=true සහ OCR_INPUT_BUCKET සකසා නැවත deploy කරන්න.",
-            canRetry: false,
+            message: "We could not process this scanned document. Please try again later.",
+            canRetry: true,
           };
         }
 
@@ -694,7 +788,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
             found: false,
             errorCode: "DIRECT_PDF_TOO_LARGE_TO_SCAN_INLINE",
             stage: "PDF_INDEXING",
-            message: "විශාල PDF එක මුලින් සුරකිමින් index කරන්න. එවිට ප්‍රශ්න ඉක්මනින් අහන්න පුළුවන්.",
+            message: "Save and index this large PDF before asking questions from it.",
           };
         }
 
@@ -728,7 +822,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
               errorCode: "AI_BILLING_EXHAUSTED",
               stage: "MODEL_CALL",
               reason: "AI billing exhausted. PDF was not fully analyzed by Gemini.",
-              message: "AI credits අවසන් නිසා PDF scan/answer generation complete වුණේ නැහැ.",
+              message: "The PDF answer could not be completed because the AI service limit was reached.",
               canRetry: false
             };
           }
@@ -804,6 +898,15 @@ pdfRoutes.get("/question-cache", requireFirebaseUser, async (req: any, res) => {
     const { sourceId } = req.query;
     if (!sourceId) return res.status(400).json({ ok: false, error: "Missing sourceId" });
     const db = getAdminDb();
+    const sourceSnapshot = await db.collection("rag_sources").doc(String(sourceId)).get();
+    const source = sourceSnapshot.exists ? sourceSnapshot.data() : null;
+    if (!source || !canViewSource(req.user, source)) {
+      return res.status(source ? 403 : 404).json({
+        ok: false,
+        code: source ? "QUESTION_CACHE_FORBIDDEN" : "SOURCE_NOT_FOUND",
+        message: source ? "You do not have access to this source." : "Source not found.",
+      });
+    }
     const cacheSnap = await db.collection("pdf_question_cache")
       .where("sourceId", "==", sourceId)
       .orderBy("updatedAt", "desc")
@@ -829,6 +932,9 @@ pdfRoutes.get("/question-cache", requireFirebaseUser, async (req: any, res) => {
 pdfRoutes.post("/question-cache/:docId/reject", requireFirebaseUser, async (req: any, res) => {
   try {
     const { docId } = req.params;
+    if (!canReviewQuestionCache(req.user)) {
+      return res.status(403).json({ ok: false, code: "QUESTION_CACHE_REVIEW_FORBIDDEN", message: "You do not have permission to review cached questions." });
+    }
     const db = getAdminDb();
     await db.collection("pdf_question_cache").doc(docId).update({
       validationStatus: "rejected",
@@ -844,6 +950,9 @@ pdfRoutes.post("/question-cache/:docId/reject", requireFirebaseUser, async (req:
 pdfRoutes.post("/question-cache/:docId/resolve", requireFirebaseUser, async (req: any, res) => {
   try {
     const { docId } = req.params;
+    if (!canReviewQuestionCache(req.user)) {
+      return res.status(403).json({ ok: false, code: "QUESTION_CACHE_REVIEW_FORBIDDEN", message: "You do not have permission to resolve cached questions." });
+    }
     const db = getAdminDb();
     const doc = await db.collection("pdf_question_cache").doc(docId).get();
     if (!doc.exists) return res.status(404).json({ ok: false, error: "Cache not found" });

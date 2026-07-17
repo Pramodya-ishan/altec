@@ -6,7 +6,7 @@
   "functions": {
     "api/index.ts": {
       "maxDuration": 300,
-      "includeFiles": "vercel-runtime/google-gax-protos/**",
+      "includeFiles": "vercel-runtime/**",
       "excludeFiles": "node_modules/**"
     }
   },
