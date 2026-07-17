@@ -18,6 +18,7 @@ export type KnowledgeRouterResult = {
     | "continue_grounded_discussion"
     | "normal_chat"
     | "past_paper_search"
+    | "past_paper_analysis"
     | "web_search"
     | "url_context"
     | "uploaded_pdf_qa"
@@ -68,6 +69,7 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
 
   // PDF Inventory request check
   const isPdfInventory = lower.includes("give all pdfs") ||
+    /\b(?:give|show|list)?\s*all\s+(?:sft|et|ict)\s+pdfs?\b/i.test(lower) ||
     lower.includes("all pdfs") ||
     lower.includes("mage pdf") ||
     lower.includes("thiyena pdf") ||
@@ -83,10 +85,17 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
     lower.includes("tika ko");
   
   if (isPdfInventory) {
+    const inventorySubject = /\bsft\b|science for technology|තාක්ෂණවේදය සඳහා විද්‍යාව/i.test(prompt)
+      ? "SFT"
+      : /\bict\b|information (?:and|&) communication technology|තොරතුරු හා සන්නිවේදන/i.test(prompt)
+        ? "ICT"
+        : /\bet\b|engineering technology|ඉංජිනේරු තාක්ෂණවේදය/i.test(prompt)
+          ? "ET"
+          : activeSubject;
     return {
       mode: "pdf_inventory_request" as any,
       entities: {
-        subject: activeSubject as any,
+        subject: inventorySubject as any,
       },
       answerHints: {
         mustUseRag: true,
@@ -233,6 +242,17 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
       mode: "continue_grounded_discussion",
 
       entities: { subject }
+    };
+  }
+  const asksPaperAnalysis = Boolean(year)
+    && (lower.includes("paper") || lower.includes("past paper"))
+    && (lower.includes("guess") || lower.includes("prediction") || lower.includes("predict")
+      || lower.includes("frequency") || lower.includes("trend") || lower.includes("repeated")
+      || lower.includes("probability"));
+  if (asksPaperAnalysis) {
+    return {
+      mode: "past_paper_analysis",
+      entities: { subject, year, resourceType: "past_paper", paperType: "paper" },
     };
   }
   const asksPastPaperLesson = (lower.includes("past paper") || lower.includes("pastpaper") || lower.includes("past papers") || lower.includes("paper prashna"))

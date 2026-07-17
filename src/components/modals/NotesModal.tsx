@@ -32,20 +32,20 @@ function formatBytes(value: number) {
 }
 
 function formatEta(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return "ගණනය කරමින්…";
-  if (value < 60) return `${Math.max(1, Math.ceil(value))} තත්`;
+  if (value === null || !Number.isFinite(value)) return "Calculating…";
+  if (value < 60) return `${Math.max(1, Math.ceil(value))} sec`;
   const minutes = Math.floor(value / 60);
   const seconds = Math.ceil(value % 60);
-  return `${minutes} මිනි ${seconds} තත්`;
+  return `${minutes} min ${seconds} sec`;
 }
 
 function mediaKindLabel(kind?: LessonResourceKind) {
-  if (kind === "video") return "වීඩියෝ";
-  if (kind === "image") return "රූපය";
-  if (kind === "audio") return "ශ්‍රව්‍ය";
+  if (kind === "video") return "Video";
+  if (kind === "image") return "Image";
+  if (kind === "audio") return "Audio";
   if (kind === "pdf") return "PDF";
-  if (kind === "link") return "සබැඳිය";
-  return "ගොනුව";
+  if (kind === "link") return "Link";
+  return "File";
 }
 
 function getMediaKind(file: File): LessonResourceKind {
@@ -201,7 +201,7 @@ export function NotesModal() {
   if (!modals.playlist.open) return null;
 
   const close = () => {
-    if (isUploading && !confirm("ගොනුව තවම එක් කරමින් පවතී. එය නවතා වසන්නද?")) return;
+    if (isUploading && !confirm("An upload is still running. Cancel it and close?")) return;
     controlsRef.current?.cancel();
     setModals((previous) => ({ ...previous, playlist: { open: false, topic: "" } }));
   };
@@ -236,16 +236,16 @@ export function NotesModal() {
     const mediaKind = getMediaKind(file);
     const maxBytes = mediaKind === "video" ? 10 * 1024 * 1024 * 1024 : 50 * 1024 * 1024;
     if (file.size <= 0 || file.size > maxBytes) {
-      showNotification(`ගොනුවේ ප්‍රමාණය වලංගු නැහැ. උපරිමය ${mediaKind === "video" ? "10 GB" : "50 MB"}.`, "error");
+      showNotification(`Invalid file size. The maximum is ${mediaKind === "video" ? "10 GB" : "50 MB"}.`, "error");
       return;
     }
     if (mediaKind === "video" && videoPermission !== "allowed") {
       if (videoPermission === "loading") {
-        showNotification("වීඩියෝ එක් කිරීමේ අවසරය පරීක්ෂා කරමින්. මොහොතකින් නැවත උත්සාහ කරන්න.", "info");
+        showNotification("Checking video upload permission. Try again in a moment.", "info");
       } else if (videoPermission === "unavailable") {
-        showNotification("වීඩියෝ අවසරය තහවුරු කළ නොහැක. සම්බන්ධතාව පරීක්ෂා කර නැවත උත්සාහ කරන්න.", "error");
+        showNotification("Video permission could not be verified. Check your connection and try again.", "error");
       } else {
-        showNotification("පාඩම් වීඩියෝ එක් කළ හැක්කේ පරිපාලකයෙකුට හෝ අන්තර්ගත සංස්කාරකයෙකුට පමණයි.", "error");
+        showNotification("Only an administrator or content editor can upload lesson videos.", "error");
       }
       return;
     }
@@ -278,7 +278,7 @@ export function NotesModal() {
           sizeBytes: file.size,
           createdAt: new Date().toISOString(),
         });
-        showNotification(result.transcodeQueued ? "වීඩියෝව එක් කළා. ආරක්ෂිත සැකසුම ආරම්භ වුණා." : "වීඩියෝව එක් කළා. දැන් වාදනය කළ හැක.", "success");
+        showNotification(result.transcodeQueued ? "Video uploaded. Secure processing has started." : "Video uploaded and ready to play.", "success");
       } else {
         const upload = await uploadPdfWithClientStorage({
           file,
@@ -326,12 +326,12 @@ export function NotesModal() {
           sizeBytes: file.size,
           createdAt: new Date().toISOString(),
         });
-        showNotification("පාඩම් සම්පත සාර්ථකව එක් කළා.", "success");
+        showNotification("Lesson resource uploaded successfully.", "success");
       }
     } catch (error: any) {
       if (error?.name !== "AbortError" && error?.code !== "storage/canceled") {
         console.error(error);
-        showNotification(error?.message || "ගොනුව එක් කිරීමට නොහැකි වුණා", "error");
+        showNotification(error?.message || "Unable to upload the file", "error");
       }
     } finally {
       setIsUploading(false);
@@ -353,7 +353,7 @@ export function NotesModal() {
       const payload = await response.json().catch(() => null);
       const liveStatus = payload?.video?.status || resource.status;
       if (!response.ok || liveStatus !== "ready") {
-        showNotification(`වීඩියෝව තවම සකසමින් පවතී (${liveStatus || "පොරොත්තුවෙන්"}).`, "info");
+        showNotification(`Video is still processing (${liveStatus || "pending"}).`, "info");
         return;
       }
       setPlayerResource({ ...resource, status: "ready" });
@@ -364,7 +364,7 @@ export function NotesModal() {
   };
 
   const deleteResource = async (resource: LessonResource) => {
-    if (!isAdmin || !confirm(`“${resource.title}” ඉවත් කරන්නද?`)) return;
+    if (!isAdmin || !confirm(`Delete “${resource.title}”?`)) return;
     try {
       if (resource.mediaKind === "video" && resource.videoId) {
         const response = await apiFetch(`/api/admin/videos/${resource.videoId}`, { method: "DELETE" });
@@ -389,9 +389,9 @@ export function NotesModal() {
       setCatalogVideos((current) => current.filter((item) => (
         String(item.videoId || item.sourceId || item.id || item.storagePath || item.title) !== resourceKey
       )));
-      showNotification("සම්පත ඉවත් කළා.", "success");
+      showNotification("Resource deleted.", "success");
     } catch (error: any) {
-      showNotification(error?.message || "සම්පත ඉවත් කිරීමට නොහැකි වුණා", "error");
+      showNotification(error?.message || "Unable to delete the resource", "error");
     }
   };
 
@@ -401,7 +401,7 @@ export function NotesModal() {
         <motion.div initial={{ opacity: 0, scale: 0.97, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 14 }} transition={{ type: "spring", damping: 28, stiffness: 320 }} className="flex max-h-[92dvh] w-full max-w-4xl flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white shadow-[0_28px_80px_rgba(15,23,42,0.22)]">
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4 sm:px-7">
             <div>
-              <h2 className="text-sm font-black tracking-wide text-slate-800">පාඩම් සම්පත්</h2>
+              <h2 className="text-sm font-black tracking-wide text-slate-800">Lesson resources</h2>
               <p className="mt-1 text-xs font-medium text-slate-500">{currentSubject.toUpperCase()} · {topic}</p>
             </div>
             <button onClick={close} className="rounded-xl p-2 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500" aria-label="Close resources"><X className="h-5 w-5" /></button>
@@ -411,12 +411,12 @@ export function NotesModal() {
             <section>
               <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="inline-flex w-fit rounded-xl bg-slate-100 p-1" role="tablist" aria-label="Lesson resource type">
-                  <button type="button" role="tab" aria-selected={activeTab === "resources"} onClick={() => setActiveTab("resources")} className={`rounded-lg px-4 py-2 text-xs font-bold transition-all ${activeTab === "resources" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500"}`}>සම්පත් ({fileResources.length})</button>
-                  <button type="button" role="tab" aria-selected={activeTab === "videos"} onClick={() => setActiveTab("videos")} className={`rounded-lg px-4 py-2 text-xs font-bold transition-all ${activeTab === "videos" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500"}`}>වීඩියෝ ({videoResources.length})</button>
+                  <button type="button" role="tab" aria-selected={activeTab === "resources"} onClick={() => setActiveTab("resources")} className={`rounded-lg px-4 py-2 text-xs font-bold transition-all ${activeTab === "resources" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500"}`}>Resources ({fileResources.length})</button>
+                  <button type="button" role="tab" aria-selected={activeTab === "videos"} onClick={() => setActiveTab("videos")} className={`rounded-lg px-4 py-2 text-xs font-bold transition-all ${activeTab === "videos" ? "bg-white text-slate-950 shadow-sm" : "text-slate-500"}`}>Videos ({videoResources.length})</button>
                 </div>
                 <input ref={fileInputRef} type="file" accept="application/pdf,image/*,audio/*,video/mp4,video/quicktime,video/webm,.doc,.docx,.ppt,.pptx,.txt" onChange={handleFileInput} className="hidden" id="lesson-resource-upload" disabled={isUploading} />
                 <button type="button" onClick={() => fileInputRef.current?.click()} disabled={isUploading} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-4 py-2 text-xs font-black text-slate-700 shadow-sm transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60">
-                  <UploadCloud className="h-4 w-4" /> {isUploading ? `${Math.round((telemetry?.progress || 0) * 100)}%` : isAdmin ? "සම්පතක් / වීඩියෝවක් එක් කරන්න" : videoPermission === "loading" ? "අවසර පරීක්ෂා කරමින්…" : "PDF / රූපයක් එක් කරන්න"}
+                  <UploadCloud className="h-4 w-4" /> {isUploading ? `${Math.round((telemetry?.progress || 0) * 100)}%` : isAdmin ? "Upload resource / video" : videoPermission === "loading" ? "Checking permission…" : "Upload PDF / image"}
                 </button>
               </div>
 
@@ -425,22 +425,22 @@ export function NotesModal() {
                   <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-black text-slate-800">{telemetry.fileName}</p>
-                      <p className="mt-1 text-xs font-semibold text-indigo-600">{telemetry.state === "paused" ? "විරාම කර ඇත" : "ආරක්ෂිතව එක් කරමින්"}</p>
+                      <p className="mt-1 text-xs font-semibold text-blue-600">{telemetry.state === "paused" ? "Paused" : "Uploading securely"}</p>
                     </div>
                     <span className="text-lg font-black text-indigo-700">{Math.round(telemetry.progress * 100)}%</span>
                   </div>
                   <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-indigo-100"><div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-[width] duration-300" style={{ width: `${Math.max(1, telemetry.progress * 100)}%` }} /></div>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
-                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">එක් කළ ප්‍රමාණය</span><strong className="text-slate-700">{formatBytes(telemetry.bytesTransferred)} / {formatBytes(telemetry.totalBytes)}</strong></div>
-                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">ඉතිරි ප්‍රමාණය</span><strong className="text-slate-700">{formatBytes(telemetry.remainingBytes)}</strong></div>
-                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">වේගය</span><strong className="text-slate-700">{formatBytes(telemetry.speedBytesPerSecond)}/s</strong></div>
-                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">ඉතිරි කාලය</span><strong className="text-slate-700">{formatEta(telemetry.etaSeconds)}</strong></div>
+                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">Uploaded</span><strong className="text-slate-700">{formatBytes(telemetry.bytesTransferred)} / {formatBytes(telemetry.totalBytes)}</strong></div>
+                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">Remaining</span><strong className="text-slate-700">{formatBytes(telemetry.remainingBytes)}</strong></div>
+                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">Speed</span><strong className="text-slate-700">{formatBytes(telemetry.speedBytesPerSecond)}/s</strong></div>
+                    <div className="rounded-lg bg-white/80 p-2"><span className="block text-slate-400">ETA</span><strong className="text-slate-700">{formatEta(telemetry.etaSeconds)}</strong></div>
                   </div>
                   <div className="mt-3 flex justify-end gap-2">
                     <button type="button" onClick={() => { const changed = isPaused ? controlsRef.current?.resume() : controlsRef.current?.pause(); if (changed) setIsPaused(!isPaused); }} className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm ring-1 ring-slate-200">
-                      {isPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />} {isPaused ? "නැවත අරඹන්න" : "විරාම කරන්න"}
+                      {isPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />} {isPaused ? "Resume" : "Pause"}
                     </button>
-                    <button type="button" onClick={() => controlsRef.current?.cancel()} className="rounded-lg bg-rose-100 px-3 py-2 text-xs font-bold text-rose-700">නවත්වන්න</button>
+                    <button type="button" onClick={() => controlsRef.current?.cancel()} className="rounded-lg bg-rose-100 px-3 py-2 text-xs font-bold text-rose-700">Cancel</button>
                   </div>
                 </div>
               )}
@@ -449,7 +449,7 @@ export function NotesModal() {
                 {visibleResources.length === 0 ? (
                   <button type="button" onClick={() => fileInputRef.current?.click()} className="flex w-full flex-col items-center py-8 text-center">
                     <UploadCloud className="mb-3 h-8 w-8 text-slate-300" />
-                    <span className="text-sm font-bold text-slate-500">මෙම පාඩමට තවම {activeTab === "videos" ? "වීඩියෝ" : "සම්පත්"} නැහැ</span>
+                    <span className="text-sm font-bold text-slate-500">No {activeTab === "videos" ? "videos" : "resources"} have been added to this lesson.</span>
                   </button>
                 ) : (
                   <AnimatePresence mode="popLayout" initial={false}>

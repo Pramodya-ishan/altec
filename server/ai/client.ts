@@ -20,6 +20,10 @@ function shouldUseVertex(): boolean {
   return !process.env.GEMINI_API_KEY;
 }
 
+export function isVertexAiEnabled(): boolean {
+  return shouldUseVertex();
+}
+
 export function prepareGoogleCredentials() {
   const serviceAccount = getGoogleServiceAccountFromEnvironment();
   if (serviceAccount && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {

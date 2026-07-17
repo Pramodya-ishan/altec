@@ -1,7 +1,15 @@
 import { normalizeSubject } from "./sourceNormalizer";
 
-export function getSourceScore(src: any, params: { year?: string | null, subject?: string | null, activeSourceId?: string | null, prompt: string }) {
-  const { year, subject, activeSourceId, prompt } = params;
+export type StrictSourceParams = {
+  year?: string | null;
+  subject?: string | null;
+  activeSourceId?: string | null;
+  expectedResourceType?: string | null;
+  prompt: string;
+};
+
+export function getSourceScore(src: any, params: StrictSourceParams) {
+  const { year, subject, activeSourceId, expectedResourceType, prompt } = params;
   const promptLower = prompt.toLowerCase();
   let score = 0;
 
@@ -41,6 +49,15 @@ export function getSourceScore(src: any, params: { year?: string | null, subject
   const isMarking = src.resourceType === "marking_scheme" || textToScan.includes("marking") || textToScan.includes("පිළිතුරු");
   if (isMarking) score += 60;
 
+  if (expectedResourceType) {
+    const normalizedExpected = expectedResourceType.toLowerCase();
+    const normalizedActual = String(src.resourceType || "").toLowerCase();
+    const matchesExpected = normalizedActual === normalizedExpected
+      || (normalizedExpected === "past_paper" && isPastPaper && !isMarking)
+      || (normalizedExpected === "marking_scheme" && isMarking);
+    score += matchesExpected ? 180 : -700;
+  }
+
   // PENALIZE TUTES FOR PAPER QUESTIONS
   const isPaperQuestion = promptLower.includes("paper") || promptLower.includes("mcq") || (year && !promptLower.includes("lesson"));
   if (isPaperQuestion) {
@@ -51,7 +68,7 @@ export function getSourceScore(src: any, params: { year?: string | null, subject
   return score;
 }
 
-export function resolveStrictSource(sources: any[], params: { year?: string | null, subject?: string | null, activeSourceId?: string | null, prompt: string }) {
+export function resolveStrictSource(sources: any[], params: StrictSourceParams) {
   const allScored = sources.map(s => ({
     source: s,
     score: getSourceScore(s, params)

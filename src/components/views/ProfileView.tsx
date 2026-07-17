@@ -564,9 +564,22 @@ export default function ProfileView() {
 
  <div className="mb-5">
  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">
- Choose Preset Avatar to upload avatar
+ Choose a profile picture
  </label>
  <div className="flex flex-wrap gap-2.5 mb-3">
+ {user?.picture && (
+ <button
+ type="button"
+ onClick={() => { setEditPicture(user.picture || ''); setCustomPicUrl(''); }}
+ className={cn(
+ "w-12 h-12 rounded-full overflow-hidden border-2 transition-all hover:scale-105 active:scale-95 bg-slate-50 cursor-pointer",
+ editPicture === user.picture && customPicUrl === '' ? "border-primary-600 scale-110 shadow-sm" : "border-slate-200"
+ )}
+ title="Use Google account picture"
+ >
+ <img src={user.picture} alt="Google account" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+ </button>
+ )}
  {PRESET_AVATARS.map((pic, idx) => (
  <button
  key={idx}
@@ -580,7 +593,7 @@ export default function ProfileView() {
  editPicture === pic && customPicUrl === '' ? "border-primary-600 scale-110 shadow-sm" : "border-slate-200"
  )}
  >
- <img src={pic} alt="Preset" className="w-full h-full" />
+ <img src={pic} alt={`Preset avatar ${idx + 1}`} className="w-full h-full" loading="lazy" />
  </button>
  ))}
 

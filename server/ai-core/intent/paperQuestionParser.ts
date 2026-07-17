@@ -31,7 +31,8 @@ export function detectOfficialPaperCandidate(prompt: string, activeSubject?: str
 
   // Question Number Extraction
   let questionNo = null;
-  const mcqNoMatch = prompt.match(/\bmcq\s*[-_]?\s*(\d+)\b/i);
+  const mcqNoMatch = prompt.match(/\bmcq\s*[-_]?\s*(\d+)\b/i)
+    || prompt.match(/\b(\d+)\s*(?:st|nd|rd|th|වෙනි|වැනි)?\s*mcq\b/i);
   const qNoMatch = prompt.match(/(?:question|q|ප්‍රශ්න|ප්‍රශ්නය|අංක|no)\s*(\d+)/i) || 
                    prompt.match(/\b(\d+)\s*(?:වෙනි|වැනි|th|st|nd|rd)\b/i) ||
                    prompt.match(/\b(?:පළවෙනි|පළමු|දෙවෙනි|දෙවන|තුන්වෙනි|හතරවෙනි|පස්වෙනි|හයවෙනි|හත්වෙනි|අටවෙනි|නවවෙනි|දහවෙනි|first|second|third)\b/i);

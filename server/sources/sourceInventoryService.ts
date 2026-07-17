@@ -7,6 +7,43 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
+function inventoryText(value: unknown) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function extractTitleYear(value: unknown): string | null {
+  return inventoryText(value).match(/\b(20\d{2})\b/)?.[1] || null;
+}
+
+export function inferSubject(value: unknown): "SFT" | "ET" | "ICT" | null {
+  const text = inventoryText(
+    typeof value === "object" && value !== null
+      ? `${(value as any).subject || ""} ${(value as any).title || ""} ${(value as any).fileName || ""}`
+      : value,
+  );
+  if (/\bSFT\b|SCIENCE\s+FOR\s+TECHNOLOGY|තාක්ෂණවේදය\s+සඳහා\s+විද්‍යාව/i.test(text)) return "SFT";
+  if (/\bICT\b|INFORMATION\s+(?:AND|&)\s+COMMUNICATION\s+TECHNOLOGY|තොරතුරු\s+හා\s+සන්නිවේදන/i.test(text)) return "ICT";
+  if (/\bET\b|ENGINEERING\s+TECHNOLOGY|ඉංජිනේරු\s+තාක්ෂණවේදය/i.test(text)) return "ET";
+  return null;
+}
+
+export function inferResourceType(source: unknown): string {
+  const record = typeof source === "object" && source !== null ? source as Record<string, unknown> : {};
+  const explicit = inventoryText(record.resourceType || record.sourceType).toLowerCase();
+  if (explicit) return explicit;
+
+  const text = inventoryText(`${record.title || source || ""} ${record.fileName || ""}`).toLowerCase();
+  if (/marking\s*scheme|answer\s*scheme|\bfull\s+sm\b|\bsm\b|පිළිතුරු/.test(text)) return "marking_scheme";
+  if (/past\s*paper|official\s*paper|model\s*paper|\bpaper\b|විභාග/.test(text)) return "past_paper";
+  if (/syllabus|curriculum/.test(text)) return "syllabus";
+  if (/\.(?:png|jpe?g|webp|gif)\b/.test(text)) return "image";
+  return "uploaded_pdf";
+}
+
 function lessonFromStoragePath(storagePath: unknown) {
   const path = String(storagePath || "").replace(/^gs:\/\/[^/]+\//, "");
   const parts = path.split("/").filter(Boolean);
@@ -107,9 +144,9 @@ export async function getSourceInventory(params: {
     sourceIds.add(sId);
 
     // Normalize fields
-    const normSubject = String(src.subject || "").trim().toUpperCase();
-    const normYear = String(src.year || "").trim();
-    const normResourceType = String(src.resourceType || src.sourceType || "").trim().toLowerCase();
+    const normSubject = String(src.subject || inferSubject(src) || "").trim().toUpperCase();
+    const normYear = String(src.year || extractTitleYear(src.title || src.fileName) || "").trim();
+    const normResourceType = inferResourceType(src);
     const normSourceScope = String(src.sourceScope || "").trim().toLowerCase();
 
     // Subject Filter

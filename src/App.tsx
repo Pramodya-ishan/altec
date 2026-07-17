@@ -116,15 +116,15 @@ function NotFoundView() {
     <section className="flex min-h-[60vh] flex-1 items-center justify-center px-6 py-16 text-center">
       <div className="max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-400">404</p>
-        <h1 className="mt-3 text-2xl font-semibold text-slate-950">පිටුව හමු නොවුණි</h1>
+        <h1 className="mt-3 text-2xl font-semibold text-slate-950">Page not found</h1>
         <p className="mt-3 text-sm leading-6 text-slate-500">
-          මෙම ලිපිනය Tec A/L පිටුවක් නොවේ. ලිපිනය පරීක්ෂා කරන්න හෝ ප්‍රධාන පිටුවට යන්න.
+          This address is not available in Tec A/L. Check the URL or return to the main page.
         </p>
         <a
           href="/"
           className="mt-6 inline-flex rounded-full bg-slate-950 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800"
         >
-          ප්‍රධාන පිටුවට යන්න
+          Go to main page
         </a>
       </div>
     </section>
@@ -134,6 +134,17 @@ function NotFoundView() {
 function AuthOverlay() {
   const { user, loginWithGooglePopup, isAuthLoading } = useApp();
   const [actionLoading, setActionLoading] = React.useState(false);
+  const [authWaitSeconds, setAuthWaitSeconds] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!isAuthLoading) {
+      setAuthWaitSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => setAuthWaitSeconds(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [isAuthLoading]);
 
   const handleGoogleLogin = async () => {
     setActionLoading(true);
@@ -147,11 +158,14 @@ function AuthOverlay() {
   if (isAuthLoading) {
     return (
       <div className="fixed inset-0 z-[999999] flex items-center justify-center bg-white" role="status" aria-live="polite" aria-label="Checking sign-in">
-        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 px-5 py-4 shadow-sm">
+        <div className="flex max-w-[calc(100vw-2rem)] items-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
           <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
           <div>
-            <p className="text-sm font-bold text-slate-800">ඔබගේ ගිණුම විවෘත කරමින්</p>
-            <p className="text-xs text-slate-500">ආරක්ෂිත පිවිසුම පරීක්ෂා කරමින්…</p>
+            <p className="text-sm font-bold text-slate-800">Opening your workspace</p>
+            <p className="text-xs text-slate-500">{authWaitSeconds >= 8 ? "The server is taking longer than usual…" : "Checking your secure session…"}</p>
+            {authWaitSeconds >= 15 && (
+              <button type="button" onClick={() => window.location.reload()} className="mt-2 text-xs font-semibold text-blue-600 hover:text-blue-700">Retry sign-in check</button>
+            )}
           </div>
         </div>
       </div>
@@ -170,7 +184,7 @@ function AuthOverlay() {
           <div className="space-y-1.5">
             <h2 className="text-2xl font-black text-slate-900 tracking-tight">Tec A/L</h2>
             <p className="text-sm font-medium text-slate-500">
-              ඔබගේ A/L අධ්‍යයන පුවරුවට පිවිසීමට Google ගිණුම භාවිත කරන්න.
+              Sign in with your Google account to access your A/L workspace.
             </p>
           </div>
         </div>
@@ -190,7 +204,7 @@ function AuthOverlay() {
                 <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
                 <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
               </svg>
-              Google සමඟ පිවිසෙන්න
+              Sign in with Google
             </>
           )}
         </button>
@@ -203,6 +217,7 @@ function AppContent() {
   const { theme, isSidebarOpen, setCurrentView, user, isUserDataLoading, hasHydratedUserData } = useApp();
   const location = useLocation();
   const isChatRoute = location.pathname === "/clora-x" || location.pathname === "/ai-chat";
+  const [routeChanging, setRouteChanging] = React.useState(false);
 
   React.useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -216,11 +231,18 @@ function AppContent() {
      setCurrentView(path as any);
   }, [location.pathname, setCurrentView]);
 
+  React.useEffect(() => {
+    setRouteChanging(true);
+    const timer = window.setTimeout(() => setRouteChanging(false), 320);
+    return () => window.clearTimeout(timer);
+  }, [location.pathname]);
+
   return (
     <div className="min-h-screen bg-white font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 relative">
       <OnlineStatus />
       <ToastNotification />
       <AuthOverlay />
+      <AnimatePresence>{routeChanging && <motion.div initial={{ scaleX: 0, opacity: 0 }} animate={{ scaleX: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.28 }} className="fixed left-0 top-0 z-[100000] h-0.5 w-full origin-left bg-blue-600" />}</AnimatePresence>
       <Sidebar />
       <div className={cn("flex flex-col transition-all duration-300", isChatRoute ? "h-[100dvh] overflow-hidden bg-white" : "min-h-screen bg-white", isSidebarOpen ? "lg:pl-72" : "lg:pl-[72px] pl-0")}>
         <TopNav />
@@ -229,7 +251,7 @@ function AppContent() {
             "relative w-full flex-1 flex flex-col min-h-0",
             isChatRoute
               ? "max-w-none p-0 overflow-hidden"
-              : "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
+              : "max-w-7xl mx-auto px-4 pb-24 pt-6 sm:px-6 sm:py-8 lg:px-8"
           )}
         >
           <div className="relative flex h-full min-h-0 w-full flex-1 flex-col">

@@ -20,18 +20,18 @@ export function Sidebar() {
   const { isSidebarOpen, setSidebarOpen, profile } = useApp();
   
   const menuItems: { id: ViewKey; label: string; icon: any }[] = [
-    { id: 'paper-structure', label: 'ප්‍රශ්න පත්‍ර ව්‍යුහය', icon: Layers },
-    { id: 'paper-marks', label: 'ලකුණු ප්‍රගතිය', icon: LineChart },
-    { id: 'past-papers', label: 'ප්‍රශ්න පත්‍ර', icon: FileText },
-    { id: 'admission-predictor', label: 'Z-Score විශ්ලේෂණය', icon: GraduationCap },
-    { id: 'clora-x', label: 'අධ්‍යයන සහායක', icon: Bot }
+    { id: 'paper-structure', label: 'Paper structure', icon: Layers },
+    { id: 'paper-marks', label: 'Marks & analytics', icon: LineChart },
+    { id: 'past-papers', label: 'Past papers', icon: FileText },
+    { id: 'admission-predictor', label: 'Z-score analytics', icon: GraduationCap },
+    { id: 'clora-x', label: 'Study assistant', icon: Bot }
   ];
 
   const isAdminUser = profile?.role === 'admin' || profile?.roles?.includes('admin');
   const isSyllabusEditor = isAdminUser || profile?.role === 'content_editor' || profile?.roles?.includes('content_editor') || profile?.role === 'teacher' || profile?.roles?.includes('teacher');
 
   if (isSyllabusEditor) {
-    menuItems.push({ id: 'syllabus', label: 'විෂය නිර්දේශය', icon: BookOpen } as any);
+    menuItems.push({ id: 'syllabus', label: 'Syllabus', icon: BookOpen } as any);
   }
   if (isAdminUser) {
     menuItems.push({ id: 'pdf-sources', label: 'PDF Intelligence', icon: FileText } as any);
@@ -60,7 +60,7 @@ export function Sidebar() {
           <button
             onClick={() => setSidebarOpen(!isSidebarOpen)}
             className="w-10 h-10 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
-            aria-label="Toggle Menu"
+            aria-label={isSidebarOpen ? "Collapse navigation" : "Expand navigation"}
           >
             <Menu className="w-5 h-5" />
           </button>
@@ -88,6 +88,9 @@ export function Sidebar() {
                     ? "bg-indigo-50 text-indigo-700"
                     : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
                 )}
+                aria-current={isActive ? 'page' : undefined}
+                aria-label={item.label}
+                title={!isSidebarOpen ? item.label : undefined}
               >
                 <Icon className={cn("shrink-0 transition-transform duration-200", isActive ? "scale-110 text-indigo-600" : "group-hover:scale-110", isSidebarOpen ? "w-5 h-5" : "w-5 h-5")} />
                 
@@ -104,6 +107,17 @@ export function Sidebar() {
         </nav>
 
         </aside>
+
+      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-slate-200 bg-white/95 px-1 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1.5 shadow-[0_-8px_24px_rgba(15,23,42,0.06)] backdrop-blur lg:hidden" aria-label="Mobile navigation">
+        {menuItems.slice(0, 5).map((item) => {
+          const isActive = location.pathname.includes(item.id) || (location.pathname === '/' && item.id === 'paper-structure');
+          const Icon = item.icon;
+          return <button key={`mobile-${item.id}`} type="button" onClick={() => navigate(`/${item.id}`)} className={cn("flex min-h-12 flex-col items-center justify-center gap-1 rounded-xl px-1 text-[9px] font-semibold transition", isActive ? "text-blue-700" : "text-slate-500")} aria-current={isActive ? 'page' : undefined} aria-label={item.label}>
+            <Icon className={cn("h-5 w-5", isActive && "text-blue-600")} />
+            <span className="max-w-full truncate">{item.label.replace(' & analytics', '')}</span>
+          </button>;
+        })}
+      </nav>
     </>
   );
 }
