@@ -83,66 +83,167 @@ export function detectQuestionNo(text: string): string | null {
 }
 
 // 1. Download/Signed URL for sources
+async function resolveDownloadSource(db: any, sourceId: string, userUid: string) {
+  const [ragSnapshot, paperSnapshot, lessonSnapshot, syllabusSnapshot] = await Promise.all([
+    db.collection("rag_sources").doc(sourceId).get(),
+    db.collection("past_papers").doc(sourceId).get(),
+    db.collection("lesson_resources").doc(sourceId).get(),
+    db.collection("users").doc(userUid).collection("syllabus_resources").doc(sourceId).get(),
+  ]);
+
+  const candidates: Array<{ origin: string; data: any }> = [];
+  // Prefer global catalog records over legacy per-user metadata. This preserves
+  // their published/official visibility even when the matching rag_sources row
+  // was created by an older uploader with visibility:"private".
+  if (paperSnapshot.exists) candidates.push({ origin: "past_papers", data: { id: paperSnapshot.id, ...paperSnapshot.data() } });
+  if (lessonSnapshot.exists) candidates.push({ origin: "lesson_resources", data: { id: lessonSnapshot.id, ...lessonSnapshot.data() } });
+  if (ragSnapshot.exists) candidates.push({ origin: "rag_sources", data: { id: ragSnapshot.id, ...ragSnapshot.data() } });
+  if (syllabusSnapshot.exists) candidates.push({ origin: "syllabus_resources", data: { id: syllabusSnapshot.id, ...syllabusSnapshot.data() } });
+
+  if (!lessonSnapshot.exists) {
+    const lessonBySource = await db.collection("lesson_resources").where("sourceId", "==", sourceId).limit(1).get();
+    if (!lessonBySource.empty) {
+      const document = lessonBySource.docs[0];
+      candidates.push({ origin: "lesson_resources", data: { id: document.id, ...document.data() } });
+    }
+  }
+
+  return candidates.find((candidate) => String(candidate.data?.storagePath || "").trim())
+    || candidates[0]
+    || null;
+}
+
+function isPublishedSourceForStudents(origin: string, data: any) {
+  const visibility = String(data?.visibility || "").toLowerCase();
+  const scope = String(data?.sourceScope || "").toLowerCase();
+  const resourceType = String(data?.resourceType || data?.sourceType || "").toLowerCase();
+
+  // A document stored in the global past_papers collection is an application
+  // resource, even when an old row still carries visibility:"private" from a
+  // previous upload implementation.
+  if (origin === "past_papers") return data?.published !== false;
+  if (data?.published === true && ["official", "shared", "class", "institution", "public"].includes(visibility)) return true;
+  if (["official", "shared", "class", "institution", "public"].includes(visibility)) return true;
+  if (["past_paper", "paper_structure", "owner_syllabus", "shared_lesson", "official"].includes(scope)) return true;
+  return ["past_paper", "model_paper", "marking_scheme", "paper_structure", "syllabus"].includes(resourceType)
+    && data?.published !== false;
+}
+
+function safeInlineFileName(value: unknown) {
+  return String(value || "source.pdf")
+    .replace(/[\r\n"\\/]+/g, "_")
+    .replace(/_+/g, "_")
+    .slice(0, 180) || "source.pdf";
+}
+
 ragRoutes.get("/sources/:sourceId/download", requireFirebaseUser, async (req: any, res) => {
   try {
     const user = req.user;
     const { sourceId } = req.params;
     const db = getAdminDb();
-    
-    const docRef = db.collection("rag_sources").doc(sourceId);
-    const docSnap = await docRef.get();
-    if (!docSnap.exists) {
-      return res.status(404).json({ ok: false, error: "Source not found" });
+    const resolved = await resolveDownloadSource(db, sourceId, user.uid);
+
+    if (!resolved) {
+      return res.status(404).json({ ok: false, code: "SOURCE_NOT_FOUND", message: "Source not found." });
     }
-    
-    const data = docSnap.data();
-    if (!data || !data.storagePath) {
-      return res.status(404).json({ ok: false, error: "Storage path not found" });
+
+    const data = resolved.data || {};
+    if (!data.storagePath) {
+      return res.status(404).json({ ok: false, code: "SOURCE_STORAGE_PATH_MISSING", message: "Storage path not found." });
     }
-    
-    const visibleToStudents = ["official", "shared", "class", "institution", "public"].includes(String(data.visibility || ""));
+
+    const visibleToStudents = isPublishedSourceForStudents(resolved.origin, data);
     if (data.ownerUid !== user.uid && !visibleToStudents && !isContentManager(user)) {
       return res.status(403).json({ ok: false, code: "SOURCE_ACCESS_FORBIDDEN", message: "You do not have access to this source." });
     }
-    
+
     const bucket = getAdminBucket();
-    const file = bucket.file(data.storagePath);
-    
+    const file = bucket.file(String(data.storagePath));
     const [exists] = await file.exists();
     if (!exists) {
-      return res.status(404).json({ ok: false, error: "File not found in storage" });
+      return res.status(404).json({ ok: false, code: "SOURCE_FILE_NOT_FOUND", message: "File not found in storage." });
     }
-    
+
+    const [metadata] = await file.getMetadata().catch(() => [{} as any]);
+    const contentType = String(data.mimeType || metadata.contentType || "application/pdf");
+    const fileName = safeInlineFileName(data.fileName || data.title || metadata.name || "source.pdf");
     const shouldStream = req.query.stream === "true";
-    
+    const wantsJson = req.query.format === "json";
+    const expiresAtMs = Date.now() + 15 * 60 * 1000;
+
     if (!shouldStream) {
-      // Try to create a signed URL first (valid for 15 mins) and redirect
       try {
         const [signedUrl] = await retryGoogleAuthOperation("sourcesGetSignedUrl", async () => {
           return await file.getSignedUrl({
-            action: 'read',
-            expires: Date.now() + 15 * 60 * 1000, // 15 mins
+            action: "read",
+            expires: expiresAtMs,
+            responseDisposition: `inline; filename="${fileName}"`,
+            responseType: contentType,
           });
         });
+
+        if (wantsJson) {
+          res.setHeader("Cache-Control", "private, no-store");
+          return res.json({
+            ok: true,
+            mode: "signed_url",
+            url: signedUrl,
+            expiresAt: new Date(expiresAtMs).toISOString(),
+            fileName,
+            contentType,
+          });
+        }
         return res.redirect(signedUrl);
       } catch (signErr) {
-        console.warn("Failed to generate signed URL, falling back to direct stream:", signErr);
+        console.warn("Failed to generate signed source URL; using authenticated stream.", signErr);
+        if (wantsJson) {
+          res.setHeader("Cache-Control", "private, no-store");
+          return res.json({
+            ok: true,
+            mode: "stream",
+            streamUrl: `/api/rag/sources/${encodeURIComponent(sourceId)}/download?stream=true`,
+            fileName,
+            contentType,
+          });
+        }
       }
     }
-    
-    // Fallback: direct stream
-    res.setHeader("Content-Type", data.mimeType || "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(data.fileName || "source.pdf")}"`);
-    file.createReadStream().pipe(res);
+
+    const size = Number(metadata.size || 0);
+    const rangeHeader = String(req.headers.range || "");
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Accept-Ranges", "bytes");
+
+    if (rangeHeader && size > 0) {
+      const match = /^bytes=(\d+)-(\d*)$/i.exec(rangeHeader);
+      if (match) {
+        const start = Number(match[1]);
+        const requestedEnd = match[2] ? Number(match[2]) : size - 1;
+        const end = Math.min(size - 1, requestedEnd);
+        if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end >= start) {
+          res.status(206);
+          res.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
+          res.setHeader("Content-Length", String(end - start + 1));
+          return file.createReadStream({ start, end }).on("error", (error: Error) => res.destroy(error)).pipe(res);
+        }
+      }
+      res.status(416).setHeader("Content-Range", `bytes */${size}`);
+      return res.end();
+    }
+
+    if (size > 0) res.setHeader("Content-Length", String(size));
+    return file.createReadStream().on("error", (error: Error) => res.destroy(error)).pipe(res);
   } catch (e: any) {
     if (isPermissionError(e)) {
-      return res.status(403).json({
+      return res.status(503).json({
         ok: false,
-        code: "FIRESTORE_PERMISSION_DENIED",
-        message: "Firestore/Storage Admin permission issue. Check backend health."
+        code: "SOURCE_BACKEND_PERMISSION_ERROR",
+        message: "The server could not read this source. Check the runtime service-account Storage permissions."
       });
     }
-    res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, code: "SOURCE_DOWNLOAD_FAILED", message: e.message });
   }
 });
 

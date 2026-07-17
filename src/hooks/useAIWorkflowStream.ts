@@ -401,9 +401,10 @@ export function useAIWorkflowStream() {
                       questionType,
                       year,
                       subject,
-                      extractionMethod: "gemini_direct_pdf_qa",
+                      extractionMethod: result.extractionMethod || "gemini_direct_pdf_qa",
                       sourceEvidence: result.sourceEvidence,
                     },
+                    visualBlocks: result.visualBlocks || [],
                   });
                 } else {
                   const errorString = String(result.error || result.message || "").toLowerCase();

@@ -1,5 +1,14 @@
 export type VisualBlock =
   | {
+      type: "source_evidence";
+      title: string;
+      year?: string;
+      questionLabel?: string;
+      pageNumber?: number;
+      status: string;
+      verified: boolean;
+    }
+  | {
       type: "coordinate_plane";
       title: string;
       points: { label: string; x: number; y: number }[];
@@ -21,6 +30,24 @@ export type VisualBlock =
       title: string;
       formula: string;
       variables: { symbol: string; meaning: string }[];
+    }
+  | {
+      type: "reaction_diagram";
+      title: string;
+      equation: string;
+      caption?: string;
+    }
+  | {
+      type: "comparison_bars";
+      title: string;
+      items: { label: string; value: number; displayValue?: string }[];
+      caption?: string;
+    }
+  | {
+      type: "process_flow";
+      title: string;
+      steps: string[];
+      caption?: string;
     }
   | {
       type: "table";

@@ -5,7 +5,7 @@ import { Button } from './Button';
 import { FileText, Download, Sparkles, CheckCircle, Lock, Globe, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../../lib/api';
 import { auth } from '../../lib/firebase';
-import { openSourcePdf } from '../../lib/sourceActions';
+import { getPdfOpenErrorMessage, openSourcePdf } from '../../lib/sourceActions';
 import { cn } from '../../lib/utils';
 
 export interface SourceCardProps {
@@ -56,20 +56,10 @@ export const SourceCard: React.FC<SourceCardProps> = ({
 
   const handleDownload = async () => {
     try {
-      await openSourcePdf({ storagePath, id, url: `/api/rag/sources/${id}/download` });
-    } catch (e: any) {
-      console.error('Download trigger failed:', e);
-      if (e.message?.includes('LOGIN_REQUIRED')) {
-         alert('Sign in again to open this PDF.');
-      } else if (e.message?.includes('storage/unauthorized')) {
-         alert('PDF permission denied. Check your sign-in and access permissions.');
-      } else if (e.message?.includes('NOT_A_PDF_RESPONSE')) {
-         alert('The server returned an error instead of a PDF.');
-      } else if (e.message?.includes('NO_OPENABLE_PDF_SOURCE')) {
-         alert('This source has no available PDF file.');
-      } else {
-         alert('Error opening PDF: ' + e.message);
-      }
+      await openSourcePdf({ storagePath, id, sourceId: id, title, url: `/api/rag/sources/${id}/download` });
+    } catch (error: unknown) {
+      console.warn('Secure PDF open failed:', error);
+      alert(getPdfOpenErrorMessage(error));
     }
   };
 

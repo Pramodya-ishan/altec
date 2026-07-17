@@ -22,6 +22,7 @@ import { resolveAnswerPolicy } from "./answerPolicy";
 import { scoreSource } from "../sources/sourceScoring";
 import { isLessonEvidenceMode } from "../knowledge/lessonResolver";
 import { createAssistantStreamSanitizer, isSimpleGreeting, sanitizeAssistantText, simpleGreetingReply } from "./responseHygiene";
+import { deriveEducationalVisualBlocks } from "./visualAidBuilder";
 
 interface StreamTrace {
   requestId: string;
@@ -1507,6 +1508,13 @@ export async function aiRespondStream(req: any, res: any) {
       emitSse(res, "error", { ok: false, error: "Stream interrupted", recoverable: true, code: "STREAM_INTERRUPTED", completed: false, incomplete: true });
     }
 
+    const derivedVisualBlocks = !isInterrupted
+      ? deriveEducationalVisualBlocks({ prompt, answer: fullText, mode: route.mode })
+      : [];
+    if (derivedVisualBlocks.length > 0) {
+      emitSse(res, "visual_blocks", { blocks: derivedVisualBlocks });
+    }
+
     // Track AI Usage Costs
     try {
       const { trackAIUsage } = await import("../cost/usageTracker");
@@ -1639,7 +1647,17 @@ Do not include any other text or markdown formatting.`;
     // sent to the browser. Only the answer and its usable sources belong in
     // the learner-facing conversation.
     trace.completed = !isInterrupted;
-    emitSse(res, "done", { ok: !isInterrupted, completed: !isInterrupted, incomplete: isInterrupted, requestId, messageId: chatRes?.messageId || null, chatSaved: trace.chatSaved, sources: allSources || [], finishReason: isInterrupted ? "interrupted" : "complete" });
+    emitSse(res, "done", {
+      ok: !isInterrupted,
+      completed: !isInterrupted,
+      incomplete: isInterrupted,
+      requestId,
+      messageId: chatRes?.messageId || null,
+      chatSaved: trace.chatSaved,
+      sources: allSources || [],
+      visualBlocks: derivedVisualBlocks,
+      finishReason: isInterrupted ? "interrupted" : "complete",
+    });
     trace.doneSent = true;
     trace.lastEvent = "done";
   } catch (error: any) {

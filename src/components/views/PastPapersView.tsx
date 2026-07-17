@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../../lib/utils';
-import { openSourcePdf } from '../../lib/sourceActions';
+import { getPdfOpenErrorMessage, openSourcePdf } from '../../lib/sourceActions';
 import { useApp } from '../../context/AppContext';
 import { auth } from '../../lib/firebase';
 import { apiFetch } from '../../lib/api';
@@ -458,19 +458,15 @@ export default function PastPapersView() {
  exit="exit"
  className="group flex h-full cursor-pointer flex-col justify-between overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_14px_34px_rgba(15,23,42,0.08)]"
  onClick={() => {
-    openSourcePdf({ storagePath: paper.storagePath, url: paper.url, id: paper.id }).catch((e: any) => {
-      console.error('Download trigger failed:', e);
-      if (e.message?.includes('LOGIN_REQUIRED')) {
-         alert('Sign in again to open this PDF.');
-      } else if (e.message?.includes('storage/unauthorized')) {
-         alert('PDF permission denied. Check your sign-in and access permissions.');
-      } else if (e.message?.includes('NOT_A_PDF_RESPONSE')) {
-         alert('The server returned an error instead of a PDF.');
-      } else if (e.message?.includes('NO_OPENABLE_PDF_SOURCE')) {
-         alert('This source has no available PDF file.');
-      } else {
-         alert('Error opening PDF: ' + e.message);
-      }
+    openSourcePdf({
+      storagePath: paper.storagePath,
+      url: paper.url,
+      id: paper.id,
+      sourceId: paper.sourceId,
+      title: paper.title,
+    }).catch((error: unknown) => {
+      console.warn('Secure PDF open failed:', error);
+      setToast({ type: 'error', message: getPdfOpenErrorMessage(error) });
     });
   }}
  >

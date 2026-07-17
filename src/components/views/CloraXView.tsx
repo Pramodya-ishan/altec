@@ -871,7 +871,11 @@ const [messages, setMessages] = useState<{
                   ...m,
                   status: hasScanFailure ? "error" : (data?.completed === false ? "incomplete" : "done"),
                   paperInfo: data?.paperInfo || m.paperInfo,
-                  errorCode: data?.errorCode
+                  errorCode: data?.errorCode,
+                  visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
+                  sources: Array.isArray(data?.sources) && data.sources.length > 0
+                    ? Array.from(new Map([...(m.sources || []), ...data.sources].map((source: any) => [source.id || source.sourceId || source.title, source])).values())
+                    : m.sources,
                 };
               }
               return m;
@@ -985,7 +989,11 @@ const [messages, setMessages] = useState<{
            return prev.map(m => {
              if (m.id === assistantMsgId) {
                finalContent = m.content || "";
-               return { ...m, status: data?.completed === false ? "incomplete" : "done" };
+               return {
+                 ...m,
+                 status: data?.completed === false ? "incomplete" : "done",
+                 visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
+               };
              }
              return m;
            });
@@ -1277,7 +1285,11 @@ const [messages, setMessages] = useState<{
                   ...m,
                   status: hasScanFailure ? "error" : (data?.completed === false ? "incomplete" : "done"),
                   paperInfo: data?.paperInfo || m.paperInfo,
-                  errorCode: data?.errorCode
+                  errorCode: data?.errorCode,
+                  visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
+                  sources: Array.isArray(data?.sources) && data.sources.length > 0
+                    ? Array.from(new Map([...(m.sources || []), ...data.sources].map((source: any) => [source.id || source.sourceId || source.title, source])).values())
+                    : m.sources,
                 };
               }
               return m;

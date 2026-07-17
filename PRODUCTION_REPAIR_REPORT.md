@@ -106,3 +106,7 @@ This ZIP contains the repaired source and built runtime, but it has not been pro
 Deploy this project as a preview first, then promote it to production. Configure the OCR environment and cloud resources documented in `.env.example`, deploy `firestore.rules` and `storage.rules`, and run the lesson-resource migration once where required.
 
 After production promotion, open the site in a new tab or hard-refresh once. The new asset hashes should replace the old `firebase-TbtXCjiz.js` and `index-B87-hrzB.js` bundles.
+
+## Production Repair V3 addendum
+
+V3 removes client Firebase Storage ownership requirements for published administrator PDFs by opening shared resources through an authenticated server download endpoint. It also adds evidence-first Direct PDF answer formatting, normalized MCQ numbering, verified source cards, reaction diagrams, comparison bars, formula/process visuals, and deterministic visual aids for general answers. See `PRODUCTION_REPAIR_V3_REPORT.md` for deployment and verification details.

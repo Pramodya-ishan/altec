@@ -48,6 +48,17 @@ assert(knowledgeRouter.includes("asksWhichPdfCanAnswer") && knowledgeRouter.incl
 assert(respondStream.includes("Ready for secure direct PDF scan") && respondStream.includes("answerableSources"), "Saved PDFs without chunks are not handed to Direct PDF QA");
 assert(envExample.includes("OCR_ENABLED=true") && envExample.includes("OCR_INPUT_BUCKET=al-ai-chat-ocr-input") && envExample.includes("OCR_OUTPUT_BUCKET=al-ai-chat-ocr-output"), "OCR production example is incomplete");
 
+const sourceActions = await read("src/lib/sourceActions.ts");
+const ragRoutes = await read("server/rag/routes.ts");
+const directFormatter = await read("src/lib/ai/directPdfAnswerFormatter.ts");
+const visualRenderer = await read("src/components/ui/VisualBlockRenderer.tsx");
+const visualBuilder = await read("server/ai/visualAidBuilder.ts");
+assert(sourceActions.includes("getProtectedPdfRoute") && sourceActions.indexOf("getProtectedPdfRoute(source)") < sourceActions.lastIndexOf("getDownloadURL(ref(storage"), "Shared PDF opening must prefer the protected API over Firebase client Storage permissions");
+assert(ragRoutes.includes('req.query.format === "json"') && ragRoutes.includes("responseDisposition") && ragRoutes.includes('origin === "past_papers"'), "Protected PDF signed URL/download route is incomplete");
+assert(directFormatter.includes("normalizeMcqOption") && directFormatter.includes('type: "source_evidence"') && directFormatter.includes('type: "comparison_bars"'), "Direct PDF answer UI formatter is incomplete");
+assert(visualRenderer.includes('case "source_evidence"') && visualRenderer.includes('case "reaction_diagram"') && visualRenderer.includes('case "comparison_bars"'), "Educational visual renderer is incomplete");
+assert(visualBuilder.includes("deriveEducationalVisualBlocks") && respondStream.includes('emitSse(res, "visual_blocks"'), "General answer visual-aid pipeline is incomplete");
+
 for (const path of [
   "vercel-runtime/server.mjs",
   "vercel-runtime/pdf.worker.mjs",

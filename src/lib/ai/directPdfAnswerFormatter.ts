@@ -1,0 +1,199 @@
+import type { VisualBlock } from "../visualBlocks";
+import { stripRawVisualBlocks } from "./stripVisualBlocks";
+
+export type DirectPdfAnswerFormatterInput = {
+  source: {
+    id?: string;
+    sourceId?: string;
+    title?: string;
+    fileName?: string;
+    year?: string | number;
+  };
+  year?: string | number;
+  questionNo?: string | number;
+  questionType?: string;
+  result: any;
+};
+
+function clean(value: unknown) {
+  return stripRawVisualBlocks(String(value ?? "")).trim();
+}
+
+export function normalizeMcqOption(value: unknown, index: number) {
+  const text = clean(value)
+    .replace(/^\s*(?:\(\s*[1-5]\s*\)|[1-5][.)])\s*/u, "")
+    .trim();
+  return `(${index + 1}) ${text}`.trim();
+}
+
+function normalizeAnswerText(value: unknown, optionNo?: string | number | null) {
+  const text = clean(value);
+  if (!text) return "";
+  if (/^\s*(?:\(\s*[1-5]\s*\)|[1-5][.)])\s*/u.test(text)) return text;
+  return optionNo ? `(${optionNo}) ${text}` : text;
+}
+
+function safeVisualAid(value: any): VisualBlock | null {
+  if (!value || typeof value !== "object") return null;
+
+  if (value.type === "comparison_bars" && Array.isArray(value.items)) {
+    const items = value.items
+      .map((item: any) => ({
+        label: clean(item?.label).slice(0, 90),
+        value: Number(item?.value),
+        displayValue: clean(item?.displayValue).slice(0, 30) || undefined,
+      }))
+      .filter((item: any) => item.label && Number.isFinite(item.value) && item.value >= 0)
+      .slice(0, 6);
+    if (items.length >= 2) {
+      return {
+        type: "comparison_bars",
+        title: clean(value.title || "Comparison").slice(0, 120),
+        items,
+        caption: clean(value.caption).slice(0, 240) || undefined,
+      };
+    }
+  }
+
+  if (value.type === "process_flow" && Array.isArray(value.steps)) {
+    const steps = value.steps.map((step: unknown) => clean(step).slice(0, 120)).filter(Boolean).slice(0, 6);
+    if (steps.length >= 2) {
+      return {
+        type: "process_flow",
+        title: clean(value.title || "Process").slice(0, 120),
+        steps,
+        caption: clean(value.caption).slice(0, 240) || undefined,
+      };
+    }
+  }
+
+  return null;
+}
+
+function buildAutomaticVisuals(params: {
+  sourceTitle: string;
+  year?: string | number;
+  questionNo?: string | number;
+  questionType?: string;
+  result: any;
+  answerStatus: string;
+  explanation: string;
+  formulaOrRule: string;
+}): VisualBlock[] {
+  const { sourceTitle, year, questionNo, questionType, result, answerStatus, explanation, formulaOrRule } = params;
+  const blocks: VisualBlock[] = [{
+    type: "source_evidence",
+    title: sourceTitle,
+    year: year ? String(year) : undefined,
+    questionLabel: questionNo
+      ? `${String(questionType || "Question").toUpperCase() === "MCQ" ? "MCQ" : "Question"} ${questionNo}`
+      : undefined,
+    pageNumber: Number(result?.sourceEvidence?.pageNumber) || undefined,
+    status: answerStatus,
+    verified: result?.found === true,
+  }];
+
+  const visualAid = safeVisualAid(result?.answer?.solvedAnswer?.visualAid);
+  if (visualAid) blocks.push(visualAid);
+
+  if (formulaOrRule) {
+    if (/(?:→|->|⇌|↔)/u.test(formulaOrRule)) {
+      blocks.push({
+        type: "reaction_diagram",
+        title: "Reaction relationship",
+        equation: formulaOrRule.replace(/->/g, "→"),
+        caption: "Use the mole ratio in the balanced equation before comparing the released heat.",
+      });
+    } else {
+      blocks.push({
+        type: "formula_card",
+        title: "Rule used",
+        formula: formulaOrRule,
+        variables: [],
+      });
+    }
+  }
+
+  const combined = `${formulaOrRule}\n${explanation}`;
+  const isNeutralizationComparison = /NaOH/i.test(combined)
+    && /H(?:₂|2)SO(?:₄|4)/i.test(combined)
+    && /(දෙගුණ|twice|double|2\s*(?:×|x))/i.test(combined);
+  if (isNeutralizationComparison && !blocks.some((block) => block.type === "comparison_bars")) {
+    blocks.push({
+      type: "comparison_bars",
+      title: "Heat released by the stated mole amount",
+      items: [
+        { label: "NaOH 1 mol → H₂O 1 mol", value: 1, displayValue: "1×" },
+        { label: "H₂SO₄ 1 mol → H₂O 2 mol", value: 2, displayValue: "2×" },
+      ],
+      caption: "Neutralization heat is defined per 1 mol of water formed.",
+    });
+  }
+
+  return blocks;
+}
+
+export function formatDirectPdfAnswer(input: DirectPdfAnswerFormatterInput) {
+  const { source, result, questionNo, questionType } = input;
+  const year = input.year || source.year;
+  const sourceTitle = clean(source.title || source.fileName || "PDF source");
+  const questionText = clean(result?.sourceEvidence?.questionText);
+  const options = Array.isArray(result?.sourceEvidence?.options)
+    ? result.sourceEvidence.options.map((option: unknown, index: number) => normalizeMcqOption(option, index))
+    : [];
+
+  const answer = result?.answer || {};
+  const solvedAnswer = answer.solvedAnswer || null;
+  const officialAnswer = clean(answer.officialAnswer);
+  const explanation = clean(solvedAnswer?.explanationSinhala || answer.explanationSinhala);
+  const whyOthersWrong = Array.isArray(solvedAnswer?.whyOthersWrong)
+    ? solvedAnswer.whyOthersWrong.map(clean).filter(Boolean)
+    : [];
+  const formulaOrRule = clean(solvedAnswer?.formulaOrRule);
+
+  let answerStatus = "Verification required";
+  let finalAnswerText = "";
+  if (officialAnswer) {
+    finalAnswerText = officialAnswer;
+    answerStatus = "Verified from the official marking scheme";
+  } else if (solvedAnswer) {
+    finalAnswerText = normalizeAnswerText(solvedAnswer.optionText, solvedAnswer.optionNo);
+    answerStatus = "Solved from verified PDF evidence";
+  } else {
+    finalAnswerText = "The question was found in the PDF, but a confirmed answer was not available.";
+  }
+
+  const sections: string[] = [];
+  if (questionText) {
+    sections.push(`## ප්‍රශ්නය\n\n${questionText}`);
+  }
+  if (options.length) {
+    sections.push(options.map((option: string) => `**${option.match(/^\([1-5]\)/)?.[0] || ""}**${option.replace(/^\([1-5]\)/, "")}`).join("\n\n"));
+  }
+  if (finalAnswerText) {
+    sections.push(`## පිළිතුර\n\n> **${finalAnswerText}**`);
+  }
+  if (explanation) {
+    sections.push(`## පැහැදිලි කිරීම\n\n${explanation}`);
+  }
+  if (whyOthersWrong.length) {
+    sections.push(`## අනෙක් විකල්ප නොගැළපෙන හේතු\n\n${whyOthersWrong.map((reason: string) => `- ${reason}`).join("\n")}`);
+  }
+
+  const visualBlocks = buildAutomaticVisuals({
+    sourceTitle,
+    year,
+    questionNo,
+    questionType,
+    result,
+    answerStatus,
+    explanation,
+    formulaOrRule,
+  });
+
+  return {
+    markdown: sections.join("\n\n"),
+    visualBlocks,
+    answerStatus,
+  };
+}

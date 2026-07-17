@@ -1,0 +1,34 @@
+Tec A/L Production Repair V3 - Final Verification
+Date: 2026-07-18
+
+PASS npm run typecheck
+PASS npm test
+  PASS source registry and normalization tests
+  PASS redirect-only authentication strategy tests
+  PASS PDF extraction-state tests
+  PASS response-hygiene tests
+  PASS educational visual-aid tests
+  PASS Sinhala/display text hygiene tests
+  PASS Direct PDF answer formatter tests
+  PASS Vercel API path restoration tests
+  PASS lesson/paper routing regression tests
+  PASS security and content-permission tests
+  PASS secure video tests
+PASS npm run build:vercel
+  PASS Vite production build (3286 modules)
+  PASS self-contained Vercel runtime build
+  PASS isolated runtime smoke boot
+PASS npm run verify:repair
+
+Verified runtime assets:
+PASS vercel-runtime/server.mjs
+PASS vercel-runtime/pdf.worker.mjs
+PASS vercel-runtime/google-gax-protos/
+
+Production build bundles include:
+- index-B_Oiw59i.js
+- firebase-CY8i8PWR.js
+
+Notes:
+- Vite emitted only non-fatal chunk-size and mixed static/dynamic import warnings.
+- Local smoke has no cloud credentials or OCR environment, so cloud-dependent production services must still be configured in Vercel/Google Cloud.

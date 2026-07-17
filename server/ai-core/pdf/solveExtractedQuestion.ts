@@ -16,10 +16,21 @@ export interface SolvedMcqResult {
   whyOthersWrong: string[] | null;
   confidence: number;
   answerStatus: "official_marking_scheme" | "ai_solved_from_extracted_question" | "unknown";
+  visualAid?: {
+    type: "comparison_bars" | "process_flow" | "none";
+    title?: string;
+    items?: { label: string; value: number; displayValue?: string }[];
+    steps?: string[];
+    caption?: string;
+  } | null;
 }
 
 export async function solveExtractedMcqQuestion(params: SolveMcqParams): Promise<SolvedMcqResult | null> {
   const { questionText, options, subject, year, questionNo } = params;
+  const normalizedOptions = options.map((option, index) => {
+    const cleaned = String(option || "").replace(/^\s*(?:\(\s*[1-5]\s*\)|[1-5][.)])\s*/u, "").trim();
+    return `(${index + 1}) ${cleaned}`;
+  });
   
   const ai = getAIClient();
   const modelName = AI_MODELS.pdf; // Using Flash for solver
@@ -34,6 +45,8 @@ RULES:
 - Do not create a new question.
 - Choose exactly one option (1, 2, 3, 4, or 5).
 - Explain the logic clearly in Sinhala.
+- Add a small visualAid only when a comparison or process diagram materially clarifies the answer.
+- visualAid must contain factual values derived from the verified question and your calculation; otherwise use type:"none".
 - Return JSON only.
 `;
 
@@ -42,7 +55,7 @@ Question Number: ${questionNo}
 Question Text: ${questionText}
 
 Options:
-${options.map((opt, i) => `(${i + 1}) ${opt}`).join("\n")}
+${normalizedOptions.join("\n")}
 
 Return JSON:
 {
@@ -52,7 +65,14 @@ Return JSON:
   "explanationSinhala": "clear explanation in Sinhala",
   "whyOthersWrong": ["reason 1", "reason 2"],
   "confidence": 0.0-1.0,
-  "answerStatus": "ai_solved_from_extracted_question"
+  "answerStatus": "ai_solved_from_extracted_question",
+  "visualAid": {
+    "type": "none|comparison_bars|process_flow",
+    "title": "short title",
+    "items": [{ "label": "label", "value": 1, "displayValue": "1×" }],
+    "steps": ["step 1", "step 2"],
+    "caption": "short factual caption"
+  }
 }
 `;
 

@@ -15,6 +15,9 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
   const isUser = message.role === 'user';
   const displayContent = isUser ? String(message.content || '') : sanitizeAssistantDisplayText(message.content);
   const [copied, setCopied] = useState(false);
+  const visualBlocks = Array.isArray(message.visualBlocks) ? message.visualBlocks : [];
+  const leadVisualBlocks = visualBlocks.filter((block: any) => block?.type === 'source_evidence');
+  const supportingVisualBlocks = visualBlocks.filter((block: any) => block?.type !== 'source_evidence');
   const copyTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => () => {
@@ -70,18 +73,24 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
             </div>
           )}
 
+          {leadVisualBlocks.length > 0 && (
+            <div className="grid grid-cols-1 gap-3">
+              {leadVisualBlocks.map((block: any, index: number) => (
+                <VisualBlockRenderer key={`lead-${index}`} block={block} />
+              ))}
+            </div>
+          )}
+
           {message.content && (
             <div className="prose prose-slate min-w-0 max-w-none text-[15px] leading-7 text-slate-800 [overflow-wrap:anywhere] [word-break:normal] prose-headings:mb-3 prose-headings:mt-6 prose-p:my-2 prose-pre:max-w-full prose-pre:overflow-x-auto prose-table:block prose-table:max-w-full prose-table:overflow-x-auto">
               <MathMarkdown content={displayContent} isStreaming={isStreaming} />
             </div>
           )}
 
-          {message.visualBlocks?.length > 0 && (
-            <div className="grid grid-cols-1 gap-4 pt-1">
-              {message.visualBlocks.map((block: any, index: number) => (
-                <div key={index} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <VisualBlockRenderer block={block} />
-                </div>
+          {supportingVisualBlocks.length > 0 && (
+            <div className="grid grid-cols-1 gap-3 pt-1">
+              {supportingVisualBlocks.map((block: any, index: number) => (
+                <VisualBlockRenderer key={`support-${index}`} block={block} />
               ))}
             </div>
           )}

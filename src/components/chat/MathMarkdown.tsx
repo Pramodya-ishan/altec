@@ -40,8 +40,28 @@ export const MathMarkdown = memo(function MathMarkdown({
           ],
         ]}
         components={{
+          h1: ({ children }) => (
+            <h1 className="mb-3 mt-7 border-b border-slate-200 pb-2 text-xl font-black tracking-tight text-slate-950">{children}</h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className="mb-2 mt-7 flex items-center gap-2 text-[17px] font-black tracking-tight text-slate-950 before:h-5 before:w-1 before:rounded-full before:bg-indigo-500">{children}</h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className="mb-2 mt-5 text-[15px] font-extrabold text-slate-900">{children}</h3>
+          ),
           p: ({ children }) => (
-            <p className="ai-markdown__paragraph block">{children}</p>
+            <p className="ai-markdown__paragraph block min-w-0 [overflow-wrap:anywhere]">{children}</p>
+          ),
+          strong: ({ children }) => <strong className="font-extrabold text-slate-950">{children}</strong>,
+          blockquote: ({ children }) => (
+            <blockquote className="my-4 rounded-r-xl border-l-4 border-indigo-400 bg-indigo-50/60 px-4 py-3 font-semibold text-slate-800">{children}</blockquote>
+          ),
+          ul: ({ children }) => <ul className="my-3 space-y-2 pl-5 marker:text-indigo-500">{children}</ul>,
+          ol: ({ children }) => <ol className="my-3 space-y-2 pl-5 marker:font-bold marker:text-indigo-600">{children}</ol>,
+          li: ({ children }) => <li className="pl-1 leading-7 text-slate-700">{children}</li>,
+          hr: () => <hr className="my-6 border-slate-200" />,
+          a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noreferrer" className="font-semibold text-indigo-600 underline decoration-indigo-200 underline-offset-4 hover:text-indigo-700">{children}</a>
           ),
 
           code: ({ className, children, ...props }: any) => {

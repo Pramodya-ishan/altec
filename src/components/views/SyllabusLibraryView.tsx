@@ -10,7 +10,7 @@ import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { Badge } from '../ui/Badge';
 import { cn } from '../../lib/utils';
-import { openSourcePdf, getPdfUrl } from '../../lib/sourceActions';
+import { getPdfOpenErrorMessage, openSourcePdf, getPdfUrl } from '../../lib/sourceActions';
 const PdfViewerModal = React.lazy(() => import('../PdfViewerModal').then(m => ({ default: m.PdfViewerModal })));
 
 export default function SyllabusLibraryView() {
@@ -429,19 +429,9 @@ export default function SyllabusLibraryView() {
                           <div className="min-w-0">
                             <p
                               onClick={() => {
-                                getPdfUrl({ storagePath: r.storagePath, id: r.id, url: `/api/rag/sources/${r.id}/download` }).then(url => { setPdfUrl(url); setPdfTitle(r.title || 'Document'); setPdfModalOpen(true); }).catch((e: any) => {
-                                  console.error('Download trigger failed:', e);
-                                  if (e.message?.includes('LOGIN_REQUIRED')) {
-                                     alert('Sign in again to open this PDF.');
-                                  } else if (e.message?.includes('storage/unauthorized')) {
-                                     alert('PDF permission denied. Check your sign-in and access permissions.');
-                                  } else if (e.message?.includes('NOT_A_PDF_RESPONSE')) {
-                                     alert('The server returned an error instead of a PDF.');
-                                  } else if (e.message?.includes('NO_OPENABLE_PDF_SOURCE')) {
-                                     alert('This source has no available PDF file.');
-                                  } else {
-                                     alert('Error opening PDF: ' + e.message);
-                                  }
+                                getPdfUrl({ storagePath: r.storagePath, id: r.id, sourceId: r.sourceId || r.id, title: r.title, url: `/api/rag/sources/${r.sourceId || r.id}/download` }).then(url => { setPdfUrl(url); setPdfTitle(r.title || 'Document'); setPdfModalOpen(true); }).catch((error: unknown) => {
+                                  console.warn('Secure PDF preview failed:', error);
+                                  alert(getPdfOpenErrorMessage(error));
                                 });
                               }}
                               className={cn(

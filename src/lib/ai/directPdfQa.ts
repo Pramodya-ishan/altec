@@ -2,6 +2,8 @@ import { auth } from "../firebase";
 import { stripRawVisualBlocks } from "./stripVisualBlocks";
 import { normalizeStoragePath } from "./normalizeStoragePath";
 import { getLargeEndpointUrl } from "../apiBase";
+import type { VisualBlock } from "../visualBlocks";
+import { formatDirectPdfAnswer } from "./directPdfAnswerFormatter";
 
 export type DirectPdfQaResult = {
   ok: boolean;
@@ -27,6 +29,8 @@ export type DirectPdfQaResult = {
   pending?: boolean;
   code?: string;
   status?: string;
+  visualBlocks?: VisualBlock[];
+  extractionMethod?: string;
 };
 
 function makeDirectQaError(code: string, source: any, details: any = {}): Error {
@@ -154,54 +158,18 @@ export async function askDirectPdfQa(params: {
 
     onProgress?.("generating");
     const result = await response.json();
-    // Transform structured output to text if needed
-    if (result.ok && result.answer && typeof result.answer === 'object') {
-       const { officialAnswer, solvedAnswer, explanationSinhala } = result.answer;
-       const { questionText, options } = result.sourceEvidence || {};
-
-       let text = `**මූලාශ්‍රය:** ${source.title || "PDF ගොනුව"}`;
-       if (year || source.year) text += ` · ${year || source.year}`;
-       if (questionNo) text += ` · ${questionType === "MCQ" ? "බහුවරණ ප්‍රශ්නය" : "ප්‍රශ්නය"} ${questionNo}`;
-       text += ` · ${result.found ? "PDF එකෙන් සත්‍යාපිතයි" : "සාක්ෂිය හමු නොවුණි"}\n\n`;
-
-       if (questionText) text += `### ප්‍රශ්නය\n\n${stripRawVisualBlocks(questionText)}\n\n`;
-
-       if (options && options.length) text += `${options.map((option: string, index: number) => `${index + 1}. ${stripRawVisualBlocks(option)}`).join('\n')}\n\n`;
-
-       let finalAnswerText = "";
-       let answerStatus = "තහවුරු කිරීම අවශ්‍යයි";
-       let explanation = explanationSinhala;
-       let whyOthersWrong = [];
-
-       if (officialAnswer) {
-         finalAnswerText = officialAnswer;
-         answerStatus = "නිල ලකුණු යෝජනා ක්‍රමයෙන් සත්‍යාපිතයි";
-       } else if (solvedAnswer) {
-         const optNo = solvedAnswer.optionNo ? `(${solvedAnswer.optionNo}) ` : "";
-         finalAnswerText = `${optNo}${solvedAnswer.optionText || ""}`;
-         answerStatus = "PDF සාක්ෂිය මත විසඳා ඇත";
-         explanation = solvedAnswer.explanationSinhala || explanation;
-         whyOthersWrong = solvedAnswer.whyOthersWrong || [];
-       } else {
-         finalAnswerText = "ප්‍රශ්නය PDF එකෙන් හමු වුණා. නමුත් නිවැරදි පිළිතුර තහවුරු කිරීමට ලකුණු යෝජනා ක්‍රමය හෝ ගුරු තහවුරු කිරීම අවශ්‍යයි.";
-       }
-
-       if (finalAnswerText) {
-         text += `### පිළිතුර\n\n${stripRawVisualBlocks(finalAnswerText)}\n\n`;
-       }
-
-       if (explanation) {
-         text += `### පැහැදිලි කිරීම\n\n${stripRawVisualBlocks(explanation)}\n\n`;
-       }
-
-       if (whyOthersWrong && whyOthersWrong.length > 0) {
-         text += `### අනෙක් විකල්ප නොගැළපෙන හේතුව\n\n`;
-         text += whyOthersWrong.map((reason: string) => `- ${stripRawVisualBlocks(reason)}`).join('\n') + "\n\n";
-       }
-
-       text += `_${answerStatus}_\n`;
-
-       result.answer = text;
+    // Transform the evidence-first JSON into clean Markdown plus structured
+    // visual aids. The model never emits raw visual JSON into the answer text.
+    if (result.ok && result.answer && typeof result.answer === "object") {
+      const formatted = formatDirectPdfAnswer({
+        source,
+        year,
+        questionNo,
+        questionType,
+        result,
+      });
+      result.answer = formatted.markdown;
+      result.visualBlocks = formatted.visualBlocks;
     }
 
     return result;
