@@ -165,7 +165,7 @@ export default function PredictionPapers() {
             <div className="text-center space-y-2 border-b border-gray-100 pb-8">
               <h2 className="text-2xl font-bold text-gray-900 uppercase">Predicted Revision Paper - {subject}</h2>
               <p className="text-sm text-indigo-600 font-bold uppercase tracking-widest">{mode} Simulation Mode</p>
-              <p className="text-xs text-gray-400">A Tec A/L study paper prepared for revision.</p>
+              <p className="text-xs text-gray-400">පුනරීක්ෂණය සඳහා සකස් කළ Tec A/L අධ්‍යයන පත්‍රිකාවකි</p>
             </div>
 
             <div className="space-y-12">

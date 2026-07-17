@@ -29,7 +29,6 @@ export type KnowledgeRouterResult = {
     | "marking_scheme_request"
     | "lesson_marks_intent"
     | "pdf_inventory_request"
-    | "past_paper_analysis"
     | "zscore_prediction";
 
   entities: {
@@ -69,7 +68,6 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
 
   // PDF Inventory request check
   const isPdfInventory = lower.includes("give all pdfs") ||
-    /\bgive\s+all\s+(?:sft|et|ict)\s+pdfs?\b/i.test(prompt) ||
     lower.includes("all pdfs") ||
     lower.includes("mage pdf") ||
     lower.includes("thiyena pdf") ||
@@ -85,17 +83,10 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
     lower.includes("tika ko");
   
   if (isPdfInventory) {
-    const inventorySubject = /\bsft\b/i.test(prompt)
-      ? "SFT"
-      : /\bict\b/i.test(prompt)
-        ? "ICT"
-        : /\bet\b/i.test(prompt)
-          ? "ET"
-          : activeSubject;
     return {
       mode: "pdf_inventory_request" as any,
       entities: {
-        subject: inventorySubject as any,
+        subject: activeSubject as any,
       },
       answerHints: {
         mustUseRag: true,
@@ -192,28 +183,6 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
   const yearMatch = lower.match(/\b(20\d{2})\b/);
   if (yearMatch) {
     year = yearMatch[1];
-  }
-
-  const requestsPaperAnalysis =
-    (lower.includes("paper") || lower.includes("past paper") || lower.includes("ප්‍රශ්න පත්‍ර")) &&
-    (lower.includes("guess") || lower.includes("guessing") || lower.includes("predict") ||
-      lower.includes("prediction") || lower.includes("trend") || lower.includes("frequency") ||
-      lower.includes("probability") || lower.includes("විශ්ලේෂණ"));
-
-  // A year-specific paper analysis request must be resolved before the generic
-  // lesson/PDF branches. Otherwise filler-token lesson detection can turn a
-  // phrase such as "use all PDFs for the 2026 paper prediction" into a fake
-  // lesson name and route it to lesson_pdf_search.
-  if (requestsPaperAnalysis) {
-    return {
-      mode: "past_paper_analysis",
-      entities: {
-        subject,
-        year,
-        paperType: "paper",
-        resourceType: "past_paper",
-      },
-    };
   }
 
   // 4. Extract Question Number
@@ -506,15 +475,15 @@ Respond strictly in this JSON format:
 
       if (!entities.subject) {
         entities.needsClarification = true;
-        entities.clarificationQuestion = "Which subject do you need: SFT, ET or ICT?";
+        entities.clarificationQuestion = "🔍 කරුණාකර subject එක කියන්න. SFT, ET, ICT අතරින් මොකක්ද?";
       } else if (!entities.year) {
         entities.needsClarification = true;
-        entities.clarificationQuestion = "Which paper year do you need? For example, 2025 or 2023.";
+        entities.clarificationQuestion = "ඔයාට අවශ්‍ය paper year එක මොකක්ද? (උදා: 2025, 2023 වගේ)";
       }
     }
     
     if (entities.needsClarification && !entities.clarificationQuestion) {
-      entities.clarificationQuestion = "Which paper subject do you need: SFT, ET or ICT?";
+      entities.clarificationQuestion = "🔍 කරුණාකර ඔබ සොයන ප්‍රශ්න පත්‍රයේ විෂය සඳහන් කරන්න. SFT, ET, ICT අතරින් මොන subject එකද?";
     }
 
     return {

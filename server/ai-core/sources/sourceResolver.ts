@@ -1,15 +1,7 @@
 import { normalizeSubject } from "./sourceNormalizer";
 
-type SourceResolutionParams = {
-  year?: string | null;
-  subject?: string | null;
-  activeSourceId?: string | null;
-  expectedResourceType?: string | null;
-  prompt: string;
-};
-
-export function getSourceScore(src: any, params: SourceResolutionParams) {
-  const { year, subject, activeSourceId, expectedResourceType, prompt } = params;
+export function getSourceScore(src: any, params: { year?: string | null, subject?: string | null, activeSourceId?: string | null, prompt: string }) {
+  const { year, subject, activeSourceId, prompt } = params;
   const promptLower = prompt.toLowerCase();
   let score = 0;
 
@@ -49,13 +41,6 @@ export function getSourceScore(src: any, params: SourceResolutionParams) {
   const isMarking = src.resourceType === "marking_scheme" || textToScan.includes("marking") || textToScan.includes("පිළිතුරු");
   if (isMarking) score += 60;
 
-  if (expectedResourceType) {
-    const normalizedExpected = String(expectedResourceType).trim().toLowerCase();
-    const normalizedActual = String(src.resourceType || "").trim().toLowerCase();
-    if (normalizedActual === normalizedExpected) score += 160;
-    else if (normalizedActual) score -= 700;
-  }
-
   // PENALIZE TUTES FOR PAPER QUESTIONS
   const isPaperQuestion = promptLower.includes("paper") || promptLower.includes("mcq") || (year && !promptLower.includes("lesson"));
   if (isPaperQuestion) {
@@ -66,7 +51,7 @@ export function getSourceScore(src: any, params: SourceResolutionParams) {
   return score;
 }
 
-export function resolveStrictSource(sources: any[], params: SourceResolutionParams) {
+export function resolveStrictSource(sources: any[], params: { year?: string | null, subject?: string | null, activeSourceId?: string | null, prompt: string }) {
   const allScored = sources.map(s => ({
     source: s,
     score: getSourceScore(s, params)

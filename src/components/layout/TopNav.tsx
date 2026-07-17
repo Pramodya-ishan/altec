@@ -125,7 +125,7 @@ export function TopNav() {
       <div className="relative">
         <input
           type="text"
-          placeholder="Search syllabus topics (for example, Logic Gates or Cells)…"
+          placeholder="🔍 Search syllabus topics (e.g. Logic Gates, සෛල)..."
           value={searchQuery}
           onChange={(e) => {
             setSearchQuery(e.target.value);
@@ -160,7 +160,7 @@ export function TopNav() {
               className="absolute left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden divide-y divide-slate-100 origin-top">
               {filteredResults.length === 0 ? (
                 <div className="p-3 text-center text-xs font-medium text-slate-400">
-                  No matching lesson found.
+                  ගැළපෙන පාඩමක් හමු නොවුණි.
                 </div>
               ) : (
                 filteredResults.map((item, idx) => (
@@ -300,7 +300,7 @@ export function TopNav() {
               onClick={() => window.dispatchEvent(new CustomEvent('clora:new-chat'))}
               className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
             >
-              <Plus className="h-4 w-4" /> New chat
+              <Plus className="h-4 w-4" /> නව සංවාදය
             </button>
           ) : (
           <div className="flex items-center gap-3">

@@ -16,18 +16,26 @@ const firebaseConfig = {
 };
 
 const configuredFirebase = (firebaseConfig.apiKey && firebaseConfig.apiKey.trim() !== "") ? firebaseConfig : localConfig;
-// Firebase popup auth needs the handler and the application to share an
-// origin when the default firebaseapp.com Hosting site is not provisioned.
-// Vercel proxies /__/auth/* to Firebase below, so production can safely use
-// the real application domain and retain IndexedDB auth persistence.
 const configuredAuthDomain = String(configuredFirebase.authDomain || '')
   .replace(/^https?:\/\//i, '')
   .replace(/\/+$/, '');
+const configuredProjectId = String(configuredFirebase.projectId || localConfig.projectId || '').trim();
+const firebaseHostedAuthDomain = configuredProjectId
+  ? `${configuredProjectId}.firebaseapp.com`
+  : configuredAuthDomain;
+
+// Firebase provisions the <project>.firebaseapp.com OAuth callback for the
+// project. A custom callback such as tecal.vercel.app/__/auth/handler only
+// works after that exact URI is registered on the Google OAuth client. Keep
+// the known-good Firebase callback as the default and make a custom auth
+// domain an explicit opt-in so a Vercel environment value cannot silently
+// break every Google sign-in with redirect_uri_mismatch.
+const useCustomAuthDomain = String(import.meta.env.VITE_FIREBASE_USE_CUSTOM_AUTH_DOMAIN || '')
+  .trim()
+  .toLowerCase() === 'true';
 const activeConfig = {
   ...configuredFirebase,
-  authDomain: typeof window !== "undefined" && window.location.hostname === "tecal.vercel.app"
-    ? "tecal.vercel.app"
-    : configuredAuthDomain,
+  authDomain: useCustomAuthDomain ? configuredAuthDomain : firebaseHostedAuthDomain,
 };
 
 let firebaseApp: any = null;

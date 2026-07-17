@@ -789,8 +789,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const message = code === 'auth/popup-closed-by-user'
         ? "The Google sign-in window was closed."
         : code === 'auth/unauthorized-domain'
-          ? "Add this domain to the Firebase Authorized domains list."
-          : "Google sign-in could not be completed. Please try again.";
+          ? "Add this domain to Firebase Authentication authorized domains."
+          : code === 'auth/operation-not-supported-in-this-environment'
+            ? "Google sign-in is not supported in this browser environment."
+            : "Google sign-in could not be completed. Please try again.";
       showNotification(message, "error");
     }
     setIsAuthLoading(false);
@@ -874,7 +876,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
          if (savedData) {
             try {
                setData(JSON.parse(savedData));
-               if (import.meta.env.DEV) console.info("Restored student progress from the local cache.");
+               if (import.meta.env.DEV) console.info("දේශීය cache එකෙන් ශිෂ්‍ය ප්‍රගතිය ප්‍රතිසාධනය කළා.");
             } catch(e) {}
          }
       } catch (e) {
@@ -986,7 +988,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (unsyncedRaw) {
         try {
           const unsyncedData = JSON.parse(unsyncedRaw);
-          showNotification("Connection restored. Syncing offline changes…", "info");
+          showNotification("සම්බන්ධතාවය නැවත ලැබුණා. නොබැඳි වෙනස්කම් සමමුහුර්ත කරමින්…", "info");
 
           let serverSynced = false;
 
@@ -1005,7 +1007,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           if (serverSynced) {
             localStorage.removeItem(unsyncedKey);
-            showNotification("Offline changes synced to cloud storage.", "success");
+            showNotification("නොබැඳි වෙනස්කම් cloud ගබඩාවට සමමුහුර්ත කළා.", "success");
             setData(unsyncedData);
           }
         } catch (e) {
@@ -1151,7 +1153,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           await fetchUserDataFromDB(resData.user.email);
           await fetchYoutubeCookies(resData.user.email);
-          showNotification("Successfully signed in.", "success");
+          showNotification("සතුටුදායකයි! සාර්ථකව සම්බන්ධ වුණා. (Successfully logged in!)", "success");
           setIsAuthLoading(false);
           return { success: true };
         } else {
@@ -1184,7 +1186,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           await fetchUserDataFromDB(resData.user.email);
           await fetchYoutubeCookies(resData.user.email);
-          showNotification("Successfully signed in.", "success");
+          showNotification("සතුටුදායකයි! සාර්ථකව සම්බන්ධ වුණා. (Successfully logged in!)", "success");
           setIsAuthLoading(false);
           return { success: true };
         } else {
@@ -1227,7 +1229,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           await fetchUserDataFromDB(resData.user.email);
           await fetchYoutubeCookies(resData.user.email);
-          showNotification(resData.message || "Registration successful.", "success");
+          showNotification(resData.message || "ලියාපදිංචිය සාර්ථකයි! (Registration successful!)", "success");
           setIsAuthLoading(false);
           return { success: true };
         } else {
@@ -1255,7 +1257,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           await fetchUserDataFromDB(resData.user.email);
           await fetchYoutubeCookies(resData.user.email);
-          showNotification(resData.message || "Registration successful.", "success");
+          showNotification(resData.message || "ලියාපදිංචිය සාර්ථකයි! (Registration successful!)", "success");
           setIsAuthLoading(false);
           return { success: true };
         } else {
@@ -1291,7 +1293,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         await fetchUserDataFromDB(resData.user.email);
         await fetchYoutubeCookies(resData.user.email);
-        showNotification("Email verified and signed in.", "success");
+        showNotification("සත්‍යාපනය සාර්ථකයි! ලොග් වීම සම්පූර්ණයි. (Email verified & logged in!)", "success");
         setIsAuthLoading(false);
         return { success: true };
       } else {
@@ -1300,7 +1302,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return { error: resData.error || "Verification failed" };
       }
     } catch (e: any) {
-      showNotification("Could not connect to the verification server.", "error");
+      showNotification("ජාලගත වීමේ සේවා දෝෂයකි. (Could not connect to verification server)", "error");
       setIsAuthLoading(false);
       return { error: e.message || "Network error" };
     }

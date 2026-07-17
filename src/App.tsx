@@ -116,15 +116,15 @@ function NotFoundView() {
     <section className="flex min-h-[60vh] flex-1 items-center justify-center px-6 py-16 text-center">
       <div className="max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-400">404</p>
-        <h1 className="mt-3 text-2xl font-semibold text-slate-950">Page not found</h1>
+        <h1 className="mt-3 text-2xl font-semibold text-slate-950">පිටුව හමු නොවුණි</h1>
         <p className="mt-3 text-sm leading-6 text-slate-500">
-          This address is not a Tec A/L page. Check the URL or return to the home page.
+          මෙම ලිපිනය Tec A/L පිටුවක් නොවේ. ලිපිනය පරීක්ෂා කරන්න හෝ ප්‍රධාන පිටුවට යන්න.
         </p>
         <a
           href="/"
           className="mt-6 inline-flex rounded-full bg-slate-950 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800"
         >
-          Go to home page
+          ප්‍රධාන පිටුවට යන්න
         </a>
       </div>
     </section>
@@ -150,8 +150,8 @@ function AuthOverlay() {
         <div className="flex items-center gap-3 rounded-2xl border border-slate-200 px-5 py-4 shadow-sm">
           <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
           <div>
-            <p className="text-sm font-bold text-slate-800">Opening your workspace</p>
-            <p className="text-xs text-slate-500">Checking your secure session…</p>
+            <p className="text-sm font-bold text-slate-800">ඔබගේ ගිණුම විවෘත කරමින්</p>
+            <p className="text-xs text-slate-500">ආරක්ෂිත පිවිසුම පරීක්ෂා කරමින්…</p>
           </div>
         </div>
       </div>
@@ -170,7 +170,7 @@ function AuthOverlay() {
           <div className="space-y-1.5">
             <h2 className="text-2xl font-black text-slate-900 tracking-tight">Tec A/L</h2>
             <p className="text-sm font-medium text-slate-500">
-              Sign in with your Google account to access your A/L dashboard.
+              ඔබගේ A/L අධ්‍යයන පුවරුවට පිවිසීමට Google ගිණුම භාවිත කරන්න.
             </p>
           </div>
         </div>
@@ -190,7 +190,7 @@ function AuthOverlay() {
                 <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
                 <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
               </svg>
-              Sign in with Google
+              Google සමඟ පිවිසෙන්න
             </>
           )}
         </button>

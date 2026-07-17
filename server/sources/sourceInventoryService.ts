@@ -7,35 +7,6 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
-function sourceText(source: Record<string, unknown> | string) {
-  if (typeof source === "string") return source;
-  return [source.title, source.fileName, source.storagePath, source.resourceType]
-    .filter(Boolean)
-    .join(" ");
-}
-
-export function inferSubject(value: Record<string, unknown> | string) {
-  const text = sourceText(value).toUpperCase();
-  if (/\bSFT\b|SCIENCE\s+FOR\s+TECHNOLOGY|තාක්ෂණවේදය\s+සඳහා\s+විද්‍යාව/.test(text)) return "SFT";
-  if (/\bET\b|ENGINEERING\s+TECHNOLOGY|ඉංජිනේරු\s+තාක්ෂණවේදය/.test(text)) return "ET";
-  if (/\bICT\b|INFORMATION\s+(?:AND|&)\s+COMMUNICATION\s+TECHNOLOGY|තොරතුරු\s+හා\s+සන්නිවේදන/.test(text)) return "ICT";
-  return null;
-}
-
-export function extractTitleYear(value: Record<string, unknown> | string) {
-  return sourceText(value).match(/\b(20\d{2})\b/)?.[1] || null;
-}
-
-export function inferResourceType(source: Record<string, unknown> | string) {
-  const explicit = typeof source === "string" ? "" : String(source.resourceType || source.sourceType || "").trim().toLowerCase();
-  if (explicit) return explicit;
-  const text = sourceText(source).toLowerCase();
-  if (/marking[\s_-]*(?:scheme|guide)|answer[\s_-]*(?:sheet|key)|\bsm\b|පිළිතුරු/.test(text)) return "marking_scheme";
-  if (/past[\s_-]*paper|model[\s_-]*paper|official[\s_-]*paper|\bpaper\b|ප්‍රශ්න\s*පත්‍ර/.test(text)) return "past_paper";
-  if (/syllabus|curriculum/.test(text)) return "syllabus";
-  return "uploaded_pdf";
-}
-
 function lessonFromStoragePath(storagePath: unknown) {
   const path = String(storagePath || "").replace(/^gs:\/\/[^/]+\//, "");
   const parts = path.split("/").filter(Boolean);
@@ -136,9 +107,9 @@ export async function getSourceInventory(params: {
     sourceIds.add(sId);
 
     // Normalize fields
-    const normSubject = String(src.subject || inferSubject(src) || "").trim().toUpperCase();
-    const normYear = String(src.year || extractTitleYear(src) || "").trim();
-    const normResourceType = String(src.resourceType || src.sourceType || inferResourceType(src)).trim().toLowerCase();
+    const normSubject = String(src.subject || "").trim().toUpperCase();
+    const normYear = String(src.year || "").trim();
+    const normResourceType = String(src.resourceType || src.sourceType || "").trim().toLowerCase();
     const normSourceScope = String(src.sourceScope || "").trim().toLowerCase();
 
     // Subject Filter

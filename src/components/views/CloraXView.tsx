@@ -120,7 +120,7 @@ const [messages, setMessages] = useState<{
   }[]>([
     {
       role: 'assistant',
-      content: 'Ask about a lesson, paper question or result.',
+      content: 'අද බලන්න ඕන පාඩම, paper question එක හෝ result එක ලියන්න.',
       id: 'welcome'
     }
   ]);
@@ -354,9 +354,9 @@ const [messages, setMessages] = useState<{
 
   // Quick Action Chips
   const quickChips = [
-    { text: "Explain my Z-score", label: "My Z-Score" },
+    { text: "මගේ Z-score එක", label: "මගේ Z-score එක" },
     { text: "2023 SFT Paper structure", label: "2023 SFT Paper structure" },
-    { text: "Summarize microbiology notes", label: "Microbiology notes" },
+    { text: "ජෛවාණු notes", label: "ජෛවාණු notes" },
     { text: "SFT MCQ Weights", label: "SFT MCQ Weights" }
   ];
 
@@ -725,7 +725,7 @@ const [messages, setMessages] = useState<{
         }),
       });
       if (response.ok) {
-        showNotification("Feedback saved. This answer will be reviewed.", "success");
+        showNotification("පිළිතුර වැරදි බව සටහන් කරගත්තා. ඊළඟ වතාවේ මෙය පරීක්ෂා කෙරේ.", "success");
       }
     } catch (err) {
       console.error("Feedback failed", err);
@@ -749,7 +749,7 @@ const [messages, setMessages] = useState<{
       }
     }
 
-    const continuePrompt = "Continue the previous answer.";
+    const continuePrompt = "Continue the previous answer (ඉතිරි ටික කියන්න).";
     const userMsgId = generateUUID();
     const assistantMsgId = generateUUID();
 
@@ -1088,12 +1088,12 @@ const [messages, setMessages] = useState<{
           if (lastAssistant) {
             textToSpeak = lastAssistant.content;
           } else {
-            textToSpeak = "No message was found.";
+            textToSpeak = "කිසිදු පණිවිඩයක් සොයාගැනීමට නොහැකි විය.";
           }
        } else if (parsedCommand.text.trim() === 'file') {
-          textToSpeak = "Your file is still being analyzed.";
+          textToSpeak = "ඔබ විසින් file එකක් ලබාදී ඇත්නම් එය විශ්ලේෂණය කරමින් පවතී.";
           if (currentUpload && currentUpload.name) {
-             textToSpeak = `${currentUpload.name} is ready.`;
+             textToSpeak = `ඔබ ලබාදුන් ${currentUpload.name} ගොනුව කියවීමට හැකිවිය.`;
              // In a real app we would extract text from the file here
           }
        } else if (parsedCommand.text.trim() === 'podcast') {
@@ -1312,7 +1312,7 @@ const [messages, setMessages] = useState<{
      if (isStreaming) {
        cancel();
      }
-     setMessages([{ role: 'assistant', content: 'Ask about a lesson, paper question or result.', id: 'welcome' }]);
+     setMessages([{ role: 'assistant', content: 'අද බලන්න ඕන පාඩම, paper question එක හෝ result එක ලියන්න.', id: 'welcome' }]);
      setInput('');
      setUploadedFile(null);
      setUploadError(null);
@@ -1351,7 +1351,7 @@ const [messages, setMessages] = useState<{
                   setPdfModalUrl(url);
                   setPdfModalOpen(true);
                 } catch (e) {
-                  showNotification("The PDF preview could not be opened. Try opening it in a new tab.", "error");
+                  showNotification("PDF preview open කරන්න බැහැ. Open in new tab try කරන්න.", "error");
                 }
              } else {
                 openSourcePdf(source).catch((e: any) => {
@@ -1369,7 +1369,7 @@ const [messages, setMessages] = useState<{
                 isOpen={pdfModalOpen}
                 onClose={() => setPdfModalOpen(false)}
                 pdfUrl={pdfModalUrl}
-                title="Source document"
+                title="මූලාශ්‍ර ලේඛනය"
               />
             </React.Suspense>
           )}
@@ -1377,7 +1377,7 @@ const [messages, setMessages] = useState<{
              isOpen={showTtsModal}
              onClose={() => setShowTtsModal(false)}
             onComplete={(url) => {
-              setMessages(prev => [...prev, { role: 'assistant', content: 'Voice response ready.', id: generateUUID(), audioUrl: url }]);
+              setMessages(prev => [...prev, { role: 'assistant', content: 'හඬ පිළිතුර සූදානම්.', id: generateUUID(), audioUrl: url }]);
             }}
           />
           <RealtimeLiveCallPanel
@@ -1395,10 +1395,10 @@ const [messages, setMessages] = useState<{
                   setInput(prompt);
                 }}
                 prompts={[
-                  { title: "2023 Paper Structure", icon: <FileText className="h-4 w-4"/>, prompt: "Explain the structure of the 2023 SFT paper." },
-                  { title: "Explain Z-Score", icon: <BrainCircuit className="h-4 w-4"/>, prompt: "Explain simply how the A/L Z-Score is calculated." },
-                  { title: "Review Mistakes", icon: <CheckCircle className="h-4 w-4"/>, prompt: "Quiz me using my recent mistakes." },
-                  { title: "Summarize Notes", icon: <Database className="h-4 w-4"/>, prompt: "Give me a short summary of the main SFT units." }
+                  { title: "2023 පත්‍ර ව්‍යුහය", icon: <FileText className="h-4 w-4"/>, prompt: "2023 SFT ප්‍රශ්න පත්‍රයේ ව්‍යුහය පැහැදිලි කරන්න." },
+                  { title: "Z-Score පැහැදිලි කිරීම", icon: <BrainCircuit className="h-4 w-4"/>, prompt: "A/L Z-Score එක ගණනය කරන ආකාරය සරලව පැහැදිලි කරන්න." },
+                  { title: "වැරදි නැවත බලමු", icon: <CheckCircle className="h-4 w-4"/>, prompt: "මගේ මෑත වැරදි අනුව කෙටි ප්‍රශ්න කිහිපයක් අහන්න." },
+                  { title: "සටහන් සාරාංශය", icon: <Database className="h-4 w-4"/>, prompt: "SFT ප්‍රධාන ඒකකවල කෙටි සාරාංශයක් දෙන්න." }
                 ]}
               />
             ) : (
@@ -1435,7 +1435,7 @@ const [messages, setMessages] = useState<{
                 onClick={() => scrollToBottom('smooth')}
                 className="absolute bottom-36 left-1/2 z-30 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-lg transition-colors hover:bg-slate-50"
               >
-                New response ↓
+                අලුත් පිළිතුර ↓
               </motion.button>
             )}
           </AnimatePresence>

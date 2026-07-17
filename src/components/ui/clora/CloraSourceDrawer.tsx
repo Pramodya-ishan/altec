@@ -22,7 +22,7 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900">
             <FileText className="h-4 w-4 text-white" />
           </div>
-          <h3 className="text-sm font-bold text-slate-800">Sources used</h3>
+          <h3 className="text-sm font-bold text-slate-800">භාවිත මූලාශ්‍ර</h3>
         </div>
         <button
           onClick={onClose}
@@ -37,7 +37,7 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
         {uniqueSources.length === 0 ? (
           <div className="text-center py-10 px-4">
             <FileText className="w-10 h-10 text-slate-200 mx-auto mb-3" />
-            <p className="text-sm font-medium text-slate-500">No sources were used for this answer.</p>
+            <p className="text-sm font-medium text-slate-500">මෙම පිළිතුරට මූලාශ්‍ර භාවිත කර නැහැ.</p>
           </div>
         ) : (
           uniqueSources.map((source, i) => (
@@ -50,7 +50,7 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
             >
               <div className="flex items-start justify-between gap-2 mb-1">
                 <span className="line-clamp-2 text-xs font-bold text-slate-800 transition-colors group-hover:text-black">
-                  {source.title || source.name || "Untitled source"}
+                  {source.title || source.name || "නම නොදන්නා මූලාශ්‍රය"}
                 </span>
                 <ExternalLink className="h-3.5 w-3.5 shrink-0 text-slate-400 group-hover:text-slate-900" />
               </div>
@@ -64,11 +64,11 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
               <div className="flex items-center gap-2 mt-auto pt-2 text-[10px] text-slate-400 font-medium justify-between">
                 {source.pageNumber ? (
                   <span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200 text-slate-500">
-                    Page {source.pageNumber}
+                    පිටුව {source.pageNumber}
                   </span>
                 ) : <span />}
                 {source.relevanceScore && (
-                  <span>Relevance: {Math.round(source.relevanceScore * 100)}%</span>
+                  <span>අදාළත්වය: {Math.round(source.relevanceScore * 100)}%</span>
                 )}
               </div>
 
@@ -79,7 +79,7 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
                   className="flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg bg-slate-900 px-2 py-1.5 text-[11px] font-bold text-white transition hover:bg-black"
                 >
                   <ExternalLink className="w-3 h-3" />
-                  Open PDF
+                  PDF ගොනුව විවෘත කරන්න
                 </button>
               </div>
             </motion.div>

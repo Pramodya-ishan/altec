@@ -173,7 +173,7 @@ export function LiveVoiceChatModal({ isOpen, onClose, currentSubject, activeSour
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
           <div className="flex items-center gap-3">
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <h2 className="text-base font-bold text-white">Live voice chat</h2>
+            <h2 className="text-base font-bold text-white">සජීවී කටහඬ සාකච්ඡාව</h2>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 transition-colors">
             <X className="w-5 h-5" />
@@ -185,23 +185,23 @@ export function LiveVoiceChatModal({ isOpen, onClose, currentSubject, activeSour
           {status === 'ready' && (
             <div className="flex-1 flex flex-col items-center justify-center text-slate-500 gap-4">
                <Phone className="w-10 h-10 text-indigo-500 opacity-80" />
-               <p className="text-sm text-center max-w-xs">Talk with Tec A/L and ask questions about PDFs or lessons.</p>
+               <p className="text-sm text-center max-w-xs">Tec A/L සමඟ කටහඬින් කතා කර PDF හෝ පාඩම් පිළිබඳ ප්‍රශ්න අහන්න.</p>
                <button onClick={startCall} className="mt-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex items-center gap-2 cursor-pointer transition-colors shadow-md">
-                 <Play className="w-4 h-4 fill-white" /> Start
+                 <Play className="w-4 h-4 fill-white" /> අරඹන්න
                </button>
             </div>
           )}
           {status === 'permission_denied' && (
             <div className="flex-1 flex flex-col items-center justify-center text-rose-500 gap-3">
                <MicOff className="w-8 h-8 opacity-50" />
-               <p className="text-sm text-center max-w-xs">Microphone access is blocked. Enable microphone permission in your browser settings.</p>
+               <p className="text-sm text-center max-w-xs">මයික්‍රෝෆෝනයට අවසර නැහැ. Browser settings තුළ microphone permission සක්‍රිය කරන්න.</p>
             </div>
           )}
           
           {status !== 'ready' && (status as string) !== 'permission_denied' && transcript.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center text-slate-500 gap-3">
               <Mic className="w-8 h-8 opacity-50" />
-              <p className="text-sm">Start speaking…</p>
+              <p className="text-sm">කතා කිරීම අරඹන්න…</p>
             </div>
           ) : (
             transcript.map((t, i) => (

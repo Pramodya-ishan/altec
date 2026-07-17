@@ -55,11 +55,11 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
   const handleImage = (file?: File) => {
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      showNotification("Select an image file.", "error");
+      showNotification("රූප ගොනුවක් තෝරන්න.", "error");
       return;
     }
     if (file.size > 15 * 1024 * 1024) {
-      showNotification("The image must be smaller than 15 MB.", "error");
+      showNotification("රූප ගොනුව 15 MB ට වඩා කුඩා විය යුතුයි.", "error");
       return;
     }
     clearImage();
@@ -74,7 +74,7 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
   };
 
   const handleClose = () => {
-    if (saving && !confirm("The file is still uploading. Cancel the upload?")) return;
+    if (saving && !confirm("ගොනුව උඩුගත වෙමින් පවතී. එය අවලංගු කරන්නද?")) return;
     controlsRef.current?.cancel();
     onClose();
   };
@@ -82,15 +82,15 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
   const handleSave = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!user?.email) {
-      showNotification("Sign in before saving an error.", "error");
+      showNotification("වැරැද්ද සුරැකීමට පෙර පිවිසෙන්න.", "error");
       return;
     }
     if (!lesson.trim()) {
-      showNotification("Select a lesson or enter its name.", "error");
+      showNotification("පාඩම තෝරන්න හෝ එහි නම ලියන්න.", "error");
       return;
     }
     if (!errorText.trim() && !imageFile) {
-      showNotification("Describe the error or upload an image.", "error");
+      showNotification("වැරැද්ද විස්තර කරන්න හෝ රූපයක් උඩුගත කරන්න.", "error");
       return;
     }
 
@@ -119,7 +119,7 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
         }),
       });
       const payload = await response.json().catch(() => null);
-      if (!response.ok || !payload?.ok) throw new Error(payload?.error || "The error could not be saved.");
+      if (!response.ok || !payload?.ok) throw new Error(payload?.error || "වැරැද්ද සුරැකීමට නොහැකි වුණා.");
 
       const localRecord = {
         id: payload.id,
@@ -139,13 +139,13 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
       }
       localStorage.setItem(localKey, JSON.stringify([localRecord, ...(Array.isArray(previous) ? previous : [])].slice(0, 100)));
 
-      showNotification("Saved. The assistant can now use it for revision and question practice.", "success");
+      showNotification("සුරැකුණා. දැන් සහායකයාට මෙය පුනරීක්ෂණයට සහ ප්‍රශ්න පුහුණුවට භාවිත කළ හැකියි.", "success");
       reset();
       onLogged?.();
       onClose();
     } catch (error: any) {
       if (error?.code !== "storage/canceled") {
-        showNotification(error?.message || "The error could not be saved.", "error");
+        showNotification(error?.message || "වැරැද්ද සුරැකීමට නොහැකි වුණා.", "error");
       }
     } finally {
       controlsRef.current = null;
@@ -159,7 +159,7 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <motion.button
             type="button"
-            aria-label="Close error log"
+            aria-label="වැරදි සටහන් කවුළුව වසන්න"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -182,11 +182,11 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
                   <AlertCircle className="h-5 w-5" />
                 </span>
                 <div>
-                  <h2 id="error-log-title" className="text-lg font-bold text-slate-950">Add an error</h2>
-                  <p className="text-sm text-slate-500">Save text or a photo for revision.</p>
+                  <h2 id="error-log-title" className="text-lg font-bold text-slate-950">වැරැද්දක් සටහන් කරන්න</h2>
+                  <p className="text-sm text-slate-500">පුනරීක්ෂණයට ප්‍රශ්නය හෝ රූපය සුරකින්න.</p>
                 </div>
               </div>
-              <button type="button" onClick={handleClose} aria-label="Close" className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
+              <button type="button" onClick={handleClose} aria-label="වසන්න" className="rounded-full p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
                 <X className="h-5 w-5" />
               </button>
             </header>
@@ -194,7 +194,7 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
             <form onSubmit={handleSave} className="space-y-5 p-6">
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="space-y-2 text-xs font-bold uppercase tracking-wide text-slate-500">
-                  Subject
+                  විෂයය
                   <select value={subject} onChange={(event) => { setSubject(event.target.value); setLesson(""); }} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold normal-case text-slate-900 outline-none focus:border-slate-400 focus:ring-4 focus:ring-slate-100">
                     <option value="SFT">SFT</option>
                     <option value="ET">ET</option>
@@ -202,8 +202,8 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
                   </select>
                 </label>
                 <label className="space-y-2 text-xs font-bold uppercase tracking-wide text-slate-500">
-                  Lesson
-                  <input value={lesson} onChange={(event) => setLesson(event.target.value)} list={`mistake-lessons-${subject}`} placeholder="Type or select a lesson" className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-medium normal-case text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100" />
+                  පාඩම
+                  <input value={lesson} onChange={(event) => setLesson(event.target.value)} list={`mistake-lessons-${subject}`} placeholder="පාඩම තෝරන්න හෝ නම ලියන්න" className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-medium normal-case text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100" />
                   <datalist id={`mistake-lessons-${subject}`}>
                     {LESSON_SUGGESTIONS[subject].map((item) => <option key={item} value={item} />)}
                   </datalist>
@@ -211,34 +211,34 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
               </div>
 
               <label className="block space-y-2 text-xs font-bold uppercase tracking-wide text-slate-500">
-                Error or question
-                <textarea value={errorText} onChange={(event) => setErrorText(event.target.value)} rows={5} placeholder="Paste the question, error message, or explain what went wrong…" className="w-full resize-none rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium normal-case leading-6 text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100" />
+                වැරැද්ද හෝ ප්‍රශ්නය
+                <textarea value={errorText} onChange={(event) => setErrorText(event.target.value)} rows={5} placeholder="ප්‍රශ්නය, දෝෂ පණිවිඩය හෝ වැරදුණු තැන පැහැදිලි කරන්න…" className="w-full resize-none rounded-2xl border border-slate-200 px-4 py-3 text-sm font-medium normal-case leading-6 text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100" />
               </label>
 
               <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/70 p-4">
                 <input ref={inputRef} type="file" accept="image/*" capture="environment" onChange={(event) => handleImage(event.target.files?.[0])} className="sr-only" id="mistake-image" />
                 {imagePreview && imageFile ? (
                   <div className="flex items-center gap-4">
-                    <img src={imagePreview} alt="Selected error image" className="h-20 w-20 rounded-xl border border-slate-200 object-cover" />
+                    <img src={imagePreview} alt="තෝරාගත් වැරදි රූපය" className="h-20 w-20 rounded-xl border border-slate-200 object-cover" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-semibold text-slate-900">{imageFile.name}</p>
                       <p className="mt-1 text-xs text-slate-500">{progress ? `${Math.round(progress.progress * 100)}% · ${formatBytes(progress.bytesTransferred)} / ${formatBytes(progress.totalBytes)}` : formatBytes(imageFile.size)}</p>
                     </div>
-                    <button type="button" onClick={clearImage} disabled={saving} className="rounded-full p-2 text-slate-400 hover:bg-white hover:text-rose-600" aria-label="Remove image"><X className="h-4 w-4" /></button>
+                    <button type="button" onClick={clearImage} disabled={saving} className="rounded-full p-2 text-slate-400 hover:bg-white hover:text-rose-600" aria-label="රූපය ඉවත් කරන්න"><X className="h-4 w-4" /></button>
                   </div>
                 ) : (
                   <label htmlFor="mistake-image" className="flex cursor-pointer items-center justify-center gap-3 rounded-xl px-4 py-5 text-sm font-semibold text-slate-600 transition hover:bg-white hover:text-slate-950">
-                    <ImagePlus className="h-5 w-5" /> Upload a question or error image
+                    <ImagePlus className="h-5 w-5" /> ප්‍රශ්නයේ හෝ වැරැද්දේ රූපයක් උඩුගත කරන්න
                     <Camera className="h-4 w-4 text-slate-400" />
                   </label>
                 )}
               </div>
 
               <footer className="flex items-center justify-end gap-3 border-t border-slate-100 pt-5">
-                <button type="button" onClick={handleClose} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-900">Cancel</button>
+                <button type="button" onClick={handleClose} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-900">අවලංගු කරන්න</button>
                 <button type="submit" disabled={saving} className="inline-flex min-w-32 items-center justify-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60">
                   {saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                  {saving ? "Saving…" : "Save error"}
+                  {saving ? "සුරකිමින්…" : "වැරැද්ද සුරකින්න"}
                 </button>
               </footer>
             </form>

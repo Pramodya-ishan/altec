@@ -88,19 +88,19 @@ export function PdfViewerModal({ isOpen, onClose, pdfUrl, title }: PdfViewerModa
               {loading && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center z-10 bg-slate-100">
                   <Loader2 className="w-8 h-8 text-primary-500 animate-spin mb-2" />
-                  <span className="text-sm font-medium text-slate-500">Opening PDF…</span>
+                  <span className="text-sm font-medium text-slate-500">PDF ගොනුව විවෘත කරමින්…</span>
                 </div>
               )}
               {error && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center z-10 bg-slate-100 text-rose-500">
                   <div className="bg-rose-50 p-4 rounded-xl border border-rose-200 text-center max-w-md">
-                    <p className="font-bold mb-1">The PDF could not be opened</p>
+                    <p className="font-bold mb-1">PDF ගොනුව විවෘත කළ නොහැක</p>
                     <p className="text-xs">{error}</p>
                     <button 
                       onClick={() => window.open(pdfUrl, '_blank')}
                       className="mt-4 text-xs font-bold underline hover:text-rose-700"
                     >
-                      Open in a new tab
+                      අලුත් tab එකක විවෘත කරන්න
                     </button>
                   </div>
                 </div>

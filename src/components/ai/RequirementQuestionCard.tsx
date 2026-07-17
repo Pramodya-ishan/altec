@@ -49,7 +49,7 @@ export function RequirementQuestionCard({
             rows={3}
             value={value || ''}
             onChange={(e) => onChange(e.target.value)}
-            placeholder="Enter a value…"
+            placeholder="ඇතුලත් කරන්න..."
           />
         )}
 
