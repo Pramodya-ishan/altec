@@ -12,9 +12,12 @@ export async function requireSyllabusOwner(req: any) {
   const db = getAdminDb();
   const roleDoc = await db.collection("user_roles").doc(user.uid).get();
   const roles = roleDoc.exists ? (roleDoc.data()?.roles || (roleDoc.data()?.role ? [roleDoc.data().role] : [])) : [];
-  const isOwner = roles.includes("admin") || roles.includes("teacher") || roles.includes("content_editor") || user.admin === true;
+  const isOwner = roles.includes("admin") || roles.includes("teacher") || roles.includes("content_editor") || roles.includes("ops") || user.admin === true;
   if (!isOwner) {
-    throw new Error("SYLLABUS_OWNER_ONLY");
+    const error = new Error("Only administrators and content managers can manage syllabus resources.");
+    (error as any).status = 403;
+    (error as any).code = "CONTENT_MANAGER_REQUIRED";
+    throw error;
   }
   return user;
 }
@@ -25,7 +28,7 @@ syllabusRoutes.get("/debug", async (req, res) => {
     const db = getAdminDb();
     const roleDoc = await db.collection("user_roles").doc(user.uid).get();
     const roles = roleDoc.exists ? (roleDoc.data()?.roles || (roleDoc.data()?.role ? [roleDoc.data().role] : [])) : [];
-    const isOwner = roles.includes("admin") || roles.includes("teacher") || roles.includes("content_editor") || user.admin === true;
+    const isOwner = roles.includes("admin") || roles.includes("teacher") || roles.includes("content_editor") || roles.includes("ops") || user.admin === true;
     const ownerEmail = process.env.SYLLABUS_OWNER_EMAIL || "admin";
     
     let resourcesCount = 0;
@@ -104,37 +107,21 @@ syllabusRoutes.get("/resources", async (req, res) => {
 
 syllabusRoutes.delete("/resources/:resourceId", async (req, res) => {
   try {
-    const user = await requireUser(req);
+    const user = await requireSyllabusOwner(req);
     const { resourceId } = req.params;
     const db = getAdminDb();
     const bucket = getAdminBucket();
     
-    const roleDoc = await db.collection("user_roles").doc(user.uid).get();
-    const roles = roleDoc.exists ? (roleDoc.data()?.roles || (roleDoc.data()?.role ? [roleDoc.data().role] : [])) : [];
-    const isAdmin = roles.includes("admin") || user.admin === true;
-    
-    // Check in user's own resources
+    // Shared syllabus deletion is content-manager only. Never grant this
+    // operation merely because a legacy row happens to sit under a user's UID.
     const docRef = db.collection("users").doc(user.uid).collection("syllabus_resources").doc(resourceId);
     const docSnap = await docRef.get();
-    
-    let canDelete = docSnap.exists;
-    let storagePath: string | null = null;
-    
-    if (docSnap.exists) {
-      storagePath = docSnap.data()?.storagePath || null;
-    } else if (isAdmin) {
-      // Admin can delete from anywhere, let's find it in rag_sources
-      const ragRef = db.collection("rag_sources").doc(resourceId);
-      const ragSnap = await ragRef.get();
-      if (ragSnap.exists) {
-        canDelete = true;
-        storagePath = ragSnap.data()?.storagePath || null;
-      }
+    const ragRef = db.collection("rag_sources").doc(resourceId);
+    const ragSnap = await ragRef.get();
+    if (!docSnap.exists && !ragSnap.exists) {
+      return res.status(404).json({ ok: false, code: "SYLLABUS_RESOURCE_NOT_FOUND", message: "Resource not found." });
     }
-    
-    if (!canDelete) {
-      return res.status(403).json({ ok: false, error: "Unauthorized or resource not found" });
-    }
+    const storagePath: string | null = docSnap.data()?.storagePath || ragSnap.data()?.storagePath || null;
     
     const batch = db.batch();
     
@@ -180,7 +167,7 @@ syllabusRoutes.delete("/resources/:resourceId", async (req, res) => {
       }
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(Number(e?.status) || 500).json({ ok: false, code: e?.code || "SYLLABUS_RESOURCE_DELETE_FAILED", error: e.message });
   }
 });
 

@@ -1,0 +1,30 @@
+ALTEC PRODUCTION REPAIR V4 - TEST RESULTS
+Date: 2026-07-18
+
+PASS npm ci --include=dev
+PASS npm run typecheck
+PASS npm test
+PASS npm run build:vercel
+PASS npm run verify:repair
+PASS isolated Vercel ESM runtime smoke test
+PASS PDF.js worker packaging verification
+PASS Google gax protobuf runtime verification
+
+Security checks:
+PASS shared past-paper upload is hidden from ordinary students
+PASS shared past-paper delete is hidden from ordinary students
+PASS shared upload/delete APIs require admin/content_editor/teacher/ops
+PASS shared syllabus delete is content-manager only
+PASS lesson-resource upload/delete remains server-capability gated
+PASS personal Assistant PDF/image attachments remain private and available
+
+Ordering checks:
+PASS displayPriority is authoritative and clamped to -1000..1000
+PASS higher displayPriority appears first
+PASS equal priority sorts by original upload time descending
+PASS legacy timestamp formats are normalized
+PASS existing createdAt is preserved during updates/upserts
+PASS admin priority changes propagate to past_papers, rag_sources, and lesson_resources
+
+Generated production entry bundle:
+dist/assets/index-CEYD3QCC.js

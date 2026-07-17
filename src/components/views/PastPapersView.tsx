@@ -6,7 +6,7 @@ import { useApp } from '../../context/AppContext';
 import { auth } from '../../lib/firebase';
 import { apiFetch } from '../../lib/api';
 import { getRecommendedUploadMode } from '../../lib/uploadMode';
-import { uploadPdfWithClientStorage, deletePrivateStorageObject, type UploadProgressSnapshot, type UploadTaskControls } from '../../lib/clientStorageUpload';
+import { uploadPdfWithClientStorage, type UploadProgressSnapshot, type UploadTaskControls } from '../../lib/clientStorageUpload';
 
 function normalizeSubject(s: string) {
   return String(s || "").trim().toUpperCase();
@@ -15,6 +15,37 @@ function normalizeSubject(s: string) {
 function getPaperKey(paper: any) {
   return String(paper.sourceId || paper.id || paper.storagePath || paper.title);
 }
+
+function paperTimestampMillis(value: unknown) {
+  if (!value) return 0;
+  if (typeof value === "object") {
+    const seconds = Number((value as any).seconds ?? (value as any)._seconds);
+    if (Number.isFinite(seconds)) return seconds * 1000;
+  }
+  if (typeof value === "number") return value > 10_000_000_000 ? value : value * 1000;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizePriority(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(-1000, Math.min(1000, Math.trunc(parsed))) : 0;
+}
+
+function sortPapersForDisplay(left: any, right: any) {
+  const priorityDelta = normalizePriority(right.displayPriority) - normalizePriority(left.displayPriority);
+  if (priorityDelta !== 0) return priorityDelta;
+  const uploadedDelta = paperTimestampMillis(right.createdAt || right.uploadedAt || right.updatedAt) - paperTimestampMillis(left.createdAt || left.uploadedAt || left.updatedAt);
+  if (uploadedDelta !== 0) return uploadedDelta;
+  return String(left.title || "").localeCompare(String(right.title || ""));
+}
+
+function formatUploadedAt(value: unknown) {
+  const timestamp = paperTimestampMillis(value);
+  return timestamp > 0 ? new Date(timestamp).toLocaleString() : "Upload time unavailable";
+}
+
+const PRIORITY_OPTIONS = [100, 50, 25, 10, 0, -25, -50];
 
 function dedupeBySourceId(items: any[]) {
   const map = new Map();
@@ -52,12 +83,14 @@ function formatEta(seconds: number | null) {
 }
 
 export default function PastPapersView() {
-  const { currentSubject, profile, user } = useApp();
+  const { currentSubject, user } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('A/L Past Papers');
   const [papers, setPapers] = useState<any[]>([]);
   const [uploadedPapers, setUploadedPapers] = useState<any[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [canManagePastPapers, setCanManagePastPapers] = useState(false);
+  const [updatingPriorityId, setUpdatingPriorityId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadTelemetry, setUploadTelemetry] = useState<UploadTelemetry | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
@@ -76,6 +109,7 @@ export default function PastPapersView() {
   useEffect(() => {
     if (!auth.currentUser || auth.currentUser.isAnonymous) {
       setPapers([]);
+      setCanManagePastPapers(false);
       return;
     }
     let cancelled = false;
@@ -84,10 +118,11 @@ export default function PastPapersView() {
         const response = await apiFetch(`/api/rag/past-papers?subject=${encodeURIComponent(normalizeSubject(currentSubject))}`);
         const result = await response.json().catch(() => null);
         if (!cancelled) {
-          setPapers(response.ok && Array.isArray(result?.papers) ? dedupeBySourceId(result.papers) : []);
+          setCanManagePastPapers(response.ok && result?.canManagePastPapers === true);
+          setPapers(response.ok && Array.isArray(result?.papers) ? dedupeBySourceId(result.papers).sort(sortPapersForDisplay) : []);
         }
       } catch {
-        if (!cancelled) setPapers([]);
+        if (!cancelled) { setPapers([]); setCanManagePastPapers(false); }
       }
     };
     void loadPapers();
@@ -98,15 +133,22 @@ export default function PastPapersView() {
     };
   }, [currentSubject, user?.email]);
 
-  const filteredPapers = dedupeBySourceId([...uploadedPapers, ...papers]).filter(paper => {
-    const matchesSearch = String(paper.title || "").toLowerCase().includes(searchTerm.toLowerCase()) || String(paper.year || "").includes(searchTerm);
-    const matchesCategory = paper.category === selectedCategory;
-    return matchesSearch && matchesCategory;
-  });
+  const filteredPapers = dedupeBySourceId([...uploadedPapers, ...papers])
+    .filter(paper => {
+      const matchesSearch = String(paper.title || "").toLowerCase().includes(searchTerm.toLowerCase()) || String(paper.year || "").includes(searchTerm);
+      const matchesCategory = paper.category === selectedCategory;
+      return matchesSearch && matchesCategory;
+    })
+    .sort(sortPapersForDisplay);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!canManagePastPapers) {
+      e.target.value = "";
+      setToast({ type: "error", message: "Only administrators and content managers can upload shared papers." });
+      return;
+    }
 
     const user = auth.currentUser;
     if (!user || user.isAnonymous) {
@@ -286,7 +328,8 @@ export default function PastPapersView() {
         textIndexed: Number(data.chunkCount || 0) > 0,
         ownerUid: auth.currentUser?.uid || "",
         uploaded: true,
-        createdAt: new Date()
+        displayPriority: 0,
+        createdAt: new Date().toISOString()
       };
 
       setUploadedPapers(prev => dedupeBySourceId([newPaper, ...prev]));
@@ -306,13 +349,33 @@ export default function PastPapersView() {
     }
   };
 
-  const isDeleteAllowed = (paper: any) => {
-    const currentUser = auth.currentUser;
-    if (!currentUser) return false;
-    if (profile?.role === 'admin' || profile?.roles?.includes('admin')) return true;
-    if (paper.ownerUid === currentUser.uid) return true;
-    if (paper.uploaded === true) return true;
-    return false;
+  const isDeleteAllowed = (_paper: any) => canManagePastPapers;
+
+  const handlePriorityChange = async (paper: any, displayPriority: number, event: React.ChangeEvent<HTMLSelectElement>) => {
+    event.stopPropagation();
+    if (!canManagePastPapers) return;
+    const paperId = String(paper.sourceId || paper.id || "");
+    if (!paperId) return;
+    setUpdatingPriorityId(paperId);
+    try {
+      const response = await apiFetch(`/api/rag/past-papers/${encodeURIComponent(paperId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayPriority }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) throw new Error(payload?.message || "Priority update failed.");
+      const applyPriority = (items: any[]) => items
+        .map((item) => getPaperKey(item) === paperId ? { ...item, displayPriority: payload.displayPriority } : item)
+        .sort(sortPapersForDisplay);
+      setPapers(applyPriority);
+      setUploadedPapers(applyPriority);
+      setToast({ type: "success", message: `Display priority updated to ${payload.displayPriority}.` });
+    } catch (error: any) {
+      setToast({ type: "error", message: error?.message || "Priority update failed." });
+    } finally {
+      setUpdatingPriorityId(null);
+    }
   };
 
   const handleDeletePaper = async (paper: any, e: React.MouseEvent) => {
@@ -326,12 +389,6 @@ export default function PastPapersView() {
 
       if (!res.ok || !resData?.ok) {
         throw new Error(resData?.error || "Failed to delete from backend");
-      }
-
-      if (paper.storagePath) {
-        await deletePrivateStorageObject(paper.storagePath).catch((err) => {
-          console.warn("Storage delete failed client-side (warn only):", err);
-        });
       }
 
       setUploadedPapers(prev => prev.filter(p => (p.sourceId || p.id) !== paperId));
@@ -380,7 +437,7 @@ export default function PastPapersView() {
  </button>
  ))}
  </div>
- {auth.currentUser && !auth.currentUser.isAnonymous && (
+ {canManagePastPapers && auth.currentUser && !auth.currentUser.isAnonymous && (
   <div className="relative">
  <input 
  type="file" 
@@ -440,7 +497,7 @@ export default function PastPapersView() {
  <div className="text-center py-12 bg-slate-50 rounded-xl border border-dashed border-slate-300">
  <i className="fa-solid fa-folder-open text-3xl text-slate-300 mb-3"></i>
  <h3 className="text-slate-600 font-bold mb-1">No papers found</h3>
- <p className="text-slate-400 text-sm">Upload a PDF or change the search.</p>
+ <p className="text-slate-400 text-sm">{canManagePastPapers ? "Upload a PDF or change the search." : "No published papers match this view."}</p>
  </div>
  ) : (
  <motion.div 
@@ -487,11 +544,27 @@ export default function PastPapersView() {
  </div>
  <h4 className="font-bold text-slate-800 text-base mb-1 group-hover:text-primary-600 transition-colors leading-tight">{paper.title}</h4>
  <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider mt-2">{paper.category}</p>
+ <p className="mt-2 text-[10px] font-medium text-slate-400">Uploaded {formatUploadedAt(paper.createdAt || paper.uploadedAt || paper.updatedAt)}</p>
  </div>
  
  <div className="mt-5 pt-3 border-t border-slate-100 flex justify-between items-center relative z-10">
  <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Open PDF</span>
- <div className="flex items-center gap-2">
+ <div className="flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
+  {canManagePastPapers && (
+    <label className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500" title="Higher priority papers appear first">
+      <span>Priority</span>
+      <select
+        value={normalizePriority(paper.displayPriority)}
+        disabled={updatingPriorityId === String(paper.sourceId || paper.id)}
+        onChange={(event) => void handlePriorityChange(paper, Number(event.target.value), event)}
+        className="bg-transparent text-[10px] font-black text-slate-700 outline-none disabled:opacity-50"
+        aria-label={`Display priority for ${paper.title}`}
+      >
+        {!PRIORITY_OPTIONS.includes(normalizePriority(paper.displayPriority)) && <option value={normalizePriority(paper.displayPriority)}>{normalizePriority(paper.displayPriority)}</option>}
+        {PRIORITY_OPTIONS.map((priority) => <option key={priority} value={priority}>{priority}</option>)}
+      </select>
+    </label>
+  )}
   {isDeleteAllowed(paper) && (
     <button
     onClick={(e) => handleDeletePaper(paper, e)}

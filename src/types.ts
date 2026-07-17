@@ -34,6 +34,7 @@ export type LessonResource = {
   lessonTitle?: string;
   visibility?: string;
   published?: boolean;
+  displayPriority?: number;
 };
 
 export type Video = LessonResource;

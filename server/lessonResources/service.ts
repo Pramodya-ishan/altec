@@ -33,7 +33,27 @@ export type LessonResourceRecord = {
   ownerUid: string;
   createdAt: string;
   updatedAt: string;
+  displayPriority: number;
 };
+
+export function normalizeDisplayPriority(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(-1000, Math.min(1000, Math.trunc(parsed)));
+}
+
+export function resourceTimestampMillis(value: unknown) {
+  if (!value) return 0;
+  if (typeof (value as any)?.toMillis === "function") return Number((value as any).toMillis()) || 0;
+  if (typeof value === "object") {
+    const seconds = Number((value as any).seconds ?? (value as any)._seconds);
+    const nanos = Number((value as any).nanoseconds ?? (value as any)._nanoseconds ?? 0);
+    if (Number.isFinite(seconds)) return seconds * 1000 + Math.floor(nanos / 1_000_000);
+  }
+  if (typeof value === "number") return value > 10_000_000_000 ? value : value * 1000;
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 export async function upsertLessonResource(input: Partial<LessonResourceRecord> & {
   id: string;
@@ -44,6 +64,9 @@ export async function upsertLessonResource(input: Partial<LessonResourceRecord> 
   createdBy: string;
 }) {
   const now = new Date().toISOString();
+  const resourceRef = getAdminDb().collection("lesson_resources").doc(input.id);
+  const existingSnapshot = await resourceRef.get();
+  const existing = existingSnapshot.exists ? existingSnapshot.data() || {} : {};
   const record: LessonResourceRecord = {
     id: input.id,
     sourceId: input.sourceId,
@@ -65,10 +88,13 @@ export async function upsertLessonResource(input: Partial<LessonResourceRecord> 
     textIndexed: input.textIndexed === true,
     createdBy: input.createdBy,
     ownerUid: input.ownerUid || input.createdBy,
-    createdAt: input.createdAt || now,
+    createdAt: input.createdAt || existing.createdAt || now,
     updatedAt: now,
+    displayPriority: input.displayPriority === undefined
+      ? normalizeDisplayPriority(existing.displayPriority, 0)
+      : normalizeDisplayPriority(input.displayPriority, 0),
   };
-  await getAdminDb().collection("lesson_resources").doc(record.id).set(record, { merge: true });
+  await resourceRef.set(record, { merge: true });
   return record;
 }
 

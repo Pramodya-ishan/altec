@@ -9,7 +9,7 @@ import multer from "multer";
 import { invalidateInventoryCache, computeIndexStatus } from "../sources/sourceInventoryService";
 import { isGeminiPdfOcrConfigured } from "../pdf/geminiPdfOcr";
 import { assertContentManager, isContentManager, isSharedSourceScope } from "../utils/contentPermissions";
-import { normalizeLessonId, upsertLessonResource } from "../lessonResources/service";
+import { normalizeDisplayPriority, normalizeLessonId, resourceTimestampMillis, upsertLessonResource } from "../lessonResources/service";
 
 export const ragRoutes = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -266,11 +266,31 @@ ragRoutes.get("/past-papers", requireNonAnonymousUser, async (req: any, res) => 
       .where("subject", "==", subject)
       .limit(200)
       .get();
-    const papers = snapshot.docs.map((document: any) => ({
-      id: document.id,
-      ...document.data(),
-    }));
-    return res.json({ ok: true, papers });
+    const manager = isContentManager(req.user);
+    const papers = snapshot.docs
+      .map((document: any) => ({ id: document.id, ...document.data() }))
+      .filter((paper: any) => manager || (
+        paper.published !== false
+        && ["official", "shared", "class", "institution", "public"].includes(String(paper.visibility || "official"))
+      ))
+      .map((paper: any) => ({
+        ...paper,
+        displayPriority: normalizeDisplayPriority(paper.displayPriority, 0),
+        createdAt: resourceTimestampMillis(paper.createdAt || paper.uploadedAt || paper.updatedAt) > 0
+          ? new Date(resourceTimestampMillis(paper.createdAt || paper.uploadedAt || paper.updatedAt)).toISOString()
+          : null,
+        updatedAt: resourceTimestampMillis(paper.updatedAt) > 0
+          ? new Date(resourceTimestampMillis(paper.updatedAt)).toISOString()
+          : null,
+      }))
+      .sort((left: any, right: any) => {
+        const priorityDelta = normalizeDisplayPriority(right.displayPriority, 0) - normalizeDisplayPriority(left.displayPriority, 0);
+        if (priorityDelta !== 0) return priorityDelta;
+        const uploadedDelta = resourceTimestampMillis(right.createdAt || right.uploadedAt || right.updatedAt) - resourceTimestampMillis(left.createdAt || left.uploadedAt || left.updatedAt);
+        if (uploadedDelta !== 0) return uploadedDelta;
+        return String(left.title || "").localeCompare(String(right.title || ""));
+      });
+    return res.json({ ok: true, papers, canManagePastPapers: manager });
   } catch (err: any) {
     return res.status(isPermissionError(err) ? 503 : 500).json({
       ok: false,
@@ -301,6 +321,7 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
       storagePath,
       chunkCount,
       needsOcr,
+      displayPriority,
       createdAt,
       updatedAt
     } = req.body;
@@ -340,8 +361,11 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
       chunkCount: alreadyProcessed ? Number(existing.chunkCount || 0) : Number(chunkCount || 0),
       needsOcr: alreadyProcessed ? existing.needsOcr === true : needsOcr === true,
       textIndexed: alreadyProcessed ? existing.textIndexed === true : Number(chunkCount || 0) > 0 && needsOcr !== true,
-      createdAt: createdAt || new Date().toISOString(),
-      updatedAt: updatedAt || new Date().toISOString()
+      displayPriority: displayPriority === undefined
+        ? normalizeDisplayPriority(existing.displayPriority, 0)
+        : normalizeDisplayPriority(displayPriority, 0),
+      createdAt: existing.createdAt || createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
 
     await db.collection("past_papers").doc(finalId).set(paperDoc, { merge: true });
@@ -365,6 +389,7 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
       createdBy: req.user.uid,
       ownerUid: req.user.uid,
       createdAt: paperDoc.createdAt,
+      displayPriority: paperDoc.displayPriority,
     });
     invalidateInventoryCache(req.user.uid);
 
@@ -375,7 +400,35 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
   }
 });
 
-// 4. Delete past paper
+// 4. Update past-paper display priority. Higher values appear first.
+ragRoutes.patch("/past-papers/:id", requireNonAnonymousUser, async (req: any, res) => {
+  try {
+    assertContentManager(req.user);
+    const sourceId = String(req.params.id || "").trim();
+    if (!sourceId) return res.status(400).json({ ok: false, code: "PAST_PAPER_ID_REQUIRED" });
+
+    const db = getAdminDb();
+    const paperRef = db.collection("past_papers").doc(sourceId);
+    const paperSnapshot = await paperRef.get();
+    if (!paperSnapshot.exists) return res.status(404).json({ ok: false, code: "PAST_PAPER_NOT_FOUND" });
+
+    const displayPriority = normalizeDisplayPriority(req.body?.displayPriority, 0);
+    const update = { displayPriority, updatedAt: new Date().toISOString() };
+    const batch = db.batch();
+    batch.set(paperRef, update, { merge: true });
+    batch.set(db.collection("rag_sources").doc(sourceId), update, { merge: true });
+    batch.set(db.collection("lesson_resources").doc(sourceId), update, { merge: true });
+    await batch.commit();
+    invalidateInventoryCache(req.user.uid);
+
+    return res.json({ ok: true, sourceId, displayPriority });
+  } catch (err: any) {
+    const status = Number(err?.status) || 500;
+    return res.status(status).json({ ok: false, code: err?.code || "PAST_PAPER_PRIORITY_UPDATE_FAILED", message: err?.message || "Priority could not be updated." });
+  }
+});
+
+// 5. Delete past paper
 ragRoutes.delete("/past-papers/:id", requireNonAnonymousUser, async (req: any, res) => {
   try {
     const sourceId = req.params.id;

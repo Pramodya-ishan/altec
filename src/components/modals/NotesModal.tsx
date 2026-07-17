@@ -117,6 +117,7 @@ export function NotesModal() {
         status: resource.processingStatus || "ready",
         sizeBytes: Number(resource.sizeBytes || 0) || undefined,
         createdAt: resource.createdAt,
+        displayPriority: Number(resource.displayPriority || 0),
       })));
     } catch (error: any) {
       setResources([]);
@@ -270,6 +271,25 @@ export function NotesModal() {
     if (resource.storagePath) await openPrivateStoragePdf(resource.storagePath);
   };
 
+  const updateResourcePriority = async (resource: LessonResource, displayPriority: number) => {
+    if (!canManageLessonResources || !resource.id) return;
+    try {
+      const response = await apiFetch(`/api/lesson-resources/${resource.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayPriority }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) throw new Error(payload?.message || "Priority could not be updated.");
+      setResources((current) => current
+        .map((item) => item.id === resource.id ? { ...item, displayPriority } : item)
+        .sort((left, right) => Number(right.displayPriority || 0) - Number(left.displayPriority || 0) || Date.parse(String(right.createdAt || 0)) - Date.parse(String(left.createdAt || 0))));
+      showNotification("Resource priority updated.", "success");
+    } catch (error: any) {
+      showNotification(error?.message || "Priority could not be updated.", "error");
+    }
+  };
+
   const deleteResource = async (resource: LessonResource) => {
     if (!canManageLessonResources || !resource.id || !confirm(`Delete “${resource.title}”?`)) return;
     try {
@@ -362,11 +382,22 @@ export function NotesModal() {
                   <motion.div key={activeTab} initial={{ opacity: 0, x: activeTab === "videos" ? 10 : -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: activeTab === "videos" ? -10 : 10 }} className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2">
                     {visibleResources.map((resource) => (
                       <div key={resource.id || resource.videoId || resource.sourceId || resource.storagePath || resource.title} className="group relative flex min-w-0 items-center">
-                        <button type="button" onClick={() => void openResource(resource)} className="flex min-h-16 min-w-0 flex-1 items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 pr-12 text-left transition hover:border-slate-300 hover:shadow-sm">
+                        <button type="button" onClick={() => void openResource(resource)} className={`flex min-h-16 min-w-0 flex-1 items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 text-left transition hover:border-slate-300 hover:shadow-sm ${canManageLessonResources ? "pr-36" : "pr-3"}`}>
                           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100"><ResourceIcon kind={resource.mediaKind} /></span>
-                          <span className="min-w-0 flex-1"><span className="block truncate text-sm font-black text-slate-800">{resource.title}</span><span className="mt-1 block truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">{mediaKindLabel(resource.mediaKind)}{resource.sizeBytes ? ` · ${formatBytes(resource.sizeBytes)}` : ""}{resource.status && resource.status !== "ready" ? ` · ${resource.status}` : ""}</span></span>
+                          <span className="min-w-0 flex-1"><span className="block truncate text-sm font-black text-slate-800">{resource.title}</span><span className="mt-1 block truncate text-[10px] font-bold uppercase tracking-wider text-slate-400">{mediaKindLabel(resource.mediaKind)}{resource.sizeBytes ? ` · ${formatBytes(resource.sizeBytes)}` : ""}{resource.status && resource.status !== "ready" ? ` · ${resource.status}` : ""}{resource.createdAt ? ` · ${new Date(resource.createdAt).toLocaleString()}` : ""}</span></span>
                         </button>
-                        {canManageLessonResources && <button type="button" onClick={() => void deleteResource(resource)} className="absolute right-2 grid h-10 w-10 place-items-center rounded-xl text-slate-400 transition hover:bg-rose-50 hover:text-rose-500" aria-label={`Delete ${resource.title}`}><Trash2 className="h-4 w-4" /></button>}
+                        {canManageLessonResources && (
+                          <div className="absolute right-2 flex items-center gap-1" onClick={(event) => event.stopPropagation()}>
+                            <label className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500" title="Higher priority resources appear first">
+                              <span className="sr-only">Display priority</span>
+                              <select value={Number(resource.displayPriority || 0)} onChange={(event) => void updateResourcePriority(resource, Number(event.target.value))} className="bg-transparent text-[10px] font-black text-slate-700 outline-none" aria-label={`Display priority for ${resource.title}`}>
+                                {![100, 50, 25, 10, 0, -25, -50].includes(Number(resource.displayPriority || 0)) && <option value={Number(resource.displayPriority || 0)}>{Number(resource.displayPriority || 0)}</option>}
+                                {[100, 50, 25, 10, 0, -25, -50].map((priority) => <option key={priority} value={priority}>{priority}</option>)}
+                              </select>
+                            </label>
+                            <button type="button" onClick={() => void deleteResource(resource)} className="grid h-10 w-10 place-items-center rounded-xl text-slate-400 transition hover:bg-rose-50 hover:text-rose-500" aria-label={`Delete ${resource.title}`}><Trash2 className="h-4 w-4" /></button>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </motion.div>

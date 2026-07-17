@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireFirebaseUser } from "../firebase/authMiddleware";
 import { getAdminBucket, getAdminDb } from "../firebase/admin";
 import { assertContentManager, isContentManager } from "../utils/contentPermissions";
-import { normalizeLessonId } from "./service";
+import { normalizeDisplayPriority, normalizeLessonId, resourceTimestampMillis } from "./service";
 import { invalidateInventoryCache } from "../sources/sourceInventoryService";
 
 export const lessonResourceRoutes = Router();
@@ -27,7 +27,17 @@ lessonResourceRoutes.get("/lesson-resources", requireFirebaseUser, async (req: a
           && ["class", "public", "official"].includes(String(resource.visibility || ""))
           && resource.processingStatus !== "archived";
       })
-      .sort((left: any, right: any) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
+      .map((resource: any) => ({
+        ...resource,
+        displayPriority: normalizeDisplayPriority(resource.displayPriority, 0),
+      }))
+      .sort((left: any, right: any) => {
+        const priorityDelta = normalizeDisplayPriority(right.displayPriority, 0) - normalizeDisplayPriority(left.displayPriority, 0);
+        if (priorityDelta !== 0) return priorityDelta;
+        const uploadedDelta = resourceTimestampMillis(right.createdAt || right.updatedAt) - resourceTimestampMillis(left.createdAt || left.updatedAt);
+        if (uploadedDelta !== 0) return uploadedDelta;
+        return String(left.title || "").localeCompare(String(right.title || ""));
+      });
 
     return res.json({ ok: true, resources, canManageLessonResources: manager });
   } catch (error: any) {
@@ -43,12 +53,25 @@ lessonResourceRoutes.patch("/lesson-resources/:resourceId", requireFirebaseUser,
     if (!snapshot.exists) return res.status(404).json({ ok: false, code: "LESSON_RESOURCE_NOT_FOUND" });
     const update: Record<string, unknown> = { updatedAt: new Date().toISOString() };
     if (typeof req.body?.published === "boolean") update.published = req.body.published;
+    if (req.body?.displayPriority !== undefined) update.displayPriority = normalizeDisplayPriority(req.body.displayPriority, 0);
     if (["private", "class", "public", "official"].includes(req.body?.visibility)) update.visibility = req.body.visibility;
     if (req.body?.lessonTitle) {
       update.lessonTitle = String(req.body.lessonTitle).slice(0, 180);
       update.lessonId = normalizeLessonId(req.body.lessonId || req.body.lessonTitle);
     }
-    await resourceRef.set(update, { merge: true });
+    const resource = snapshot.data() || {};
+    const db = getAdminDb();
+    const batch = db.batch();
+    batch.set(resourceRef, update, { merge: true });
+    const sourceId = String(resource.sourceId || req.params.resourceId);
+    if (sourceId) {
+      batch.set(db.collection("rag_sources").doc(sourceId), update, { merge: true });
+      if (String(resource.resourceType || "") === "past_paper") {
+        batch.set(db.collection("past_papers").doc(sourceId), update, { merge: true });
+      }
+      if (resource.videoId) batch.set(db.collection("videos").doc(String(resource.videoId)), update, { merge: true });
+    }
+    await batch.commit();
     invalidateInventoryCache(req.user.uid);
     return res.json({ ok: true });
   } catch (error: any) {

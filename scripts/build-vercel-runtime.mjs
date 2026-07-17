@@ -7,6 +7,7 @@ const protoSourceDirectory = new URL("../node_modules/google-gax/build/protos/",
 const protoOutputDirectory = new URL("google-gax-protos/", outputDirectory);
 const pdfWorkerSource = new URL("../node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs", import.meta.url);
 const pdfWorkerTarget = new URL("pdf.worker.mjs", outputDirectory);
+const declarationTarget = new URL("server.d.mts", outputDirectory);
 
 await mkdir(outputDirectory, { recursive: true });
 await rm(protoOutputDirectory, { recursive: true, force: true });
@@ -70,4 +71,5 @@ try {
   throw new Error(`PDF.js worker is missing and cannot be packaged: ${error instanceof Error ? error.message : String(error)}`);
 }
 await writeFile(metafilePath, JSON.stringify(result.metafile));
+await writeFile(declarationTarget, 'declare const app: import("express").Express;\nexport default app;\n');
 console.log("Built a self-contained Vercel API runtime with bundled Google protobuf and PDF.js worker assets.");

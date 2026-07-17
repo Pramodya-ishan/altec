@@ -5,7 +5,7 @@ import { getRecommendedUploadMode } from '../../lib/uploadMode';
 import { Loader2, Trash2, FileText, Upload, Layers, BookOpen, FileCheck, Plus, AlertCircle, Shield, CheckCircle2 } from 'lucide-react';
 import { auth } from '../../lib/firebase';
 import { motion, AnimatePresence } from 'motion/react';
-import { uploadPdfWithClientStorage, openPrivateStoragePdf, deletePrivateStorageObject } from '../../lib/clientStorageUpload';
+import { uploadPdfWithClientStorage, openPrivateStoragePdf } from '../../lib/clientStorageUpload';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { Badge } from '../ui/Badge';
@@ -33,20 +33,27 @@ export default function SyllabusLibraryView() {
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pdfTitle, setPdfTitle] = useState("");
 
-  const { profile } = useApp();
+  const { user } = useApp();
 
   useEffect(() => {
-    const isSyllabusEditor = profile?.role === 'admin' || profile?.roles?.includes('admin') ||
-                             profile?.role === 'teacher' || profile?.roles?.includes('teacher') ||
-                             profile?.role === 'content_editor' || profile?.roles?.includes('content_editor');
-    if (isSyllabusEditor) {
-      setIsOwner(true);
-      fetchResources();
-    } else {
-      setIsOwner(false);
-      setLoading(false);
-    }
-  }, [profile]);
+    let active = true;
+    const verify = async () => {
+      setLoading(true);
+      try {
+        const response = await apiFetch('/api/auth/context');
+        const payload = await response.json().catch(() => null);
+        const allowed = response.ok && payload?.capabilities?.canManageLessonResources === true;
+        if (!active) return;
+        setIsOwner(allowed);
+        if (allowed) await fetchResources();
+        else setLoading(false);
+      } catch {
+        if (active) { setIsOwner(false); setLoading(false); }
+      }
+    };
+    void verify();
+    return () => { active = false; };
+  }, [user?.email]);
 
   const fetchResources = async () => {
     setLoading(true);
@@ -65,6 +72,7 @@ export default function SyllabusLibraryView() {
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!isOwner) { e.target.value = ""; setUploadError("Only administrators and content managers can upload syllabus resources."); return; }
 
     setUploading(true);
     setUploadResult(null);
@@ -127,17 +135,13 @@ export default function SyllabusLibraryView() {
   };
 
     const handleDelete = async (id: string) => {
+    if (!isOwner) return;
     if (!confirm("Are you sure you want to delete this resource? It will be removed from vector storage index.")) return;
     try {
       const resource = resources.find(r => r.id === id);
       const res = await apiFetch(`/api/syllabus/resources/${id}`, { method: 'DELETE' });
       const data = await res.json().catch(()=>null);
       if (res.ok && data?.ok) {
-        if (resource?.storagePath) {
-          await deletePrivateStorageObject(resource.storagePath).catch((err: any) => {
-            console.warn("Storage delete failed client-side (warn only):", err);
-          });
-        }
         setResources(r => r.filter(x => x.id !== id));
       } else {
         alert("Delete failed: " + (data?.error || "Unknown error"));
