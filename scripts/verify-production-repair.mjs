@@ -14,6 +14,8 @@ const videoPlayer = await read("src/components/video/SecureVideoPlayer.tsx");
 const upload = await read("src/lib/clientStorageUpload.ts");
 const vercel = JSON.parse(await read("vercel.json"));
 const envExample = await read(".env.example");
+const npmrc = await read(".npmrc");
+const packageLock = await read("package-lock.json");
 
 for (const label of ["Paper", "Marks", "Papers", "Z-score", "Assistant"]) {
   assert(sidebar.includes(`mobileLabel: "${label}"`), `Missing mobile label: ${label}`);
@@ -31,6 +33,9 @@ assert(!chartShell.includes("ResponsiveContainer"), "ResponsiveChartShell must n
 assert(videoPlayer.includes("Preparing video…") && videoPlayer.includes("Retry") && !videoPlayer.includes("<header"), "Video player overlay repair is incomplete");
 assert(upload.includes("validatePersonalAssistantFile") && upload.includes("25 * MB") && upload.includes("10 * MB"), "Personal attachment validation is incomplete");
 assert(vercel?.functions?.["api/index.ts"]?.includeFiles === "vercel-runtime/**", "Vercel root API runtime assets are not fully included");
+assert(vercel.installCommand.includes("registry.npmjs.org"), "Vercel install command must force the public npm registry");
+assert(npmrc.includes("registry=https://registry.npmjs.org/"), ".npmrc does not force the public npm registry");
+assert(!packageLock.includes("packages.applied-caas-gateway1.internal.api.openai.org"), "package-lock.json contains a private internal registry URL");
 assert(Object.keys(vercel.functions || {}).length === 1, "Vercel must use one Express API function");
 assert((vercel.rewrites || []).some((rewrite) => rewrite.source === "/api/:path*" && rewrite.destination === "/api?__path=:path*"), "Nested API paths are not forwarded with their original suffix");
 assert(!(vercel.rewrites || []).some((rewrite) => rewrite.destination === "/api/index"), "Legacy /api/index rewrite remains");
@@ -40,7 +45,7 @@ const responseHygiene = await read("server/ai/responseHygiene.ts");
 const contentPermissions = await read("server/utils/contentPermissions.ts");
 const knowledgeRouter = await read("server/knowledge/knowledgeRouter.ts");
 const respondStream = await read("server/ai/respondStream.ts");
-assert(appContext.includes("signInWithRedirect") && !appContext.includes("signInWithPopup"), "Google auth must not use popup polling");
+assert(appContext.includes("signInWithPopup") && appContext.includes("signInWithRedirect") && appContext.includes("shouldUseRedirectAuth"), "Google auth must use popup-first with an explicitly configured mobile redirect fallback");
 assert(apiPath.includes("restoreVercelApiPath") && apiPath.includes("__path"), "Express path restoration middleware is missing");
 assert(responseHygiene.includes("turn_off_indicator_lights_on_the_router"), "Known internal directive leak filter is missing");
 assert(contentPermissions.includes("isStudentVisibleSource") && contentPermissions.includes("isSharedSourceScope(source.sourceScope)"), "Legacy shared administrator resources are not safely visible to students");

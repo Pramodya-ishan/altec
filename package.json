@@ -6,7 +6,7 @@
   "packageManager": "npm@11.9.0",
   "scripts": {
     "dev": "tsx server.ts",
-    "verify": "npm run lint",
+    "verify": "npm run check:npm-registry && npm run lint",
     "prebuild": "npm run verify && node scripts/check-no-old-preview-url.mjs && node scripts/copy-pdf-worker.mjs",
     "prebuild:frontend": "npm run verify && node scripts/check-no-old-preview-url.mjs && node scripts/copy-pdf-worker.mjs",
     "prebuild:vercel": "npm run validate:vercel-env && npm run verify && node scripts/check-no-old-preview-url.mjs && node scripts/copy-pdf-worker.mjs",
@@ -28,7 +28,8 @@
     "typecheck": "tsc --noEmit",
     "migrate:lesson-resources": "node --import tsx scripts/migrate-lesson-resources.ts",
     "configure:video-cors": "node --import tsx scripts/apply-video-cors.ts",
-    "verify:repair": "node scripts/verify-production-repair.mjs"
+    "verify:repair": "node scripts/verify-production-repair.mjs",
+    "check:npm-registry": "node scripts/check-npm-registry.mjs"
   },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",

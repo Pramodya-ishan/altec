@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "npm ci --include=dev",
+  "installCommand": "node scripts/check-npm-registry.mjs && npm ci --include=dev --registry=https://registry.npmjs.org/",
   "buildCommand": "npm run build:vercel",
   "outputDirectory": "dist",
   "functions": {

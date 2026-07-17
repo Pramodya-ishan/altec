@@ -1,6 +1,7 @@
 import { calculateCurrentGradeFromData } from '../lib/utils';
 import { apiFetch } from "../lib/api";
 import { normalizeSinhalaDisplayText } from "../lib/assistantTextHygiene";
+import { shouldUseRedirectAuth } from "../lib/authStrategy";
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
 import { isFirebaseEnabled, auth, authPersistenceReady } from '../lib/firebase';
@@ -11,6 +12,7 @@ import {
   onAuthStateChanged,
   signInWithCredential,
   signInWithEmailAndPassword,
+  signInWithPopup,
   signInWithRedirect,
   signOut,
 } from 'firebase/auth';
@@ -713,8 +715,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [isFirebaseEnabled]);
 
   
-  // Top-level redirect auth avoids Firebase popup window polling and the
-  // resulting Cross-Origin-Opener-Policy window.closed warnings.
+  // Popup auth is the reliable default on Vercel. Mobile/PWA redirect auth is
+  // enabled only when the same-origin /__/auth proxy and OAuth redirect URI
+  // have explicitly been configured.
   const loginWithGoogle = async () => {
     if (googleLoginInFlightRef.current) return;
     googleLoginInFlightRef.current = true;
@@ -732,15 +735,65 @@ export function AppProvider({ children }: { children: ReactNode }) {
       provider.addScope("https://www.googleapis.com/auth/userinfo.profile");
       provider.setCustomParameters({ prompt: "select_account" });
       await authPersistenceReady;
-      await signInWithRedirect(auth, provider);
+
+      const redirectConfigured =
+        String(import.meta.env.VITE_FIREBASE_REDIRECT_AUTH_ENABLED || "").toLowerCase() === "true" &&
+        String(import.meta.env.VITE_FIREBASE_USE_CUSTOM_AUTH_DOMAIN || "").toLowerCase() === "true";
+      const useRedirect = shouldUseRedirectAuth({
+        standalone: window.matchMedia?.("(display-mode: standalone)").matches === true,
+        userAgent: navigator.userAgent,
+        viewportWidth: window.innerWidth,
+        redirectConfigured,
+      });
+
+      if (useRedirect) {
+        await signInWithRedirect(auth, provider);
+        return;
+      }
+
+      try {
+        const result = await signInWithPopup(auth, provider);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (credential?.accessToken) {
+          localStorage.setItem("google_access_token", credential.accessToken);
+        }
+        setUser({
+          email: result.user.email || "",
+          name: result.user.displayName || "",
+          picture: result.user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(result.user.email || "")}`,
+          token: credential?.accessToken || "",
+          emailVerified: result.user.emailVerified,
+        });
+        void bootstrapServerSession(result.user);
+      } catch (popupError: any) {
+        const popupCode = String(popupError?.code || "");
+        const canFallbackToRedirect = redirectConfigured && [
+          "auth/popup-blocked",
+          "auth/operation-not-supported-in-this-environment",
+          "auth/web-storage-unsupported",
+        ].includes(popupCode);
+        if (canFallbackToRedirect) {
+          await signInWithRedirect(auth, provider);
+          return;
+        }
+        throw popupError;
+      }
     } catch (error: any) {
       const code = String(error?.code || "");
+      const currentHost = typeof window !== "undefined" ? window.location.hostname : "this domain";
       const message = code === "auth/unauthorized-domain"
-        ? "This domain is not authorized in Firebase Authentication."
-        : code === "auth/web-storage-unsupported"
-          ? "This browser cannot save the Google sign-in session."
-          : "Google sign-in could not be started. Please try again.";
+        ? `Google sign-in is not authorized for ${currentHost}. Add this hostname in Firebase Authentication > Settings > Authorized domains.`
+        : code === "auth/popup-blocked"
+          ? "The Google sign-in popup was blocked. Allow popups for this site and try again."
+          : code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request"
+            ? "Google sign-in was cancelled."
+            : code === "auth/web-storage-unsupported"
+              ? "This browser cannot save the Google sign-in session. Disable private browsing or allow site storage, then try again."
+              : code === "auth/operation-not-allowed"
+                ? "Google sign-in is disabled in Firebase Authentication."
+                : "Google sign-in failed. Please try again.";
       showNotification(message, "error");
+      if (import.meta.env.DEV) console.error("Google sign-in failed", error);
     } finally {
       googleLoginInFlightRef.current = false;
       setIsAuthLoading(false);

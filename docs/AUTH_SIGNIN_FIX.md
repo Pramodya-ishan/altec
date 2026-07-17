@@ -1,34 +1,30 @@
-# Google sign-in configuration
+# Google authentication production repair
 
-This build uses Firebase's default authentication handler:
+## Failure addressed
 
-`https://al-ai-chat.firebaseapp.com/__/auth/handler`
+The previous build forced `signInWithRedirect()` on every browser while the app was
+hosted on Vercel and Firebase's helper was hosted on `firebaseapp.com`. Modern browser
+third-party storage restrictions can prevent that redirect result from being restored,
+which makes the login appear to return to the app without signing the user in.
 
-That prevents a Vercel custom-domain proxy from generating a Google OAuth
-`redirect_uri_mismatch`.
+## Behaviour in this build
 
-## Required console setting
+- Popup sign-in is the reliable default.
+- Mobile/PWA redirect is used only when same-origin redirect support is explicitly enabled.
+- A blocked popup falls back to redirect only when that redirect setup is known to be configured.
+- `getRedirectResult()` is initialized once.
+- Duplicate login clicks are ignored while a request is active.
+- Browser-local Firebase persistence remains the authentication source of truth.
+- A temporary server-session bootstrap failure does not sign out a valid Firebase user.
+- Specific Firebase errors are displayed for unauthorized domains, disabled Google provider,
+  blocked popups, unsupported storage, and cancelled sign-in.
 
-In **Firebase Console → Authentication → Settings → Authorized domains**, keep
-all deployed frontend domains, including the production Vercel domain and any
-preview/custom domain that should be allowed to sign in.
-
-The frontend environment should normally use:
+## Required production variables
 
 ```env
 VITE_FIREBASE_AUTH_DOMAIN=al-ai-chat.firebaseapp.com
 VITE_FIREBASE_USE_CUSTOM_AUTH_DOMAIN=false
+VITE_FIREBASE_REDIRECT_AUTH_ENABLED=false
 ```
 
-Only enable a custom authentication domain after its exact
-`https://<domain>/__/auth/handler` URI is configured for the Firebase/Google
-OAuth client and the domain is serving Firebase's authentication helper files.
-
-## Behaviour in this build
-
-- Popup sign-in is the primary path.
-- Redirect sign-in is used only when a browser blocks/does not support popups.
-- Redirect results are completed during application bootstrap.
-- Duplicate sign-in clicks are ignored while one request is active.
-- Firebase Auth persistence is the session source of truth.
-- Expired Google `userinfo` access tokens are no longer restored from local storage.
+Also enable Google sign-in and authorize `tecal.vercel.app` in Firebase Authentication.

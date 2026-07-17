@@ -1,0 +1,41 @@
+ALTEC PRODUCTION REPAIR V6 - TEST RESULTS
+Date: 2026-07-18
+
+PASS npm ci --include=dev
+  924 packages installed from the public npm registry.
+
+PASS npm run check:npm-registry
+  package-lock.json contains no private/internal registry URL.
+
+PASS npm run typecheck
+  TypeScript completed with no errors.
+
+PASS npm test
+  Source registry tests passed.
+  Z-score tests passed.
+  Markdown tests passed.
+  Source repository tests passed.
+  Google auth strategy tests passed.
+  PDF extraction tests passed.
+  Response hygiene tests passed.
+  Visual aid tests passed.
+  Direct PDF formatter tests passed.
+  API path tests passed.
+  Knowledge routing tests passed.
+  Security and capability tests passed.
+  Content permission tests passed.
+  Secure video tests passed.
+
+PASS npm run build:vercel
+  Vite production build completed.
+  Self-contained Vercel API runtime completed.
+  PDF.js worker copied and verified.
+  Google protobuf assets copied and verified.
+  Isolated ESM runtime smoke test passed.
+
+PASS npm run verify:repair
+  Production repair static verification passed.
+
+NON-BLOCKING WARNINGS
+  Existing transitive package deprecation notices remain. They did not cause the failed
+  deployment; the fatal failure was the unreachable private registry URL.
