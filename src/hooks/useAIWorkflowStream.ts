@@ -108,7 +108,7 @@ export function useAIWorkflowStream() {
     setIsStreaming(true);
 
     if (!navigator.onLine) {
-      const errorMsg = "සම්බන්ධතාවය බිඳවැටී ඇත (Offline). Please check your internet connection and try again.";
+      const errorMsg = "You are offline. Check your internet connection and try again.";
       setError(errorMsg);
       setIsStreaming(false);
       setStatus({ stage: "error", label: "Offline" });
@@ -305,16 +305,16 @@ export function useAIWorkflowStream() {
 
             setStatus({
                stage: "processing",
-               label: "PDF එක පරීක්ෂා කරමින්",
-               message: "තෝරාගත් PDF මූලාශ්‍රයෙන් අදාළ ප්‍රශ්නය සොයමින්…"
+               label: "Checking the PDF",
+               message: "Searching the selected PDF source for the requested question…"
             });
 
             void (async () => {
               try {
                 if (!sourceId && !storagePath) {
-                   const errorMsg = "PDF මූලාශ්‍රය හඳුනාගැනීමට අවශ්‍ය source ID හෝ storage path එකක් ලැබී නැහැ.";
+                   const errorMsg = "The PDF source is missing its source ID or storage path.";
                    if (import.meta.env.DEV) console.error("[DirectPDFQA]", errorMsg);
-                   setStatus({ stage: "error", label: "මූලාශ්‍ර දෝෂයක්", message: errorMsg });
+                   setStatus({ stage: "error", label: "Source error", message: errorMsg });
                    onToken?.(errorMsg);
                    setIsStreaming(false);
                    doneReceived = true;
@@ -335,27 +335,27 @@ export function useAIWorkflowStream() {
                     if (step === "fetching") {
                       setStatus({
                         stage: "processing",
-                        label: "PDF එක සූදානම් කරමින්",
-                        message: "ආරක්ෂිත මූලාශ්‍රය විවෘත කරමින්…"
+                        label: "Preparing the PDF",
+                        message: "Opening the secure source…"
                       });
                     } else if (step === "uploading") {
-                      const sizeWarn = payload?.isLarge ? " ⚠️ PDF එක 15MB වලට වඩා විශාල බැවින් scan කිරීමට වැඩි වේලාවක් ගතවිය හැක. Indexing/Reindex භාවිත කරන්න." : "";
+                      const sizeWarn = payload?.isLarge ? " This PDF is larger than 15 MB, so scanning may take longer. Indexing it first is recommended." : "";
                       setStatus({
                         stage: "processing",
-                        label: "PDF එක සූදානම් කරමින්",
-                        message: `PDF ගොනුව විශ්ලේෂණයට සූදානම් කරමින්…${sizeWarn}`
+                        label: "Preparing the PDF",
+                        message: `Preparing the file for analysis…${sizeWarn}`
                       });
                     } else if (step === "scanning") {
                       setStatus({
                         stage: "processing",
-                        label: "ප්‍රශ්නය සොයමින්",
-                        message: "ප්‍රශ්නයට අදාළ කොටස් PDF ගොනුවෙන් scan කරමින් පවතී..."
+                        label: "Finding the question",
+                        message: "Scanning the PDF for the relevant pages…"
                       });
                     } else if (step === "generating") {
                       setStatus({
                         stage: "processing",
-                        label: "පිළිතුර සකස් කරමින්",
-                        message: "ප්‍රශ්නයට පිළිතුර සකස් කරමින් පවතී..."
+                        label: "Preparing the answer",
+                        message: "Building an answer from the source evidence…"
                       });
                     }
                   }
@@ -373,8 +373,8 @@ export function useAIWorkflowStream() {
                   const waitMs = Math.min(15_000, Math.max(800, Number(result.retryAfterMs || 4_000)));
                   setStatus({
                     stage: "processing",
-                    label: "PDF අකුරු සකසමින්",
-                    message: `මූලාශ්‍රය සූදානම් වූ විගස ප්‍රශ්නය ස්වයංක්‍රීයව නැවත පරීක්ෂා කරනවා… (${attempt + 1}/3)`,
+                    label: "Indexing the PDF",
+                    message: `The question will be checked again as soon as the source is ready… (${attempt + 1}/3)`,
                   });
                   await new Promise<void>((resolve) => {
                     const timer = window.setTimeout(resolve, waitMs);
@@ -412,7 +412,7 @@ export function useAIWorkflowStream() {
                   });
                 } else {
                   if (import.meta.env.DEV) console.error("[DirectPDFQA]", result);
-                  let userMsg = "PDF source එක Firebase එකේ හම්බුණා. හැබැයි server-side PDF download එක fail වුණා, ඒ නිසා මම answer එක guess කරන්නේ නැහැ. Direct Scan/Reindex action එක run කළාම PDF එකෙන්ම answer දෙන්නම්.";
+                  let userMsg = "The PDF source was found, but the secure server could not read it. I will not guess an answer. Index the PDF and try again.";
 
                   const errorStr = String(result.error || "").toLowerCase();
                   const isBillingExhausted = result.errorCode === "AI_BILLING_EXHAUSTED" ||
@@ -427,27 +427,27 @@ export function useAIWorkflowStream() {
                   const isIndexing = result.errorCode === "PDF_INDEXING_STARTED" || result.errorCode === "PDF_INDEX_READY_RETRY";
 
                   if (isIndexing) {
-                     userMsg = (result as any).message || "PDF එක index කරමින් පවතී. අවසන් වූ පසු ප්‍රශ්නය නැවත යවන්න.";
+                     userMsg = (result as any).message || "The PDF is being indexed. Please try the question again when processing is complete.";
                   } else if (result.errorCode === "PDF_OCR_NOT_CONFIGURED") {
-                     userMsg = (result as any).message || "මෙම scan කළ PDF එක කියවීමට OCR සැකසුම් අවශ්‍යයි.";
+                     userMsg = (result as any).message || "OCR must be configured before this scanned PDF can be read.";
                   } else if (isBillingExhausted) {
-                     userMsg = "AI සේවා සීමාව අවසන් වී තිබෙනවා. සේවා සැලැස්ම යාවත්කාලීන කළ පසු PDF පිළිතුර නැවත ලබාගත හැක.";
+                     userMsg = "The AI service limit has been reached. Try again after the service plan is available.";
                   } else if (isRuntimeError) {
-                     userMsg = "AI සේවාවේ සැකසුම් දෝෂයක් ඇති වුණා. මොහොතකින් නැවත උත්සාහ කරන්න.";
+                     userMsg = "The AI service is not configured correctly. Please try again shortly.";
                   } else if (result.found === false) {
-                     userMsg = (result as any).message || result.reason || "PDF එක පරීක්ෂා කළා. නමුත් ප්‍රශ්නයට අදාළ නිශ්චිත පෙළ හමු නොවුණි. PDF එක නැවත සකස් කර හෝ ප්‍රශ්නයේ රූපයක් එක් කර උත්සාහ කරන්න.";
+                     userMsg = (result as any).message || result.reason || "The PDF was checked, but no exact evidence for this question was found. Reindex the PDF or attach an image of the question and try again.";
                   } else if (result.errorCode === "DIRECT_QA_FIREBASE_FETCH_FAILED" || result.errorCode === "ADMIN_STORAGE_DEGRADED_USE_CLIENT_HANDOFF") {
-                     userMsg = "PDF මූලාශ්‍රය හමු වුණත් එය කියවීමට අවසර ලැබී නැහැ. නැවත පිවිසී උත්සාහ කරන්න.";
+                     userMsg = "The PDF source was found, but access was denied. Sign in again and retry.";
                   }
 
                   setStatus({
                     stage: isIndexing ? "processing" : (result.stage || "error"),
                     label: isIndexing
-                      ? "PDF එක සූදානම් කරමින්"
-                      : "PDF පිළිතුර ලබාගත නොහැක",
+                      ? "Preparing the PDF"
+                      : "Unable to answer from this PDF",
                     message: isIndexing
-                      ? ((result as any).message || "Index කරමින් පවතී")
-                      : (isBillingExhausted ? "සේවා සීමාව අවසන්" : (isRuntimeError ? "සේවා සැකසුම් දෝෂයක්" : (result.reason || "අදාළ සාක්ෂිය හමු නොවුණි")))
+                      ? ((result as any).message || "Indexing in progress")
+                      : (isBillingExhausted ? "Service limit reached" : (isRuntimeError ? "Service configuration error" : (result.reason || "No relevant evidence was found")))
                   });
                   onToken?.(userMsg);
                   doneReceived = true;
@@ -458,23 +458,23 @@ export function useAIWorkflowStream() {
                 setIsStreaming(false);
                 doneReceived = true;
 
-                let userFriendlyMsg = `PDF එකෙන් පිළිතුර ලබාගැනීම අසාර්ථක වුණා: ${err.message}`;
+                let userFriendlyMsg = `Unable to answer from the PDF: ${err.message}`;
                 let friendlyStage = "error";
-                let friendlyLabel = "PDF පිළිතුර ලබාගත නොහැක";
+                let friendlyLabel = "Unable to answer from this PDF";
                 let errorCode = err.errorCode || "FATAL_ERROR";
 
                 if (err.errorCode === "DIRECT_QA_BACKEND_NON_JSON_RESPONSE") {
-                  userFriendlyMsg = "⚠️ PDF scan endpoint එකෙන් non-JSON response එකක් ලැබුණා (උදා: gateway/proxy timeout හෝ backend crash වීමක්). විශාල PDF එකක් නිසා scan කිරීමට වැඩි වේලාවක් ගතවුණා විය හැක. කරුණාකර මෙම PDF එක Reindex/Process කර නැවත උත්සාහ කරන්න.";
-                  friendlyLabel = "PDF පරීක්ෂාව කල් ඉකුත් වුණා";
+                  userFriendlyMsg = "The PDF scan timed out or returned an invalid server response. Index this PDF first, then try again.";
+                  friendlyLabel = "PDF scan timed out";
                 } else if (err.errorCode === "DIRECT_QA_BACKEND_ERROR") {
-                  userFriendlyMsg = `⚠️ PDF scan backend එකේ දෝෂයක් ඇති විය: ${err.details?.message || err.message}`;
-                  friendlyLabel = "සේවා දෝෂයක්";
+                  userFriendlyMsg = `The PDF service returned an error: ${err.details?.message || err.message}`;
+                  friendlyLabel = "PDF service error";
                 } else if (err.errorCode === "DIRECT_QA_FIREBASE_FETCH_FAILED") {
-                  userFriendlyMsg = `⚠️ PDF ගොනුව Firebase Storage එකෙන් බාගත කර ගැනීමට නොහැකි විය: ${err.details?.message || err.message}\nකරුණාකර Storage rules/login status පරීක්ෂා කරන්න.`;
-                  friendlyLabel = "ගොනු අවසර දෝෂයක්";
+                  userFriendlyMsg = `The PDF could not be read from secure storage: ${err.details?.message || err.message}\nCheck your sign-in session and storage permissions.`;
+                  friendlyLabel = "File access error";
                 } else if (err.message && err.message.includes("Failed to fetch")) {
-                  userFriendlyMsg = "⚠️ Backend සේවාදායකය සමඟ සම්බන්ධ වීමට නොහැකි විය (Network Connection / CORS Error). කරුණාකර ඔබගේ අන්තර්ජාල සම්බන්ධතාවය පරීක්ෂා කර නැවත උත්සාහ කරන්න.";
-                  friendlyLabel = "සම්බන්ධතා දෝෂයක්";
+                  userFriendlyMsg = "The PDF service could not be reached. Check your connection and try again.";
+                  friendlyLabel = "Connection error";
                 }
 
                 setError(err.message);
@@ -521,7 +521,7 @@ export function useAIWorkflowStream() {
             if (data.recoverable) setIsRecoverableError(true);
             if (data.code === "AI_BILLING_EXHAUSTED") {
                setIsRecoverableError(false); // Do not show retry button for this
-               setStatus({ stage: "error", label: "AI සේවා සීමාව අවසන්", message: data.message });
+               setStatus({ stage: "error", label: "AI service limit reached", message: data.message });
             }
             onError?.(errObj);
           }
@@ -531,8 +531,8 @@ export function useAIWorkflowStream() {
               doneReceived = true;
               setStatus({
                 stage: "processing",
-                label: "PDF එක පරීක්ෂා කරමින්",
-                message: "PDF එකෙන් exact question extract කරමින්..."
+                label: "Checking the PDF",
+                message: "Extracting the exact question from the source…"
               });
               return;
             }
@@ -559,7 +559,7 @@ export function useAIWorkflowStream() {
             setTotalSeconds(data.totalSeconds);
             setStatus({
               stage: data.ok !== false ? "done" : "error",
-              label: data.ok !== false ? "සම්පූර්ණයි" : "නවතා ඇත",
+              label: data.ok !== false ? "Complete" : "Stopped",
               startedAt: Date.now() - (data.totalMs || 0),
             });
             if (data.sources) {

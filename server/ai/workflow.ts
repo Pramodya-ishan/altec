@@ -1,16 +1,16 @@
 export const AI_WORKFLOW_STAGES = {
-  thinking: "සොයමින්...",
-  auth: "ගිණුම තහවුරු කරමින්...",
-  profile: "ඔබගේ දත්ත ගනිමින්...",
-  progress: "ප්‍රගතිය පරීක්ෂා කරමින්...",
-  memory: "පාඩම් සටහන් ගනිමින්...",
-  sources: "මූලාශ්‍ර පරීක්ෂා කරමින්...",
-  search: "වෙබ් සෙවීම සිදු කරමින්...",
-  planning: "පිළිතුර සකස් කරමින්...",
-  generating: "පිළිතුර ලියමින්...",
-  saving: "සුරකිමින්...",
-  done: "සම්පූර්ණයි",
-  error: "නවතා ඇත",
+  thinking: "Thinking…",
+  auth: "Verifying your account…",
+  profile: "Loading your profile…",
+  progress: "Checking your progress…",
+  memory: "Loading your study notes…",
+  sources: "Checking sources…",
+  search: "Searching the web…",
+  planning: "Preparing the answer…",
+  generating: "Writing the answer…",
+  saving: "Saving…",
+  done: "Complete",
+  error: "Stopped",
 };
 
 export function sendSSE(res: any, event: string, data: any) {

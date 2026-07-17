@@ -20,18 +20,18 @@ export function Sidebar() {
   const { isSidebarOpen, setSidebarOpen, profile } = useApp();
   
   const menuItems: { id: ViewKey; label: string; icon: any }[] = [
-    { id: 'paper-structure', label: 'ප්‍රශ්න පත්‍ර ව්‍යුහය', icon: Layers },
-    { id: 'paper-marks', label: 'ලකුණු ප්‍රගතිය', icon: LineChart },
-    { id: 'past-papers', label: 'ප්‍රශ්න පත්‍ර', icon: FileText },
-    { id: 'admission-predictor', label: 'Z-Score විශ්ලේෂණය', icon: GraduationCap },
-    { id: 'clora-x', label: 'අධ්‍යයන සහායක', icon: Bot }
+    { id: 'paper-structure', label: 'Paper Structure', icon: Layers },
+    { id: 'paper-marks', label: 'Marks Progress', icon: LineChart },
+    { id: 'past-papers', label: 'Past Papers', icon: FileText },
+    { id: 'admission-predictor', label: 'Z-Score Analytics', icon: GraduationCap },
+    { id: 'clora-x', label: 'Study Assistant', icon: Bot }
   ];
 
   const isAdminUser = profile?.role === 'admin' || profile?.roles?.includes('admin');
   const isSyllabusEditor = isAdminUser || profile?.role === 'content_editor' || profile?.roles?.includes('content_editor') || profile?.role === 'teacher' || profile?.roles?.includes('teacher');
 
   if (isSyllabusEditor) {
-    menuItems.push({ id: 'syllabus', label: 'විෂය නිර්දේශය', icon: BookOpen } as any);
+    menuItems.push({ id: 'syllabus', label: 'Syllabus', icon: BookOpen } as any);
   }
   if (isAdminUser) {
     menuItems.push({ id: 'pdf-sources', label: 'PDF Intelligence', icon: FileText } as any);

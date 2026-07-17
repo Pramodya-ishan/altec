@@ -740,7 +740,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setUser(signedInUser);
         localStorage.setItem('email_user_session', JSON.stringify(signedInUser));
         setIsAuthLoading(false);
-        showNotification("Google ගිණුමෙන් සාර්ථකව පිවිසුණා.", "success");
+        showNotification("Signed in with Google.", "success");
 
         const savedData = localStorage.getItem(`student_progress_data_${signedInUser.email.toLowerCase()}`);
         if (savedData) {
@@ -768,7 +768,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (import.meta.env.DEV) console.warn('Server session bootstrap skipped', sessionError);
         });
       } else {
-         showNotification("Google පිවිසුම සඳහා Firebase සැකසුම් අවශ්‍යයි.", "error");
+         showNotification("Firebase configuration is required for Google sign-in.", "error");
       }
     } catch (error: any) {
       console.error("Google Popup Login Error:", error);
@@ -787,10 +787,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
       const message = code === 'auth/popup-closed-by-user'
-        ? "Google පිවිසුම් කවුළුව වසා දමා ඇත."
+        ? "The Google sign-in window was closed."
         : code === 'auth/unauthorized-domain'
-          ? "මෙම domain එක Firebase Authorized domains ලැයිස්තුවට එක් කළ යුතුයි."
-          : "Google පිවිසුම සම්පූර්ණ කළ නොහැකි වුණා. නැවත උත්සාහ කරන්න.";
+          ? "Add this domain to the Firebase Authorized domains list."
+          : "Google sign-in could not be completed. Please try again.";
       showNotification(message, "error");
     }
     setIsAuthLoading(false);
@@ -874,7 +874,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
          if (savedData) {
             try {
                setData(JSON.parse(savedData));
-               if (import.meta.env.DEV) console.info("දේශීය cache එකෙන් ශිෂ්‍ය ප්‍රගතිය ප්‍රතිසාධනය කළා.");
+               if (import.meta.env.DEV) console.info("Restored student progress from the local cache.");
             } catch(e) {}
          }
       } catch (e) {
@@ -986,7 +986,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (unsyncedRaw) {
         try {
           const unsyncedData = JSON.parse(unsyncedRaw);
-          showNotification("සම්බන්ධතාවය නැවත ලැබුණා. නොබැඳි වෙනස්කම් සමමුහුර්ත කරමින්…", "info");
+          showNotification("Connection restored. Syncing offline changes…", "info");
 
           let serverSynced = false;
 
@@ -1005,7 +1005,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           if (serverSynced) {
             localStorage.removeItem(unsyncedKey);
-            showNotification("නොබැඳි වෙනස්කම් cloud ගබඩාවට සමමුහුර්ත කළා.", "success");
+            showNotification("Offline changes synced to cloud storage.", "success");
             setData(unsyncedData);
           }
         } catch (e) {
@@ -1151,7 +1151,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           await fetchUserDataFromDB(resData.user.email);
           await fetchYoutubeCookies(resData.user.email);
-          showNotification("සතුටුදායකයි! සාර්ථකව සම්බන්ධ වුණා. (Successfully logged in!)", "success");
+          showNotification("Successfully signed in.", "success");
           setIsAuthLoading(false);
           return { success: true };
         } else {
@@ -1184,7 +1184,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           await fetchUserDataFromDB(resData.user.email);
           await fetchYoutubeCookies(resData.user.email);
-          showNotification("සතුටුදායකයි! සාර්ථකව සම්බන්ධ වුණා. (Successfully logged in!)", "success");
+          showNotification("Successfully signed in.", "success");
           setIsAuthLoading(false);
           return { success: true };
         } else {
@@ -1227,7 +1227,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           await fetchUserDataFromDB(resData.user.email);
           await fetchYoutubeCookies(resData.user.email);
-          showNotification(resData.message || "ලියාපදිංචිය සාර්ථකයි! (Registration successful!)", "success");
+          showNotification(resData.message || "Registration successful.", "success");
           setIsAuthLoading(false);
           return { success: true };
         } else {
@@ -1255,7 +1255,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           await fetchUserDataFromDB(resData.user.email);
           await fetchYoutubeCookies(resData.user.email);
-          showNotification(resData.message || "ලියාපදිංචිය සාර්ථකයි! (Registration successful!)", "success");
+          showNotification(resData.message || "Registration successful.", "success");
           setIsAuthLoading(false);
           return { success: true };
         } else {
@@ -1291,7 +1291,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         await fetchUserDataFromDB(resData.user.email);
         await fetchYoutubeCookies(resData.user.email);
-        showNotification("සත්‍යාපනය සාර්ථකයි! ලොග් වීම සම්පූර්ණයි. (Email verified & logged in!)", "success");
+        showNotification("Email verified and signed in.", "success");
         setIsAuthLoading(false);
         return { success: true };
       } else {
@@ -1300,7 +1300,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return { error: resData.error || "Verification failed" };
       }
     } catch (e: any) {
-      showNotification("ජාලගත වීමේ සේවා දෝෂයකි. (Could not connect to verification server)", "error");
+      showNotification("Could not connect to the verification server.", "error");
       setIsAuthLoading(false);
       return { error: e.message || "Network error" };
     }

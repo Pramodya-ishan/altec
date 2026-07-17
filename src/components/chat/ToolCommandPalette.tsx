@@ -11,7 +11,7 @@ export interface CommandOption {
 
 const COMMAND_OPTIONS: CommandOption[] = [
   { id: 'tts', command: '@tts', label: 'Text to Speech', description: 'Paste text and generate downloadable audio', icon: <Speaker className="w-4 h-4" /> },
-  { id: 'live', command: '@live', label: 'සජීවී කතාබහ', description: 'Tec A/L සමඟ කටහඬින් සාකච්ඡා කරන්න', icon: <Mic className="w-4 h-4" /> },
+  { id: 'live', command: '@live', label: 'Live voice chat', description: 'Talk with Tec A/L using your voice', icon: <Mic className="w-4 h-4" /> },
   { id: 'websearch', command: '@websearch', label: 'Web Search', description: 'Find real-time web info', icon: <Globe className="w-4 h-4" /> },
   { id: 'deepsearch', command: '@deepsearch', label: 'Deep Search', description: 'Search deeply across web and PDFs', icon: <Search className="w-4 h-4" /> },
   { id: 'image', command: '@image', label: 'Create Image', description: 'Generate an image from a prompt', icon: <ImageIcon className="w-4 h-4" /> },

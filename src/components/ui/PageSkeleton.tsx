@@ -27,8 +27,8 @@ export function PageSkeleton({ pathname }: PageSkeletonProps) {
 
   if (isChat) {
     return (
-      <section className="flex h-full min-h-[70vh] flex-col bg-white px-4 py-6" role="status" aria-label="සංවාදය පූරණය කරමින්">
-        <span className="sr-only">සංවාදය පූරණය කරමින්</span>
+      <section className="flex h-full min-h-[70vh] flex-col bg-white px-4 py-6" role="status" aria-label="Loading conversation">
+        <span className="sr-only">Loading conversation</span>
         <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-7">
           <PulseBlock className="h-8 w-40" />
           <PulseBlock className="ml-auto mt-8 h-12 w-64 rounded-3xl" />
@@ -41,8 +41,8 @@ export function PageSkeleton({ pathname }: PageSkeletonProps) {
 
   if (isLibrary) {
     return (
-      <section className="space-y-5" role="status" aria-label="ගොනු පූරණය කරමින්">
-        <span className="sr-only">ගොනු පූරණය කරමින්</span>
+      <section className="space-y-5" role="status" aria-label="Loading files">
+        <span className="sr-only">Loading files</span>
         <div className="rounded-[1.8rem] border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-6 flex items-center justify-between gap-5"><div className="space-y-2"><PulseBlock className="h-5 w-40" /><PulseBlock className="h-3 w-60 max-w-full" /></div><PulseBlock className="h-10 w-32" /></div>
           <PulseBlock className="mb-6 h-12 w-full rounded-xl" />
@@ -58,8 +58,8 @@ export function PageSkeleton({ pathname }: PageSkeletonProps) {
 
   if (isAnalytics) {
     return (
-      <section className="space-y-6" role="status" aria-label="විශ්ලේෂණ දත්ත පූරණය කරමින්">
-        <span className="sr-only">විශ්ලේෂණ දත්ත පූරණය කරමින්</span>
+      <section className="space-y-6" role="status" aria-label="Loading analytics">
+        <span className="sr-only">Loading analytics</span>
         <div className="grid gap-4 sm:grid-cols-3">{["metric-a", "metric-b", "metric-c"].map((key) => <div key={key} className="rounded-2xl border border-slate-200 bg-white p-5"><PulseBlock className="mb-5 h-3 w-24" /><PulseBlock className="h-8 w-28" /><PulseBlock className="mt-3 h-3 w-36" /></div>)}</div>
         <div className="rounded-[1.8rem] border border-slate-200 bg-white p-6"><PulseBlock className="mb-8 h-5 w-52" /><div className="flex h-56 items-end gap-4 border-b border-l border-slate-100 px-5">{[36, 55, 46, 72, 62, 83, 70].map((height, index) => <PulseBlock key={`bar-${index}`} className="w-full rounded-b-none" style={{ height: `${height}%` } as React.CSSProperties} />)}</div></div>
         <div className="grid gap-5 lg:grid-cols-2"><CardSkeleton /><CardSkeleton /></div>
@@ -68,8 +68,8 @@ export function PageSkeleton({ pathname }: PageSkeletonProps) {
   }
 
   return (
-    <section className="space-y-6" role="status" aria-label="පිටුව පූරණය කරමින්">
-      <span className="sr-only">පිටුව පූරණය කරමින්</span>
+    <section className="space-y-6" role="status" aria-label="Loading page">
+      <span className="sr-only">Loading page</span>
       <div className="flex items-center justify-between"><div className="space-y-2"><PulseBlock className="h-5 w-48" /><PulseBlock className="h-3 w-72 max-w-[70vw]" /></div><PulseBlock className="h-10 w-28" /></div>
       <div className="grid gap-5 md:grid-cols-2"><CardSkeleton /><CardSkeleton /></div>
       <div className="rounded-[1.8rem] border border-slate-200 bg-white p-6 shadow-[0_8px_28px_rgba(15,23,42,0.04)]"><PulseBlock className="mb-6 h-5 w-44" /><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{["lesson-a", "lesson-b", "lesson-c", "lesson-d", "lesson-e", "lesson-f"].map((key) => <PulseBlock key={key} className="h-16" />)}</div></div>

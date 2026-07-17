@@ -107,7 +107,7 @@ export const OcrTextModal: React.FC<OcrTextModalProps> = ({ sourceId, title, onC
                 {title}
               </h3>
               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                ලබාගත් සිංහල Unicode පෙළ
+                Extracted Sinhala Unicode text
               </p>
             </div>
           </div>
@@ -125,27 +125,27 @@ export const OcrTextModal: React.FC<OcrTextModalProps> = ({ sourceId, title, onC
             <div className="flex-1 flex flex-col items-center justify-center gap-3">
               <i className="fa-solid fa-circle-notch fa-spin text-3xl text-indigo-600"></i>
               <span className="text-xs font-semibold text-slate-500 animate-pulse">
-                Sinhala text index කියවමින් පවතී...
+                Loading the Sinhala text index…
               </span>
             </div>
           ) : error ? (
             <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
               <AlertCircle className="w-12 h-12 text-rose-500 mb-3" />
-              <h4 className="font-bold text-slate-800 mb-1">පෙළ පූරණය කළ නොහැක</h4>
+              <h4 className="font-bold text-slate-800 mb-1">Text could not be loaded</h4>
               <p className="text-slate-500 text-xs max-w-md mb-4">{error}</p>
               <button
                 onClick={onClose}
                 className="px-4 py-2 text-xs font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-xl transition-all"
               >
-                වසන්න
+                Close
               </button>
             </div>
           ) : pages.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
               <AlertCircle className="w-12 h-12 text-amber-500 mb-3" />
-              <h4 className="font-bold text-slate-800 mb-1">ලබාගත් පෙළක් නැහැ</h4>
+              <h4 className="font-bold text-slate-800 mb-1">No extracted text</h4>
               <p className="text-slate-500 text-xs max-w-md">
-                මෙම PDF පත්‍රිකාවේ extract කරන ලද text අඩංගු නොවේ. කරුණාකර නැවත Reindex/OCR කරන්න.
+                This PDF does not contain extracted text. Reindex or run OCR again.
               </p>
             </div>
           ) : (

@@ -53,11 +53,11 @@ function formatBytes(bytes: number) {
 }
 
 function formatEta(seconds: number) {
-  if (!Number.isFinite(seconds) || seconds <= 0) return 'ගණනය කරමින්…';
-  if (seconds < 60) return `${Math.ceil(seconds)} තත්.`;
+  if (!Number.isFinite(seconds) || seconds <= 0) return 'Calculating…';
+  if (seconds < 60) return `${Math.ceil(seconds)} sec`;
   const minutes = Math.floor(seconds / 60);
   const remainder = Math.ceil(seconds % 60);
-  return `${minutes} මිනි. ${remainder} තත්.`;
+  return `${minutes} min ${remainder} sec`;
 }
 
 function AttachmentIcon({ attachment }: { attachment: any }) {
@@ -125,12 +125,12 @@ export function CloraComposer({
 
   const canSubmit = !disabled && (input.trim().length > 0 || attachments.length > 0);
   const telemetryLabel = uploadTelemetry?.phase === 'processing'
-    ? 'ගොනුව සකස් කරමින්'
+    ? 'Processing file'
     : uploadTelemetry?.phase === 'success'
-      ? 'උඩුගත කිරීම සම්පූර්ණයි'
+      ? 'Upload complete'
       : uploadTelemetry?.phase === 'error'
-        ? 'උඩුගත කිරීම අසාර්ථකයි'
-        : 'ආරක්ෂිතව උඩුගත කරමින්';
+        ? 'Upload failed'
+        : 'Uploading securely';
 
   return (
     <div
@@ -166,9 +166,9 @@ export function CloraComposer({
                 </div>
                 <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] text-slate-500 sm:grid-cols-4">
                   <span><strong className="text-slate-700">{formatBytes(uploadTelemetry.bytesTransferred)}</strong> / {formatBytes(uploadTelemetry.totalBytes)}</span>
-                  <span>ඉතිරි <strong className="text-slate-700">{formatBytes(uploadTelemetry.remainingBytes)}</strong></span>
-                  <span>වේගය <strong className="text-slate-700">{formatBytes(uploadTelemetry.speedBytesPerSecond)}/s</strong></span>
-                  <span>ඉතිරි කාලය <strong className="text-slate-700">{formatEta(uploadTelemetry.etaSeconds)}</strong></span>
+                  <span>Remaining <strong className="text-slate-700">{formatBytes(uploadTelemetry.remainingBytes)}</strong></span>
+                  <span>Speed <strong className="text-slate-700">{formatBytes(uploadTelemetry.speedBytesPerSecond)}/s</strong></span>
+                  <span>ETA <strong className="text-slate-700">{formatEta(uploadTelemetry.etaSeconds)}</strong></span>
                 </div>
               </div>
             )}
@@ -178,7 +178,7 @@ export function CloraComposer({
                 <span className="flex min-w-0 items-center gap-2"><AlertCircle className="h-4 w-4 shrink-0" /><span className="truncate">{uploadError}</span></span>
                 {indexingFailed && onRetryIndexing && (
                   <button type="button" onClick={onRetryIndexing} className="inline-flex shrink-0 items-center gap-1 font-semibold hover:text-rose-900">
-                    <RotateCcw className="h-3.5 w-3.5" /> නැවත උත්සාහ කරන්න
+                    <RotateCcw className="h-3.5 w-3.5" /> Retry
                   </button>
                 )}
               </div>
@@ -192,10 +192,10 @@ export function CloraComposer({
               <div key={attachment.id || attachment.storagePath || `${attachment.name}-${index}`} className="flex max-w-[250px] shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
                 <span className="text-slate-500"><AttachmentIcon attachment={attachment} /></span>
                 <span className="min-w-0">
-                  <span className="block truncate font-semibold text-slate-700">{attachment.name || 'අමුණා ඇති ගොනුව'}</span>
+                  <span className="block truncate font-semibold text-slate-700">{attachment.name || 'Attached file'}</span>
                   {attachment.size ? <span className="text-[10px] text-slate-400">{formatBytes(attachment.size)}</span> : null}
                 </span>
-                <button type="button" onClick={() => onRemoveAttachment?.(attachment.id || index)} className="ml-1 rounded-full p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700" aria-label={`${attachment.name || 'ගොනුව'} ඉවත් කරන්න`}>
+                <button type="button" onClick={() => onRemoveAttachment?.(attachment.id || index)} className="ml-1 rounded-full p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700" aria-label={`Remove ${attachment.name || 'file'}`}>
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -208,31 +208,31 @@ export function CloraComposer({
           value={input}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
-          placeholder="පාඩමක්, paper එකක් හෝ result එකක් අහන්න"
+          placeholder="Ask about a lesson, paper, or result"
           disabled={disabled}
           rows={1}
           className="block max-h-32 min-h-11 w-full resize-none bg-transparent px-4 pb-1 pt-3 text-[15px] leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed sm:min-h-14 sm:px-5 sm:pb-2 sm:pt-4"
-          aria-label="ඉගෙනුම් සහායකයාට පණිවිඩයක් යවන්න"
+          aria-label="Message the study assistant"
           enterKeyHint="send"
         />
 
         <div className="flex items-center justify-between gap-3 px-3 pb-3">
           <div className="flex items-center gap-1">
-            <button type="button" onClick={onAttachClick} disabled={disabled} className="rounded-full p-2.5 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40" aria-label="PDF, රූප, හඬ හෝ වීඩියෝ ගොනුවක් අමුණන්න" title="ගොනුවක් අමුණන්න">
+            <button type="button" onClick={onAttachClick} disabled={disabled} className="rounded-full p-2.5 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Attach a PDF, image, audio, or video file" title="Attach file">
               <Paperclip className="h-5 w-5" />
             </button>
-            <span className="hidden rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-500 sm:inline">@ මෙවලම්</span>
+            <span className="hidden rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-500 sm:inline">@ tools</span>
           </div>
 
           <div className="flex items-center gap-1.5">
             {!isStreaming && !input.trim() && onMicClick && (
-              <button type="button" onClick={onMicClick} disabled={disabled} className="rounded-full p-2.5 text-slate-600 hover:bg-slate-100 disabled:opacity-40" aria-label="සජීවී කටහඬ සංවාදය අරඹන්න">
+              <button type="button" onClick={onMicClick} disabled={disabled} className="rounded-full p-2.5 text-slate-600 hover:bg-slate-100 disabled:opacity-40" aria-label="Start live voice conversation">
                 <Mic className="h-5 w-5" />
               </button>
             )}
 
             {isStreaming ? (
-              <button type="button" onClick={onStopClick} className="grid h-10 w-10 place-items-center rounded-full bg-slate-900 text-white hover:bg-black" aria-label="පිළිතුර නවත්වන්න">
+              <button type="button" onClick={onStopClick} className="grid h-10 w-10 place-items-center rounded-full bg-slate-900 text-white hover:bg-black" aria-label="Stop answer">
                 <Square className="h-3.5 w-3.5 fill-current" />
               </button>
             ) : (
@@ -244,7 +244,7 @@ export function CloraComposer({
                   onClick={onSubmit}
                   disabled={!canSubmit}
                   className="grid h-10 w-10 place-items-center rounded-full bg-slate-900 text-white transition hover:bg-black disabled:bg-slate-200 disabled:text-slate-400"
-                  aria-label="පණිවිඩය යවන්න"
+                  aria-label="Send message"
                 >
                   <ArrowUp className="h-5 w-5" />
                 </motion.button>
@@ -253,7 +253,7 @@ export function CloraComposer({
           </div>
         </div>
       </motion.div>
-      <p className="mt-2 text-center text-[10px] text-slate-400">වැදගත් විභාග තොරතුරු නිල මූලාශ්‍රයකින් තහවුරු කරන්න.</p>
+      <p className="mt-2 text-center text-[10px] text-slate-400">Verify important exam information with an official source.</p>
     </div>
   );
 }

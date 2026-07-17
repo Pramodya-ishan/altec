@@ -18,7 +18,7 @@ export function VisualBlockRenderer({ block }: VisualBlockRendererProps) {
               <Layers className="w-3.5 h-3.5" />
             </div>
             <span className="text-xs font-black text-slate-700 tracking-wide uppercase">
-              {block.title || "ඛණ්ඩාංක සිතියම (Coordinate Graph)"}
+              {block.title || "Coordinate graph"}
             </span>
           </div>
           <CoordinatePlane
@@ -42,7 +42,7 @@ export function VisualBlockRenderer({ block }: VisualBlockRendererProps) {
               <HelpCircle className="w-3.5 h-3.5" />
             </div>
             <span className="text-xs font-black text-indigo-950 tracking-wide uppercase">
-              {block.title || "සූත්‍රය (Formula Card)"}
+              {block.title || "Formula"}
             </span>
           </div>
           <div className="py-5 flex items-center justify-center bg-white/70 backdrop-blur-xs rounded-xl my-3 border border-slate-100 shadow-2xs">
@@ -50,7 +50,7 @@ export function VisualBlockRenderer({ block }: VisualBlockRendererProps) {
           </div>
           {block.variables && block.variables.length > 0 && (
             <div className="space-y-1.5 pt-1">
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">පරාමිතීන් (Parameters):</p>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Parameters</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {block.variables.map((v, i) => (
                   <div key={i} className="flex items-start gap-2 bg-white border border-slate-100 rounded-lg p-2">
@@ -76,7 +76,7 @@ export function VisualBlockRenderer({ block }: VisualBlockRendererProps) {
               <FileCode className="w-3.5 h-3.5" />
             </div>
             <span className="text-xs font-black text-amber-950 tracking-wide uppercase">
-              {block.title || "පියවරෙන් පියවර විග්‍රහය (Scratch Steps)"}
+              {block.title || "Working steps"}
             </span>
           </div>
           <div className="space-y-4 relative before:absolute before:left-3 before:top-2 before:bottom-2 before:w-0.5 before:bg-amber-100">
@@ -112,7 +112,7 @@ export function VisualBlockRenderer({ block }: VisualBlockRendererProps) {
               <TableIcon className="w-3.5 h-3.5" />
             </div>
             <span className="text-xs font-black text-slate-700 tracking-wide uppercase">
-              {block.title || "ගණනය කිරීම් (Calculations Table)"}
+              {block.title || "Calculations"}
             </span>
           </div>
           <div className="w-full overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-2xs">

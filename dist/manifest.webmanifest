@@ -1,1 +1,11 @@
-{"name":"Tec A/L","short_name":"Tec A/L","description":"Sri Lankan A/L Technology study workspace","start_url":"/","display":"standalone","background_color":"#ffffff","theme_color":"#2563eb","lang":"en","scope":"/","icons":[]}
+{
+  "name": "Tec A/L",
+  "short_name": "Tec A/L",
+  "description": "Sinhala-first A/L Technology AI tutor",
+  "start_url": "/clora-x",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#080b14",
+  "theme_color": "#2563eb",
+  "icons": []
+}

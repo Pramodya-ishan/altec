@@ -432,13 +432,13 @@ export default function SyllabusLibraryView() {
                                 getPdfUrl({ storagePath: r.storagePath, id: r.id, url: `/api/rag/sources/${r.id}/download` }).then(url => { setPdfUrl(url); setPdfTitle(r.title || 'Document'); setPdfModalOpen(true); }).catch((e: any) => {
                                   console.error('Download trigger failed:', e);
                                   if (e.message?.includes('LOGIN_REQUIRED')) {
-                                     alert('PDF open කරන්න login අවශ්‍යයි. නැවත sign in කරන්න.');
+                                     alert('Sign in again to open this PDF.');
                                   } else if (e.message?.includes('storage/unauthorized')) {
-                                     alert('PDF permission denied. Storage rules / App Check / login check කරන්න.');
+                                     alert('PDF access was denied. Check Storage rules, App Check, and your sign-in session.');
                                   } else if (e.message?.includes('NOT_A_PDF_RESPONSE')) {
-                                     alert('PDF වෙනුවට server error response එකක් ආවා. Source route/auth fix කරන්න.');
+                                     alert('The server returned an error instead of the PDF. Check the source route and authentication.');
                                   } else if (e.message?.includes('NO_OPENABLE_PDF_SOURCE')) {
-                                     alert('මේ source එකට storagePath හෝ public URL එකක් නැහැ.');
+                                     alert('This source has no storage path or public URL.');
                                   } else {
                                      alert('Error opening PDF: ' + e.message);
                                   }
