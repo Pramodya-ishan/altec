@@ -7,9 +7,9 @@
   "scripts": {
     "dev": "tsx server.ts",
     "verify": "npm run check:npm-registry && npm run lint",
-    "prebuild": "npm run verify && node scripts/check-no-old-preview-url.mjs && node scripts/copy-pdf-worker.mjs",
-    "prebuild:frontend": "npm run verify && node scripts/check-no-old-preview-url.mjs && node scripts/copy-pdf-worker.mjs",
-    "prebuild:vercel": "npm run validate:vercel-env && npm run verify && node scripts/check-no-old-preview-url.mjs && node scripts/copy-pdf-worker.mjs",
+    "prebuild": "npm run cleanup:obsolete && npm run verify && node scripts/check-no-old-preview-url.mjs && node scripts/copy-pdf-worker.mjs",
+    "prebuild:frontend": "npm run cleanup:obsolete && npm run verify && node scripts/check-no-old-preview-url.mjs && node scripts/copy-pdf-worker.mjs",
+    "prebuild:vercel": "npm run cleanup:obsolete && npm run validate:vercel-env && npm run verify && node scripts/check-no-old-preview-url.mjs && node scripts/copy-pdf-worker.mjs",
     "build": "npm run verify && vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "build:frontend": "npm run verify && vite build",
     "build:vercel": "vite build && npm run bundle:vercel",
@@ -37,7 +37,9 @@
     "test:integration": "npm run test:knowledge && npm run test:security && node --import tsx server/ai/__tests__/sourceSelection.test.ts && node --import tsx server/ai-core/pdf/__tests__/indexedQuestionSelection.test.ts",
     "test:e2e": "npm run build:frontend && node scripts/run-browser-e2e.mjs",
     "test:e2e:pdf-grounding": "node --import tsx server/pdf/__tests__/extractText.test.ts && node --import tsx server/ai/__tests__/sourceSelection.test.ts && node --import tsx server/ai-core/pdf/__tests__/indexedQuestionSelection.test.ts",
-    "test:e2e:lesson-resources": "node --import tsx server/knowledge/__tests__/lessonResolver.test.ts && node --import tsx server/utils/__tests__/contentPermissions.test.ts"
+    "test:e2e:lesson-resources": "node --import tsx server/knowledge/__tests__/lessonResolver.test.ts && node --import tsx server/utils/__tests__/contentPermissions.test.ts",
+    "cleanup:obsolete": "node scripts/remove-obsolete-files.mjs",
+    "pretypecheck": "npm run cleanup:obsolete"
   },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
