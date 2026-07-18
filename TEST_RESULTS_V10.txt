@@ -1,0 +1,59 @@
+CLORA X V10 FINAL TEST RESULTS
+Date: 2026-07-18 UTC
+
+PASS  npm run check:npm-registry
+      Public npm registry lockfile validation passed.
+
+PASS  npm run typecheck
+      TypeScript completed with no errors.
+
+PASS  npm test
+      Source registry tests passed.
+      Z-score tests passed.
+      Markdown and Sinhala rendering tests passed.
+      Direct PDF answer formatter tests passed.
+      Exact indexed-question marker tests passed.
+      Deterministic source-selection tests passed.
+      Knowledge routing tests passed.
+      Security and content-permission tests passed.
+      Secure video tests passed.
+
+PASS  npm run verify:repair
+      V10 static production checks passed.
+      Exact source lock and conversation-state checks passed.
+      Authoritative SFT runtime reference checks passed.
+      Rejected-cache protection checks passed.
+      Sinhala joiner-preservation checks passed.
+
+PASS  npm run build:vercel
+      Vite production frontend built.
+      Self-contained Vercel API runtime built.
+      48 runtime imports verified.
+      Isolated pure-ESM runtime boot passed.
+      JSON API smoke handling passed.
+
+VERIFIED RUNTIME ASSETS
+      vercel-runtime/server.mjs
+      vercel-runtime/pdf.worker.mjs
+      vercel-runtime/google-gax-protos/
+      vercel-runtime/node_modules/@napi-rs/canvas/
+      vercel-runtime/authoritative/sft/sALSyl_SFT.pdf
+      vercel-runtime/authoritative/sft/SFT Maths book 1.pdf
+      vercel-runtime/authoritative/sft/SFT Chemistry Book 1.pdf
+      vercel-runtime/authoritative/sft/SFT Bio Book.pdf
+      vercel-runtime/authoritative/sft/SFT Physics book2.pdf
+      vercel-runtime/authoritative/sft/sGr12OM SFT ResourceBookNew.pdf
+
+PRODUCTION BUNDLES
+      dist/assets/index-D-Hiyg1p.js
+      dist/assets/firebase-BCa7H10T.js
+
+NON-FATAL BUILD WARNINGS
+      Existing large frontend chunk warnings remain.
+      sourceActions.ts is both statically and dynamically imported.
+
+NOT EXECUTED LOCALLY
+      Live Gemini/Vertex answer request.
+      Live Firebase Storage source read.
+      Live Firestore conversation-state persistence.
+      These require production credentials and must be tested on Vercel Preview.

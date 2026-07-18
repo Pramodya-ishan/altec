@@ -89,20 +89,13 @@ export async function retrieveEvidence(
       allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
       allowAnswerGeneration = true;
     } else if (!isLessonEvidenceMode(intent)) {
-      if (allAvailableSources.length > 0) {
-        // Find best match manually if resolveStrictSource failed
-        const matches = allAvailableSources.filter(s => {
-          if (requestedYear && s.year !== requestedYear) return false;
-          if (subject && s.subject !== subject) return false;
-          return true;
-        });
-        if (matches.length > 0) {
-          selectedSource = matches[0];
-          evidenceStatus = "verified";
-          allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
-          allowAnswerGeneration = true;
-        }
-      }
+      // Evidence-required requests must never fall back to the first PDF in an
+      // inventory. A source is usable only when it is explicitly selected or
+      // strictly locked by title/year/subject metadata.
+      selectedSource = null;
+      allowedSourceIds = [];
+      allowAnswerGeneration = false;
+      evidenceStatus = "not_found";
     }
   }
 

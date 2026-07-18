@@ -122,15 +122,41 @@ assert(syllabusRoutes.includes("await requireSyllabusOwner(req)") && syllabusRou
 console.log("Production repair static verification passed.");
 
 
-// V9 authoritative syllabus, display, and resource checks.
+// V10 strict PDF source lock, authoritative syllabus, display, and resource checks.
 const syllabusGrounding = await readFile("server/pdf/syllabusGrounding.ts", "utf8");
-const directFormatterV9 = await readFile("src/lib/ai/directPdfAnswerFormatter.ts", "utf8");
-const lessonRoutesV9 = await readFile("server/lessonResources/routes.ts", "utf8");
-const predictionV9 = await readFile("server/ai-core/exam-intel/predictedPaper.ts", "utf8");
-const cloraHeroV9 = await readFile("src/components/ui/clora/CloraHero.tsx", "utf8");
-assert(syllabusGrounding.includes("DEFAULT_SFT_SYLLABUS_STORAGE_PATH") && syllabusGrounding.includes("bundled_sft_syllabus"), "V9 authoritative SFT syllabus fallback is missing");
-assert(!directFormatterV9.includes('type: "source_evidence"'), "V9 still adds the visible Verified PDF evidence container");
-assert(lessonRoutesV9.includes('collection("rag_sources")') && lessonRoutesV9.includes("isStudentVisibleSource") && lessonRoutesV9.includes("subjectVariants"), "V9 lesson resource legacy merge or historical subject normalization is missing");
-assert(predictionV9.includes("exam_question_index") && predictionV9.includes("getSubjectSyllabusGroundingPdf"), "V9 prediction engine is not grounded in indexed papers and syllabus");
-assert(cloraHeroV9.includes("Clora X · Made by Pramodya Ishan"), "V9 Clora X creator branding is missing");
-console.log("V9 authoritative SFT syllabus, Sinhala display, prediction, and lesson-resource checks passed.");
+const directFormatterV10 = await readFile("src/lib/ai/directPdfAnswerFormatter.ts", "utf8");
+const lessonRoutesV10 = await readFile("server/lessonResources/routes.ts", "utf8");
+const predictionV10 = await readFile("server/ai-core/exam-intel/predictedPaper.ts", "utf8");
+const cloraHeroV10 = await readFile("src/components/ui/clora/CloraHero.tsx", "utf8");
+assert(syllabusGrounding.includes("DEFAULT_SFT_SYLLABUS_STORAGE_PATH") && syllabusGrounding.includes("bundled_sft_syllabus"), "V10 authoritative SFT syllabus fallback is missing");
+assert(!directFormatterV10.includes('type: "source_evidence"'), "V10 still adds the visible Verified PDF evidence container");
+assert(lessonRoutesV10.includes('collection("rag_sources")') && lessonRoutesV10.includes("isStudentVisibleSource") && lessonRoutesV10.includes("subjectVariants"), "V10 lesson resource legacy merge or historical subject normalization is missing");
+assert(predictionV10.includes("exam_question_index") && predictionV10.includes("getSubjectSyllabusGroundingPdf"), "V10 prediction engine is not grounded in indexed papers and syllabus");
+assert(cloraHeroV10.includes("Clora X · Made by Pramodya Ishan"), "V10 Clora X creator branding is missing");
+
+const sourceSelectionV10 = await readFile("server/ai/sourceSelection.ts", "utf8");
+const conversationStateV10 = await readFile("server/knowledge/conversationState.ts", "utf8");
+const indexedSelectionV10 = await readFile("server/ai-core/pdf/indexedQuestionSelection.ts", "utf8");
+const evidenceRetrievalV10 = await readFile("server/knowledge/evidenceRetrieval.ts", "utf8");
+const sftReferencesV10 = await readFile("server/pdf/sftReferenceGrounding.ts", "utf8");
+const clientSinhalaV10 = await readFile("src/utils/normalizeMathMarkdown.ts", "utf8");
+const evidenceCacheV10 = await readFile("server/ai-core/evidence/evidenceRetriever.ts", "utf8");
+assert(sourceSelectionV10.includes("parseSourceChoiceIndex") && sourceSelectionV10.includes("scoreNamedSource") && sourceSelectionV10.includes("guess"), "V10 deterministic named/numbered PDF selection is missing");
+assert(conversationStateV10.includes("selectedSourceTitle") && conversationStateV10.includes("pendingSourceChoices") && conversationStateV10.includes("awaitingSourceSelection"), "V10 selected PDF conversation lock is missing");
+assert(indexedSelectionV10.includes("hasExactQuestionMarker") && indexedSelectionV10.includes("selectIndexedQuestionChunks"), "V10 exact question marker validation is missing");
+assert(!evidenceRetrievalV10.includes("first matching subject/year source"), "V10 still contains an arbitrary source fallback");
+assert(pdfRoutes.includes("hasExactQuestionMarker") && !pdfRoutes.includes("targetNo - 1"), "V10 PDF route can still use positional page fallback");
+assert(sftReferencesV10.includes("SFT_PHYSICS_REFERENCE_STORAGE_PATH") && sftReferencesV10.includes("SFT_BIOLOGY_REFERENCE_STORAGE_PATH") && sftReferencesV10.includes("SFT_CHEMISTRY_REFERENCE_STORAGE_PATH"), "V10 authoritative SFT resource grounding is incomplete");
+assert(pdfSolver.includes("inSyllabus") && pdfSolver.includes("syllabusBasis") && pdfSolver.includes("do not answer from general memory"), "V10 syllabus-scope enforcement is incomplete");
+assert(clientSinhalaV10.includes("normalizeMathSegment") && !clientSinhalaV10.includes("replace(/[\u200C\u200D\uFEFF]/g"), "V10 client rendering still strips Sinhala joiners globally");
+assert(evidenceCacheV10.includes("evidenceVersion") && evidenceCacheV10.includes("rejected") && evidenceCacheV10.includes("validationStatus"), "V10 stale/rejected answer-cache protection is missing");
+for (const path of [
+  "vercel-runtime/authoritative/sft/sALSyl_SFT.pdf",
+  "vercel-runtime/authoritative/sft/SFT Maths book 1.pdf",
+  "vercel-runtime/authoritative/sft/SFT Chemistry Book 1.pdf",
+  "vercel-runtime/authoritative/sft/SFT Bio Book.pdf",
+  "vercel-runtime/authoritative/sft/SFT Physics book2.pdf",
+  "vercel-runtime/authoritative/sft/sGr12OM SFT ResourceBookNew.pdf",
+]) await access(path);
+
+console.log("V10 authoritative SFT syllabus, Sinhala display, prediction, and lesson-resource checks passed.");

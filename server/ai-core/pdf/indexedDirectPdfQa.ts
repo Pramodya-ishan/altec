@@ -1,63 +1,14 @@
 import { getAdminDb } from "../../firebase/admin";
 import { getAIClient, AI_MODELS } from "../../ai/client";
 import { removeUndefinedDeep } from "../memory/chatSanitizer";
-import { solveExtractedMcqQuestion } from "./solveExtractedQuestion";
+import { solveExtractedEssayQuestion, solveExtractedMcqQuestion } from "./solveExtractedQuestion";
 
-type IndexedChunk = {
-  id: string;
-  text: string;
-  pageNumber?: number;
-  chunkIndex?: number;
-  questionNo?: string | number;
-};
+import { selectIndexedQuestionChunks, type IndexedQuestionChunk } from "./indexedQuestionSelection";
+
+type IndexedChunk = IndexedQuestionChunk;
 
 function cleanJson(text: string) {
   return text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-}
-
-function requestedNumber(value: unknown) {
-  return String(value || "").match(/\d+/)?.[0] || "";
-}
-
-function chunkContainsQuestion(chunk: IndexedChunk, questionNo: string) {
-  const number = requestedNumber(questionNo);
-  if (!number) return false;
-  if (requestedNumber(chunk.questionNo) === number) return true;
-  const escaped = number.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const text = String(chunk.text || "");
-  const patterns = [
-    new RegExp(`(?:^|\\n)\\s*(?:mcq\\s*)?(?:q(?:uestion)?\\s*)?0*${escaped}\\s*[.\\):\\-]`, "im"),
-    new RegExp(`\\(\\s*0*${escaped}\\s*\\)`, "m"),
-    new RegExp(`(?:ප්‍රශ්නය|ප්රශ්නය)\\s*0*${escaped}(?:\\s|$)`, "m"),
-    new RegExp(`0*${escaped}\\s*(?:වන|වෙනි)(?:\\s|$)`, "m"),
-  ];
-  return patterns.some((pattern) => pattern.test(text));
-}
-
-export function selectIndexedQuestionChunks(chunks: IndexedChunk[], questionNo: string) {
-  const sorted = [...chunks].sort((a, b) => Number(a.chunkIndex || 0) - Number(b.chunkIndex || 0));
-  const matches = sorted
-    .map((chunk, index) => ({ chunk, index }))
-    .filter(({ chunk }) => chunkContainsQuestion(chunk, questionNo));
-
-  const selectedIndexes = new Set<number>();
-  for (const { index } of matches) {
-    for (let offset = -1; offset <= 2; offset += 1) {
-      if (sorted[index + offset]) selectedIndexes.add(index + offset);
-    }
-  }
-
-  // Some scanned papers omit a visible "Q1" marker in their first text
-  // block. The opening chunks are still the safest bounded context for Q1.
-  if (selectedIndexes.size === 0 && requestedNumber(questionNo) === "1") {
-    sorted.slice(0, 8).forEach((_chunk, index) => selectedIndexes.add(index));
-  }
-
-  return [...selectedIndexes]
-    .sort((a, b) => a - b)
-    .map((index) => sorted[index])
-    .filter(Boolean)
-    .slice(0, 12);
 }
 
 function resultFromCache(cache: any) {
@@ -101,8 +52,12 @@ export async function answerStructuredFromIndexedPdf(params: {
   const db = getAdminDb();
   const cacheId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
   const cached = await db.collection("pdf_question_cache").doc(cacheId).get();
-  if (cached.exists) {
-    const result = resultFromCache(cached.data());
+  const cachedData = cached.exists ? cached.data() : null;
+  if (cachedData
+    && cachedData.rejected !== true
+    && String(cachedData.validationStatus || "").toLowerCase() !== "rejected"
+    && Number(cachedData.evidenceVersion || 0) >= 3) {
+    const result = resultFromCache(cachedData);
     if (result) return result;
   }
 
@@ -154,9 +109,12 @@ ${allowOfficialAnswer ? "Copy officialAnswer only when it is explicitly printed 
     && (String(questionType).toUpperCase() !== "MCQ" || options.length >= 4);
   if (!found) return null;
 
-  let solvedAnswer = null;
-  if (String(questionType).toUpperCase() === "MCQ" && options.length >= 4 && !extracted.officialAnswer) {
+  let solvedAnswer: any = null;
+  const normalizedType = String(questionType).toUpperCase();
+  if (normalizedType === "MCQ" && options.length >= 4 && !extracted.officialAnswer) {
     solvedAnswer = await solveExtractedMcqQuestion({ uid, sourceId, questionText, options, subject, year, questionNo });
+  } else if (["ESSAY", "STRUCTURED", "STRUCTURED ESSAY"].includes(normalizedType) && !extracted.officialAnswer) {
+    solvedAnswer = await solveExtractedEssayQuestion({ uid, sourceId, questionText, subject, year, questionNo, questionType: normalizedType });
   }
 
   const cacheData = removeUndefinedDeep({
@@ -174,6 +132,7 @@ ${allowOfficialAnswer ? "Copy officialAnswer only when it is explicitly printed 
     confidence: Number(extracted.confidence || 0.8),
     extractionMethod: "indexed_pdf_text",
     validationStatus: "valid",
+    evidenceVersion: 3,
     updatedAt: new Date().toISOString(),
   });
   await db.collection("pdf_question_cache").doc(cacheId).set(cacheData, { merge: true });

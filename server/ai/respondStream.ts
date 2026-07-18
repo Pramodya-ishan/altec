@@ -25,6 +25,7 @@ import { createAssistantStreamSanitizer, isSimpleGreeting, sanitizeAssistantText
 import { deriveEducationalVisualBlocks } from "./visualAidBuilder";
 import { buildImageReferenceText, isImageGenerationIntent } from "./imageIntent";
 import { getSubjectSyllabusGroundingPdf } from "../pdf/syllabusGrounding";
+import { extractQuestionNumberFromPrompt, inferQuestionTypeFromText, parseSourceChoiceIndex, rankNamedSources, selectNamedSource, toPendingSourceChoice } from "./sourceSelection";
 
 interface StreamTrace {
   requestId: string;
@@ -359,7 +360,124 @@ export async function aiRespondStream(req: any, res: any) {
 
     const activeConversationState = await getConversationState(user.uid);
     const normalizedFollowUp = String(prompt || "").trim().toLowerCase();
+
+    // Numeric replies immediately after a PDF list select that exact displayed
+    // source. They are not interpreted as a question number until selection is
+    // complete, which removes the ambiguous "1"/"2" behaviour.
+    const pendingChoices = Array.isArray(activeConversationState.pendingSourceChoices)
+      ? activeConversationState.pendingSourceChoices
+      : [];
+    const pendingChoiceIndex = activeConversationState.awaitingSourceSelection
+      ? parseSourceChoiceIndex(prompt, pendingChoices.length)
+      : null;
+    if (pendingChoiceIndex !== null) {
+      const choice = pendingChoices[pendingChoiceIndex];
+      const answer = sanitizeAssistantText(`**${choice.title}** තෝරාගත්තා. දැන් එම PDF එකේ අවශ්‍ය ප්‍රශ්න අංකය ලියන්න. උදාහරණ: **q1**, **MCQ 7**, හෝ **essay 1**.`);
+      await updateConversationState(user.uid, {
+        selectedSourceId: choice.sourceId,
+        selectedSourceTitle: choice.title,
+        selectedSourceSubject: choice.subject || activeConversationState.activeSubject || null,
+        selectedSourceYear: choice.year || null,
+        selectedQuestionType: choice.questionTypeHint || null,
+        activeSubject: choice.subject || activeConversationState.activeSubject,
+        activeSourceIds: [choice.sourceId],
+        pendingSourceChoices: [],
+        awaitingSourceSelection: false,
+        lastIntent: "selected_resource_discussion",
+      });
+      emitSse(res, "token", { text: answer });
+      const chatRes = await saveFinalChat({ uid: user.uid, email: user.email, userText: prompt, assistantText: answer, mode: "selected_resource_discussion", subject: choice.subject || activeSubject, sources: [] });
+      trace.completed = true;
+      trace.chatSaved = chatRes.chatSaved;
+      emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: [], finishReason: "source_selected" });
+      trace.doneSent = true;
+      return;
+    }
+
+    // Resolve named model/guessing/syllabus resources directly. A request such
+    // as "guessing 1 essay q1" must lock Guessing 01 Essay before any model is
+    // allowed to answer.
+    const hasNamedPdfDescriptor = /(?:guess(?:ing)?|guess\s*paper|model\s*paper|syllabus|විෂය\s*නිර්දේශ)/iu.test(prompt)
+      && /(?:pdf|paper|essay|mcq|structured|q\s*\d+|ප්‍රශ්න|ප්රශ්න|රචනා|බහුවරණ)/iu.test(prompt);
+    if (hasNamedPdfDescriptor) {
+      const { getSourceInventory } = await import("../sources/sourceInventoryService");
+      const explicitSubject = route.entities?.subject || (/\bsft\b|science for technology|තාක්ෂණවේදය සඳහා විද්‍යාව/iu.test(prompt) ? "SFT" : undefined);
+      const inventory = await getSourceInventory({
+        uid: user.uid,
+        subject: explicitSubject || activeConversationState.activeSubject || activeSubject || undefined,
+        isAdmin: user.roles?.includes("admin") || user.admin === true,
+      });
+      const available = Array.isArray(inventory.all) ? inventory.all : [];
+      const named = selectNamedSource(available, prompt);
+      const requestedNamedQuestion = extractQuestionNumberFromPrompt(prompt);
+      if (named.locked && named.source && named.sourceId) {
+        const source = named.source;
+        const questionType = inferQuestionTypeFromText(prompt) || inferQuestionTypeFromText(`${source.title || ""} ${source.resourceType || ""}`) || activeConversationState.selectedQuestionType || "ESSAY";
+        route.entities = route.entities || {};
+        route.entities.activeSourceId = named.sourceId;
+        route.entities.subject = source.subject || explicitSubject || activeConversationState.activeSubject || "SFT";
+        route.entities.year = source.year ? String(source.year) : route.entities.year;
+        route.entities.questionType = questionType;
+        if (requestedNamedQuestion) route.entities.questionNo = requestedNamedQuestion;
+        route.mode = requestedNamedQuestion ? "paper_question_qa" : "selected_resource_discussion";
+        route.answerHints = { ...(route.answerHints || {}), mustUseRag: true, mustAskClarification: false };
+        await updateConversationState(user.uid, {
+          selectedSourceId: named.sourceId,
+          selectedSourceTitle: source.title || source.fileName || "PDF source",
+          selectedSourceSubject: source.subject || route.entities.subject || null,
+          selectedSourceYear: source.year ? String(source.year) : null,
+          selectedQuestionType: questionType as any,
+          activeSubject: source.subject || route.entities.subject || activeConversationState.activeSubject,
+          activeSourceIds: [named.sourceId],
+          pendingSourceChoices: [],
+          awaitingSourceSelection: false,
+          currentQuestionIndex: requestedNamedQuestion ? Number(requestedNamedQuestion) : activeConversationState.currentQuestionIndex,
+          lastIntent: requestedNamedQuestion ? "paper_question_qa" : "selected_resource_discussion",
+        });
+        if (!requestedNamedQuestion) {
+          const answer = sanitizeAssistantText(`**${source.title || source.fileName || "PDF source"}** තෝරාගත්තා. එම PDF එකේ ප්‍රශ්න අංකය ලියන්න.`);
+          emitSse(res, "token", { text: answer });
+          const chatRes = await saveFinalChat({ uid: user.uid, email: user.email, userText: prompt, assistantText: answer, mode: "selected_resource_discussion", subject: route.entities.subject, sources: [] });
+          trace.completed = true;
+          trace.chatSaved = chatRes.chatSaved;
+          emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: [], finishReason: "named_source_selected" });
+          trace.doneSent = true;
+          return;
+        }
+      } else if (named.ranked.length > 0) {
+        const ranked = named.ranked.slice(0, 8).map(({ source }: any) => source);
+        const choices = ranked.map(toPendingSourceChoice).filter(Boolean) as any[];
+        await updateConversationState(user.uid, { pendingSourceChoices: choices, awaitingSourceSelection: true, lastIntent: "lesson_pdf_search" });
+        const answer = sanitizeAssistantText([
+          "මේ නමට ගැළපෙන saved PDFs:",
+          "",
+          ...ranked.map((source: any, index: number) => `${index + 1}. **${source.title || source.fileName || "PDF source"}**`),
+          "",
+          "අවශ්‍ය PDF එකේ අංකය පමණක් ලියන්න.",
+        ].join("\n"));
+        emitSse(res, "token", { text: answer });
+        const candidateSources = ranked.map((source: any) => ({ ...source, usedInAnswer: false }));
+        const chatRes = await saveFinalChat({ uid: user.uid, email: user.email, userText: prompt, assistantText: answer, mode: "lesson_pdf_search", subject: explicitSubject || activeSubject, sources: candidateSources });
+        trace.completed = true;
+        trace.chatSaved = chatRes.chatSaved;
+        emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: candidateSources, finishReason: "source_selection_required" });
+        trace.doneSent = true;
+        return;
+      }
+    }
     const selectedSourceId = activeConversationState.selectedSourceId || activeConversationState.activeSourceIds?.[0] || null;
+    if (selectedSourceId && /^[?？]+$/.test(String(prompt || "").trim())) {
+      const title = activeConversationState.selectedSourceTitle || "තෝරාගත් PDF එක";
+      const current = activeConversationState.currentQuestionIndex ? ` දැනට තෝරාගෙන ඇත්තේ ප්‍රශ්නය ${activeConversationState.currentQuestionIndex}.` : "";
+      const answer = sanitizeAssistantText(`**${title}** PDF එක තවම තෝරාගෙන තිබෙනවා.${current} අවශ්‍ය ප්‍රශ්න අංකය **q1**, **MCQ 7**, හෝ **essay 1** ලෙස ලියන්න.`);
+      emitSse(res, "token", { text: answer });
+      const chatRes = await saveFinalChat({ uid: user.uid, email: user.email, userText: prompt, assistantText: answer, mode: "selected_resource_discussion", subject: activeConversationState.selectedSourceSubject || activeSubject, sources: [] });
+      trace.completed = true;
+      trace.chatSaved = chatRes.chatSaved;
+      emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: [], finishReason: "active_source_status" });
+      trace.doneSent = true;
+      return;
+    }
     const explicitQuestionFollowUp = normalizedFollowUp.match(/^(?:q(?:uestion)?|ප්‍රශ්නය|prashna|mcq|essay)\s*[-:#]?\s*(\d{1,3})[?.!]*$/i)
       || normalizedFollowUp.match(/^(\d{1,3})\s*(?:වන|වෙනි|වැනි|st|nd|rd|th)\s*(?:ප්‍රශ්නය|question|mcq|essay)[?.!]*$/i);
     const bareQuestionFollowUp = activeConversationState.lastIntent !== "lesson_pdf_search"
@@ -376,9 +494,11 @@ export async function aiRespondStream(req: any, res: any) {
       route.mode = questionFollowUp ? "paper_question_qa" : "continue_grounded_discussion";
       route.entities = route.entities || {};
       route.entities.activeSourceId = selectedSourceId;
+      route.entities.subject = route.entities.subject || activeConversationState.selectedSourceSubject || activeConversationState.activeSubject || activeSubject || "SFT";
+      route.entities.year = route.entities.year || activeConversationState.selectedSourceYear || undefined;
       if (questionFollowUp) {
         route.entities.questionNo = questionFollowUp[1];
-        route.entities.questionType = route.entities.questionType || "MCQ";
+        route.entities.questionType = route.entities.questionType || activeConversationState.selectedQuestionType || "MCQ";
       }
       route.answerHints = {
         ...(route.answerHints || {}),
@@ -399,6 +519,10 @@ export async function aiRespondStream(req: any, res: any) {
       activeLessonIds: evidence.lessonIds.length > 0 ? evidence.lessonIds : activeConversationState.activeLessonIds,
       activeSourceIds: evidence.allowedSourceIds.length > 0 ? evidence.allowedSourceIds : activeConversationState.activeSourceIds,
       selectedSourceId: evidence.selectedSource?.id || evidence.selectedSource?.sourceId || activeConversationState.selectedSourceId,
+      selectedSourceTitle: evidence.selectedSource?.title || evidence.selectedSource?.fileName || activeConversationState.selectedSourceTitle || null,
+      selectedSourceSubject: evidence.selectedSource?.subject || activeConversationState.selectedSourceSubject || evidence.subject || null,
+      selectedSourceYear: evidence.selectedSource?.year ? String(evidence.selectedSource.year) : activeConversationState.selectedSourceYear || null,
+      selectedQuestionType: (route.entities?.questionType as any) || activeConversationState.selectedQuestionType || null,
       currentQuestionIndex: questionFollowUp ? Number(questionFollowUp[1]) : activeConversationState.currentQuestionIndex,
       lastIntent: evidence.intent
     });
@@ -497,7 +621,7 @@ export async function aiRespondStream(req: any, res: any) {
           sourceId: id,
           url: source.url || `/api/rag/sources/${id}/download`,
           badge: "Lesson PDF",
-          usedInAnswer: true,
+          usedInAnswer: false,
         };
       });
 
@@ -515,7 +639,8 @@ export async function aiRespondStream(req: any, res: any) {
             const name = String(source.fileName || source.title || "").toLowerCase();
             return kind === "pdf" || name.endsWith(".pdf");
           })
-          .slice(0, 20)
+          .sort((a: any, b: any) => scoreSource(b, prompt) - scoreSource(a, prompt))
+          .slice(0, 10)
           .map((source: any) => {
             const id = source.sourceId || source.id;
             return {
@@ -524,7 +649,7 @@ export async function aiRespondStream(req: any, res: any) {
               sourceId: id,
               url: source.url || `/api/rag/sources/${id}/download`,
               badge: "Saved PDF",
-              usedInAnswer: true,
+              usedInAnswer: false,
             };
           });
         usedSubjectFallback = lessonSources.length > 0;
@@ -559,7 +684,15 @@ export async function aiRespondStream(req: any, res: any) {
       }
 
       answer = sanitizeAssistantText(answer);
-      if (lessonSources.length > 0) emitSse(res, "sources", { sources: lessonSources });
+      if (lessonSources.length > 0) {
+        const choices = lessonSources.map(toPendingSourceChoice).filter(Boolean) as any[];
+        await updateConversationState(user.uid, {
+          pendingSourceChoices: choices,
+          awaitingSourceSelection: choices.length > 0,
+          lastIntent: "lesson_pdf_search",
+        });
+        emitSse(res, "sources", { sources: lessonSources });
+      }
       emitSse(res, "token", { text: answer });
       const chatRes = await saveFinalChat({
         uid: user.uid,
@@ -728,9 +861,12 @@ export async function aiRespondStream(req: any, res: any) {
         [...indexedSources, ...directPdfSources].map((source: any) => [String(source.sourceId || source.id), source]),
       ).values()) as any[];
       const pendingSources = pdfSources.filter((source: any) => !answerableSources.includes(source));
-      const displayedSources = wantsAnswerable
+      const inventoryBase = wantsAnswerable
         ? (answerableSources.length > 0 ? answerableSources : pdfSources)
         : pdfSources;
+      const displayedSources = [...inventoryBase]
+        .sort((a: any, b: any) => scoreSource(b, prompt) - scoreSource(a, prompt))
+        .slice(0, 12);
 
       const sseSources = displayedSources.map((source: any) => {
         const id = source.sourceId || source.id;
@@ -754,11 +890,19 @@ export async function aiRespondStream(req: any, res: any) {
           year: source.year,
           textIndexed: source.textIndexed,
           indexStatus: source.indexStatus,
-          usedInAnswer: true,
+          usedInAnswer: false,
         };
       });
 
-      if (sseSources.length > 0) emitSse(res, "sources", { sources: sseSources });
+      if (sseSources.length > 0) {
+        const choices = displayedSources.map(toPendingSourceChoice).filter(Boolean) as any[];
+        await updateConversationState(user.uid, {
+          pendingSourceChoices: choices,
+          awaitingSourceSelection: choices.length > 0,
+          lastIntent: "lesson_pdf_search",
+        });
+        emitSse(res, "sources", { sources: sseSources });
+      }
 
       let answer = "";
       if (pdfSources.length === 0) {
@@ -769,7 +913,7 @@ export async function aiRespondStream(req: any, res: any) {
         answer = [
           `මේ PDF${answerableSources.length === 1 ? " එකෙන්" : " වලින්"} මට දැන්ම evidence-based පිළිතුරු දෙන්න පුළුවන්:`,
           "",
-          ...answerableSources.map((source: any, index: number) => {
+          ...displayedSources.map((source: any, index: number) => {
             const id = source.sourceId || source.id;
             const meta = [source.subject, source.year, source.lesson].filter(Boolean).join(" · ");
             const indexed = source.textIndexed === true
@@ -793,23 +937,17 @@ export async function aiRespondStream(req: any, res: any) {
           "Admin reprocess/index action එක අවසන් වූ පසු ඒ PDF අන්තර්ගතයෙන් පිළිතුරු දෙන්න පුළුවන්.",
         ].join("\n");
       } else {
-        const sections: string[] = [];
-        const addSection = (title: string, items: any[]) => {
-          if (!items.length) return;
-          sections.push(`### ${title}`);
-          sections.push(...items.map((source: any, index: number) => {
+        answer = [
+          `ඔබට access තියෙන saved PDFs${pdfSources.length > displayedSources.length ? ` අතරින් වඩාත් අදාළ ${displayedSources.length}` : ""}:`,
+          "",
+          ...displayedSources.map((source: any, index: number) => {
             const id = source.sourceId || source.id;
-            const status = source.textIndexed || Number(source.chunkCount || 0) > 0 ? "Ready" : (source.indexStatus || "Not indexed");
+            const status = source.textIndexed || Number(source.chunkCount || 0) > 0 || source.indexStatus === "ready" ? "Ready" : (source.needsOcr ? "OCR pending" : "Index pending");
             return `${index + 1}. [${source.title}](/api/rag/sources/${id}/download) — ${status}`;
-          }));
-          sections.push("");
-        };
-        addSection("Past papers", groups.pastPapers);
-        addSection("Marking schemes", groups.markingSchemes);
-        addSection("Syllabus PDFs", groups.syllabus);
-        addSection("Paper structure PDFs", groups.paperStructure);
-        addSection("Other uploaded PDFs", groups.uploadedPdfs);
-        answer = sections.join("\n").trim();
+          }),
+          "",
+          "PDF එක තෝරන්න එහි අංකය පමණක් ලියන්න. නිශ්චිත නමක් සොයන්න නම් එම නම ලියන්න.",
+        ].join("\n");
       }
 
       answer = sanitizeAssistantText(answer);
@@ -848,10 +986,12 @@ export async function aiRespondStream(req: any, res: any) {
     const isPaperQa = !hasUploadedPdf && (route.mode === "paper_question_qa" || route.mode === "marking_scheme_request" || route.mode === "pdf_link_request");
     if (isPaperQa) {
       const requestedSubject = route.entities.subject || activeSubject || "SFT";
-      const requestedYear = route.entities.year;
+      let requestedYear = route.entities.year || activeConversationState.selectedSourceYear || undefined;
       const requestedQuestionNo = route.entities.questionNo;
+      const requestedQuestionType = String(route.entities.questionType || activeConversationState.selectedQuestionType || paperIntent.questionType || "MCQ").toUpperCase();
+      const activePaperSourceId = route.entities?.activeSourceId || activeConversationState.selectedSourceId || null;
 
-      if (requestedSubject && requestedYear) {
+      if (requestedSubject && (requestedYear || activePaperSourceId)) {
         emitSse(res, "status", { step: "exam_db", status: "searching" });
 
         let paperSource: any = null;
@@ -862,18 +1002,21 @@ export async function aiRespondStream(req: any, res: any) {
 
         const isAdminUser = user.roles?.includes("admin") || user.admin === true;
         const inventory = await getSourceInventory({ uid: user.uid, subject: requestedSubject, isAdmin: isAdminUser });
-        const allAvailableSources = [...inventory.groups.pastPapers, ...inventory.groups.markingSchemes, ...inventory.groups.syllabus, ...inventory.groups.uploadedPdfs];
+        const allAvailableSources = [...inventory.groups.pastPapers, ...inventory.groups.markingSchemes, ...inventory.groups.syllabus, ...inventory.groups.uploadedPdfs, ...inventory.groups.paperStructure];
 
         const strictRes = resolveStrictSource(allAvailableSources, {
           year: requestedYear,
           subject: requestedSubject,
-          activeSourceId: null,
+          activeSourceId: activePaperSourceId,
+          expectedResourceType: route.mode === "marking_scheme_request" ? "marking_scheme" : undefined,
           prompt
         });
 
         if (strictRes.sourceLocked && strictRes.selectedSource) {
            console.log(`[AI_CORE] Source Locked: ${strictRes.selectedSource.title}`);
-           paperSource = strictRes.selectedSource;
+           paperSource = { ...strictRes.selectedSource, id: strictRes.selectedSource.id || strictRes.selectedSource.sourceId };
+           requestedYear = requestedYear || (paperSource.year ? String(paperSource.year) : "Model/Guessing");
+           route.entities.year = requestedYear;
            // CLEAR ALL OTHER SOURCES if locked
            allSources = [{
              sourceId: paperSource.id || paperSource.sourceId,
@@ -888,7 +1031,7 @@ export async function aiRespondStream(req: any, res: any) {
         } else {
            // [FIX 11] For official paper questions, stop if source lock fails. Do not fallback to legacy.
            if (paperIntent.isOfficialPaperCandidate || route.mode === "paper_question_qa") {
-             const msg = `${requestedYear || ""} ${requestedSubject || ""} ${paperIntent.questionType || "MCQ"} ${requestedQuestionNo || ""} සඳහා exact official paper source lock වෙලා නැහැ. ඒ නිසා answer guess කරන්න බැහැ.`;
+             const msg = `${requestedYear || ""} ${requestedSubject || ""} ${requestedQuestionType} ${requestedQuestionNo || ""} සඳහා තෝරාගත් නිශ්චිත PDF මූලාශ්‍රය සනාථ කරගත නොහැකි නිසා පිළිතුරක් අනුමාන කරන්නේ නැහැ.`;
              emitSse(res, "evidence_missing", {
                reason: "STRICT_SOURCE_LOCK_FAILED",
                message: msg
@@ -927,7 +1070,7 @@ export async function aiRespondStream(req: any, res: any) {
           emitSse(res, "sources", { sources: allSources });
         }
         const hasPaperSource = !!paperSource;
-        const questionId = (paperSource?.id && requestedQuestionNo) ? `${paperSource.id}_${paperIntent.questionType || 'MCQ'}_${requestedQuestionNo}`.replace(/\//g, "_") : null;
+        const questionId = (paperSource?.id && requestedQuestionNo) ? `${paperSource.id}_${requestedQuestionType}_${requestedQuestionNo}`.replace(/\//g, "_") : null;
 
         if (hasPaperSource && route.mode !== "pdf_link_request") {
           const db = getAdminDb();
@@ -938,7 +1081,7 @@ export async function aiRespondStream(req: any, res: any) {
             emitSse(res, "status", { step: "evidence_check", message: "Searching for verified evidence..." });
             const evidenceResult = await retrieveEvidenceForPaperQuestion({
               sourceId: paperSource.id,
-              questionType: paperIntent.questionType || "MCQ",
+              questionType: requestedQuestionType,
               questionNo: requestedQuestionNo!,
               year: requestedYear!,
               subject: requestedSubject!
@@ -976,7 +1119,7 @@ export async function aiRespondStream(req: any, res: any) {
                   questionNo: requestedQuestionNo,
                   year: requestedYear,
                   subject: requestedSubject,
-                  questionType: paperIntent.questionType || "MCQ",
+                  questionType: requestedQuestionType,
               prompt: prompt,
                   extractionMethod: evidence.extractionMethod
                 }
@@ -1020,7 +1163,7 @@ export async function aiRespondStream(req: any, res: any) {
                    const hasQuestionMarker = qNoMarker.test(chunkText);
                    const hasOptions = /1\)|2\)|3\)|4\)|5\)/.test(chunkText) || /\(1\)|\(2\)|\(3\)|\(4\)|\(5\)/.test(chunkText);
 
-                   const isHealthy = hasQuestionMarker && (paperIntent.questionType === "MCQ" ? hasOptions : true);
+                   const isHealthy = hasQuestionMarker && (requestedQuestionType === "MCQ" ? hasOptions : true);
 
                    if (!isHealthy || chunkText.length < 50) {
                       console.log(`[AI_CORE] Evidence Gate Failed for Chunks: ${paperSource.id} Q${requestedQuestionNo}`);
@@ -1032,6 +1175,13 @@ export async function aiRespondStream(req: any, res: any) {
               console.warn("Failed to retrieve exact paper question for quality checks:", err);
             }
           }
+
+          const sourceIdentity = `${paperSource?.resourceType || ""} ${paperSource?.sourceType || ""} ${paperSource?.sourceScope || ""} ${paperSource?.title || ""}`.toLowerCase();
+          const sourceIsMarkingScheme = /marking|scheme|answer|පිළිතුරු/u.test(sourceIdentity);
+          // Question-paper chunks prove where the question is, but they are not
+          // an answer. Route every uncached question-paper request through the
+          // exact extractor + syllabus-bounded solver.
+          if (requestedQuestionNo && !sourceIsMarkingScheme) badTextQuality = true;
 
           // 1.3 If chunks are missing or bad, trigger the authenticated Direct
           // PDF QA handoff. The frontend sends the source identity; the backend
@@ -1046,7 +1196,7 @@ export async function aiRespondStream(req: any, res: any) {
               subject: requestedSubject,
               year: requestedYear,
               questionNo: requestedQuestionNo,
-              questionType: paperIntent.questionType || "MCQ",
+              questionType: requestedQuestionType,
               prompt: prompt,
               reason: "DIRECT_PDF_QA_SERVER_SCAN_REQUIRED",
               message: "PDF source එක secure server scan එකකට යොමු කරනවා."
@@ -1068,7 +1218,7 @@ export async function aiRespondStream(req: any, res: any) {
                 questionNo: requestedQuestionNo,
                 year: requestedYear,
                 subject: requestedSubject,
-                questionType: paperIntent.questionType || "MCQ",
+                questionType: requestedQuestionType,
               prompt: prompt,
                 extractionMethod: "pending_direct_pdf_qa"
               }
@@ -1635,9 +1785,15 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
     try {
     try {
       await updateConversationState(user.uid, {
-        activeSourceIds: allSources.map((s: any) => s.id || s.sourceId).filter(Boolean),
-        selectedSourceId: route.entities?.activeSourceId || null,
-        selectedQuestionId: route.entities?.questionNo || null
+        activeSourceIds: allSources.map((s: any) => s.id || s.sourceId).filter(Boolean).length > 0
+          ? allSources.map((s: any) => s.id || s.sourceId).filter(Boolean)
+          : activeConversationState.activeSourceIds,
+        selectedSourceId: route.entities?.activeSourceId || activeConversationState.selectedSourceId || null,
+        selectedSourceTitle: activeConversationState.selectedSourceTitle || null,
+        selectedSourceSubject: route.entities?.subject || activeConversationState.selectedSourceSubject || null,
+        selectedSourceYear: route.entities?.year || activeConversationState.selectedSourceYear || null,
+        selectedQuestionType: (route.entities?.questionType as any) || activeConversationState.selectedQuestionType || null,
+        selectedQuestionId: route.entities?.questionNo || activeConversationState.selectedQuestionId || null
       });
     } catch (e) { /* ignore */ }
       chatRes = await safeCall("saveFinalChat", () => saveFinalChat({

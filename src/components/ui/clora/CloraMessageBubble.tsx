@@ -55,6 +55,7 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
   const displayContent = isUser ? String(message.content || '') : sanitizeAssistantDisplayText(message.content);
   const [copied, setCopied] = useState(false);
   const visualBlocks = Array.isArray(message.visualBlocks) ? message.visualBlocks : [];
+  const answerSources = Array.isArray(message.sources) ? message.sources.filter((source: any) => source?.usedInAnswer !== false) : [];
   const leadVisualBlocks = visualBlocks.filter((block: any) => block?.type === 'pdf_image_preview');
   const supportingVisualBlocks = visualBlocks.filter((block: any) => block?.type !== 'source_evidence' && block?.type !== 'pdf_image_preview');
   const copyTimeoutRef = useRef<number | null>(null);
@@ -156,11 +157,11 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
             </div>
           )}
 
-          {!isStreaming && (message.content || message.sources?.length > 0 || generatedImage?.url) && (
+          {!isStreaming && (message.content || answerSources.length > 0 || generatedImage?.url) && (
             <div className="flex items-center gap-1 pt-1 text-slate-400 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
               {message.content && <button type="button" onClick={copyMessage} className="rounded-lg p-2 hover:bg-slate-100 hover:text-slate-700" aria-label="Copy answer" title="Copy answer">{copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}</button>}
               <button type="button" onClick={() => onReply?.(message)} className="rounded-lg p-2 hover:bg-slate-100 hover:text-slate-700" aria-label="Reply to answer" title="Reply"><Reply className="h-4 w-4" /></button>
-              {message.sources?.length > 0 && <button type="button" onClick={() => onToolClick?.('sources')} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium hover:bg-slate-100 hover:text-slate-700"><FileText className="h-4 w-4" /> Sources {message.sources.length}</button>}
+              {answerSources.length > 0 && <button type="button" onClick={() => onToolClick?.('sources')} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium hover:bg-slate-100 hover:text-slate-700"><FileText className="h-4 w-4" /> Sources {answerSources.length}</button>}
               {message.status === 'done' && <CheckCircle2 className="ml-1 h-3.5 w-3.5 text-emerald-500" aria-label="Answer complete" />}
             </div>
           )}

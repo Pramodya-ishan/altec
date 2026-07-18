@@ -1,6 +1,7 @@
 import { callGeminiWithFallback } from "../../ai/modelRouter";
 import { retrieveRelevantKnowledge } from "../../knowledge/retrieve";
 import { getSubjectSyllabusGroundingPdf } from "../../pdf/syllabusGrounding";
+import { getSftReferenceGroundingParts } from "../../pdf/sftReferenceGrounding";
 import { normalizeSinhalaUnicode } from "../../ai/responseHygiene";
 
 export interface SolveMcqParams {
@@ -21,6 +22,8 @@ export interface SolvedMcqResult {
   whyOthersWrong: string[] | null;
   confidence: number;
   answerStatus: "official_marking_scheme" | "ai_solved_from_extracted_question" | "ai_solved_from_verified_question_and_syllabus" | "unknown";
+  scopeStatus?: "in_syllabus" | "out_of_syllabus" | "unverified";
+  syllabusBasis?: string | null;
   visualAid?: {
     type: "comparison_bars" | "process_flow" | "none";
     title?: string;
@@ -31,11 +34,36 @@ export interface SolvedMcqResult {
 }
 
 function normalizeSolvedResult(value: any, normalizedOptions: string[]): SolvedMcqResult | null {
+  const scopeStatus = value?.inSyllabus === true
+    ? "in_syllabus"
+    : value?.inSyllabus === false
+      ? "out_of_syllabus"
+      : "unverified";
+  const syllabusBasis = normalizeSinhalaUnicode(value?.syllabusBasis || "").trim() || null;
+  const explanationSinhala = normalizeSinhalaUnicode(value?.explanationSinhala || "").trim();
+
+  if (scopeStatus !== "in_syllabus") {
+    const safeMessage = explanationSinhala.length >= 20
+      ? explanationSinhala
+      : "මෙම ප්‍රශ්නය නිල SFT විෂය නිර්දේශයට අයත් බව සනාථ කරගත නොහැකි නිසා පිළිතුරක් අනුමාන කරන්නේ නැහැ.";
+    return {
+      optionNo: null,
+      optionText: null,
+      formulaOrRule: null,
+      explanationSinhala: safeMessage,
+      whyOthersWrong: null,
+      confidence: Math.max(0, Math.min(1, Number(value?.confidence) || 0.5)),
+      answerStatus: "unknown",
+      scopeStatus,
+      syllabusBasis,
+      visualAid: null,
+    };
+  }
+
   const optionNo = String(value?.optionNo || "").replace(/\D/g, "");
   if (!/^[1-5]$/.test(optionNo)) return null;
 
   const optionText = normalizedOptions[Number(optionNo) - 1]?.replace(/^\([1-5]\)\s*/, "") || null;
-  const explanationSinhala = normalizeSinhalaUnicode(value?.explanationSinhala || "").trim();
   if (!explanationSinhala || explanationSinhala.length < 30) return null;
 
   const whyOthersWrong = Array.isArray(value?.whyOthersWrong)
@@ -50,12 +78,21 @@ function normalizeSolvedResult(value: any, normalizedOptions: string[]): SolvedM
     whyOthersWrong,
     confidence: Math.max(0, Math.min(1, Number(value?.confidence) || 0.7)),
     answerStatus: "ai_solved_from_verified_question_and_syllabus",
+    scopeStatus,
+    syllabusBasis,
     visualAid: value?.visualAid || null,
   };
 }
 
-async function collectSyllabusContext(params: SolveMcqParams) {
-  if (!params.uid) return { text: "", pdfPart: null as any };
+type SyllabusContext = {
+  text: string;
+  pdfPart: any | null;
+  referenceParts: any[];
+  referenceSources: Array<Record<string, unknown>>;
+};
+
+async function collectSyllabusContext(params: SolveMcqParams): Promise<SyllabusContext> {
+  if (!params.uid) return { text: "", pdfPart: null, referenceParts: [], referenceSources: [] };
 
   const retrieval = await retrieveRelevantKnowledge({
     uid: params.uid,
@@ -89,7 +126,12 @@ async function collectSyllabusContext(params: SolveMcqParams) {
     };
   }
 
-  return { text: syllabusChunks, pdfPart };
+  const reference = String(params.subject || "").toUpperCase() === "SFT"
+    ? await getSftReferenceGroundingParts(`${params.questionText}\n${params.options.join("\n")}`)
+      .catch(() => ({ parts: [], sources: [], domains: [] }))
+    : { parts: [], sources: [], domains: [] };
+
+  return { text: syllabusChunks, pdfPart, referenceParts: reference.parts, referenceSources: reference.sources };
 }
 
 
@@ -126,7 +168,9 @@ Use the supplied syllabus PDF and approved subject evidence as the authoritative
 RULES:
 - Do not change the question text.
 - Do not create a new question.
-- Choose exactly one option (1, 2, 3, 4, or 5).
+- First verify that the tested concept is inside the supplied subject syllabus.
+- If it is outside or cannot be verified, return inSyllabus:false, optionNo:null, and do not solve it from general memory.
+- Only when inSyllabus:true, choose exactly one option (1, 2, 3, 4, or 5).
 - Explain the logic in ordinary Sri Lankan classroom Sinhala with correctly normalized Unicode. Avoid stiff literal translations and unnatural technical wording.
 - Answer the question even when an official marking scheme is unavailable.
 - Never call an AI-solved answer an official answer.
@@ -148,7 +192,9 @@ ${normalizedOptions.join("\n")}
 
 Return JSON:
 {
-  "optionNo": "1|2|3|4|5",
+  "inSyllabus": true|false,
+  "syllabusBasis": "short syllabus unit or reason it is outside scope",
+  "optionNo": "1|2|3|4|5|null",
   "optionText": "text of the selected option",
   "formulaOrRule": "any formula or rule used",
   "explanationSinhala": "clear explanation in Sinhala",
@@ -167,6 +213,7 @@ Return JSON:
 
   const parts: any[] = [];
   if (syllabusContext.pdfPart) parts.push(syllabusContext.pdfPart);
+  if (Array.isArray(syllabusContext.referenceParts)) parts.push(...syllabusContext.referenceParts);
   parts.push({
     text: `${userPrompt}\n\nSUPPORTING SYLLABUS TEXT:\n${syllabusContext.text || "No indexed excerpt was available. Use the attached authoritative syllabus PDF. Do not expand beyond its scope."}`,
   });
@@ -193,5 +240,118 @@ Return JSON:
     }
   }
 
+  return null;
+}
+
+
+export interface SolveEssayParams {
+  uid?: string;
+  sourceId?: string;
+  questionText: string;
+  subject: string;
+  year: string;
+  questionNo: string;
+  questionType: string;
+}
+
+export interface SolvedEssayResult {
+  answerMarkdownSinhala: string;
+  keyPoints: string[];
+  confidence: number;
+  answerStatus: "ai_solved_from_verified_question_and_syllabus" | "unknown";
+  scopeStatus: "in_syllabus" | "out_of_syllabus" | "unverified";
+  syllabusBasis?: string | null;
+}
+
+function normalizeEssayResult(value: any): SolvedEssayResult | null {
+  const scopeStatus = value?.inSyllabus === true
+    ? "in_syllabus"
+    : value?.inSyllabus === false
+      ? "out_of_syllabus"
+      : "unverified";
+  const syllabusBasis = normalizeSinhalaUnicode(value?.syllabusBasis || "").trim() || null;
+  const answerMarkdownSinhala = normalizeSinhalaUnicode(value?.answerMarkdownSinhala || "")
+    .replace(/(?:→\s*){2,}/g, "→ ")
+    .trim();
+  if (scopeStatus !== "in_syllabus") {
+    const safeMessage = answerMarkdownSinhala.length >= 20
+      ? answerMarkdownSinhala
+      : "මෙම ප්‍රශ්නය නිල SFT විෂය නිර්දේශයට අයත් බව සනාථ කරගත නොහැකි නිසා පිළිතුරක් අනුමාන කරන්නේ නැහැ.";
+    return {
+      answerMarkdownSinhala: safeMessage,
+      keyPoints: [],
+      confidence: Math.max(0, Math.min(1, Number(value?.confidence) || 0.5)),
+      answerStatus: "unknown",
+      scopeStatus,
+      syllabusBasis,
+    };
+  }
+  if (answerMarkdownSinhala.length < 40) return null;
+  const keyPoints = Array.isArray(value?.keyPoints)
+    ? value.keyPoints.map((item: unknown) => normalizeSinhalaUnicode(item).trim()).filter(Boolean).slice(0, 12)
+    : [];
+  return {
+    answerMarkdownSinhala,
+    keyPoints,
+    confidence: Math.max(0, Math.min(1, Number(value?.confidence) || 0.7)),
+    answerStatus: "ai_solved_from_verified_question_and_syllabus",
+    scopeStatus,
+    syllabusBasis,
+  };
+}
+
+export async function solveExtractedEssayQuestion(params: SolveEssayParams): Promise<SolvedEssayResult | null> {
+  if (!params.questionText || params.questionText.trim().length < 20) return null;
+  const syllabusContext = await collectSyllabusContext({ ...params, options: [] });
+  const parts: any[] = [];
+  if (syllabusContext.pdfPart) parts.push(syllabusContext.pdfPart);
+  if (Array.isArray(syllabusContext.referenceParts)) parts.push(...syllabusContext.referenceParts);
+  parts.push({
+    text: `VERIFIED QUESTION FROM THE SELECTED PDF:
+${params.questionText}
+
+` +
+      `INDEXED APPROVED SFT EVIDENCE:
+${syllabusContext.text || "No indexed excerpt was available; use only the attached official syllabus and SFT reference PDF."}`,
+  });
+
+  const systemInstruction = `
+You answer one exact, already extracted Sri Lankan G.C.E. A/L ${params.subject} ${params.questionType} question.
+The selected question PDF is authoritative for what was asked. The official subject syllabus is the scope boundary. Approved SFT reference books may explain only content already inside that SFT syllabus.
+
+NON-NEGOTIABLE RULES:
+- First verify the tested concept against the attached official subject syllabus.
+- If it is outside the syllabus or cannot be verified, return inSyllabus:false and a short Sinhala scope message; do not answer from general memory.
+- Never invent, rename, extend, or replace the question or its subparts.
+- Answer only subparts visibly present in VERIFIED QUESTION.
+- If a subpart is incomplete or unreadable, state that exact subpart could not be read; do not fill it from memory.
+- Never import standalone A/L Biology, Chemistry, Physics, or Mathematics syllabus content into SFT.
+- Never call an AI-generated solution an official marking-scheme answer.
+- Write natural Sri Lankan classroom Sinhala in correct Unicode. Use ප්‍ර, ශ්‍ර, ක්‍ර, ද්‍ර, ත්‍ර and other conjuncts correctly.
+- Do not output duplicate arrows such as → →.
+- Use concise exam-answer wording, with the original i), ii), a), b) labels where present.
+- Return JSON only with: inSyllabus, syllabusBasis, answerMarkdownSinhala, keyPoints, confidence.
+`;
+
+  for (const task of ["direct_pdf_solve", "final_answer"] as const) {
+    try {
+      const { result } = await callGeminiWithFallback(task, {
+        model: "ignored",
+        contents: [{ role: "user", parts }],
+        config: {
+          systemInstruction,
+          temperature: 0,
+          responseMimeType: "application/json",
+          maxOutputTokens: 5_000,
+        },
+      } as any);
+      if (!result.text) continue;
+      const parsed = parseJsonResponse(result.text);
+      const normalized = normalizeEssayResult(parsed);
+      if (normalized) return normalized;
+    } catch (error) {
+      console.error(`[AI_CORE] Essay solver ${task} failed:`, error);
+    }
+  }
   return null;
 }

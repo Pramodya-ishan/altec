@@ -1,4 +1,5 @@
 import { getAdminDb } from "../firebase/admin";
+import type { PendingSourceChoice, SourceQuestionType } from "../ai/sourceSelection";
 
 export interface PaperMcqQuizSession {
   active: boolean;
@@ -35,6 +36,12 @@ export interface ConversationState {
   activeLessonIds: string[];
   activeSourceIds: string[];
   selectedSourceId: string | null;
+  selectedSourceTitle?: string | null;
+  selectedSourceSubject?: string | null;
+  selectedSourceYear?: string | null;
+  selectedQuestionType?: SourceQuestionType | null;
+  pendingSourceChoices?: PendingSourceChoice[];
+  awaitingSourceSelection?: boolean;
   selectedQuestionId: string | null;
   currentQuestionIndex: number | null;
   requestedResourceType: string | null;
@@ -60,6 +67,12 @@ export async function getConversationState(uid: string): Promise<ConversationSta
     activeLessonIds: [],
     activeSourceIds: [],
     selectedSourceId: null,
+    selectedSourceTitle: null,
+    selectedSourceSubject: null,
+    selectedSourceYear: null,
+    selectedQuestionType: null,
+    pendingSourceChoices: [],
+    awaitingSourceSelection: false,
     selectedQuestionId: null,
     currentQuestionIndex: null,
     requestedResourceType: null,
@@ -95,6 +108,12 @@ export async function resetConversationState(uid: string): Promise<ConversationS
     activeLessonIds: [],
     activeSourceIds: [],
     selectedSourceId: null,
+    selectedSourceTitle: null,
+    selectedSourceSubject: null,
+    selectedSourceYear: null,
+    selectedQuestionType: null,
+    pendingSourceChoices: [],
+    awaitingSourceSelection: false,
     selectedQuestionId: null,
     currentQuestionIndex: null,
     requestedResourceType: null,

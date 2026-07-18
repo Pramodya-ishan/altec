@@ -3,7 +3,7 @@ import { callGeminiWithFallback } from "../../ai/modelRouter";
 import { stripRawVisualBlocks } from "../answer/stripVisualBlocks";
 import { removeUndefinedDeep } from "../memory/chatSanitizer";
 import { getAdminDb } from "../../firebase/admin";
-import { solveExtractedMcqQuestion } from "./solveExtractedQuestion";
+import { solveExtractedEssayQuestion, solveExtractedMcqQuestion } from "./solveExtractedQuestion";
 import { trackAIUsage, checkSpecificLimit } from "../../cost/usageTracker";
 import { classifyAiError } from "../../ai/aiErrorClassifier";
 
@@ -164,36 +164,35 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
       if (!valid) result.sourceEvidence.imageRegion = null;
     }
 
-    // [PHASE 1] Solver Pass
-    if (
-      result.found === true &&
-      result.sourceEvidence?.questionText &&
-      Array.isArray(result.sourceEvidence.options) &&
-      result.sourceEvidence.options.length >= 4 &&
-      !result.answer?.solvedAnswer &&
-      !result.answer?.officialAnswer
-    ) {
+    // Solver runs only after the exact question has passed validation.
+    if (result.found === true && result.sourceEvidence?.questionText && !result.answer?.solvedAnswer && !result.answer?.officialAnswer) {
       console.log(`[DirectPDFQA] Triggering solver pass for ${questionType} ${questionNo}`);
       try {
-        const solved = await solveExtractedMcqQuestion({
-          uid,
-          sourceId,
-          questionText: result.sourceEvidence.questionText,
-          options: result.sourceEvidence.options,
-          subject,
-          year,
-          questionNo
-        });
+        const normalizedType = String(questionType || "").toUpperCase();
+        const solved = normalizedType === "MCQ"
+          ? await solveExtractedMcqQuestion({
+              uid,
+              sourceId,
+              questionText: result.sourceEvidence.questionText,
+              options: Array.isArray(result.sourceEvidence.options) ? result.sourceEvidence.options : [],
+              subject,
+              year,
+              questionNo,
+            })
+          : await solveExtractedEssayQuestion({
+              uid,
+              sourceId,
+              questionText: result.sourceEvidence.questionText,
+              subject,
+              year,
+              questionNo,
+              questionType: normalizedType || "ESSAY",
+            });
         if (solved) {
-          // [PHASE 1] Track Solver Call
           await trackAIUsage(uid, AI_MODELS.pdf, 500, 500, "solverCalls");
-
-          result.answer = {
-            ...result.answer,
-            solvedAnswer: solved
-          };
-          if (!result.answer.explanationSinhala && solved.explanationSinhala) {
-             result.answer.explanationSinhala = solved.explanationSinhala;
+          result.answer = { ...result.answer, solvedAnswer: solved };
+          if (!result.answer.explanationSinhala && "explanationSinhala" in solved && solved.explanationSinhala) {
+            result.answer.explanationSinhala = solved.explanationSinhala;
           }
         }
       } catch (solveErr) {
@@ -217,6 +216,7 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
          confidence: result.confidence,
          extractionMethod: "gemini_direct_pdf_qa",
          validationStatus: result.confidence > 0.8 ? "valid" : "needs_review",
+         evidenceVersion: 3,
          updatedAt: new Date().toISOString()
        };
 
@@ -355,21 +355,34 @@ export async function askGeminiExtractedTextStructured(params: {
   }
 
   if (!allowOfficialAnswer && parsed.answer) parsed.answer.officialAnswer = null;
-  if (String(questionType).toUpperCase() === "MCQ" && !parsed.answer?.officialAnswer) {
-    const solved = await solveExtractedMcqQuestion({
-      uid,
-      sourceId,
-      questionText,
-      options,
-      subject,
-      year,
-      questionNo: normalizedQuestionNo,
-    });
+  const normalizedType = String(questionType).toUpperCase();
+  if (!parsed.answer?.officialAnswer) {
+    const solved = normalizedType === "MCQ"
+      ? await solveExtractedMcqQuestion({
+          uid,
+          sourceId,
+          questionText,
+          options,
+          subject,
+          year,
+          questionNo: normalizedQuestionNo,
+        })
+      : await solveExtractedEssayQuestion({
+          uid,
+          sourceId,
+          questionText,
+          subject,
+          year,
+          questionNo: normalizedQuestionNo,
+          questionType: normalizedType || "ESSAY",
+        });
     if (solved) {
       parsed.answer = {
         ...(parsed.answer || {}),
         solvedAnswer: solved,
-        explanationSinhala: solved.explanationSinhala || parsed.answer?.explanationSinhala || null,
+        explanationSinhala: "explanationSinhala" in solved
+          ? solved.explanationSinhala || parsed.answer?.explanationSinhala || null
+          : parsed.answer?.explanationSinhala || null,
       };
     }
   }

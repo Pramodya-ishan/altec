@@ -6,9 +6,11 @@ export function validateQuestionEvidence(evidence: QuestionEvidence, request: { 
   if (request.year && evidence.year !== request.year) return { ok: false, reason: "YEAR_MISMATCH" };
   if (request.subject && evidence.subject !== request.subject) return { ok: false, reason: "SUBJECT_MISMATCH" };
   if (request.questionNo && String(evidence.questionNo) !== String(request.questionNo)) return { ok: false, reason: "QUESTION_NUMBER_MISMATCH" };
-  if (request.questionType && evidence.questionType !== request.questionType) return { ok: false, reason: "QUESTION_TYPE_MISMATCH" };
+  const requestedType = String(request.questionType || "").toUpperCase().replace(/\s+/g, "_");
+  const evidenceType = String(evidence.questionType || "").toUpperCase().replace(/\s+/g, "_");
+  if (requestedType && evidenceType !== requestedType) return { ok: false, reason: "QUESTION_TYPE_MISMATCH" };
 
-  if (request.questionType === "MCQ" && (!evidence.options || evidence.options.length < 4)) {
+  if (requestedType === "MCQ" && (!evidence.options || evidence.options.length < 4)) {
     // A/L MCQs usually have 5 options, but at least 4 is a safe bet for "readable"
     return { ok: false, reason: "MCQ_MISSING_OPTIONS" };
   }

@@ -1,4 +1,5 @@
 import { normalizeSubject } from "./sourceNormalizer";
+import { scoreNamedSource } from "../../ai/sourceSelection";
 
 export type StrictSourceParams = {
   year?: string | null;
@@ -11,7 +12,7 @@ export type StrictSourceParams = {
 export function getSourceScore(src: any, params: StrictSourceParams) {
   const { year, subject, activeSourceId, expectedResourceType, prompt } = params;
   const promptLower = prompt.toLowerCase();
-  let score = 0;
+  let score = scoreNamedSource(src, prompt);
 
   const srcId = src.sourceId || src.id;
   const textToScan = ((src.title || "") + " " + (src.fileName || "")).toLowerCase();
@@ -86,7 +87,7 @@ export function resolveStrictSource(sources: any[], params: StrictSourceParams) 
 
   const best = scored[0];
   // A source is locked if it has high confidence (matched subject AND year, or is active source)
-  const sourceLocked = !!(best && best.score >= 180);
+  const sourceLocked = !!(best && (best.score >= 260 || (params.activeSourceId && (best.source.sourceId || best.source.id) === params.activeSourceId)));
 
   const selectedSourceId = best?.source ? (best.source.sourceId || best.source.id) : null;
 

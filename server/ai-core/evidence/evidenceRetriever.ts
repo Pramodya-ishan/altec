@@ -31,6 +31,15 @@ export async function retrieveEvidenceForPaperQuestion(params: {
   const cacheSnap = await db.collection("pdf_question_cache").doc(verifiedId).get();
   if (cacheSnap.exists) {
     const data = cacheSnap.data() as any;
+    // Version 2 caches are created only after exact question extraction. Older
+    // caches may contain answers inferred from the first PDF chunks and must be
+    // rebuilt instead of being trusted.
+    if (data?.rejected === true || String(data?.validationStatus || "").toLowerCase() === "rejected") {
+      return { ok: false, reason: "REJECTED_CACHE" };
+    }
+    if (Number(data?.evidenceVersion || 0) < 3) {
+      return { ok: false, reason: "STALE_UNVERIFIED_CACHE" };
+    }
     const gate = validateQuestionEvidence(data, { year, subject, questionNo, questionType });
     if (gate.ok) {
       return { ok: true, evidence: data as QuestionEvidence };

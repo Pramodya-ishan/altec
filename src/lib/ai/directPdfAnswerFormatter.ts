@@ -19,6 +19,7 @@ export type DirectPdfAnswerFormatterInput = {
 function clean(value: unknown) {
   return normalizeSinhalaDisplayText(stripRawVisualBlocks(String(value ?? "")))
     .replace(/[ \t]+\n/g, "\n")
+    .replace(/(?:→\s*){2,}/g, "→ ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -153,7 +154,14 @@ export function formatDirectPdfAnswer(input: DirectPdfAnswerFormatterInput) {
   const answer = result?.answer || {};
   const solvedAnswer = answer.solvedAnswer || null;
   const officialAnswer = clean(answer.officialAnswer);
-  const explanation = clean(solvedAnswer?.explanationSinhala || answer.explanationSinhala);
+  const essayAnswer = clean(solvedAnswer?.answerMarkdownSinhala);
+  const explanation = clean(
+    solvedAnswer?.explanationSinhala
+      || answer.explanationSinhala
+      || (solvedAnswer && String(solvedAnswer.scopeStatus || "in_syllabus") !== "in_syllabus"
+        ? solvedAnswer.answerMarkdownSinhala
+        : ""),
+  );
   const whyOthersWrong = Array.isArray(solvedAnswer?.whyOthersWrong)
     ? solvedAnswer.whyOthersWrong.map(clean).filter(Boolean)
     : [];
@@ -165,8 +173,13 @@ export function formatDirectPdfAnswer(input: DirectPdfAnswerFormatterInput) {
     finalAnswerText = officialAnswer;
     answerStatus = "Verified from the official marking scheme";
   } else if (solvedAnswer) {
-    finalAnswerText = normalizeAnswerText(solvedAnswer.optionText, solvedAnswer.optionNo);
-    answerStatus = "Question verified · AI-solved with syllabus evidence";
+    const scopeStatus = String(solvedAnswer.scopeStatus || "in_syllabus");
+    finalAnswerText = scopeStatus === "in_syllabus"
+      ? (essayAnswer || normalizeAnswerText(solvedAnswer.optionText, solvedAnswer.optionNo))
+      : "";
+    answerStatus = scopeStatus === "in_syllabus"
+      ? "Question verified · AI-solved with syllabus evidence"
+      : "Question verified · outside confirmed syllabus scope";
   } else if (answer.estimatedAnswer) {
     finalAnswerText = normalizeAnswerText(answer.estimatedAnswer, answer.estimatedOptionNo);
     answerStatus = "Question verified · AI-solved from available evidence";

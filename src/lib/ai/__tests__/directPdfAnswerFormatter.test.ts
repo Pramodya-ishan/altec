@@ -48,3 +48,52 @@ assert.doesNotMatch(formatted.markdown, /^>\s/m, "answers must not be rendered a
 assert.equal(formatted.answerStatus, "Question verified · AI-solved with syllabus evidence");
 
 console.log("Direct PDF answer formatter tests passed.");
+
+const essayFormatted = formatDirectPdfAnswer({
+  source: { id: "guess-essay", title: "Guessing 01 Essay" },
+  questionNo: "1",
+  questionType: "ESSAY",
+  result: {
+    ok: true,
+    found: true,
+    sourceEvidence: {
+      questionText: "1. (a) සෛලයක ව්‍යුහය පිළිබඳ පහත ප්‍රශ්නවලට පිළිතුරු සපයන්න.\n(i) කොටස නම් කරන්න.",
+      options: null,
+    },
+    answer: {
+      solvedAnswer: {
+        answerMarkdownSinhala: "**(a) (i)** නිවැරදි පිළිතුර මෙහි ලියන්න.\n\nමෙය → → නොව එක් ඊතලයකින් පෙන්විය යුතුය.",
+        keyPoints: ["නිවැරදි කරුණ"],
+        confidence: 0.9,
+      },
+    },
+  },
+});
+assert.match(essayFormatted.markdown, /^### පිළිතුර/m);
+assert.match(essayFormatted.markdown, /\*\*\(a\) \(i\)\*\*/);
+assert.doesNotMatch(essayFormatted.markdown, /→\s*→/);
+assert.doesNotMatch(essayFormatted.markdown, /Question verified ·/);
+
+
+const outsideScope = formatDirectPdfAnswer({
+  source: { id: "guess-essay", title: "Guessing 01 Essay" },
+  questionNo: "1",
+  questionType: "ESSAY",
+  result: {
+    ok: true,
+    found: true,
+    sourceEvidence: { questionText: "1. නිල SFT විෂය නිර්දේශයෙන් පිටත කරුණක් පැහැදිලි කරන්න.", options: null },
+    answer: {
+      solvedAnswer: {
+        answerMarkdownSinhala: "මෙම ප්‍රශ්නය නිල SFT විෂය නිර්දේශයට අයත් බව සනාථ කරගත නොහැකි නිසා පිළිතුරක් අනුමාන කරන්නේ නැහැ.",
+        keyPoints: [],
+        confidence: 0.5,
+        scopeStatus: "out_of_syllabus",
+        answerStatus: "unknown",
+      },
+    },
+  },
+});
+assert.equal(outsideScope.answerStatus, "Question verified · outside confirmed syllabus scope");
+assert.doesNotMatch(outsideScope.markdown, /^### පිළිතුර/m);
+assert.match(outsideScope.markdown, /^### පැහැදිලි කිරීම/m);

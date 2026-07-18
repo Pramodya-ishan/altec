@@ -88,7 +88,7 @@ export function resolveAnswerPolicy(
       allowVisuals: /diagram|graph|වගුව|රූප|සටහන/i.test(prompt),
       maxAnswerStyle: "exam_style",
       shouldUseStudentContext: false,
-      shouldUseSyllabus: false,
+      shouldUseSyllabus: true,
     };
   }
 
@@ -103,7 +103,7 @@ export function resolveAnswerPolicy(
        allowVisuals: p.includes("diagram") || p.includes("graph") || p.includes("waguwa") || p.includes("රූප"),
        maxAnswerStyle: "exam_style",
        shouldUseStudentContext: false,
-       shouldUseSyllabus: false
+       shouldUseSyllabus: true
     };
   }
 

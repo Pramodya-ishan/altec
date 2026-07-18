@@ -11,6 +11,7 @@ import { assertContentManager, isContentManager, isSharedSourceScope, isStudentV
 import { normalizeLessonId, updateLessonResourceProcessing, upsertLessonResource } from "../lessonResources/service";
 import { invalidateInventoryCache } from "../sources/sourceInventoryService";
 import { createPdfQuestionPreview } from "./questionPreview";
+import { hasExactQuestionMarker } from "../ai-core/pdf/indexedQuestionSelection";
 
 export const pdfRoutes = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -600,9 +601,8 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
 
           if (indexedChunks.length > 0) {
             const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
-            const marker = new RegExp(`(?:^|\\s|\\n)(?:q(?:uestion)?\\s*)?0?${targetNo}(?:\\.|\\)|\\s|$)`, "i");
             const exactIndexes = indexedChunks
-              .map((chunk: any, index: number) => marker.test(String(chunk.text || "")) ? index : -1)
+              .map((chunk: any, index: number) => hasExactQuestionMarker(chunk.text, targetNo) ? index : -1)
               .filter((index: number) => index >= 0);
             const selectedIndexes = new Set<number>();
             if (exactIndexes.length > 0) {
@@ -611,9 +611,9 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
                   if (indexedChunks[index + offset]) selectedIndexes.add(index + offset);
                 }
               });
-            } else {
-              indexedChunks.slice(0, 10).forEach((_chunk: any, index: number) => selectedIndexes.add(index));
             }
+            // No exact marker means no indexed answer. Continue to the locked
+            // PDF extractor instead of treating the first chunks as Q1.
             const indexedText = Array.from(selectedIndexes)
               .sort((a, b) => a - b)
               .map((index) => {
@@ -689,35 +689,31 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
             return { ok: true, ...visualResult, extractionMethod: "gemini_pdf_visual" };
           }
         }
-        if (localExtraction.text.trim().length >= 80) {
+        if (localExtraction.text.trim().length >= 80 && localExtraction.textEncoding !== "legacy_fm_abhaya") {
           const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
-          const marker = new RegExp(`(?:^|\\s|\\n)(?:q(?:uestion)?\\s*)?0?${targetNo}(?:\\.|\\)|\\s|$)`, "i");
-          const matchingPages = localExtraction.pages.filter((page: any) => marker.test(String(page.text || page.rawText || "")));
-          const candidatePages = matchingPages.length > 0
-            ? matchingPages.slice(0, 4)
-            : localExtraction.pages.slice(Math.max(0, Number(targetNo) - 1), Math.max(0, Number(targetNo) - 1) + 4);
-          const candidateText = (candidatePages.length > 0 ? candidatePages : localExtraction.pages.slice(0, 5))
+          const matchingPages = localExtraction.pages.filter((page: any) => hasExactQuestionMarker(page.text || page.rawText || "", targetNo));
+          const candidateText = matchingPages
+            .slice(0, 4)
             .map((page: any) => `[Page ${page.pageNumber}]\n${page.text || page.rawText || ""}`)
             .join("\n\n")
             .slice(0, 90_000);
-          const textResult = await askGeminiExtractedTextStructured({
-            uid: req.user.uid,
-            sourceId: sourceId || "uploaded_temp",
-            extractedText: candidateText,
-            year: year || "unknown",
-            subject: subject || "unknown",
-            questionType,
-            questionNo,
-            allowOfficialAnswer: [resolvedSource?.resourceType, resolvedSource?.sourceType, resolvedSource?.sourceScope]
-              .some((value) => String(value || "").toLowerCase().includes("marking"))
-              || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
-          });
-          if (textResult.ok && textResult.found) {
-            return textResult;
+          if (candidateText.trim().length >= 80) {
+            const textResult = await askGeminiExtractedTextStructured({
+              uid: req.user.uid,
+              sourceId: sourceId || "uploaded_temp",
+              extractedText: candidateText,
+              year: year || "unknown",
+              subject: subject || "unknown",
+              questionType,
+              questionNo,
+              allowOfficialAnswer: [resolvedSource?.resourceType, resolvedSource?.sourceType, resolvedSource?.sourceScope]
+                .some((value) => String(value || "").toLowerCase().includes("marking"))
+                || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
+            });
+            if (textResult.ok && textResult.found) return textResult;
           }
-          if (!localExtraction.needsOcr) {
-            return textResult;
-          }
+          // No exact marker falls through to the visual PDF extractor. It must
+          // not infer a question from page order.
         }
         // A stored scan must be indexed once, not uploaded to the model again
         // for every question. Whole-document binary calls on large scans were
@@ -766,14 +762,15 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
                   || Number(left.chunkIndex || 0) - Number(right.chunkIndex || 0));
               if (orderedChunks.length > 0) {
                 const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
-                const marker = new RegExp(`(?:^|\\s|\\n)(?:q(?:uestion)?\\s*)?0?${targetNo}(?:\\.|\\)|\\s|$)`, "i");
-                const exactIndex = orderedChunks.findIndex((chunk: any) => marker.test(String(chunk.text || "")));
-                const startIndex = exactIndex >= 0 ? Math.max(0, exactIndex - 1) : 0;
-                const indexedText = orderedChunks
-                  .slice(startIndex, exactIndex >= 0 ? startIndex + 5 : 10)
-                  .map((chunk: any) => `[Page ${chunk.pageNumber || "?"}]\n${chunk.text}`)
-                  .join("\n\n")
-                  .slice(0, 90_000);
+                const exactIndex = orderedChunks.findIndex((chunk: any) => hasExactQuestionMarker(chunk.text, targetNo));
+                const startIndex = exactIndex >= 0 ? Math.max(0, exactIndex - 1) : -1;
+                const indexedText = exactIndex >= 0
+                  ? orderedChunks
+                    .slice(startIndex, startIndex + 5)
+                    .map((chunk: any) => `[Page ${chunk.pageNumber || "?"}]\n${chunk.text}`)
+                    .join("\n\n")
+                    .slice(0, 90_000)
+                  : "";
                 if (indexedText.trim().length >= 80) {
                   const answerFromIndex = await askGeminiExtractedTextStructured({
                     uid: req.user.uid,

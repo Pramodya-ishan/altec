@@ -45,6 +45,8 @@ export type KnowledgeRouterResult = {
     uploadedFileName?: string;
     requestedAnswerType?: "essay" | "mcq";
     inventoryMode?: "all" | "answerable";
+    activeSourceId?: string;
+    questionType?: "MCQ" | "ESSAY" | "STRUCTURED" | string;
   };
 
   contextBlocks: Array<{

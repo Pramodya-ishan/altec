@@ -79,8 +79,10 @@ export function normalizeMathMarkdown(
     return input;
   }
 
+  // Sinhala conjuncts use U+200D (ZWJ). Never strip joiners from ordinary
+  // prose; KaTeX cleanup is intentionally limited to normalizeMathSegment().
   let output = rawContent
-    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[\u200B\uFEFF]/g, "")
     .replace(/\r\n/g, "\n")
     .replace(/\\text\{([^\}]+)\}/g, "$1")
     .replace(/\\\\\(/g, "\\(")
