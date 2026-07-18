@@ -1,5 +1,6 @@
 import type { VisualBlock } from "../visualBlocks";
 import { stripRawVisualBlocks } from "./stripVisualBlocks";
+import { normalizeSinhalaDisplayText } from "../assistantTextHygiene";
 
 export type DirectPdfAnswerFormatterInput = {
   source: {
@@ -16,7 +17,10 @@ export type DirectPdfAnswerFormatterInput = {
 };
 
 function clean(value: unknown) {
-  return stripRawVisualBlocks(String(value ?? "")).trim();
+  return normalizeSinhalaDisplayText(stripRawVisualBlocks(String(value ?? "")))
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 export function normalizeMcqOption(value: unknown, index: number) {
@@ -96,6 +100,20 @@ function buildAutomaticVisuals(params: {
   const visualAid = safeVisualAid(result?.answer?.solvedAnswer?.visualAid);
   if (visualAid) blocks.push(visualAid);
 
+  const imagePreviewUrl = clean(result?.sourceEvidence?.imagePreviewUrl);
+  if (imagePreviewUrl && /^https?:\/\//i.test(imagePreviewUrl)) {
+    blocks.push({
+      type: "pdf_image_preview",
+      title: "PDF question visual",
+      imageUrl: imagePreviewUrl,
+      sourceId: clean(result?.sourceEvidence?.sourceId || result?.sourceId),
+      storagePath: clean(result?.sourceEvidence?.imagePreviewStoragePath),
+      pageNumber: Number(result?.sourceEvidence?.pageNumber) || undefined,
+      crop: result?.sourceEvidence?.imageRegion || null,
+      caption: "The relevant visual was cropped from the selected PDF page.",
+    });
+  }
+
   if (formulaOrRule) {
     if (/(?:→|->|⇌|↔)/u.test(formulaOrRule)) {
       blocks.push({
@@ -151,33 +169,36 @@ export function formatDirectPdfAnswer(input: DirectPdfAnswerFormatterInput) {
     : [];
   const formulaOrRule = clean(solvedAnswer?.formulaOrRule);
 
-  let answerStatus = "Verification required";
+  let answerStatus = "Question verified from PDF";
   let finalAnswerText = "";
   if (officialAnswer) {
     finalAnswerText = officialAnswer;
     answerStatus = "Verified from the official marking scheme";
   } else if (solvedAnswer) {
     finalAnswerText = normalizeAnswerText(solvedAnswer.optionText, solvedAnswer.optionNo);
-    answerStatus = "Solved from verified PDF evidence";
+    answerStatus = "Question verified · AI-solved with syllabus evidence";
+  } else if (answer.estimatedAnswer) {
+    finalAnswerText = normalizeAnswerText(answer.estimatedAnswer, answer.estimatedOptionNo);
+    answerStatus = "Question verified · AI-solved from available evidence";
   } else {
-    finalAnswerText = "The question was found in the PDF, but a confirmed answer was not available.";
+    answerStatus = "Question verified · Answer generation temporarily unavailable";
   }
 
   const sections: string[] = [];
   if (questionText) {
-    sections.push(`## ප්‍රශ්නය\n\n${questionText}`);
+    sections.push(`### ප්‍රශ්නය\n\n${questionText}`);
   }
   if (options.length) {
     sections.push(options.map((option: string) => `**${option.match(/^\([1-5]\)/)?.[0] || ""}**${option.replace(/^\([1-5]\)/, "")}`).join("\n\n"));
   }
   if (finalAnswerText) {
-    sections.push(`## පිළිතුර\n\n> **${finalAnswerText}**`);
+    sections.push(`### පිළිතුර\n\n**${finalAnswerText}**`);
   }
   if (explanation) {
-    sections.push(`## පැහැදිලි කිරීම\n\n${explanation}`);
+    sections.push(`### පැහැදිලි කිරීම\n\n${explanation}`);
   }
   if (whyOthersWrong.length) {
-    sections.push(`## අනෙක් විකල්ප නොගැළපෙන හේතු\n\n${whyOthersWrong.map((reason: string) => `- ${reason}`).join("\n")}`);
+    sections.push(`### අනෙක් විකල්ප නොගැළපෙන හේතු\n\n${whyOthersWrong.map((reason: string) => `- ${reason}`).join("\n")}`);
   }
 
   const visualBlocks = buildAutomaticVisuals({

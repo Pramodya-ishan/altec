@@ -9,6 +9,16 @@ export type VisualBlock =
       verified: boolean;
     }
   | {
+      type: "pdf_image_preview";
+      title: string;
+      imageUrl: string;
+      sourceId?: string;
+      storagePath?: string;
+      pageNumber?: number;
+      crop?: { x: number; y: number; width: number; height: number } | null;
+      caption?: string;
+    }
+  | {
       type: "coordinate_plane";
       title: string;
       points: { label: string; x: number; y: number }[];

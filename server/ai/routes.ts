@@ -442,7 +442,7 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
     fast: { configured: process.env.GEMINI_DEFAULT_MODEL || "gemini-3-flash-preview", lastOk: true, lastError: null },
     lite: { configured: process.env.GEMINI_LITE_MODEL || "gemini-3.1-flash-lite", lastOk: true, lastError: null },
     embeddings: { configured: process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001", lastOk: true, lastError: null },
-    image: { enabled: process.env.ENABLE_IMAGE_GENERATION === "true", available: !!process.env.GEMINI_IMAGE_MODEL, lastError: null }
+    image: { enabled: process.env.DISABLE_IMAGE_GENERATION !== "true", available: true, lastError: null }
   };
 
   cachedHealthResponse = responsePayload;

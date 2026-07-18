@@ -52,7 +52,9 @@ Return JSON only:
     "pageNumber": number|null,
     "questionNo": "${questionNo}",
     "questionText": string|null,
-    "options": string[]|null
+    "options": string[]|null,
+    "hasRelevantImage": boolean,
+    "imageRegion": {"x":number,"y":number,"width":number,"height":number}|null
   },
   "answer": {
     "officialAnswer": string|null,
@@ -80,6 +82,7 @@ Question Number: ${questionNo}
 Source ID: ${sourceId}
 
 Return JSON with exact evidence. If not found, set found:false.
+If a diagram, graph, table, photograph, or other visual is part of the requested question, set hasRelevantImage:true and return its approximate normalized page region. Coordinates must be between 0 and 1, measured from the page's top-left. Otherwise return hasRelevantImage:false and imageRegion:null.
 `;
 
   // [PHASE 1] Track Direct PDF QA Call
@@ -150,6 +153,17 @@ Return JSON with exact evidence. If not found, set found:false.
       };
     }
 
+    const region = result?.sourceEvidence?.imageRegion;
+    if (region && typeof region === "object") {
+      const values = [region.x, region.y, region.width, region.height].map(Number);
+      const valid = values.every(Number.isFinite)
+        && values[0] >= 0 && values[1] >= 0
+        && values[2] > 0 && values[3] > 0
+        && values[0] + values[2] <= 1.02
+        && values[1] + values[3] <= 1.02;
+      if (!valid) result.sourceEvidence.imageRegion = null;
+    }
+
     // [PHASE 1] Solver Pass
     if (
       result.found === true &&
@@ -162,6 +176,8 @@ Return JSON with exact evidence. If not found, set found:false.
       console.log(`[DirectPDFQA] Triggering solver pass for ${questionType} ${questionNo}`);
       try {
         const solved = await solveExtractedMcqQuestion({
+          uid,
+          sourceId,
           questionText: result.sourceEvidence.questionText,
           options: result.sourceEvidence.options,
           subject,
@@ -341,6 +357,8 @@ export async function askGeminiExtractedTextStructured(params: {
   if (!allowOfficialAnswer && parsed.answer) parsed.answer.officialAnswer = null;
   if (String(questionType).toUpperCase() === "MCQ" && !parsed.answer?.officialAnswer) {
     const solved = await solveExtractedMcqQuestion({
+      uid,
+      sourceId,
       questionText,
       options,
       subject,

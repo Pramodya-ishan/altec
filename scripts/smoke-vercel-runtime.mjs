@@ -26,6 +26,11 @@ try {
     path.join(isolatedDirectory, "google-gax-protos"),
     { recursive: true },
   );
+  await cp(
+    new URL("../vercel-runtime/node_modules/", import.meta.url),
+    path.join(isolatedDirectory, "node_modules"),
+    { recursive: true },
+  );
 
   const runtime = await import(pathToFileURL(isolatedRuntimePath).href);
   if (typeof runtime.default !== "function") {

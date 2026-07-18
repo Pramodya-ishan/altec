@@ -4,6 +4,7 @@ import { normalizeSinhalaDisplayText, sanitizeAssistantDisplayText } from "../as
 assert.equal(normalizeSinhalaDisplayText("ප්රගතිය"), "ප්‍රගතිය");
 assert.equal(normalizeSinhalaDisplayText("අධ්යයනය"), "අධ්‍යයනය");
 assert.equal(normalizeSinhalaDisplayText("විද්යාව"), "විද්‍යාව");
+assert.equal(normalizeSinhalaDisplayText("සත්යාපිතයි"), "සත්‍යාපිතයි");
 
 const cleaned = sanitizeAssistantDisplayText(
   "ආයුබෝවන්!\nturn_off_indicator_lights_on_the_router_if_possible_to_save_power_and_reduce_light_pollution.\nප්රගතිය හොඳයි.",

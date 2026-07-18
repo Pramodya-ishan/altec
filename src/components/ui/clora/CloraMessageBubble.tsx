@@ -16,8 +16,8 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
   const displayContent = isUser ? String(message.content || '') : sanitizeAssistantDisplayText(message.content);
   const [copied, setCopied] = useState(false);
   const visualBlocks = Array.isArray(message.visualBlocks) ? message.visualBlocks : [];
-  const leadVisualBlocks = visualBlocks.filter((block: any) => block?.type === 'source_evidence');
-  const supportingVisualBlocks = visualBlocks.filter((block: any) => block?.type !== 'source_evidence');
+  const leadVisualBlocks = visualBlocks.filter((block: any) => ['source_evidence', 'pdf_image_preview'].includes(block?.type));
+  const supportingVisualBlocks = visualBlocks.filter((block: any) => !['source_evidence', 'pdf_image_preview'].includes(block?.type));
   const copyTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => () => {
@@ -82,7 +82,7 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({ messa
           )}
 
           {message.content && (
-            <div className="prose prose-slate min-w-0 max-w-none text-[15px] leading-7 text-slate-800 [overflow-wrap:anywhere] [word-break:normal] prose-headings:mb-3 prose-headings:mt-6 prose-p:my-2 prose-pre:max-w-full prose-pre:overflow-x-auto prose-table:block prose-table:max-w-full prose-table:overflow-x-auto">
+            <div className="prose prose-slate min-w-0 max-w-none text-[15px] leading-7 text-slate-800 [overflow-wrap:anywhere] [word-break:normal] prose-headings:mb-3 prose-headings:mt-6 prose-p:my-3 prose-pre:max-w-full prose-pre:overflow-x-auto prose-table:block prose-table:max-w-full prose-table:overflow-x-auto">
               <MathMarkdown content={displayContent} isStreaming={isStreaming} />
             </div>
           )}

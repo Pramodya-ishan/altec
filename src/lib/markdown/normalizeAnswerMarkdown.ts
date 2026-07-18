@@ -1,7 +1,7 @@
 function paragraphizeLongAnswer(content: string) {
   return content.split(/\n{2,}/).map((block) => {
     const trimmed = block.trim();
-    if (trimmed.length < 380) return trimmed;
+    if (trimmed.length < 260) return trimmed;
     if (/^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>|```|\||\$)/.test(trimmed)) return trimmed;
     if (trimmed.includes("\n")) return trimmed;
 
@@ -9,9 +9,17 @@ function paragraphizeLongAnswer(content: string) {
     if (sentences.length < 3) return trimmed;
 
     const paragraphs: string[] = [];
-    for (let index = 0; index < sentences.length; index += 2) {
-      paragraphs.push(sentences.slice(index, index + 2).join(" "));
+    let current = "";
+    for (const sentence of sentences) {
+      const next = current ? `${current} ${sentence}` : sentence;
+      if (current && next.length > 260) {
+        paragraphs.push(current);
+        current = sentence;
+      } else {
+        current = next;
+      }
     }
+    if (current) paragraphs.push(current);
     return paragraphs.join("\n\n");
   }).join("\n\n");
 }

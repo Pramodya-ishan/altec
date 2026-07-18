@@ -13,6 +13,10 @@ const SINHALA_NORMALIZATIONS: Array<[RegExp, string]> = [
   [/භ්ය/g, "භ්‍ය"],
   [/න්ය/g, "න්‍ය"],
   [/ර්ය/g, "ර්‍ය"],
+  [/සත්යා/g, "සත්‍යා"],
+  [/ත්යා/g, "ත්‍යා"],
+  [/න්යා/g, "න්‍යා"],
+  [/ල්යා/g, "ල්‍යා"],
 ];
 
 const INTERNAL_TAG_PATTERN = /<\/?(?:system|assistant|developer|thought_process|analysis|tool|function|claude_behavior|memory_system|computer_use)[^>]*>/gi;

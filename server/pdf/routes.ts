@@ -10,6 +10,7 @@ import { extractPdfText } from "./extractText";
 import { assertContentManager, isContentManager, isSharedSourceScope, isStudentVisibleSource } from "../utils/contentPermissions";
 import { normalizeLessonId, updateLessonResourceProcessing, upsertLessonResource } from "../lessonResources/service";
 import { invalidateInventoryCache } from "../sources/sourceInventoryService";
+import { createPdfQuestionPreview } from "./questionPreview";
 
 export const pdfRoutes = Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -53,6 +54,10 @@ function canViewSource(user: any, source: any) {
 function canReviewQuestionCache(user: any) {
   const roles = Array.isArray(user?.roles) ? user.roles.map(String) : [];
   return isContentManager(user) || roles.includes("reviewer");
+}
+
+function asksForPdfVisual(value: unknown) {
+  return /(?:image|picture|diagram|graph|chart|figure|visual|crop|රූප|පින්තූර|සටහන|ප්‍රස්තාර|වගුව)/iu.test(String(value || ""));
 }
 
 async function resolveDirectQaSource(user: any, sourceId: string, submittedPath: unknown) {
@@ -479,6 +484,7 @@ const failedDirectQaCooldown = new Map<string, number>();
 pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), async (req: any, res) => {
   try {
     const { sourceId, storagePath, prompt, questionId, questionNo, questionType, subject, year } = req.body;
+    const visualEvidenceRequested = asksForPdfVisual(prompt);
     console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}`);
 
     const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}`;
@@ -631,7 +637,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
                   .some((value) => String(value || "").toLowerCase().includes("marking"))
                   || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
               });
-              if (indexedResult.ok && indexedResult.found) return indexedResult;
+              if (indexedResult.ok && indexedResult.found && !visualEvidenceRequested) return indexedResult;
             }
           }
         }
@@ -662,6 +668,26 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
             message: "The PDF could not be parsed because of an internal server error.",
             canRetry: true,
           };
+        }
+
+        const directVisualLimit = Number(process.env.DIRECT_PDF_INLINE_MAX_BYTES || 10 * 1024 * 1024);
+        if (visualEvidenceRequested && buffer.length <= directVisualLimit) {
+          const visualResult = await askGeminiDirectPdfStructured({
+            uid: req.user.uid,
+            sourceId: sourceId || "uploaded_temp",
+            pdfBuffer: buffer,
+            year: year || resolvedSource?.year || "unknown",
+            subject: subject || resolvedSource?.subject || "unknown",
+            questionType,
+            questionNo,
+            prompt: effectivePrompt,
+            allowOfficialAnswer: [resolvedSource?.resourceType, resolvedSource?.sourceType, resolvedSource?.sourceScope]
+              .some((value) => String(value || "").toLowerCase().includes("marking"))
+              || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
+          });
+          if (visualResult.ok && visualResult.found && visualResult.sourceEvidence?.questionText) {
+            return { ok: true, ...visualResult, extractionMethod: "gemini_pdf_visual" };
+          }
         }
         if (localExtraction.text.trim().length >= 80) {
           const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
@@ -947,6 +973,46 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
   }
 });
 
+pdfRoutes.post("/question-preview", requireFirebaseUser, express.json({ limit: "64kb" }), async (req: any, res) => {
+  try {
+    const { sourceId, storagePath, pageNumber, crop, title } = req.body || {};
+    if (!sourceId || !pageNumber) {
+      return res.status(400).json({
+        ok: false,
+        code: "PDF_PREVIEW_INPUT_INVALID",
+        message: "A source ID and page number are required.",
+      });
+    }
+
+    const resolved = await resolveDirectQaSource(req.user, String(sourceId), storagePath);
+    const [pdfBuffer] = await getAdminBucket().file(resolved.path).download();
+    if (!pdfBuffer?.length) {
+      return res.status(404).json({ ok: false, code: "PDF_PREVIEW_SOURCE_EMPTY", message: "The PDF is unavailable." });
+    }
+
+    const preview = await createPdfQuestionPreview({
+      uid: req.user.uid,
+      sourceId: String(sourceId),
+      pdfBuffer,
+      pageNumber: Number(pageNumber),
+      crop,
+      title: title || resolved.source?.title || resolved.source?.fileName,
+    });
+
+    return res.json({ ok: true, ...preview });
+  } catch (error: any) {
+    console.error("[PDF_PREVIEW] Failed:", error);
+    const unavailable = /@napi-rs\/canvas|Cannot find package|render/i.test(String(error?.message || error));
+    return res.status(unavailable ? 503 : Number(error?.status) || 500).json({
+      ok: false,
+      code: unavailable ? "PDF_PREVIEW_RENDERER_UNAVAILABLE" : (error?.code || "PDF_PREVIEW_FAILED"),
+      message: unavailable
+        ? "The PDF image preview service is temporarily unavailable."
+        : (error?.message || "The PDF image preview could not be created."),
+    });
+  }
+});
+
 // 6. Get Question Cache for a Source
 pdfRoutes.get("/question-cache", requireFirebaseUser, async (req: any, res) => {
   try {
@@ -1019,6 +1085,8 @@ pdfRoutes.post("/question-cache/:docId/resolve", requireFirebaseUser, async (req
 
     const { solveExtractedMcqQuestion } = await import("../ai-core/pdf/solveExtractedQuestion");
     const solved = await solveExtractedMcqQuestion({
+      uid: req.user.uid,
+      sourceId: data.sourceId,
       questionText: data.questionText,
       options: data.options,
       subject: data.subject || "SFT",

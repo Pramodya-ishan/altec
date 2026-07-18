@@ -1112,23 +1112,32 @@ const [messages, setMessages] = useState<{
 
     if (parsedCommand.command === 'image') {
       try {
+        const referenceText = [...messages]
+          .reverse()
+          .find((message) => message.role === 'assistant' && message.content)?.content || '';
         const imageRes = await fetch(apiUrl("/api/image/generate"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${await auth.currentUser?.getIdToken()}`
           },
-          body: JSON.stringify({ prompt: parsedCommand.text })
+          body: JSON.stringify({
+            prompt: parsedCommand.text,
+            subject: currentSubject,
+            referenceText: String(referenceText).slice(0, 5_000),
+            aspectRatio: "4:3",
+          })
         });
 
         if (imageRes.ok) {
           const data = await imageRes.json();
-          setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: `Here is your generated image: ![Generated Image](${data.imageUrl || data.image})`, status: "done" } : m));
+          setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: `මෙන්න ඉල්ලූ රූපය.\n\n![Generated educational image](${data.imageUrl || data.image})`, status: "done" } : m));
         } else {
-          setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: "Image generation failed or is disabled.", status: "error" } : m));
+          const data = await imageRes.json().catch(() => null);
+          setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: data?.error || "රූපය නිර්මාණය කිරීමට මේ මොහොතේ නොහැකි වුණා. නැවත උත්සාහ කරන්න.", status: "error" } : m));
         }
       } catch (err: any) {
-        setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: `Image generation error: ${err.message}`, status: "error" } : m));
+        setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: "රූප නිර්මාණ සේවාවට සම්බන්ධ වීමට නොහැකි වුණා. නැවත උත්සාහ කරන්න.", status: "error" } : m));
       }
       if (activeStreamIdRef.current === streamId) {
         activeStreamIdRef.current = null;

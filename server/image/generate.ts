@@ -1,19 +1,60 @@
+import { randomUUID } from "node:crypto";
 import { getAIClient, AI_MODELS } from "../ai/client";
-import { getAdminDb } from "../firebase/admin";
-import { getStorage } from "firebase-admin/storage";
+import { getAdminBucket, getAdminDb } from "../firebase/admin";
+
+function extensionForMimeType(mimeType: string) {
+  if (mimeType === "image/png") return "png";
+  if (mimeType === "image/webp") return "webp";
+  return "jpg";
+}
+
+function findInlineImage(response: any) {
+  for (const candidate of response?.candidates || []) {
+    for (const part of candidate?.content?.parts || []) {
+      const data = part?.inlineData?.data || part?.inlineData?.imageBytes;
+      if (data) {
+        return {
+          data,
+          mimeType: part?.inlineData?.mimeType || "image/png",
+        };
+      }
+    }
+  }
+  return null;
+}
 
 export async function generateEducationalImage(req: any) {
   try {
-    const { prompt, subject, lesson, style, mode, aspectRatio = "1:1", quality } = req.body;
+    const {
+      prompt,
+      subject,
+      lesson,
+      style,
+      mode,
+      aspectRatio = "1:1",
+      quality,
+      referenceText,
+    } = req.body;
     const uid = req.user.uid;
 
     if (!prompt) throw new Error("Prompt is required");
-    if (process.env.ENABLE_IMAGE_GENERATION === "false") {
-      return { ok: false, code: "IMAGE_GENERATION_DISABLED", error: "Image generation is disabled." };
+    if (process.env.DISABLE_IMAGE_GENERATION === "true") {
+      return { ok: false, code: "IMAGE_GENERATION_DISABLED", error: "Image generation is temporarily unavailable." };
     }
 
-    // Build educational Sinhalese/English exam-focused prompt
-    const finalPrompt = `Create a clean Sinhala G.C.E. A/L Technology exam-focused diagram. Clear labels. Minimal clutter. Accurate educational layout. No watermark. Sinhala labels where useful. Subject: ${subject || "Technology"}. Lesson: ${lesson || "General"}. User request: ${prompt}`;
+    const boundedReference = String(referenceText || "").trim().slice(0, 5_000);
+    const finalPrompt = [
+      "Create one accurate educational image for a Sri Lankan G.C.E. A/L Technology student.",
+      "Use natural Sinhala Unicode for labels when the request is in Sinhala or Singlish.",
+      "Keep labels short, readable, correctly spelled, and free from decorative filler.",
+      "Use a clean white or very light background, strong visual hierarchy, and exam-focused content.",
+      "Do not add watermarks, logos, fake citations, or unsupported facts.",
+      `Subject: ${subject || "Technology"}`,
+      `Lesson: ${lesson || "General"}`,
+      style ? `Requested style: ${style}` : "Style: modern educational diagram",
+      `User request: ${prompt}`,
+      boundedReference ? `Relevant previous answer/context:\n${boundedReference}` : "",
+    ].filter(Boolean).join("\n\n");
 
     let configuredModel = AI_MODELS.image;
     if (mode === "studio" || mode === "pro" || quality === "high" || quality === "4K") {
@@ -21,10 +62,20 @@ export async function generateEducationalImage(req: any) {
     }
     const fallbackModel = "imagen-3.0-generate-001";
 
-    const modelsToTry = [configuredModel, fallbackModel, "gemini-3.1-flash-image", "gemini-3-pro-image", "imagen-3.0-generate-001"];
-    const uniqueModels = Array.from(new Set(modelsToTry));
+    const modelsToTry = [
+      configuredModel,
+      process.env.NANO_BANANA_MODEL,
+      process.env.NANO_BANANA_PRO_MODEL,
+      "gemini-2.5-flash-image",
+      "gemini-3-pro-image-preview",
+      fallbackModel,
+    ];
+    const uniqueModels = Array.from(
+      new Set(modelsToTry.filter((model): model is string => Boolean(model))),
+    );
 
     let imageBase64: string | undefined;
+    let outputMimeType = "image/jpeg";
     let modelUsed: string = "";
     let lastError: any = null;
 
@@ -33,8 +84,7 @@ export async function generateEducationalImage(req: any) {
     for (const modelName of uniqueModels) {
       try {
         modelUsed = modelName;
-        if (modelName.toLowerCase().startsWith("imagen") || modelName.toLowerCase().includes("image")) {
-          // generateImages API works for both imagen-3.0 and gemini-*-image
+        if (modelName.toLowerCase().startsWith("imagen")) {
           const response = await ai.models.generateImages({
             model: modelName,
             prompt: finalPrompt,
@@ -47,6 +97,21 @@ export async function generateEducationalImage(req: any) {
 
           if (response && response.generatedImages && response.generatedImages.length > 0) {
             imageBase64 = response.generatedImages[0].image?.imageBytes;
+            outputMimeType = "image/jpeg";
+          }
+        } else {
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: [{ role: "user", parts: [{ text: finalPrompt }] }],
+            config: {
+              responseModalities: ["TEXT", "IMAGE"],
+              imageConfig: { aspectRatio },
+            } as any,
+          } as any);
+          const inlineImage = findInlineImage(response);
+          if (inlineImage) {
+            imageBase64 = inlineImage.data;
+            outputMimeType = inlineImage.mimeType;
           }
         }
 
@@ -64,24 +129,26 @@ export async function generateEducationalImage(req: any) {
       return {
         ok: false,
         code: "IMAGE_MODEL_UNAVAILABLE",
-        error: "Image model unavailable for this project/location.",
-        hint: "Use imagen-3.0-generate-001 or enable image model access."
+        error: "The image service is temporarily unavailable.",
       };
     }
 
-    const imageId = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-    let imageUrl = `data:image/jpeg;base64,${imageBase64}`;
+    const imageId = randomUUID();
+    const extension = extensionForMimeType(outputMimeType);
+    let imageUrl = `data:${outputMimeType};base64,${imageBase64}`;
     let storagePath: string | null = null;
 
     // Upload to Firebase Storage
     try {
-      const bucket = getStorage().bucket("al-ai-chat.firebasestorage.app");
-      const path = `generated_images/${uid}/${imageId}.jpg`;
+      const bucket = getAdminBucket();
+      const path = `generated_images/${uid}/${imageId}.${extension}`;
       const file = bucket.file(path);
       await file.save(Buffer.from(imageBase64, 'base64'), {
         metadata: {
-          contentType: "image/jpeg"
-        }
+          contentType: outputMimeType,
+          cacheControl: "private, max-age=3600",
+        },
+        resumable: false,
       });
 
       try { const [url] = await file.getSignedUrl({ action: 'read', expires: Date.now() + 1000 * 60 * 60 * 24 }); imageUrl = url; } catch (e) { }
@@ -101,6 +168,7 @@ export async function generateEducationalImage(req: any) {
         prompt,
         promptUsed: finalPrompt,
         model: modelUsed,
+        mimeType: outputMimeType,
         imageUrl,
         storagePath,
         createdAt: new Date().toISOString()
@@ -112,6 +180,7 @@ export async function generateEducationalImage(req: any) {
     return {
       ok: true,
       imageUrl, storagePath,
+      mimeType: outputMimeType,
       model: modelUsed,
       promptUsed: prompt,
       imageId

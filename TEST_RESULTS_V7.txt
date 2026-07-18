@@ -1,0 +1,61 @@
+TEC A/L PRODUCTION REPAIR V7 - FINAL TEST RESULTS
+Date: 2026-07-18
+
+PASS  npm run check:npm-registry
+      package-lock.json uses the public npm registry
+      private/internal registry occurrence count: 0
+
+PASS  npm run typecheck
+      TypeScript completed with no errors
+
+PASS  npm test
+      source registry tests
+      Z-score tests
+      markdown paragraphing tests
+      source repository tests
+      authentication strategy tests
+      native PDF text extraction tests
+      native PDF preview rendering tests
+      server response hygiene tests
+      visual-aid builder tests
+      natural-language image-intent tests
+      client display hygiene tests
+      Direct PDF answer formatter tests
+      Vercel API-path tests
+      lesson resolver and paper-routing tests
+      security and content-permission tests
+      video tests
+
+PASS  npm run build:vercel
+      Vite production frontend built
+      Vercel server runtime built
+      PDF.js worker copied
+      Google GAX protobuf assets copied
+      @napi-rs/canvas JavaScript package copied
+      Linux x64 GNU native canvas binary copied
+      isolated pure-ESM runtime boot passed
+      API smoke route reached LOGIN_REQUIRED rather than API_NOT_FOUND
+
+PASS  npm run verify:repair
+      removed unavailable-answer dead end
+      syllabus-grounded AI answer solver present
+      natural-language image generation present
+      secure PDF question crop endpoint present
+      compact evidence UI present
+      old dark-blue answer block removed
+
+VERIFIED RUNTIME ASSETS
+      vercel-runtime/server.mjs
+      vercel-runtime/pdf.worker.mjs
+      vercel-runtime/google-gax-protos/
+      vercel-runtime/node_modules/@napi-rs/canvas/
+      vercel-runtime/node_modules/@napi-rs/canvas-linux-x64-gnu/skia.linux-x64-gnu.node
+
+FINAL FRONTEND BUNDLES
+      dist/assets/index-BnPRbsoF.js
+      dist/assets/firebase-BCa7H10T.js
+
+NOT EXECUTED WITHOUT PRODUCTION CREDENTIALS
+      live Gemini/Imagen image-generation provider request
+      live Firebase Storage/Firestore write
+      authenticated browser end-to-end test against a deployed Preview URL

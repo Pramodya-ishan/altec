@@ -36,12 +36,15 @@ const formatted = formatDirectPdfAnswer({
   },
 });
 
-assert.match(formatted.markdown, /^## ප්‍රශ්නය/m);
+assert.match(formatted.markdown, /^### ප්‍රශ්නය/m);
 assert.match(formatted.markdown, /\*\*\(1\)\*\* NaOH 1 mol/);
 assert.doesNotMatch(formatted.markdown, /1\. \(1\)/);
-assert.match(formatted.markdown, /^## පිළිතුර/m);
+assert.match(formatted.markdown, /^### පිළිතුර/m);
 assert.ok(formatted.visualBlocks.some((block) => block.type === "source_evidence"));
 assert.ok(formatted.visualBlocks.some((block) => block.type === "reaction_diagram"));
 assert.ok(formatted.visualBlocks.some((block) => block.type === "comparison_bars"));
+assert.doesNotMatch(formatted.markdown, /confirmed answer was not available/i);
+assert.doesNotMatch(formatted.markdown, /^>\s/m, "answers must not be rendered as blue blockquotes");
+assert.equal(formatted.answerStatus, "Question verified · AI-solved with syllabus evidence");
 
 console.log("Direct PDF answer formatter tests passed.");

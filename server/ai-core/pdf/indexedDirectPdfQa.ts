@@ -95,7 +95,7 @@ export async function answerStructuredFromIndexedPdf(params: {
   questionNo: string;
   allowOfficialAnswer?: boolean;
 }) {
-  const { sourceId, year, subject, questionType, questionNo, allowOfficialAnswer = false } = params;
+  const { uid, sourceId, year, subject, questionType, questionNo, allowOfficialAnswer = false } = params;
   if (!sourceId) return null;
 
   const db = getAdminDb();
@@ -156,7 +156,7 @@ ${allowOfficialAnswer ? "Copy officialAnswer only when it is explicitly printed 
 
   let solvedAnswer = null;
   if (String(questionType).toUpperCase() === "MCQ" && options.length >= 4 && !extracted.officialAnswer) {
-    solvedAnswer = await solveExtractedMcqQuestion({ questionText, options, subject, year, questionNo });
+    solvedAnswer = await solveExtractedMcqQuestion({ uid, sourceId, questionText, options, subject, year, questionNo });
   }
 
   const cacheData = removeUndefinedDeep({

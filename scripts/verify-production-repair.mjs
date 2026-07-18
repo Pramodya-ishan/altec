@@ -16,6 +16,7 @@ const vercel = JSON.parse(await read("vercel.json"));
 const envExample = await read(".env.example");
 const npmrc = await read(".npmrc");
 const packageLock = await read("package-lock.json");
+const packageJson = JSON.parse(await read("package.json"));
 
 for (const label of ["Paper", "Marks", "Papers", "Z-score", "Assistant"]) {
   assert(sidebar.includes(`mobileLabel: "${label}"`), `Missing mobile label: ${label}`);
@@ -51,6 +52,8 @@ assert(responseHygiene.includes("turn_off_indicator_lights_on_the_router"), "Kno
 assert(contentPermissions.includes("isStudentVisibleSource") && contentPermissions.includes("isSharedSourceScope(source.sourceScope)"), "Legacy shared administrator resources are not safely visible to students");
 assert(knowledgeRouter.includes("asksWhichPdfCanAnswer") && knowledgeRouter.includes("inventoryMode: asksWhichPdfCanAnswer ? \"answerable\" : \"all\""), "Singlish answerable-PDF inventory routing is missing");
 assert(respondStream.includes("Ready for secure direct PDF scan") && respondStream.includes("answerableSources"), "Saved PDFs without chunks are not handed to Direct PDF QA");
+assert(envExample.includes("ENABLE_IMAGE_GENERATION=true") && envExample.includes("DISABLE_IMAGE_GENERATION=false"), "Image generation production defaults are incomplete");
+assert(packageJson.dependencies?.["@napi-rs/canvas"], "Native PDF crop renderer dependency is missing");
 assert(envExample.includes("OCR_ENABLED=true") && envExample.includes("OCR_INPUT_BUCKET=al-ai-chat-ocr-input") && envExample.includes("OCR_OUTPUT_BUCKET=al-ai-chat-ocr-output"), "OCR production example is incomplete");
 
 const sourceActions = await read("src/lib/sourceActions.ts");
@@ -61,13 +64,28 @@ const visualBuilder = await read("server/ai/visualAidBuilder.ts");
 assert(sourceActions.includes("getProtectedPdfRoute") && sourceActions.indexOf("getProtectedPdfRoute(source)") < sourceActions.lastIndexOf("getDownloadURL(ref(storage"), "Shared PDF opening must prefer the protected API over Firebase client Storage permissions");
 assert(ragRoutes.includes('req.query.format === "json"') && ragRoutes.includes("responseDisposition") && ragRoutes.includes('origin === "past_papers"'), "Protected PDF signed URL/download route is incomplete");
 assert(directFormatter.includes("normalizeMcqOption") && directFormatter.includes('type: "source_evidence"') && directFormatter.includes('type: "comparison_bars"'), "Direct PDF answer UI formatter is incomplete");
+assert(!directFormatter.includes("The question was found in the PDF, but a confirmed answer was not available."), "Legacy no-answer template remains");
+assert(!directFormatter.includes('> **${finalAnswerText}**'), "Direct answer still uses a blockquote card");
 assert(visualRenderer.includes('case "source_evidence"') && visualRenderer.includes('case "reaction_diagram"') && visualRenderer.includes('case "comparison_bars"'), "Educational visual renderer is incomplete");
 assert(visualBuilder.includes("deriveEducationalVisualBlocks") && respondStream.includes('emitSse(res, "visual_blocks"'), "General answer visual-aid pipeline is incomplete");
+const imageIntent = await read("server/ai/imageIntent.ts");
+const imageGenerator = await read("server/image/generate.ts");
+const pdfPreview = await read("server/pdf/questionPreview.ts");
+const pdfRoutes = await read("server/pdf/routes.ts");
+const pdfSolver = await read("server/ai-core/pdf/solveExtractedQuestion.ts");
+assert(imageIntent.includes("isImageGenerationIntent") && respondStream.includes("isImageGenerationIntent"), "Natural-language image generation routing is missing");
+assert(imageGenerator.includes('responseModalities: ["TEXT", "IMAGE"]') && imageGenerator.includes("generated_images/"), "Image generation/storage pipeline is incomplete");
+assert(pdfPreview.includes("pdf_question_previews/") && pdfPreview.includes("@napi-rs/canvas"), "PDF visual crop pipeline is incomplete");
+assert(pdfRoutes.includes('pdfRoutes.post("/question-preview"') && pdfRoutes.includes("createPdfQuestionPreview"), "Secure PDF preview endpoint is missing");
+assert(pdfSolver.includes("getSubjectSyllabusGroundingPdf") && pdfSolver.includes("retrieveRelevantKnowledge") && pdfSolver.includes("AI-solved"), "Syllabus-grounded PDF solver is incomplete");
+assert(!visualRenderer.includes("rounded-2xl border border-emerald"), "Source evidence still uses the oversized green card");
 
 for (const path of [
   "vercel-runtime/server.mjs",
   "vercel-runtime/pdf.worker.mjs",
   "vercel-runtime/google-gax-protos",
+  "vercel-runtime/node_modules/@napi-rs/canvas",
+  "vercel-runtime/node_modules/@napi-rs/canvas-linux-x64-gnu",
 ]) {
   await access(path);
 }

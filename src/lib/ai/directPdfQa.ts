@@ -33,6 +33,10 @@ export type DirectPdfQaResult = {
   extractionMethod?: string;
 };
 
+function asksForPdfVisual(value: unknown) {
+  return /(?:image|picture|diagram|graph|chart|figure|visual|crop|රූප|පින්තූර|සටහන|ප්‍රස්තාර|වගුව)/iu.test(String(value || ""));
+}
+
 function makeDirectQaError(code: string, source: any, details: any = {}): Error {
   const err = new Error(details.message || `Direct PDF QA Stage Failed: ${code}`);
   (err as any).errorCode = code;
@@ -158,6 +162,37 @@ export async function askDirectPdfQa(params: {
 
     onProgress?.("generating");
     const result = await response.json();
+    const evidence = result?.sourceEvidence;
+    if (
+      result?.ok
+      && evidence?.pageNumber
+      && (evidence?.hasRelevantImage === true || asksForPdfVisual(prompt))
+      && (source.id || source.sourceId)
+    ) {
+      try {
+        const previewResponse = await fetch(getLargeEndpointUrl("/api/pdf/question-preview"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token || ""}`,
+          },
+          body: JSON.stringify({
+            sourceId: source.id || source.sourceId,
+            storagePath: normalized ? (normalized.kind === "path" ? normalized.path : normalized.url) : source.storagePath,
+            pageNumber: evidence.pageNumber,
+            crop: evidence.imageRegion || null,
+            title: source.title || source.fileName,
+          }),
+        });
+        const preview = await previewResponse.json().catch(() => null);
+        if (previewResponse.ok && preview?.imageUrl) {
+          result.sourceEvidence.imagePreviewUrl = preview.imageUrl;
+          result.sourceEvidence.imagePreviewStoragePath = preview.storagePath;
+        }
+      } catch (previewError) {
+        if (import.meta.env.DEV) console.warn("[DirectPDFQA] PDF image preview unavailable", previewError);
+      }
+    }
     // Transform the evidence-first JSON into clean Markdown plus structured
     // visual aids. The model never emits raw visual JSON into the answer text.
     if (result.ok && result.answer && typeof result.answer === "object") {

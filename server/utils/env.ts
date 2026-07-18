@@ -111,7 +111,7 @@ const GEMINI_DEFAULT_MODEL = validateOptional("GEMINI_DEFAULT_MODEL", "gemini-3.
 const DEV_BYPASS_AUTH = validateBoolean("DEV_BYPASS_AUTH", false);
 const ENABLE_MOCK_ROUTES = validateBoolean("ENABLE_MOCK_ROUTES", false);
 const ENABLE_MODEL_TEST_ROUTE = validateBoolean("ENABLE_MODEL_TEST_ROUTE", false);
-const ENABLE_IMAGE_GENERATION = validateBoolean("ENABLE_IMAGE_GENERATION", false);
+const ENABLE_IMAGE_GENERATION = validateBoolean("ENABLE_IMAGE_GENERATION", true);
 const OCR_ENABLED = validateBoolean("OCR_ENABLED", false);
 
 const MAX_BODY_LIMIT_MB = validateNumber("MAX_BODY_LIMIT_MB", 2, 0.1, 100);

@@ -23,6 +23,7 @@ import { scoreSource } from "../sources/sourceScoring";
 import { isLessonEvidenceMode } from "../knowledge/lessonResolver";
 import { createAssistantStreamSanitizer, isSimpleGreeting, sanitizeAssistantText, simpleGreetingReply } from "./responseHygiene";
 import { deriveEducationalVisualBlocks } from "./visualAidBuilder";
+import { buildImageReferenceText, isImageGenerationIntent } from "./imageIntent";
 
 interface StreamTrace {
   requestId: string;
@@ -227,6 +228,69 @@ export async function aiRespondStream(req: any, res: any) {
         chatSaved: chatRes.chatSaved,
         sources: [],
         finishReason: "simple_greeting",
+      });
+      trace.doneSent = true;
+      return;
+    }
+
+    if (isImageGenerationIntent(prompt, Boolean(image))) {
+      emitSse(res, "status", {
+        step: "image_generation",
+        status: "working",
+        message: "Creating the educational image…",
+      });
+
+      const { generateEducationalImage } = await import("../image/generate");
+      const imageResult = await generateEducationalImage({
+        user,
+        body: {
+          prompt,
+          subject: activeSubject,
+          referenceText: buildImageReferenceText(history),
+          aspectRatio: "4:3",
+        },
+      });
+
+      if (!imageResult.ok || !imageResult.imageUrl) {
+        const message = "රූපය නිර්මාණය කිරීමට මේ මොහොතේ නොහැකි වුණා. ටික වේලාවකින් නැවත උත්සාහ කරන්න.";
+        emitSse(res, "token", { text: message });
+        emitSse(res, "done", {
+          ok: false,
+          completed: true,
+          requestId,
+          finishReason: imageResult.code || "image_generation_failed",
+        });
+        trace.completed = true;
+        trace.doneSent = true;
+        return;
+      }
+
+      const answer = `මෙන්න ඉල්ලූ රූපය.\n\n![Generated educational image](${imageResult.imageUrl})`;
+      emitSse(res, "token", { text: answer });
+      const chatRes = await saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: answer,
+        mode: "image_generation",
+        subject: activeSubject,
+        sources: [],
+      });
+      trace.chatSaved = chatRes.chatSaved;
+      trace.messageId = chatRes.messageId;
+      trace.completed = true;
+      emitSse(res, "done", {
+        ok: true,
+        completed: true,
+        requestId,
+        messageId: chatRes.messageId || null,
+        chatSaved: chatRes.chatSaved,
+        image: {
+          imageUrl: imageResult.imageUrl,
+          storagePath: imageResult.storagePath,
+          model: imageResult.model,
+        },
+        finishReason: "image_generation_complete",
       });
       trace.doneSent = true;
       return;

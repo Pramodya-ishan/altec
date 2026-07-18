@@ -8,9 +8,14 @@ const protoOutputDirectory = new URL("google-gax-protos/", outputDirectory);
 const pdfWorkerSource = new URL("../node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs", import.meta.url);
 const pdfWorkerTarget = new URL("pdf.worker.mjs", outputDirectory);
 const declarationTarget = new URL("server.d.mts", outputDirectory);
+const nativeCanvasSource = new URL("../node_modules/@napi-rs/canvas/", import.meta.url);
+const nativeCanvasTarget = new URL("node_modules/@napi-rs/canvas/", outputDirectory);
+const nativeCanvasLinuxSource = new URL("../node_modules/@napi-rs/canvas-linux-x64-gnu/", import.meta.url);
+const nativeCanvasLinuxTarget = new URL("node_modules/@napi-rs/canvas-linux-x64-gnu/", outputDirectory);
 
 await mkdir(outputDirectory, { recursive: true });
 await rm(protoOutputDirectory, { recursive: true, force: true });
+await rm(new URL("node_modules/", outputDirectory), { recursive: true, force: true });
 
 const googleGaxProtoPathPlugin = {
   name: "google-gax-proto-path",
@@ -47,6 +52,7 @@ const result = await build({
   target: "node22",
   format: "esm",
   plugins: [googleGaxProtoPathPlugin],
+  external: ["@napi-rs/canvas", "@napi-rs/canvas-linux-x64-gnu", "@napi-rs/canvas-linux-x64-musl"],
   define: {
     "process.env.NODE_ENV": '"production"',
   },
@@ -70,6 +76,13 @@ try {
 } catch (error) {
   throw new Error(`PDF.js worker is missing and cannot be packaged: ${error instanceof Error ? error.message : String(error)}`);
 }
+try {
+  await mkdir(new URL("node_modules/@napi-rs/", outputDirectory), { recursive: true });
+  await cp(nativeCanvasSource, nativeCanvasTarget, { recursive: true });
+  await cp(nativeCanvasLinuxSource, nativeCanvasLinuxTarget, { recursive: true });
+} catch (error) {
+  throw new Error(`Native PDF preview renderer is missing and cannot be packaged: ${error instanceof Error ? error.message : String(error)}`);
+}
 await writeFile(metafilePath, JSON.stringify(result.metafile));
 await writeFile(declarationTarget, 'declare const app: import("express").Express;\nexport default app;\n');
-console.log("Built a self-contained Vercel API runtime with bundled Google protobuf and PDF.js worker assets.");
+console.log("Built a self-contained Vercel API runtime with Google protobuf, PDF.js worker, and native PDF preview assets.");

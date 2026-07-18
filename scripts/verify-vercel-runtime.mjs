@@ -5,6 +5,8 @@ const runtimePath = new URL("../vercel-runtime/server.mjs", import.meta.url);
 const metafilePath = new URL("../vercel-runtime/server.meta.json", import.meta.url);
 const protoAssetPath = new URL("../vercel-runtime/google-gax-protos/google/longrunning/operations.proto", import.meta.url);
 const pdfWorkerPath = new URL("../vercel-runtime/pdf.worker.mjs", import.meta.url);
+const nativeCanvasPath = new URL("../vercel-runtime/node_modules/@napi-rs/canvas/index.js", import.meta.url);
+const nativeCanvasBinaryPath = new URL("../vercel-runtime/node_modules/@napi-rs/canvas-linux-x64-gnu/skia.linux-x64-gnu.node", import.meta.url);
 const vercelConfigPath = new URL("../vercel.json", import.meta.url);
 const source = await readFile(runtimePath, "utf8");
 const metafile = JSON.parse(await readFile(metafilePath, "utf8"));
@@ -29,11 +31,17 @@ const optionalRuntimeImports = new Set([
   "supports-color",
   "utf-8-validate",
 ]);
+const packagedRuntimeImports = new Set([
+  "@napi-rs/canvas",
+  "@napi-rs/canvas-linux-x64-gnu",
+  "@napi-rs/canvas-linux-x64-musl",
+]);
 const thirdPartyImports = [...importSpecifiers].filter((specifier) => (
   !specifier.startsWith(".")
   && !specifier.startsWith("/")
   && !builtins.has(specifier)
   && !optionalRuntimeImports.has(specifier)
+  && !packagedRuntimeImports.has(specifier)
 ));
 
 if (thirdPartyImports.length > 0) {
@@ -56,6 +64,8 @@ if (!source.includes("google-gax-protos")) {
 
 await access(protoAssetPath);
 await access(pdfWorkerPath);
+await access(nativeCanvasPath);
+await access(nativeCanvasBinaryPath);
 
 const functionEntries = Object.entries(vercelConfig.functions || {});
 const expectedFunctions = new Set(["api/index.ts"]);
