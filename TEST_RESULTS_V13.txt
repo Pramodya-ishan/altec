@@ -1,0 +1,23 @@
+Clora X V13 validation
+======================
+
+PASS  node scripts/check-npm-registry.mjs
+      npm lockfile registry check passed.
+
+PASS  cleanup regression
+      Created temporary legacy paths:
+      - server/app.ts
+      - server/data/userRepository.ts
+      - data_users/test.json
+      Ran npm run cleanup:obsolete.
+      All legacy paths were removed.
+
+PASS  node --check scripts/remove-obsolete-files.mjs
+
+PASS  node scripts/verify-production-repair.mjs
+      Production repair static verification passed.
+      V10 authoritative SFT syllabus, Sinhala display, prediction, and lesson-resource checks passed.
+      V11 security, privacy, unlimited-capacity, App Check, and deployment checks passed.
+
+NOT RUN  fresh npm ci / full typecheck / Vite build in this sandbox
+Reason: outbound npm registry DNS returned EAI_AGAIN. The user's Vercel log shows npm ci completed successfully and compilation reached only the stale server/app.ts import. V13 removes that obsolete file before tsc through both pretypecheck and prebuild:vercel.
