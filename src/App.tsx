@@ -219,7 +219,6 @@ function AppContent() {
   const { theme, isSidebarOpen, setCurrentView, user, isUserDataLoading, hasHydratedUserData } = useApp();
   const location = useLocation();
   const isChatRoute = location.pathname === "/clora-x" || location.pathname === "/ai-chat";
-  const [routeChanging, setRouteChanging] = React.useState(false);
 
   React.useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -233,18 +232,11 @@ function AppContent() {
      setCurrentView(path as any);
   }, [location.pathname, setCurrentView]);
 
-  React.useEffect(() => {
-    setRouteChanging(true);
-    const timer = window.setTimeout(() => setRouteChanging(false), 320);
-    return () => window.clearTimeout(timer);
-  }, [location.pathname]);
-
   return (
     <div className="min-h-[100dvh] overflow-x-hidden bg-white font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 relative">
       <OnlineStatus />
       <ToastNotification />
       <AuthOverlay />
-      <AnimatePresence>{routeChanging && <motion.div initial={{ scaleX: 0, opacity: 0 }} animate={{ scaleX: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.28 }} className="fixed left-0 top-0 z-[100000] h-0.5 w-full origin-left bg-blue-600" />}</AnimatePresence>
       <Sidebar />
       <div className={cn("flex flex-col transition-all duration-300", isChatRoute ? "h-[100dvh] overflow-hidden bg-white" : "min-h-[100dvh] bg-white", isSidebarOpen ? "lg:pl-72" : "lg:pl-[72px] pl-0")}>
         <TopNav />
@@ -256,12 +248,20 @@ function AppContent() {
               : "max-w-7xl mx-auto px-4 pb-24 pt-6 sm:px-6 sm:py-8 lg:px-8"
           )}
         >
-          <div className="relative flex h-full min-h-0 w-full flex-1 flex-col">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={location.pathname}
+              initial={{ opacity: 0, y: 7 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -5 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+              className="relative flex h-full min-h-0 w-full flex-1 flex-col"
+            >
               <Suspense fallback={<PageSkeleton pathname={location.pathname} />}>
                 {user && isUserDataLoading && !hasHydratedUserData ? (
                   <PageSkeleton pathname={location.pathname} />
                 ) : (
-                <Routes location={location} key={location.pathname}>
+                <Routes location={location}>
                   <Route path="/" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="/paper-structure" element={<PaperStructureView />} />
                   <Route path="/question-marks" element={<Navigate to="/paper-structure" replace />} />
@@ -287,7 +287,8 @@ function AppContent() {
                 </Routes>
                 )}
               </Suspense>
-          </div>
+            </motion.div>
+          </AnimatePresence>
         </main>
       </div>
 

@@ -43,6 +43,9 @@ interface CloraComposerProps {
   uploadError?: string | null;
   indexingFailed?: boolean;
   onRetryIndexing?: () => void;
+  replyTo?: { id: string; role: string; content: string } | null;
+  onCancelReply?: () => void;
+  onFocusChange?: (focused: boolean) => void;
 }
 
 function formatBytes(bytes: number) {
@@ -84,6 +87,9 @@ export function CloraComposer({
   uploadError,
   indexingFailed,
   onRetryIndexing,
+  replyTo,
+  onCancelReply,
+  onFocusChange,
 }: CloraComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -143,6 +149,11 @@ export function CloraComposer({
   };
 
   const canSubmit = !disabled && (input.trim().length > 0 || attachments.length > 0);
+  const notifyFocus = (focused: boolean) => {
+    onFocusChange?.(focused);
+    window.dispatchEvent(new CustomEvent('clora:composer-focus', { detail: { focused } }));
+  };
+
   const telemetryLabel = uploadTelemetry?.phase === 'processing'
     ? 'Processing file'
     : uploadTelemetry?.phase === 'success'
@@ -166,6 +177,17 @@ export function CloraComposer({
         layout
         className="overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.08)] transition focus-within:border-slate-400 focus-within:shadow-[0_12px_36px_rgba(15,23,42,0.12)]"
       >
+        {replyTo && (
+          <div className="flex min-w-0 items-start justify-between gap-3 border-b border-slate-100 bg-slate-50/80 px-4 py-2.5">
+            <div className="min-w-0 border-l-2 border-slate-300 pl-3">
+              <p className="text-[11px] font-semibold text-slate-600">Replying to {replyTo.role === 'assistant' ? 'Assistant' : 'your message'}</p>
+              <p className="mt-0.5 truncate text-xs text-slate-500">{replyTo.content}</p>
+            </div>
+            <button type="button" onClick={onCancelReply} className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-700" aria-label="Cancel reply">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
         {(uploadTelemetry || uploadError) && (
           <div className="border-b border-slate-100 px-4 py-3">
             {uploadTelemetry && (
@@ -227,6 +249,8 @@ export function CloraComposer({
           value={input}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
+          onFocus={() => notifyFocus(true)}
+          onBlur={() => window.setTimeout(() => notifyFocus(false), 120)}
           placeholder="Ask about a lesson, paper, or result"
           disabled={disabled}
           rows={1}
@@ -237,7 +261,7 @@ export function CloraComposer({
 
         <div className="flex items-center justify-between gap-3 px-3 pb-3">
           <div className="flex items-center gap-1">
-            <button type="button" onClick={onAttachClick} disabled={disabled} className="rounded-full p-2.5 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Attach a PDF, image, audio, or video file" title="Attach file">
+            <button type="button" onClick={onAttachClick} disabled={disabled} className="rounded-full p-2.5 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Attach a PDF or image" title="Attach file">
               <Paperclip className="h-5 w-5" />
             </button>
             <span className="hidden rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-500 sm:inline">@ tools</span>

@@ -17,6 +17,10 @@ const SINHALA_NORMALIZATIONS: Array<[RegExp, string]> = [
   [/ත්යා/g, "ත්‍යා"],
   [/න්යා/g, "න්‍යා"],
   [/ල්යා/g, "ල්‍යා"],
+  [/විද්යා/g, "විද්‍යා"],
+  [/කාර්යය/g, "කාර්යය"],
+  [/ප්රති/g, "ප්‍රති"],
+  [/ප්රධාන/g, "ප්‍රධාන"],
 ];
 
 const KNOWN_INTERNAL_LEAKS = [
@@ -56,5 +60,14 @@ export function sanitizeAssistantDisplayText(value: unknown): string {
     output.push(originalLine.replace(LONG_SNAKE_DIRECTIVE_PATTERN, "").trimEnd());
   }
 
-  return output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  let cleaned = output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (cleaned.length > 650 && !cleaned.includes("\n\n") && !cleaned.includes("```")) {
+    const sentences = cleaned.split(/(?<=[.!?。]|යි\.|වේ\.|ය\.)\s+/u).filter(Boolean);
+    if (sentences.length >= 4) {
+      const paragraphs: string[] = [];
+      for (let index = 0; index < sentences.length; index += 2) paragraphs.push(sentences.slice(index, index + 2).join(" "));
+      cleaned = paragraphs.join("\n\n");
+    }
+  }
+  return cleaned;
 }

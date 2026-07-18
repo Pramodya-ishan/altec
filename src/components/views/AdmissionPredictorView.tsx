@@ -770,51 +770,17 @@ export default function AdmissionPredictorView() {
   }, [historyPoints]);
 
   const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-xl p-4 min-w-[200px]">
-          <p className="text-slate-500 font-bold text-xs uppercase mb-2">
-            {label}
-          </p>
-          <div className="space-y-1">
-            {payload.map((entry: any, index: number) => (
-              <div
-                key={index}
-                className="flex justify-between items-center gap-4"
-              >
-                <div className="flex items-center gap-1.5">
-                  <div
-                    className="w-2 h-2 rounded-full"
-                    style={{ backgroundColor: entry.color }}
-                  ></div>
-                  <span className="text-slate-600 text-xs font-semibold">
-                    {entry.name}
-                  </span>
-                </div>
-                <span
-                  className="text-slate-900 font-bold text-sm tracking-tight"
-                  style={{ color: entry.color }}
-                >
-                  {entry.value > 0 ? "+" : ""}
-                  {entry.value}
-                </span>
-              </div>
-            ))}
-          </div>
-          {payload[0] && payload[0].payload.reason && (
-            <div className="mt-3 pt-3 border-t border-slate-100">
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-1">
-                Reason for change
-              </p>
-              <p className="text-xs text-slate-700 font-medium leading-snug">
-                {payload[0].payload.reason}
-              </p>
-            </div>
-          )}
+    if (!active || !payload?.length) return null;
+    const entry = payload[0];
+    return (
+      <div className="pointer-events-none max-w-[170px] rounded-xl border border-slate-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+        <p className="truncate text-[10px] font-semibold text-slate-500">{label}</p>
+        <div className="mt-1 flex items-center justify-between gap-3">
+          <span className="truncate text-[11px] font-medium text-slate-600">Z-score</span>
+          <strong className="shrink-0 text-xs tabular-nums text-slate-900">{Number(entry.value) > 0 ? "+" : ""}{entry.value}</strong>
         </div>
-      );
-    }
-    return null;
+      </div>
+    );
   };
 
   const formatZ = (value: number, digits = 3) =>
@@ -1036,7 +1002,7 @@ export default function AdmissionPredictorView() {
                             axisLine={false}
                             domain={[-2.5, 3.0]}
                           />
-                          <Tooltip content={<CustomTooltip />} />
+                          <Tooltip content={<CustomTooltip />} offset={14} allowEscapeViewBox={{ x: true, y: true }} wrapperStyle={{ pointerEvents: "none", zIndex: 20 }} />
                           <Legend
                             verticalAlign="top"
                             height={36}

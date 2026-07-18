@@ -23,12 +23,12 @@ for (const label of ["Paper", "Marks", "Papers", "Z-score", "Assistant"]) {
 }
 assert(sidebar.includes("h-[calc(60px+env(safe-area-inset-bottom))]"), "Mobile navigation height is not safe-area aware");
 assert(!sidebar.includes("Study assistant") && !sidebar.includes("Z-score analytics"), "Legacy navigation labels remain");
-assert(topNav.includes('aria-label="Open navigation"'), "Mobile navigation button is missing its accessible label");
+assert(!topNav.includes('aria-label="Open navigation"') && sidebar.includes('lg:flex') && sidebar.includes('hidden h-[100dvh]'), "Mobile sidebar or hamburger must be removed");
 assert(topNav.includes('aria-label="New chat"') && !topNav.includes("/> New chat"), "New chat must be icon-only");
 assert(chat.includes("Ask about a lesson, paper, question, or result."), "English welcome message is missing");
 assert(chat.includes('aria-label="Jump to latest answer"') && !chat.includes("අලුත් පිළිතුර"), "Latest-answer button was not repaired");
 assert(chat.includes('accept="application/pdf,image/png,image/jpeg,image/webp"'), "Assistant attachment input is not restricted");
-assert(bubble.includes("Searching sources") && bubble.includes("Preparing answer") && bubble.includes("Copy answer"), "Assistant status chrome is not English");
+assert(bubble.includes("Thinking") && bubble.includes("Copy answer") && bubble.includes("Reply"), "Assistant thinking/message actions are incomplete");
 assert(chartShell.includes("ResizeObserver") && chartShell.includes("IntersectionObserver"), "Chart shell is missing visibility-aware measurement");
 assert(!chartShell.includes("ResponsiveContainer"), "ResponsiveChartShell must not depend on ResponsiveContainer");
 assert(videoPlayer.includes("Preparing video…") && videoPlayer.includes("Retry") && !videoPlayer.includes("<header"), "Video player overlay repair is incomplete");
@@ -91,6 +91,21 @@ for (const path of [
 }
 assert((await stat("vercel-runtime/pdf.worker.mjs")).size > 100_000, "PDF.js worker looks invalid");
 
+
+
+const hero = await read("src/components/ui/clora/CloraHero.tsx");
+const composer = await read("src/components/ui/clora/CloraComposer.tsx");
+const memoryExtractor = await read("server/ai/memoryExtractor.ts");
+const userContext = await read("server/firebase/userContext.ts");
+const notesModal = await read("src/components/modals/NotesModal.tsx");
+const admissionView = await read("src/components/views/AdmissionPredictorView.tsx");
+assert(!hero.includes("Study with A/L subjects") && !hero.includes("2023 SFT") && hero.includes("What would you like to learn?"), "Legacy Assistant hero/prompts remain");
+assert(chat.includes("activeSubject: undefined") && chat.includes("replyingTo") && chat.includes("revealBufferedAnswer"), "All-subject context, message replies, or buffered typing is missing");
+assert(composer.includes("clora:composer-focus") && sidebar.includes("clora:composer-focus"), "Mobile bottom navigation does not react to the Assistant keyboard/composer");
+assert(memoryExtractor.includes('"weak_points"') && memoryExtractor.includes('"mistake_notebook"') && memoryExtractor.includes('"learning_signal_aggregates"'), "Separate learning memory collections are missing");
+assert(userContext.includes("weak_points") && userContext.includes("mistake_notebook") && userContext.includes("learning_signal_aggregates"), "Saved learning signals are not loaded into AI context");
+assert(notesModal.includes("lesson-resources:changed") && notesModal.includes("lessonTitle"), "Lesson resources do not refresh or use stable lesson matching");
+assert(admissionView.includes("max-w-[170px]") && admissionView.includes("allowEscapeViewBox"), "Z-score tooltip still obscures the chart");
 
 const pastPapersView = await read("src/components/views/PastPapersView.tsx");
 const lessonResourceRoutes = await read("server/lessonResources/routes.ts");

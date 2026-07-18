@@ -55,6 +55,7 @@ import { TtsComposerModal } from '../chat/TtsComposerModal';
 import { RealtimeLiveCallPanel } from '../ui/clora/RealtimeLiveCallPanel';
 import { VoiceAudioCard } from '../chat/VoiceAudioCard';
 import { parseChatCommand } from '../../lib/chatCommandParser';
+import { isClientImageGenerationIntent } from '../../lib/ai/imageIntent';
 
 function generateUUID() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -116,7 +117,12 @@ const [messages, setMessages] = useState<{
     paperInfo?: any,
     errorCode?: string,
     audioUrl?: string,
-    attachments?: any[]
+    attachments?: any[],
+    replyTo?: { id: string; role: string; content: string } | null,
+    thinkingStatus?: string,
+    generatedImage?: { url: string; alt?: string; storagePath?: string; model?: string },
+    imageError?: string,
+    imagePrompt?: string
   }[]>([
     {
       role: 'assistant',
@@ -125,6 +131,7 @@ const [messages, setMessages] = useState<{
     }
   ]);
   const [input, setInput] = useState('');
+  const [replyingTo, setReplyingTo] = useState<{ id: string; role: string; content: string } | null>(null);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [commandSearchQuery, setCommandSearchQuery] = useState('');
   const [showTtsModal, setShowTtsModal] = useState(false);
@@ -302,11 +309,39 @@ const [messages, setMessages] = useState<{
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const currentRequestIdRef = useRef<string | null>(null);
   const activeStreamIdRef = useRef<string | null>(null);
+  const bufferedAnswerRef = useRef(new Map<string, string>());
+  const typingTimerRef = useRef<number | null>(null);
   const isStreamingRef = useRef(false);
 
   useEffect(() => {
     isStreamingRef.current = isStreaming;
   }, [isStreaming]);
+
+  useEffect(() => () => {
+    if (typingTimerRef.current !== null) window.clearTimeout(typingTimerRef.current);
+  }, []);
+
+  const revealBufferedAnswer = React.useCallback((messageId: string, finalStatus: string, onComplete?: (content: string) => void) => {
+    const fullText = bufferedAnswerRef.current.get(messageId) || '';
+    bufferedAnswerRef.current.delete(messageId);
+    if (!fullText) {
+      setMessages(prev => prev.map(message => message.id === messageId ? { ...message, status: finalStatus } : message));
+      onComplete?.('');
+      return;
+    }
+    let cursor = 0;
+    setMessages(prev => prev.map(message => message.id === messageId ? { ...message, content: '', status: 'typing', thinkingStatus: 'Writing the answer' } : message));
+    const tick = () => {
+      const remaining = fullText.length - cursor;
+      const chunkSize = remaining > 2400 ? 48 : remaining > 900 ? 24 : 10;
+      cursor = Math.min(fullText.length, cursor + chunkSize);
+      const visible = fullText.slice(0, cursor);
+      setMessages(prev => prev.map(message => message.id === messageId ? { ...message, content: visible, status: cursor >= fullText.length ? finalStatus : 'typing' } : message));
+      if (cursor < fullText.length) typingTimerRef.current = window.setTimeout(tick, 16);
+      else { typingTimerRef.current = null; onComplete?.(fullText); }
+    };
+    tick();
+  }, []);
 
   const [uploading, setUploading] = useState(false);
   const [uploadTelemetry, setUploadTelemetry] = useState<UploadTelemetry | null>(null);
@@ -862,28 +897,22 @@ const [messages, setMessages] = useState<{
           }
 
           let finalContent = "";
-          setMessages(prev => {
-            return prev.map(m => {
-              if (m.id === assistantMsgId) {
-                finalContent = m.content || "";
-                const hasScanFailure = data?.finishReason === "direct_pdf_qa_failed" || data?.errorCode === "AI_CLIENT_RUNTIME_ERROR" || data?.errorCode === "EXACT_QUESTION_EVIDENCE_MISSING";
-                return {
-                  ...m,
-                  status: hasScanFailure ? "error" : (data?.completed === false ? "incomplete" : "done"),
-                  paperInfo: data?.paperInfo || m.paperInfo,
-                  errorCode: data?.errorCode,
-                  visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
-                  sources: Array.isArray(data?.sources) && data.sources.length > 0
-                    ? Array.from(new Map([...(m.sources || []), ...data.sources].map((source: any) => [source.id || source.sourceId || source.title, source])).values())
-                    : m.sources,
-                };
-              }
-              return m;
-            });
-          });
-          if (isVoiceFeedbackEnabled && finalContent) {
-            speakText(finalContent, assistantMsgId);
-          }
+          setMessages(prev => prev.map(m => {
+            if (m.id !== assistantMsgId) return m;
+            finalContent = m.content || "";
+            const failed = data?.finishReason === "direct_pdf_qa_failed" || data?.completed === false;
+            return {
+              ...m,
+              status: failed ? "error" : "done",
+              paperInfo: data?.paperInfo || m.paperInfo,
+              errorCode: data?.errorCode,
+              visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
+              sources: Array.isArray(data?.sources) && data.sources.length > 0
+                ? Array.from(new Map([...(m.sources || []), ...data.sources].map((source: any) => [source.id || source.sourceId || source.title, source])).values())
+                : m.sources,
+            };
+          }));
+          if (isVoiceFeedbackEnabled && finalContent) speakText(finalContent, assistantMsgId);
           if (activeStreamIdRef.current === streamId) {
             activeStreamIdRef.current = null;
             currentRequestIdRef.current = null;
@@ -906,6 +935,8 @@ const [messages, setMessages] = useState<{
       role: 'assistant' as const,
       content: "",
       status: "streaming",
+      thinkingStatus: "Understanding your question",
+      replyTo: replyingTo,
       summary: [] as string[],
       sources: lastAssistantMessage.sources || [],
       createdAt: new Date().toISOString(),
@@ -1050,6 +1081,7 @@ const [messages, setMessages] = useState<{
       content: userMsg,
       status: "sent",
       createdAt: new Date().toISOString(),
+      replyTo: replyingTo,
       attachments: currentUpload ? [{
         name: currentUpload.name,
         mimeType: currentUpload.mimeType || (currentUpload.isImage ? "image/jpeg" : undefined),
@@ -1070,6 +1102,7 @@ const [messages, setMessages] = useState<{
     };
 
     const nextMessages = [...messages, userMessage];
+    setReplyingTo(null);
     setMessages(prev => [...prev, userMessage, assistantPlaceholder]);
 
     const parsedCommand = parseChatCommand(userMsg);
@@ -1110,7 +1143,7 @@ const [messages, setMessages] = useState<{
        return;
     }
 
-    if (parsedCommand.command === 'image') {
+    if (parsedCommand.command === 'image' || isClientImageGenerationIntent(userMsg, Boolean(imagePayload))) {
       try {
         const referenceText = [...messages]
           .reverse()
@@ -1122,8 +1155,8 @@ const [messages, setMessages] = useState<{
             Authorization: `Bearer ${await auth.currentUser?.getIdToken()}`
           },
           body: JSON.stringify({
-            prompt: parsedCommand.text,
-            subject: currentSubject,
+            prompt: parsedCommand.command === 'image' ? parsedCommand.text : userMsg,
+            subject: undefined,
             referenceText: String(referenceText).slice(0, 5_000),
             aspectRatio: "4:3",
           })
@@ -1137,7 +1170,7 @@ const [messages, setMessages] = useState<{
           setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: data?.error || "රූපය නිර්මාණය කිරීමට මේ මොහොතේ නොහැකි වුණා. නැවත උත්සාහ කරන්න.", status: "error" } : m));
         }
       } catch (err: any) {
-        setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: "රූප නිර්මාණ සේවාවට සම්බන්ධ වීමට නොහැකි වුණා. නැවත උත්සාහ කරන්න.", status: "error" } : m));
+        setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: "", imageError: "රූප නිර්මාණ සේවාවට සම්බන්ධ වීමට නොහැකි වුණා. නැවත උත්සාහ කරන්න.", imagePrompt: userMsg, status: "error" } : m));
       }
       if (activeStreamIdRef.current === streamId) {
         activeStreamIdRef.current = null;
@@ -1178,6 +1211,10 @@ const [messages, setMessages] = useState<{
       messagePrompt = `[PDF Intent] ${parsedCommand.text || "Please answer from the uploaded PDF"}`;
     }
 
+    if (replyingTo) {
+      messagePrompt = `[Replying to ${replyingTo.role} message: ${replyingTo.content.slice(0, 1200)}]\n\n${messagePrompt}`;
+    }
+
     let attachmentsPayload = undefined;
     if (currentUpload && !currentUpload.isImage && currentUpload.storagePath && currentUpload.mimeType) {
        attachmentsPayload = [{
@@ -1189,7 +1226,7 @@ const [messages, setMessages] = useState<{
 
     await sendAIMessage({
         prompt: messagePrompt,
-        activeSubject: currentSubject,
+        activeSubject: undefined,
         mode: toolMode,
         history: nextMessages.slice(-10).map(m => ({ role: m.role, text: m.content })),
         image: imagePayload,
@@ -1197,13 +1234,7 @@ const [messages, setMessages] = useState<{
         assistantMessageId: assistantMsgId,
         onToken: (text) => {
           if (activeStreamIdRef.current !== streamId) return;
-          setMessages(prev =>
-            prev.map(m =>
-              m.id === assistantMsgId
-                ? { ...m, content: (m.content || "") + text }
-                : m
-            )
-          );
+          bufferedAnswerRef.current.set(assistantMsgId, (bufferedAnswerRef.current.get(assistantMsgId) || "") + text);
         },
         onSources: (newSources) => {
           if (activeStreamIdRef.current !== streamId) return;
@@ -1229,6 +1260,9 @@ const [messages, setMessages] = useState<{
           );
         },
         onStatus: (statusData) => {
+          if (activeStreamIdRef.current !== streamId) return;
+          const label = statusData?.message || statusData?.label || "Thinking";
+          setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, thinkingStatus: label, status: "streaming" } : m));
         },
         onWebCandidates: (candidates) => {
           if (activeStreamIdRef.current !== streamId) return;
@@ -1284,29 +1318,25 @@ const [messages, setMessages] = useState<{
             return;
           }
 
-          let finalContent = "";
-          setMessages(prev => {
-            return prev.map(m => {
-              if (m.id === assistantMsgId) {
-                finalContent = m.content || "";
-                const hasScanFailure = data?.finishReason === "direct_pdf_qa_failed" || data?.errorCode === "AI_CLIENT_RUNTIME_ERROR" || data?.errorCode === "EXACT_QUESTION_EVIDENCE_MISSING";
-                return {
-                  ...m,
-                  status: hasScanFailure ? "error" : (data?.completed === false ? "incomplete" : "done"),
-                  paperInfo: data?.paperInfo || m.paperInfo,
-                  errorCode: data?.errorCode,
-                  visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
-                  sources: Array.isArray(data?.sources) && data.sources.length > 0
-                    ? Array.from(new Map([...(m.sources || []), ...data.sources].map((source: any) => [source.id || source.sourceId || source.title, source])).values())
-                    : m.sources,
-                };
-              }
-              return m;
-            });
+          const bufferedContent = bufferedAnswerRef.current.get(assistantMsgId) || "";
+          setMessages(prev => prev.map(m => {
+            if (m.id !== assistantMsgId) return m;
+            return {
+              ...m,
+              status: "streaming",
+              paperInfo: data?.paperInfo || m.paperInfo,
+              errorCode: data?.errorCode,
+              generatedImage: data?.image?.imageUrl ? { url: data.image.imageUrl, storagePath: data.image.storagePath, model: data.image.model, alt: userMsg } : m.generatedImage,
+              visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
+              sources: Array.isArray(data?.sources) && data.sources.length > 0
+                ? Array.from(new Map([...(m.sources || []), ...data.sources].map((source: any) => [source.id || source.sourceId || source.title, source])).values())
+                : m.sources,
+            };
+          }));
+          const finalStatus = (data?.finishReason === "direct_pdf_qa_failed" || data?.completed === false) ? "error" : "done";
+          revealBufferedAnswer(assistantMsgId, finalStatus, (revealedContent) => {
+            if (isVoiceFeedbackEnabled && revealedContent) speakText(revealedContent, assistantMsgId);
           });
-          if (isVoiceFeedbackEnabled && finalContent) {
-            speakText(finalContent, assistantMsgId);
-          }
           if (activeStreamIdRef.current === streamId) {
             activeStreamIdRef.current = null;
             currentRequestIdRef.current = null;
@@ -1321,6 +1351,7 @@ const [messages, setMessages] = useState<{
      }
      setMessages([{ role: 'assistant', content: 'Ask about a lesson, paper, question, or result.', id: 'welcome' }]);
      setInput('');
+     setReplyingTo(null);
      setUploadedFile(null);
      setUploadError(null);
      setUploadTelemetry(null);
@@ -1397,17 +1428,7 @@ const [messages, setMessages] = useState<{
 
           <div className="clora-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-white" ref={scrollRef}>
             {isEmptyChat ? (
-              <CloraHero
-                onSelectPrompt={(prompt) => {
-                  setInput(prompt);
-                }}
-                prompts={[
-                  { title: "2023 paper structure", icon: <FileText className="h-4 w-4"/>, prompt: "2023 SFT ප්‍රශ්න පත්‍රයේ ව්‍යුහය පැහැදිලි කරන්න." },
-                  { title: "Explain Z-score", icon: <BrainCircuit className="h-4 w-4"/>, prompt: "A/L Z-Score එක ගණනය කරන ආකාරය සරලව පැහැදිලි කරන්න." },
-                  { title: "Review mistakes", icon: <CheckCircle className="h-4 w-4"/>, prompt: "මගේ මෑත වැරදි අනුව කෙටි ප්‍රශ්න කිහිපයක් අහන්න." },
-                  { title: "Summarize notes", icon: <Database className="h-4 w-4"/>, prompt: "SFT ප්‍රධාන ඒකකවල කෙටි සාරාංශයක් දෙන්න." }
-                ]}
-              />
+              <CloraHero />
             ) : (
               <div className="mx-auto w-full min-w-0 max-w-3xl px-4 pb-6 pt-5 sm:px-6 sm:pt-8">
                 <AnimatePresence initial={false}>
@@ -1417,7 +1438,10 @@ const [messages, setMessages] = useState<{
                     <CloraMessageBubble
                       key={msg.id || idx}
                       message={msg}
-                      isStreaming={isStreaming && idx === messages.length - 1}
+                      isStreaming={(msg.status === 'streaming' || msg.status === 'typing') && idx === messages.length - 1}
+                      onReply={(message) => setReplyingTo({ id: message.id, role: message.role, content: String(message.content || '').slice(0, 1200) })}
+                      onSuggestionClick={(suggestion) => setInput(suggestion)}
+                      onRetryImage={(prompt) => { setInput(prompt); requestAnimationFrame(() => document.getElementById('clora-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }))); }}
                       onToolClick={(tool) => {
                          if (tool === 'sources') {
                             setActiveSources(msg.sources || []);
@@ -1453,6 +1477,8 @@ const [messages, setMessages] = useState<{
             <CloraComposer
               input={input}
               setInput={setInput}
+              replyTo={replyingTo}
+              onCancelReply={() => setReplyingTo(null)}
               onSubmit={handleComposerSubmit}
               isStreaming={isStreaming}
               onStopClick={cancel}

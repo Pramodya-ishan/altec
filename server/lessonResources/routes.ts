@@ -11,35 +11,83 @@ lessonResourceRoutes.get("/lesson-resources", requireFirebaseUser, async (req: a
   try {
     const subject = String(req.query.subject || "").trim().toUpperCase();
     const requestedLessonId = normalizeLessonId(req.query.lessonId || req.query.lessonTitle);
+    const requestedLessonTitle = String(req.query.lessonTitle || req.query.lessonId || "").normalize("NFKC").trim();
     if (!subject || !requestedLessonId) {
       return res.status(400).json({ ok: false, code: "LESSON_QUERY_REQUIRED", message: "subject and lessonId are required." });
     }
 
-    const snapshot = await getAdminDb().collection("lesson_resources").where("subject", "==", subject).get();
+    const db = getAdminDb();
     const manager = isContentManager(req.user);
-    const resources = snapshot.docs
-      .map((document: any) => ({ id: document.id, ...document.data() }))
-      .filter((resource: any) => normalizeLessonId(resource.lessonId || resource.lessonTitle) === requestedLessonId)
-      .filter((resource: any) => {
-        if (manager) return resource.processingStatus !== "archived";
-        if (resource.ownerUid === req.user.uid && resource.visibility === "private") return true;
-        return resource.published === true
-          && ["class", "public", "official"].includes(String(resource.visibility || ""))
-          && resource.processingStatus !== "archived";
-      })
-      .map((resource: any) => ({
-        ...resource,
-        displayPriority: normalizeDisplayPriority(resource.displayPriority, 0),
-      }))
-      .sort((left: any, right: any) => {
-        const priorityDelta = normalizeDisplayPriority(right.displayPriority, 0) - normalizeDisplayPriority(left.displayPriority, 0);
-        if (priorityDelta !== 0) return priorityDelta;
-        const uploadedDelta = resourceTimestampMillis(right.createdAt || right.updatedAt) - resourceTimestampMillis(left.createdAt || left.updatedAt);
-        if (uploadedDelta !== 0) return uploadedDelta;
-        return String(left.title || "").localeCompare(String(right.title || ""));
-      });
+    const [resourceSnapshot, videoSnapshot] = await Promise.all([
+      db.collection("lesson_resources").where("subject", "==", subject).get(),
+      db.collection("videos").where("subject", "==", subject).get().catch(() => ({ docs: [] } as any)),
+    ]);
 
-    return res.json({ ok: true, resources, canManageLessonResources: manager });
+    const aliases = new Set([
+      requestedLessonId,
+      normalizeLessonId(requestedLessonTitle),
+      normalizeLessonId(requestedLessonTitle.replace(/[–—:()\[\]]/g, " ")),
+    ].filter(Boolean));
+    const matchesLesson = (resource: any) => {
+      const candidates = [resource.lessonId, resource.lessonTitle, resource.lesson, resource.topic]
+        .map((value) => normalizeLessonId(value))
+        .filter(Boolean);
+      return candidates.some((candidate) => aliases.has(candidate))
+        || candidates.some((candidate) => candidate.includes(requestedLessonId) || requestedLessonId.includes(candidate));
+    };
+
+    const resourceDocs = resourceSnapshot.docs.map((document: any) => ({ id: document.id, ...document.data() }));
+    const videoFallbackDocs = (videoSnapshot as any).docs.map((document: any) => {
+      const video = document.data() || {};
+      return {
+        id: `video-${document.id}`,
+        videoId: document.id,
+        sourceId: document.id,
+        subject,
+        lessonId: video.lessonId || normalizeLessonId(video.lesson || video.lessonTitle),
+        lessonTitle: video.lessonTitle || video.lesson || "General",
+        resourceType: "lesson_video",
+        mediaKind: "video",
+        title: video.title || video.fileName || "Lesson video",
+        fileName: video.fileName || video.title || "Lesson video",
+        storagePath: video.storagePath || video.sourceStoragePath || null,
+        visibility: video.visibility || "public",
+        published: Boolean(video.isPublished),
+        processingStatus: video.status || "processing",
+        allowPlayback: Boolean(video.allowPlayback),
+        createdBy: video.createdBy || video.ownerUid || null,
+        createdAt: video.createdAt,
+        updatedAt: video.updatedAt,
+        displayPriority: normalizeDisplayPriority(video.displayPriority, 0),
+      };
+    });
+
+    const merged = new Map<string, any>();
+    for (const resource of [...resourceDocs, ...videoFallbackDocs]) {
+      if (!matchesLesson(resource)) continue;
+      const visible = manager
+        ? resource.processingStatus !== "archived"
+        : (resource.ownerUid === req.user.uid && resource.visibility === "private")
+          || (resource.published === true
+            && ["class", "public", "official"].includes(String(resource.visibility || ""))
+            && resource.processingStatus !== "archived"
+            && (resource.mediaKind !== "video" || resource.allowPlayback === true));
+      if (!visible) continue;
+      const key = String(resource.videoId || resource.sourceId || resource.id);
+      const previous = merged.get(key) || {};
+      merged.set(key, { ...previous, ...resource, displayPriority: normalizeDisplayPriority(resource.displayPriority, 0) });
+    }
+
+    const resources = Array.from(merged.values()).sort((left: any, right: any) => {
+      const priorityDelta = normalizeDisplayPriority(right.displayPriority, 0) - normalizeDisplayPriority(left.displayPriority, 0);
+      if (priorityDelta !== 0) return priorityDelta;
+      const uploadedDelta = resourceTimestampMillis(right.createdAt || right.updatedAt) - resourceTimestampMillis(left.createdAt || left.updatedAt);
+      if (uploadedDelta !== 0) return uploadedDelta;
+      return String(left.title || "").localeCompare(String(right.title || ""));
+    });
+
+    res.setHeader("Cache-Control", "private, no-store, max-age=0");
+    return res.json({ ok: true, resources, canManageLessonResources: manager, lessonId: requestedLessonId });
   } catch (error: any) {
     return res.status(500).json({ ok: false, code: "LESSON_RESOURCES_READ_FAILED", message: error.message });
   }

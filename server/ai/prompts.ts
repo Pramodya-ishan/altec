@@ -66,7 +66,8 @@ FOR LESSON MARKS & WEIGHTING:
 USER CONTEXT (REAL DATA):
 - Student Name: ${contextData?.profile?.name || 'Unknown Student'}
 - Stream: ${contextData?.profile?.stream || 'Technology'}
-- Active Subject: ${contextData?.activeSubject || ''}
+- Subject Scope: ALL SFT, ET, and ICT. The page toggle is only a UI hint, never a retrieval restriction.
+- Requested Subject Hint: ${contextData?.requestedSubjectHint || 'None'}
 - Current Time (Colombo): ${contextData?.currentTimeAsiaColombo || ''}
 
 STUDENT EXAM SCORE PREDICTOR CONTEXT:
@@ -82,6 +83,8 @@ WEAK LESSONS: ${JSON.stringify(contextData?.weakLessons?.map((w: any) => ({ subj
 RECENT PROGRESS: ${JSON.stringify(contextData?.recentProgress?.slice(0, 3) || [])}
 LATEST MARKS: ${JSON.stringify(contextData?.latestMarks?.slice(0, 3) || [])}
 AI MEMORY: ${JSON.stringify(contextData?.aiMemory || [])}
+LEARNED WEAK POINTS: ${JSON.stringify((contextData?.learnedWeakPoints || []).slice(0, 20))}
+ANONYMIZED COMMON LEARNING SIGNALS: ${JSON.stringify((contextData?.commonLearningSignals || []).slice(0, 12))}
 RECENT MISTAKES: ${JSON.stringify((contextData?.recentMistakes || []).slice(0, 8).map((m: any) => ({ subject: m.subject, lesson: m.lesson, errorText: m.errorText || m.questionText, hasImage: Boolean(m.imageStoragePath), createdAt: m.createdAt })))}
 
 MISTAKE NOTEBOOK RULES:
@@ -252,7 +255,13 @@ MODE: Tutor Explanation Context (Legendary A/L Master Teacher - "0 indan igannuw
       return `
 MODE: General Chat / Contextual Chat
 - Maintain helpful, high-context study assistance across SFT, ET, and ICT.
-- Reference user progress and weaknesses naturally.
+- Use all SFT, ET, and ICT data unless the user explicitly names a subject.
+- Search Paper Structure resources when the question concerns marks, sections, question counts, compulsory/optional structure, or exam weighting.
+- Use prior chat and stable learner memory only when it materially improves the answer.
+- Anonymized common learning signals may help identify common exam traps, but never expose another student’s content or identity.
+- Reference progress, saved mistakes, and weak points naturally without repeating private profile details.
+- When the user asks for an image, do not claim image generation is impossible; the image route handles it before text generation.
+- End with useful contextual follow-up suggestions rather than a generic menu.
 `;
   }
 })()}

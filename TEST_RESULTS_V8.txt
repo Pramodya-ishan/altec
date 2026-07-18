@@ -1,0 +1,191 @@
+=== V8 FINAL VERIFICATION ===
+UTC 2026-07-18 01:15:05
+\n$ npm run check:npm-registry
+
+> react-example@0.0.0 check:npm-registry
+> node scripts/check-npm-registry.mjs
+
+npm lockfile registry check passed.
+\n$ npm run typecheck
+
+> react-example@0.0.0 typecheck
+> tsc --noEmit
+
+\n$ npm test
+
+> react-example@0.0.0 test
+> npm run test:sources && npm run test:knowledge && npm run test:security && npm run test:video
+
+
+> react-example@0.0.0 test:sources
+> node --import tsx src/shared/source-registry/__tests__/source.test.ts && node --import tsx src/shared/__tests__/zscore.test.ts && node --import tsx src/lib/markdown/__tests__/normalizeAnswerMarkdown.test.ts && node --import tsx server/sources/__tests__/run-repo-tests.ts && node --import tsx src/lib/__tests__/authStrategy.test.ts && node --import tsx server/pdf/__tests__/extractText.test.ts && node --import tsx server/pdf/__tests__/questionPreviewRenderer.test.ts && node --import tsx server/ai/__tests__/responseHygiene.test.ts && node --import tsx server/ai/__tests__/visualAidBuilder.test.ts && node --import tsx server/ai/__tests__/imageIntent.test.ts && node --import tsx src/lib/ai/__tests__/imageIntent.test.ts && node --import tsx src/lib/__tests__/assistantTextHygiene.test.ts && node --import tsx src/lib/ai/__tests__/directPdfAnswerFormatter.test.ts && node --import tsx server/utils/__tests__/vercelApiPath.test.ts
+
+Running Source Registry v2 Unit Tests...
+- Testing Filename Normalization...
+- Testing Subject Normalization...
+- Testing Alias Generation...
+- Testing Schema Validation...
+- Testing Transitions...
+- Testing Question Parser (Part 04A)...
+
+ALL TESTS PASSED!
+Z-score regression tests passed
+answer Markdown normalization tests passed
+==========================================
+STARTING PART 03B REPOSITORY TESTS
+==========================================
+
+[PASS] Private source authorization
+[PASS] Legacy RAG converter
+
+==========================================
+ALL PART 03B REPOSITORY TESTS PASSED!
+Google auth strategy tests passed
+PDF extraction state tests passed
+PDF question preview renderer tests passed.
+assistant response hygiene tests passed
+Educational visual aid builder tests passed.
+Natural-language image intent tests passed.
+Client image intent tests passed
+assistant display text hygiene tests passed
+Direct PDF answer formatter tests passed.
+Vercel API path restoration tests passed
+
+> react-example@0.0.0 test:knowledge
+> node --import tsx server/knowledge/__tests__/lessonResolver.test.ts && node --import tsx server/knowledge/__tests__/paperRoutingRegression.test.ts
+
+lesson resolver regression tests passed
+Paper routing regression tests passed.
+
+> react-example@0.0.0 test:security
+> node --import tsx scripts/run-security-tests.ts && node --import tsx server/utils/__tests__/contentPermissions.test.ts
+
+==========================================
+STARTING SECTION 02 SECURITY & ROLE TESTS
+==========================================
+
+--- Group A: Capability Matrix Tests ---
+[PASS] Student owned private source
+[PASS] Student accessing foreign private source
+[PASS] Admin accessing foreign private source
+[PASS] Student accessing official source
+[PASS] Ops accessing official source
+[PASS] Reviewer vs Student cache review capability
+
+--- Group B: Literal Email Scan Checks ---
+[PASS] Literal email authorization scan - No forbidden admin emails found in logical guards.
+
+--- Group C: Configured Admin Role Tests ---
+[PASS] Configured admin requires a verified matching Firebase email
+
+--- Group D: Google Credential Validation Tests ---
+[PASS] Strict Google service-account parsing
+
+==========================================
+ALL SECURITY & CAPABILITY TESTS PASSED!
+==========================================
+content permission tests passed
+
+> react-example@0.0.0 test:video
+> node --import tsx server/video/__tests__/run-video-tests.ts
+
+◇ injected env (0) from .env // tip: ⌘ override existing { override: true }
+ALL SECURE VIDEO TESTS PASSED!
+\n$ npm run build:vercel
+
+> react-example@0.0.0 prebuild:vercel
+> npm run validate:vercel-env && npm run verify && node scripts/check-no-old-preview-url.mjs && node scripts/copy-pdf-worker.mjs
+
+
+> react-example@0.0.0 validate:vercel-env
+> node --import tsx scripts/validate-vercel-env.ts
+
+Skipped Google service-account validation outside Vercel (no credential configured). 
+
+> react-example@0.0.0 verify
+> npm run check:npm-registry && npm run lint
+
+
+> react-example@0.0.0 check:npm-registry
+> node scripts/check-npm-registry.mjs
+
+npm lockfile registry check passed.
+
+> react-example@0.0.0 lint
+> tsc --noEmit
+
+Scanning files for old preview URLs...
+No old preview URLs found. Success!
+Copied worker from node_modules/pdfjs-dist/build/pdf.worker.min.mjs to public/pdf.worker.min.mjs
+
+> react-example@0.0.0 build:vercel
+> vite build && npm run bundle:vercel
+
+[36mvite v6.4.3 [32mbuilding for production...[36m[39m
+transforming...
+\n=== POST-TIMEOUT VERIFICATION ===
+The prior successful production bundle was created at UTC 01:11; the timed-out rerun changed only the verification script, not application source.
+\n$ npm run bundle:vercel
+
+> react-example@0.0.0 bundle:vercel
+> node scripts/build-vercel-runtime.mjs && node scripts/verify-vercel-runtime.mjs && node scripts/smoke-vercel-runtime.mjs
+
+Built a self-contained Vercel API runtime with Google protobuf, PDF.js worker, and native PDF preview assets.
+Verified self-contained Vercel runtime (47 imports).
+◇ injected env (0) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+Successfully seeded pre-existing user data on Vercel.
+[DEPLOY] target=cloud_run
+[AI_CONFIG] mode=vertex
+[AI_CONFIG] project=al-ai-chat
+[AI_CONFIG] location=global
+[AI_CONFIG] hasServiceAccountJson=false
+[AI_CONFIG] GEMINI_API_KEY ignored because GEMINI_USE_VERTEX=true
+[AI_CONFIG] normal_chat=gemini-3.5-flash
+[AI_CONFIG] pdfQa=gemini-3.5-flash
+[AI_CONFIG] final=gemini-3.1-pro-preview
+[AI_CONFIG] tts=false
+🔒 Safe Environment Config Loaded:
+  - NODE_ENV: "production"
+  - PORT: 3000
+  - ALLOWED_ORIGINS: []
+  - GOOGLE_CLOUD_PROJECT: "al-ai-chat"
+  - FIREBASE_PROJECT_ID: "al-ai-chat"
+  - FIREBASE_STORAGE_BUCKET: "al-ai-chat.firebasestorage.app"
+  - FIRESTORE_DATABASE_ID: ""
+  - GEMINI_API_KEY: [REDACTED] (Not Configured)
+  - GEMINI_DEFAULT_MODEL: "gemini-3.5-flash"
+  - DEV_BYPASS_AUTH: false
+  - ENABLE_MOCK_ROUTES: false
+  - ENABLE_MODEL_TEST_ROUTE: false
+  - ENABLE_IMAGE_GENERATION: true
+  - OCR_ENABLED: false
+  - MAX_BODY_LIMIT_MB: 2
+  - RATE_LIMIT_IP_WINDOW_MS: 60000
+  - RATE_LIMIT_IP_MAX: 100
+  - RATE_LIMIT_UID_WINDOW_MS: 60000
+  - RATE_LIMIT_UID_MAX: 100
+  - ENABLE_VIDEO: true
+  - ENABLE_VIDEO_TRANSCODING: false
+  - VIDEO_REQUIRE_APP_CHECK: false
+  - VIDEO_INPUT_BUCKET: "al-ai-chat.firebasestorage.app"
+  - VIDEO_OUTPUT_BUCKET: ""
+  - VIDEO_ARCHIVE_BUCKET: ""
+  - VIDEO_TRANSCODER_LOCATION: "us-central1"
+  - VIDEO_CDN_BASE_URL: ""
+  - VIDEO_CDN_KEY_NAME: [REDACTED] (Not Configured)
+  - VIDEO_CDN_SIGNING_KEY: [REDACTED] (Not Configured)
+  - VIDEO_COOKIE_DOMAIN: ""
+  - VIDEO_UPLOAD_MAX_MB: 10240
+  - VIDEO_COOKIE_TTL_SECONDS: 300
+  - VIDEO_SESSION_TTL_SECONDS: 600
+  - ENABLE_4K: false
+Verified isolated pure-ESM boot and JSON API handling without root node_modules.
+\n$ npm run verify:repair
+
+> react-example@0.0.0 verify:repair
+> node scripts/verify-production-repair.mjs
+
+Production repair static verification passed.
+\nRuntime assets:
+11550413 vercel-runtime/server.mjs
+2333217 vercel-runtime/pdf.worker.mjs

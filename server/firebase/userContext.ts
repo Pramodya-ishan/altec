@@ -96,12 +96,14 @@ export async function loadUserAIContext(uid: string, email?: string) {
       userEmailRef ? userEmailRef.collection("chat_history").orderBy("createdAt", "desc").limit(15).get().catch(() => ({ docs: [] })) : { docs: [] }
     ]);
 
-    const mistakeSnapshot = await userUidRef.collection("mistake_notebook")
-      .orderBy("createdAt", "desc")
-      .limit(20)
-      .get()
-      .catch(() => ({ docs: [] } as any));
+    const [mistakeSnapshot, weakPointSnapshot, commonSignalSnapshot] = await Promise.all([
+      userUidRef.collection("mistake_notebook").orderBy("updatedAt", "desc").limit(30).get().catch(() => ({ docs: [] } as any)),
+      userUidRef.collection("weak_points").orderBy("updatedAt", "desc").limit(30).get().catch(() => ({ docs: [] } as any)),
+      db.collection("learning_signal_aggregates").orderBy("count", "desc").limit(12).get().catch(() => ({ docs: [] } as any)),
+    ]);
     const recentMistakes = (mistakeSnapshot as any).docs.map((document: any) => ({ id: document.id, ...document.data() }));
+    const learnedWeakPoints = (weakPointSnapshot as any).docs.map((document: any) => ({ id: document.id, ...document.data() }));
+    const commonLearningSignals = (commonSignalSnapshot as any).docs.map((document: any) => ({ id: document.id, ...document.data() }));
 
     // Merge unique docs
     const memoryDocs = [...(memoryUid as any).docs, ...(memoryEmail as any).docs];
@@ -352,6 +354,8 @@ export async function loadUserAIContext(uid: string, email?: string) {
       aiMemory,
       chatHistoryLast10,
       recentMistakes,
+      learnedWeakPoints,
+      commonLearningSignals,
       examDates: profileData?.examDates || {},
       targetZ: zScoreContext.targetZScore,
       zScoreContext,
@@ -371,6 +375,8 @@ export async function loadUserAIContext(uid: string, email?: string) {
       aiMemory: [],
       chatHistoryLast10: [],
       recentMistakes: [],
+      learnedWeakPoints: [],
+      commonLearningSignals: [],
       examDates: {},
       currentTimeAsiaColombo: new Date().toLocaleString("en-US", {timeZone: "Asia/Colombo"})
     };

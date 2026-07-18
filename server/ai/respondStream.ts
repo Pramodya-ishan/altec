@@ -296,8 +296,8 @@ export async function aiRespondStream(req: any, res: any) {
       return;
     }
 
-    emitSse(res, "status", { step: "started", message: "Preparing answer…" });
-    emitSse(res, "status", { label: "Searching sources…" });
+    emitSse(res, "status", { step: "understanding", message: "Understanding your question" });
+    emitSse(res, "status", { step: "context", message: "Checking your progress, papers, and lesson resources" });
 
     // 1. Route Request
     const { detectOfficialPaperCandidate } = await import("../ai-core/intent/paperQuestionParser");
@@ -590,7 +590,9 @@ export async function aiRespondStream(req: any, res: any) {
     emitSse(res, "status", { step: "profile", status: "reading" });
 
     const userContext = await safeCall("loadUserAIContext", () => loadUserAIContext(user.uid, user.email), { activeSubject } as any, res);
-    userContext.activeSubject = activeSubject;
+    userContext.activeSubject = null;
+    userContext.subjectScope = "all";
+    userContext.requestedSubjectHint = activeSubject || null;
 
     // A. DETERMINISTIC Z-SCORE INTENT
     if (route.mode === "zscore_prediction") {
@@ -1318,25 +1320,34 @@ export async function aiRespondStream(req: any, res: any) {
 
     if (isLessonEvidenceMode(route.mode) && contextBlocksText.trim().length === 0) {
       const lessonName = route.entities.lesson || evidence.lessonIds[0] || "requested lesson";
-      const statusMessage = evidence.evidenceStatus === "ocr_required"
-        ? `**${lessonName}** lesson PDF එක save වෙලා තියෙනවා. Searchable lesson text සූදානම් වූ විගස ඒ PDF evidence එකෙන් ප්‍රශ්න සහ පිළිතුරු දෙන්නම්.`
-        : `**${lessonName}** lesson එකට searchable PDF evidence එකක් තවම හමු වුණේ නැහැ. PDF එක lesson එක යටතේ upload කළ පසු එහි content එකෙන් පිළිතුරු දෙන්නම්.`;
-      emitSse(res, "evidence_missing", {
-        reason: evidence.evidenceStatus,
-        lesson: lessonName,
-        message: statusMessage,
-      });
-      emitSse(res, "token", { text: statusMessage });
-      emitSse(res, "done", {
-        ok: false,
-        completed: true,
-        requestId,
-        finishReason: "blocked_no_lesson_evidence",
-        sources: evidence.candidates,
-      });
-      trace.doneSent = true;
-      trace.completed = true;
-      return;
+      emitSse(res, "status", { step: "syllabus_fallback", status: "searching", message: "Checking the syllabus and paper structure" });
+      try {
+        const { resolveExamResources } = await import("./examResourceResolver");
+        const fallbackResolution: any = await resolveExamResources({
+          prompt: `${prompt}
+Lesson: ${lessonName}`,
+          uid: user.uid,
+          subject: route.entities.subject || activeSubject || undefined,
+        });
+        for (const source of fallbackResolution?.sources || []) {
+          const text = String(source?.text || source?.snippet || "").trim();
+          if (text) contextBlocksText += `
+[SYLLABUS / PAPER STRUCTURE] ${source.title || lessonName}:
+${text.slice(0, 5000)}
+`;
+          if (!allSources.some((existing: any) => (existing.sourceId || existing.id) === (source.sourceId || source.id))) {
+            allSources.push({ ...source, badge: source.badge || "Syllabus" });
+          }
+        }
+      } catch (fallbackError: any) {
+        console.warn("SYLLABUS_FALLBACK_FAILED", fallbackError?.message || fallbackError);
+      }
+      if (contextBlocksText.trim().length === 0) {
+        contextBlocksText += `
+[PROJECT SYLLABUS FALLBACK]
+Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syllabus concepts. State uncertainty for any detail that requires an unavailable document.
+`;
+      }
     }
 
     // 4. Web Search
@@ -1618,7 +1629,7 @@ export async function aiRespondStream(req: any, res: any) {
     }
 
     // Background extraction
-    if (process.env.ENABLE_MEMORY_EXTRACTION === "true") {
+    if (process.env.ENABLE_MEMORY_EXTRACTION !== "false") {
       safeCall("extractStableMemoryIfUseful", () => extractStableMemoryIfUseful({ uid: user.uid, email: user.email, prompt, answer: fullText, userContext: modifiedUserContext }), null, res).catch(() => null);
     }
 
@@ -1639,8 +1650,8 @@ export async function aiRespondStream(req: any, res: any) {
           if (mode === "tutor_explanation" || mode === "normal_chat") {
             return [
               "මේක සරලව නැවත පැහැදිලි කරන්න",
-              "මේ lesson එකෙන් MCQ 5ක් දෙන්න",
-              "මගේ වැරදි points ටික කියන්න"
+              "මේක රූපයක් සමඟ පැහැදිලි කරන්න",
+              "මගේ දුර්වල කොටස් අනුව ප්‍රශ්න අහන්න"
             ];
           }
 

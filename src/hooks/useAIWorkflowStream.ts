@@ -359,7 +359,7 @@ export function useAIWorkflowStream() {
                     } else if (step === "scanning") {
                       setStatus({ stage: "processing", label: "Searching the PDF", message: "Finding the exact question evidence…" });
                     } else if (step === "generating") {
-                      setStatus({ stage: "processing", label: "Preparing answer", message: "Preparing an evidence-based answer…" });
+                      setStatus({ stage: "processing", label: "Reasoning from evidence", message: "Connecting the verified question to the syllabus…" });
                     }
                   },
                 });

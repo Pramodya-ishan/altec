@@ -54,7 +54,7 @@ export function TopNav() {
     logout
   } = useApp();
 
-  const [countdown, setCountdown] = useState({ days: 0, hours: 0, active: false });
+  const [countdown, setCountdown] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0, active: false });
   const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [showProfilePopup, setShowProfilePopup] = useState(false);
 
@@ -229,18 +229,19 @@ export function TopNav() {
 
   useEffect(() => {
     const updateCountdown = () => {
-      const targetDate = new Date("August 10, 2026 00:00:00").getTime();
+      const targetDate = new Date(import.meta.env.VITE_AL_EXAM_START_DATE || "2026-08-10T00:00:00+05:30").getTime();
       const now = new Date().getTime();
       const distance = targetDate - now;
 
       if (distance < 0) {
-        setCountdown({ days: 0, hours: 0, active: true });
+        setCountdown({ days: 0, hours: 0, minutes: 0, seconds: 0, active: true });
         return;
       }
       const days = Math.floor(distance / (1000 * 60 * 60 * 24));
       const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-      
-      setCountdown({ days, hours, active: false });
+      const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+      setCountdown({ days, hours, minutes, seconds, active: false });
     };
 
     updateCountdown();
@@ -256,13 +257,6 @@ export function TopNav() {
       {/* Top Row: Menu & Countdown + Desktop Search + Right Controls */}
       <div className="flex min-w-0 items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2 sm:gap-4">
-          <button
-            onClick={() => setSidebarOpen(true)}
-            className="lg:hidden w-10 h-10 rounded-xl flex items-center justify-center border border-slate-200 text-slate-700 bg-white shadow-sm hover:!bg-primary-50 hover:!text-primary-600 hover:!border-primary-600 transition-all active:scale-95 cursor-pointer"
-            aria-label="Open navigation"
-          >
-            <Menu className="w-5 h-5" />
-          </button>
           <div className="flex flex-col">
             <span className="text-sm font-semibold text-primary-600 tracking-wider flex items-center gap-1.5">
               <Clock className="w-4 h-4" />
@@ -270,8 +264,8 @@ export function TopNav() {
                 <span>Exams active!</span>
               ) : (
                 <>
-                  <span className="sm:hidden">{countdown.days}d</span>
-                  <span className="hidden sm:inline">{countdown.days}d {countdown.hours}h to A/L</span>
+                  <span className="sm:hidden tabular-nums">{countdown.days}d {countdown.hours}h {countdown.minutes}m {countdown.seconds}s</span>
+                  <span className="hidden sm:inline tabular-nums">{countdown.days}d {countdown.hours}h {countdown.minutes}m {countdown.seconds}s to A/L</span>
                 </>
               )}
             </span>

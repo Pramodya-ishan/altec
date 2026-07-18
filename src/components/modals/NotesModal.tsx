@@ -97,7 +97,7 @@ export function NotesModal() {
     if (!modals.playlist.open || !lessonId) return;
     setIsLoadingResources(true);
     try {
-      const response = await apiFetch(`/api/lesson-resources?subject=${encodeURIComponent(currentSubject.toUpperCase())}&lessonId=${encodeURIComponent(lessonId)}`);
+      const response = await apiFetch(`/api/lesson-resources?subject=${encodeURIComponent(currentSubject.toUpperCase())}&lessonId=${encodeURIComponent(lessonId)}&lessonTitle=${encodeURIComponent(topic)}`);
       const payload = await response.json().catch(() => null);
       if (!response.ok || !Array.isArray(payload?.resources)) {
         throw new Error(payload?.message || "Lesson resources could not be loaded.");
@@ -120,7 +120,6 @@ export function NotesModal() {
         displayPriority: Number(resource.displayPriority || 0),
       })));
     } catch (error: any) {
-      setResources([]);
       if (permission === "loading") setPermission("unavailable");
       showNotification(error?.message || "Lesson resources could not be loaded.", "error");
     } finally {
@@ -151,6 +150,16 @@ export function NotesModal() {
     if (!modals.playlist.open) return;
     const timer = window.setInterval(() => void loadResources(), 30_000);
     return () => window.clearInterval(timer);
+  }, [currentSubject, lessonId, modals.playlist.open]);
+
+  useEffect(() => {
+    if (!modals.playlist.open) return;
+    const refresh = (event: Event) => {
+      const detail = (event as CustomEvent)?.detail || {};
+      if (!detail.subject || String(detail.subject).toLowerCase() === String(currentSubject).toLowerCase()) void loadResources();
+    };
+    window.addEventListener("lesson-resources:changed", refresh as EventListener);
+    return () => window.removeEventListener("lesson-resources:changed", refresh as EventListener);
   }, [currentSubject, lessonId, modals.playlist.open]);
 
   if (!modals.playlist.open) return null;
@@ -247,6 +256,9 @@ export function NotesModal() {
         showNotification(response.status === 202 ? "The scanned document is being processed." : "Lesson resource uploaded successfully.", "success");
       }
       await loadResources();
+      window.dispatchEvent(new CustomEvent("lesson-resources:changed", { detail: { subject: currentSubject, lessonId } }));
+      window.setTimeout(() => void loadResources(), 1200);
+      window.setTimeout(() => void loadResources(), 3500);
     } catch (error: any) {
       if (error?.name !== "AbortError" && error?.code !== "storage/canceled") {
         showNotification(error?.message || "The file could not be uploaded.", "error");

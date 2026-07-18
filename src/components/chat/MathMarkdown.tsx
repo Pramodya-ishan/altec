@@ -119,7 +119,7 @@ export const MathMarkdown = memo(function MathMarkdown({
         {normalizedContent}
       </ReactMarkdown>
       {isStreaming && (
-        <span className="inline-block w-1.5 h-4 ml-1 bg-indigo-500 rounded-full animate-pulse align-middle" />
+        <span className="inline-block w-1.5 h-4 ml-1 bg-slate-400 rounded-full animate-pulse align-middle" />
       )}
     </div>
   );
