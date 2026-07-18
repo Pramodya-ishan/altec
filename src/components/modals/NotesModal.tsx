@@ -121,7 +121,7 @@ export function NotesModal() {
       })));
     } catch (error: any) {
       if (permission === "loading") setPermission("unavailable");
-      showNotification(error?.message || "Lesson resources could not be loaded.", "error");
+      if (resources.length === 0) showNotification(error?.message || "Lesson resources could not be loaded.", "error");
     } finally {
       setIsLoadingResources(false);
     }

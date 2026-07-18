@@ -1,0 +1,32 @@
+CLORA X PRODUCTION REPAIR V9 — TEST RESULTS
+
+PASS  npm ci --include=dev
+PASS  npm run check:npm-registry
+PASS  npm run typecheck
+PASS  npm test
+PASS  npm run verify:repair
+PASS  npm run build:vercel
+PASS  Vercel self-contained runtime verification
+PASS  Isolated pure-ESM runtime smoke test
+PASS  Authoritative SFT syllabus bundled at vercel-runtime/authoritative/sft/sALSyl_SFT.pdf
+PASS  PDF.js worker bundled at vercel-runtime/pdf.worker.mjs
+PASS  Google gax protobuf assets bundled
+PASS  Native PDF preview runtime assets bundled
+PASS  Visible source_evidence card removed from direct PDF formatter
+PASS  Sinhala Unicode display/stream hygiene tests
+PASS  Legacy lesson-resource merge and subject-variant static checks
+PASS  SFT prediction syllabus/index grounding static checks
+
+BUILD OUTPUT
+- Frontend main bundle: dist/assets/index-BVjYu2xT.js
+- Firebase bundle: dist/assets/firebase-BCa7H10T.js
+- Production CSS: dist/assets/index-CKdUQUO4.css
+
+NOT EXECUTED LOCALLY
+- Live Gemini/Nano Banana image request
+- Firebase Storage generated-image write
+- Firestore lesson-resource migration
+- SFT reference-library seed/index operation
+- Cross-account production visibility test
+
+Reason: production Google/Firebase credentials were not available in the local sandbox.

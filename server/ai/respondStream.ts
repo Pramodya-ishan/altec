@@ -24,6 +24,7 @@ import { isLessonEvidenceMode } from "../knowledge/lessonResolver";
 import { createAssistantStreamSanitizer, isSimpleGreeting, sanitizeAssistantText, simpleGreetingReply } from "./responseHygiene";
 import { deriveEducationalVisualBlocks } from "./visualAidBuilder";
 import { buildImageReferenceText, isImageGenerationIntent } from "./imageIntent";
+import { getSubjectSyllabusGroundingPdf } from "../pdf/syllabusGrounding";
 
 interface StreamTrace {
   requestId: string;
@@ -1435,6 +1436,34 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         text: `Context Blocks:\n${contextBlocksText}\n\nPrevious Chat History:\n${history?.length ? JSON.stringify(history) : 'None'}\n\nCurrent User Request:\n${prompt}\nAnswer in Sinhala-first style if appropriate.`
       }
     ];
+
+    const explicitSubject = String(route.entities?.subject || paperIntent.subject || "").toUpperCase();
+    const promptSubject = /(?:\bSFT\b|SCIENCE FOR TECHNOLOGY|තාක්ෂණවේදය සඳහා විද්‍යාව|තාක්ෂණවේදය සඳහා විද්යාව)/iu.test(String(prompt || ""))
+      ? "SFT"
+      : /(?:\bET\b|ENGINEERING TECHNOLOGY|ඉංජිනේරු තාක්ෂණවේදය)/iu.test(String(prompt || ""))
+        ? "ET"
+        : /(?:\bICT\b|INFORMATION AND COMMUNICATION TECHNOLOGY|තොරතුරු හා සන්නිවේදන තාක්ෂණය)/iu.test(String(prompt || ""))
+          ? "ICT"
+          : "";
+    const groundingSubject = [explicitSubject, promptSubject, String(activeSubject || "").toUpperCase()]
+      .find((value) => ["SFT", "ET", "ICT"].includes(value));
+
+    if (groundingSubject) {
+      const syllabusPdf = await safeCall(
+        `${groundingSubject.toLowerCase()}AuthoritativeSyllabus`,
+        () => getSubjectSyllabusGroundingPdf(user.uid, groundingSubject),
+        null,
+        res,
+      );
+      if (syllabusPdf?.gcsUri) {
+        contentsParts.unshift({ fileData: { fileUri: syllabusPdf.gcsUri, mimeType: "application/pdf" } });
+      } else if (syllabusPdf?.buffer?.length) {
+        contentsParts.unshift({ inlineData: { mimeType: "application/pdf", data: syllabusPdf.buffer.toString("base64") } });
+      }
+      if (syllabusPdf) {
+        contentsParts[contentsParts.length - 1].text += `\n\nAUTHORITATIVE ${groundingSubject} SOURCE: The attached official syllabus PDF defines the allowed scope. For SFT, do not add separate A/L Biology/Chemistry/Physics/Mathematics content unless this syllabus or retrieved approved SFT resources include it.`;
+      }
+    }
 
     const asksAboutMistakes = /mistake|error log|wrong answer|වැරදි|වරද|quiz me on my recent/i.test(prompt);
     if (asksAboutMistakes && Array.isArray(modifiedUserContext.recentMistakes)) {

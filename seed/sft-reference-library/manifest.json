@@ -1,0 +1,49 @@
+{
+  "subject": "SFT",
+  "createdBy": "Pramodya Ishan",
+  "sources": [
+    {
+      "file": "sALSyl_SFT.pdf",
+      "title": "Official SFT Syllabus",
+      "resourceType": "syllabus",
+      "sourceScope": "owner_syllabus",
+      "lesson": "General syllabus",
+      "authoritative": true
+    },
+    {
+      "file": "SFT Maths book 1.pdf",
+      "title": "SFT Mathematics Reference Book 1",
+      "resourceType": "reference_book",
+      "sourceScope": "owner_syllabus",
+      "lesson": "Mathematics"
+    },
+    {
+      "file": "SFT Chemistry Book 1.pdf",
+      "title": "SFT Chemistry Reference Book 1",
+      "resourceType": "reference_book",
+      "sourceScope": "owner_syllabus",
+      "lesson": "Chemistry"
+    },
+    {
+      "file": "SFT Bio Book.pdf",
+      "title": "SFT Biology Reference Book",
+      "resourceType": "reference_book",
+      "sourceScope": "owner_syllabus",
+      "lesson": "Biology"
+    },
+    {
+      "file": "SFT Physics book2.pdf",
+      "title": "SFT Physics Reference Book 2",
+      "resourceType": "reference_book",
+      "sourceScope": "owner_syllabus",
+      "lesson": "Physics"
+    },
+    {
+      "file": "sGr12OM SFT ResourceBookNew.pdf",
+      "title": "Grade 12 SFT Resource Book",
+      "resourceType": "reference_book",
+      "sourceScope": "owner_syllabus",
+      "lesson": "Grade 12 resource book"
+    }
+  ]
+}

@@ -97,24 +97,7 @@ function PanelTitle({ icon, children }: { icon: React.ReactNode; children: React
 export function VisualBlockRenderer({ block }: VisualBlockRendererProps) {
   switch (block.type) {
     case "source_evidence":
-      return (
-        <div className="my-1 flex min-w-0 items-start gap-2.5 text-slate-600">
-            <span className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center text-emerald-600">
-              {block.verified ? <ShieldCheck className="h-4 w-4" /> : <HelpCircle className="h-4 w-4" />}
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] font-semibold text-slate-500">
-                <span className="text-emerald-700">{block.verified ? "Verified PDF" : "PDF source"}</span>
-                {block.year && <><span>·</span><span>{block.year}</span></>}
-                {block.questionLabel && <><span>·</span><span>{block.questionLabel}</span></>}
-                {block.pageNumber && <><span>·</span><span>Page {block.pageNumber}</span></>}
-              </div>
-              <p className="mt-0.5 truncate text-sm font-semibold text-slate-900" title={block.title}>{block.title}</p>
-              <p className="mt-0.5 text-xs text-slate-500">{block.status}</p>
-            </div>
-            {block.verified && <CheckCircle2 className="mt-1 h-3.5 w-3.5 shrink-0 text-emerald-500" />}
-        </div>
-      );
+      return null;
 
     case "pdf_image_preview":
       return <PdfImagePreview block={block} />;

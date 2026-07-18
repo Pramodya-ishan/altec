@@ -60,14 +60,15 @@ export async function generateEducationalImage(req: any) {
     if (mode === "studio" || mode === "pro" || quality === "high" || quality === "4K") {
       configuredModel = AI_MODELS.imagePro;
     }
-    const fallbackModel = "imagen-3.0-generate-001";
+    const fallbackModel = process.env.IMAGEN_FALLBACK_MODEL || "imagen-3.0-generate-001";
 
     const modelsToTry = [
       configuredModel,
       process.env.NANO_BANANA_MODEL,
       process.env.NANO_BANANA_PRO_MODEL,
+      process.env.GEMINI_IMAGE_MODEL,
+      process.env.GEMINI_IMAGE_PRO_MODEL,
       "gemini-2.5-flash-image",
-      "gemini-3-pro-image-preview",
       fallbackModel,
     ];
     const uniqueModels = Array.from(
@@ -104,7 +105,7 @@ export async function generateEducationalImage(req: any) {
             model: modelName,
             contents: [{ role: "user", parts: [{ text: finalPrompt }] }],
             config: {
-              responseModalities: ["TEXT", "IMAGE"],
+              responseModalities: ["IMAGE", "TEXT"],
               imageConfig: { aspectRatio },
             } as any,
           } as any);
@@ -146,12 +147,12 @@ export async function generateEducationalImage(req: any) {
       await file.save(Buffer.from(imageBase64, 'base64'), {
         metadata: {
           contentType: outputMimeType,
-          cacheControl: "private, max-age=3600",
+          cacheControl: "private, max-age=86400",
         },
         resumable: false,
       });
 
-      try { const [url] = await file.getSignedUrl({ action: 'read', expires: Date.now() + 1000 * 60 * 60 * 24 }); imageUrl = url; } catch (e) { }
+      try { const [url] = await file.getSignedUrl({ action: 'read', expires: Date.now() + 1000 * 60 * 60 * 24 * 7 }); imageUrl = url; } catch (e) { }
       storagePath = path;
     } catch (storageErr) {
       console.warn("Firebase Storage upload failed, falling back to data URL:", storageErr);

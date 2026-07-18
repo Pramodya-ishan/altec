@@ -16,6 +16,9 @@ export function CloraHero(_: CloraHeroProps) {
         <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500 sm:text-base">
           Ask a question in Sinhala or English.
         </p>
+        <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+          Clora X · Made by Pramodya Ishan
+        </p>
       </motion.div>
     </div>
   );

@@ -84,18 +84,8 @@ function buildAutomaticVisuals(params: {
   explanation: string;
   formulaOrRule: string;
 }): VisualBlock[] {
-  const { sourceTitle, year, questionNo, questionType, result, answerStatus, explanation, formulaOrRule } = params;
-  const blocks: VisualBlock[] = [{
-    type: "source_evidence",
-    title: sourceTitle,
-    year: year ? String(year) : undefined,
-    questionLabel: questionNo
-      ? `${String(questionType || "Question").toUpperCase() === "MCQ" ? "MCQ" : "Question"} ${questionNo}`
-      : undefined,
-    pageNumber: Number(result?.sourceEvidence?.pageNumber) || undefined,
-    status: answerStatus,
-    verified: result?.found === true,
-  }];
+  const { result, explanation, formulaOrRule } = params;
+  const blocks: VisualBlock[] = [];
 
   const visualAid = safeVisualAid(result?.answer?.solvedAnswer?.visualAid);
   if (visualAid) blocks.push(visualAid);
@@ -110,7 +100,7 @@ function buildAutomaticVisuals(params: {
       storagePath: clean(result?.sourceEvidence?.imagePreviewStoragePath),
       pageNumber: Number(result?.sourceEvidence?.pageNumber) || undefined,
       crop: result?.sourceEvidence?.imageRegion || null,
-      caption: "The relevant visual was cropped from the selected PDF page.",
+      caption: "Relevant visual from the selected PDF question.",
     });
   }
 
@@ -120,7 +110,7 @@ function buildAutomaticVisuals(params: {
         type: "reaction_diagram",
         title: "Reaction relationship",
         equation: formulaOrRule.replace(/->/g, "→"),
-        caption: "Use the mole ratio in the balanced equation before comparing the released heat.",
+        caption: "Use the balanced equation and its mole ratio.",
       });
     } else {
       blocks.push({
@@ -139,12 +129,12 @@ function buildAutomaticVisuals(params: {
   if (isNeutralizationComparison && !blocks.some((block) => block.type === "comparison_bars")) {
     blocks.push({
       type: "comparison_bars",
-      title: "Heat released by the stated mole amount",
+      title: "Heat comparison",
       items: [
-        { label: "NaOH 1 mol → H₂O 1 mol", value: 1, displayValue: "1×" },
-        { label: "H₂SO₄ 1 mol → H₂O 2 mol", value: 2, displayValue: "2×" },
+        { label: "NaOH 1 mol", value: 1, displayValue: "1×" },
+        { label: "H₂SO₄ 1 mol", value: 2, displayValue: "2×" },
       ],
-      caption: "Neutralization heat is defined per 1 mol of water formed.",
+      caption: "Compare the mole ratio in the balanced reaction.",
     });
   }
 

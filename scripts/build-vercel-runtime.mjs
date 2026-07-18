@@ -12,10 +12,13 @@ const nativeCanvasSource = new URL("../node_modules/@napi-rs/canvas/", import.me
 const nativeCanvasTarget = new URL("node_modules/@napi-rs/canvas/", outputDirectory);
 const nativeCanvasLinuxSource = new URL("../node_modules/@napi-rs/canvas-linux-x64-gnu/", import.meta.url);
 const nativeCanvasLinuxTarget = new URL("node_modules/@napi-rs/canvas-linux-x64-gnu/", outputDirectory);
+const authoritativeSourceDirectory = new URL("../assets/authoritative/", import.meta.url);
+const authoritativeOutputDirectory = new URL("authoritative/", outputDirectory);
 
 await mkdir(outputDirectory, { recursive: true });
 await rm(protoOutputDirectory, { recursive: true, force: true });
 await rm(new URL("node_modules/", outputDirectory), { recursive: true, force: true });
+await rm(authoritativeOutputDirectory, { recursive: true, force: true });
 
 const googleGaxProtoPathPlugin = {
   name: "google-gax-proto-path",
@@ -83,6 +86,7 @@ try {
 } catch (error) {
   throw new Error(`Native PDF preview renderer is missing and cannot be packaged: ${error instanceof Error ? error.message : String(error)}`);
 }
+await cp(authoritativeSourceDirectory, authoritativeOutputDirectory, { recursive: true });
 await writeFile(metafilePath, JSON.stringify(result.metafile));
 await writeFile(declarationTarget, 'declare const app: import("express").Express;\nexport default app;\n');
-console.log("Built a self-contained Vercel API runtime with Google protobuf, PDF.js worker, and native PDF preview assets.");
+console.log("Built a self-contained Vercel API runtime with Google protobuf, PDF.js worker, native PDF preview assets, and authoritative syllabus grounding.");

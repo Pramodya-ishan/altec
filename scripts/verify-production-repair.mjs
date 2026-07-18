@@ -63,7 +63,7 @@ const visualRenderer = await read("src/components/ui/VisualBlockRenderer.tsx");
 const visualBuilder = await read("server/ai/visualAidBuilder.ts");
 assert(sourceActions.includes("getProtectedPdfRoute") && sourceActions.indexOf("getProtectedPdfRoute(source)") < sourceActions.lastIndexOf("getDownloadURL(ref(storage"), "Shared PDF opening must prefer the protected API over Firebase client Storage permissions");
 assert(ragRoutes.includes('req.query.format === "json"') && ragRoutes.includes("responseDisposition") && ragRoutes.includes('origin === "past_papers"'), "Protected PDF signed URL/download route is incomplete");
-assert(directFormatter.includes("normalizeMcqOption") && directFormatter.includes('type: "source_evidence"') && directFormatter.includes('type: "comparison_bars"'), "Direct PDF answer UI formatter is incomplete");
+assert(directFormatter.includes("normalizeMcqOption") && !directFormatter.includes('type: "source_evidence"') && directFormatter.includes('type: "comparison_bars"'), "Direct PDF answer UI formatter or evidence-card removal is incomplete");
 assert(!directFormatter.includes("The question was found in the PDF, but a confirmed answer was not available."), "Legacy no-answer template remains");
 assert(!directFormatter.includes('> **${finalAnswerText}**'), "Direct answer still uses a blockquote card");
 assert(visualRenderer.includes('case "source_evidence"') && visualRenderer.includes('case "reaction_diagram"') && visualRenderer.includes('case "comparison_bars"'), "Educational visual renderer is incomplete");
@@ -74,7 +74,7 @@ const pdfPreview = await read("server/pdf/questionPreview.ts");
 const pdfRoutes = await read("server/pdf/routes.ts");
 const pdfSolver = await read("server/ai-core/pdf/solveExtractedQuestion.ts");
 assert(imageIntent.includes("isImageGenerationIntent") && respondStream.includes("isImageGenerationIntent"), "Natural-language image generation routing is missing");
-assert(imageGenerator.includes('responseModalities: ["TEXT", "IMAGE"]') && imageGenerator.includes("generated_images/"), "Image generation/storage pipeline is incomplete");
+assert(imageGenerator.includes('responseModalities: ["IMAGE", "TEXT"]') && imageGenerator.includes("generated_images/"), "Image generation/storage pipeline is incomplete");
 assert(pdfPreview.includes("pdf_question_previews/") && pdfPreview.includes("@napi-rs/canvas"), "PDF visual crop pipeline is incomplete");
 assert(pdfRoutes.includes('pdfRoutes.post("/question-preview"') && pdfRoutes.includes("createPdfQuestionPreview"), "Secure PDF preview endpoint is missing");
 assert(pdfSolver.includes("getSubjectSyllabusGroundingPdf") && pdfSolver.includes("retrieveRelevantKnowledge") && pdfSolver.includes("AI-solved"), "Syllabus-grounded PDF solver is incomplete");
@@ -120,3 +120,17 @@ assert(lessonResourceService.includes("existing.createdAt") && lessonResourceSer
 assert(syllabusRoutes.includes("await requireSyllabusOwner(req)") && syllabusRoutes.includes("Shared syllabus deletion is content-manager only"), "Syllabus deletion is not restricted to content managers");
 
 console.log("Production repair static verification passed.");
+
+
+// V9 authoritative syllabus, display, and resource checks.
+const syllabusGrounding = await readFile("server/pdf/syllabusGrounding.ts", "utf8");
+const directFormatterV9 = await readFile("src/lib/ai/directPdfAnswerFormatter.ts", "utf8");
+const lessonRoutesV9 = await readFile("server/lessonResources/routes.ts", "utf8");
+const predictionV9 = await readFile("server/ai-core/exam-intel/predictedPaper.ts", "utf8");
+const cloraHeroV9 = await readFile("src/components/ui/clora/CloraHero.tsx", "utf8");
+assert(syllabusGrounding.includes("DEFAULT_SFT_SYLLABUS_STORAGE_PATH") && syllabusGrounding.includes("bundled_sft_syllabus"), "V9 authoritative SFT syllabus fallback is missing");
+assert(!directFormatterV9.includes('type: "source_evidence"'), "V9 still adds the visible Verified PDF evidence container");
+assert(lessonRoutesV9.includes('collection("rag_sources")') && lessonRoutesV9.includes("isStudentVisibleSource") && lessonRoutesV9.includes("subjectVariants"), "V9 lesson resource legacy merge or historical subject normalization is missing");
+assert(predictionV9.includes("exam_question_index") && predictionV9.includes("getSubjectSyllabusGroundingPdf"), "V9 prediction engine is not grounded in indexed papers and syllabus");
+assert(cloraHeroV9.includes("Clora X · Made by Pramodya Ishan"), "V9 Clora X creator branding is missing");
+console.log("V9 authoritative SFT syllabus, Sinhala display, prediction, and lesson-resource checks passed.");

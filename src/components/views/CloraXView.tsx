@@ -387,14 +387,6 @@ const [messages, setMessages] = useState<{
   useAutosizeTextarea(textareaRef.current, input);
   const { showScrollButton, scrollToBottom } = useNearBottomAutoScroll(scrollRef, messages, isStreaming, answer);
 
-  // Quick Action Chips
-  const quickChips = [
-    { text: "Show my Z-score", label: "My Z-score" },
-    { text: "2023 SFT Paper structure", label: "2023 SFT Paper structure" },
-    { text: "Summarize microorganism notes", label: "Microorganism notes" },
-    { text: "SFT MCQ Weights", label: "SFT MCQ Weights" }
-  ];
-
   useEffect(() => {
     const handleSend = (e: any) => {
       setInput(e.detail);
@@ -1164,7 +1156,14 @@ const [messages, setMessages] = useState<{
 
         if (imageRes.ok) {
           const data = await imageRes.json();
-          setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: `මෙන්න ඉල්ලූ රූපය.\n\n![Generated educational image](${data.imageUrl || data.image})`, status: "done" } : m));
+          const imageUrl = data.imageUrl || data.image;
+          setMessages(prev => prev.map(m => m.id === assistantMsgId ? {
+            ...m,
+            content: "",
+            generatedImage: imageUrl ? { url: imageUrl, alt: "Generated educational image" } : undefined,
+            imagePrompt: userMsg,
+            status: "done",
+          } : m));
         } else {
           const data = await imageRes.json().catch(() => null);
           setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: data?.error || "රූපය නිර්මාණය කිරීමට මේ මොහොතේ නොහැකි වුණා. නැවත උත්සාහ කරන්න.", status: "error" } : m));

@@ -49,3 +49,24 @@
     scrollbar-width: none;
   }
 }
+
+
+@layer utilities {
+  .sinhala-rendering {
+    font-family: "Noto Sans Sinhala", "Nirmala UI", "Iskoola Pota", "Segoe UI", sans-serif;
+    font-variant-ligatures: normal;
+    font-feature-settings: "liga" 1, "clig" 1, "kern" 1;
+    text-rendering: optimizeLegibility;
+    unicode-bidi: plaintext;
+  }
+
+  .sinhala-rendering p,
+  .sinhala-rendering li,
+  .sinhala-rendering h1,
+  .sinhala-rendering h2,
+  .sinhala-rendering h3,
+  .sinhala-rendering h4 {
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+}

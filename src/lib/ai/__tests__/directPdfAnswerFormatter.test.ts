@@ -40,7 +40,7 @@ assert.match(formatted.markdown, /^### ප්‍රශ්නය/m);
 assert.match(formatted.markdown, /\*\*\(1\)\*\* NaOH 1 mol/);
 assert.doesNotMatch(formatted.markdown, /1\. \(1\)/);
 assert.match(formatted.markdown, /^### පිළිතුර/m);
-assert.ok(formatted.visualBlocks.some((block) => block.type === "source_evidence"));
+assert.equal(formatted.visualBlocks.some((block) => block.type === "source_evidence"), false);
 assert.ok(formatted.visualBlocks.some((block) => block.type === "reaction_diagram"));
 assert.ok(formatted.visualBlocks.some((block) => block.type === "comparison_bars"));
 assert.doesNotMatch(formatted.markdown, /confirmed answer was not available/i);

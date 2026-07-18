@@ -29,7 +29,9 @@
     "migrate:lesson-resources": "node --import tsx scripts/migrate-lesson-resources.ts",
     "configure:video-cors": "node --import tsx scripts/apply-video-cors.ts",
     "verify:repair": "node scripts/verify-production-repair.mjs",
-    "check:npm-registry": "node scripts/check-npm-registry.mjs"
+    "check:npm-registry": "node scripts/check-npm-registry.mjs",
+    "seed:sft-reference-library": "node --import tsx scripts/seed-sft-reference-library.ts",
+    "build:exam-index": "node --import tsx scripts/build-exam-index.ts"
   },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",

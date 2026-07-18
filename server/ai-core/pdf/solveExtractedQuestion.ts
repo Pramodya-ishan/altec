@@ -121,7 +121,7 @@ export async function solveExtractedMcqQuestion(params: SolveMcqParams): Promise
   const systemInstruction = `
 You are solving an already verified Sri Lankan G.C.E. A/L ${subject} MCQ.
 The exact question and options were extracted from the ${year} paper PDF.
-Use the supplied syllabus evidence as supporting subject knowledge.
+Use the supplied syllabus PDF and approved subject evidence as the authoritative scope boundary.
 
 RULES:
 - Do not change the question text.
@@ -131,6 +131,8 @@ RULES:
 - Answer the question even when an official marking scheme is unavailable.
 - Never call an AI-solved answer an official answer.
 - Use the syllabus only to solve the verified question. Never rewrite the question.
+- For SFT, do not import material from the separate A/L Biology/Chemistry/Physics/Mathematics syllabuses unless the supplied SFT syllabus or SFT resource evidence contains it.
+- When generic knowledge conflicts with the supplied syllabus, follow the supplied syllabus.
 - Add a small visualAid only when a comparison or process diagram materially clarifies the answer.
 - visualAid must contain factual values derived from the verified question and your calculation; otherwise use type:"none".
 - Keep each distinct idea in a separate short paragraph inside explanationSinhala.
@@ -166,7 +168,7 @@ Return JSON:
   const parts: any[] = [];
   if (syllabusContext.pdfPart) parts.push(syllabusContext.pdfPart);
   parts.push({
-    text: `${userPrompt}\n\nSUPPORTING SYLLABUS TEXT:\n${syllabusContext.text || "No indexed syllabus excerpt was available. Solve from the verified question and standard syllabus knowledge."}`,
+    text: `${userPrompt}\n\nSUPPORTING SYLLABUS TEXT:\n${syllabusContext.text || "No indexed excerpt was available. Use the attached authoritative syllabus PDF. Do not expand beyond its scope."}`,
   });
 
   for (const task of ["direct_pdf_solve", "final_answer"] as const) {
