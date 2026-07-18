@@ -1,21 +1,28 @@
-import { calculateCurrentGradeFromData } from '../lib/utils';
-import { apiFetch } from "../lib/api";
-import { normalizeSinhalaDisplayText } from "../lib/assistantTextHygiene";
-import { shouldUseRedirectAuth } from "../lib/authStrategy";
-import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
-import { AppData, SubjectKey, ViewKey, ThemeKey, StarItem } from '../types';
-import { isFirebaseEnabled, auth, authPersistenceReady } from '../lib/firebase';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   GoogleAuthProvider,
-  createUserWithEmailAndPassword,
   getRedirectResult,
   onAuthStateChanged,
-  signInWithCredential,
-  signInWithEmailAndPassword,
   signInWithPopup,
   signInWithRedirect,
   signOut,
-} from 'firebase/auth';
+  type User as FirebaseUser,
+} from "firebase/auth";
+import { apiFetch } from "../lib/api";
+import { normalizeSinhalaDisplayText } from "../lib/assistantTextHygiene";
+import { shouldUseRedirectAuth } from "../lib/authStrategy";
+import { auth, authPersistenceReady, isFirebaseEnabled } from "../lib/firebase";
+import { calculateCurrentGradeFromData } from "../lib/utils";
+import type { AppData, SubjectKey, ThemeKey, ViewKey } from "../types";
 
 type ModalsState = {
   playlist: { open: boolean; topic: string };
@@ -26,14 +33,14 @@ type ModalsState = {
 export type NotificationItem = {
   id: string;
   message: string;
-  type: 'success' | 'error' | 'info';
+  type: "success" | "error" | "info";
 };
 
 export type PushNotification = {
   id: string;
   title: string;
   message: string;
-  type: 'message' | 'friend_request' | 'announcement';
+  type: "message" | "friend_request" | "announcement";
   senderEmail?: string;
   senderName?: string;
   read: boolean;
@@ -55,21 +62,20 @@ export type UserProfile = {
   roles?: string[];
 };
 
-type User = {
+export type AppUser = {
+  uid: string;
   email: string;
   name: string;
   picture?: string;
-  token?: string;
   emailVerified?: boolean;
 };
 
 type AppContextType = {
   data: AppData;
   setData: React.Dispatch<React.SetStateAction<AppData>>;
-  user: User | null;
-  setUser: React.Dispatch<React.SetStateAction<User | null>>;
+  user: AppUser | null;
   currentSubject: SubjectKey;
-  setCurrentSubject: (sub: SubjectKey) => void;
+  setCurrentSubject: (subject: SubjectKey) => void;
   currentView: ViewKey;
   setCurrentView: (view: ViewKey) => void;
   theme: ThemeKey;
@@ -81,47 +87,24 @@ type AppContextType = {
   modals: ModalsState;
   setModals: React.Dispatch<React.SetStateAction<ModalsState>>;
   notifications: NotificationItem[];
-  showNotification: (message: string, type?: 'success' | 'error' | 'info') => void;
+  showNotification: (message: string, type?: NotificationItem["type"]) => void;
   removeNotification: (id: string) => void;
   toggleTopic: (topic: string) => void;
   updateTopicNotes: (topic: string, notes: string) => void;
   saveData: (newData: AppData) => void;
   clearLocalStorage: () => void;
-  stars: StarItem[];
   triggerStars: () => void;
-  fetchUserInfo: (token: string) => Promise<void>;
   loginWithGoogle: () => Promise<void>;
   isAuthLoading: boolean;
   isUserDataLoading: boolean;
   hasHydratedUserData: boolean;
-  logout: () => void;
-  youtubeCookies: string;
-  saveYoutubeCookies: (cookies: string) => Promise<void>;
-  
-  // Custom Profile & Notifications System
+  logout: () => Promise<void>;
   profile: UserProfile | null;
-  saveProfile: (p: UserProfile) => Promise<void>;
+  saveProfile: (profile: UserProfile) => Promise<void>;
   pushNotifications: PushNotification[];
-  triggerPushNotification: (title: string, message: string, type: 'message' | 'friend_request' | 'announcement', senderEmail?: string, senderName?: string) => Promise<void>;
   markPushNotificationAsRead: (id: string) => Promise<void>;
-  markAllPushNotificationsAsRead: () => Promise<void>;
-  deletePushNotification: (id: string) => Promise<void>;
-  localFriends: string[];
-  addFriend: (email: string) => void;
-
-  // Auto Gmail Sending System
-  autoEmailLogin: boolean;
-  toggleAutoEmailLogin: () => void;
-  sendGmailProgressEmail: (overrideEmail?: string, tokenOverride?: string) => Promise<boolean>;
-
-  // Admin capabilities
   adminTargetEmail: string | null;
-  setAdminTargetEmail: (email: string | null) => void;
-
-  // Custom Email/Password auth functions
-  loginWithEmailAndPassword: (email: string, password: string) => Promise<any>;
-  registerWithEmailAndDetails: (params: any) => Promise<any>;
-  verifyEmailCode: (email: string, code: string) => Promise<any>;
+  setAdminTargetEmail: (email: string | null) => Promise<void>;
 };
 
 const defaultData: AppData = {
@@ -130,12 +113,17 @@ const defaultData: AppData = {
   ict: { topics: {}, paperMarks: [], questionMarks: {} },
 };
 
-function sanitizeAppData(value: AppData): AppData {
+function sanitizeAppData(value: AppData | null | undefined): AppData {
+  const source = value && typeof value === "object" ? value : defaultData;
   return {
-    ...value,
-    zScoreHistory: Array.isArray(value?.zScoreHistory)
-      ? value.zScoreHistory
-          .filter((entry) => Number.isFinite(Number(entry?.zScore)) && Boolean(entry?.date))
+    ...defaultData,
+    ...source,
+    sft: { ...defaultData.sft, ...(source.sft || {}) },
+    et: { ...defaultData.et, ...(source.et || {}) },
+    ict: { ...defaultData.ict, ...(source.ict || {}) },
+    zScoreHistory: Array.isArray(source.zScoreHistory)
+      ? source.zScoreHistory
+          .filter((entry) => Boolean(entry?.date) && Number.isFinite(Number(entry?.zScore)))
           .map((entry) => ({
             ...entry,
             calculationBasis: entry.calculationBasis || "legacy_exam_score_predictor",
@@ -146,1195 +134,404 @@ function sanitizeAppData(value: AppData): AppData {
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
-
 let redirectResultPromise: ReturnType<typeof getRedirectResult> | null = null;
 
 function getRedirectResultOnce() {
   if (!auth) return Promise.resolve(null);
-  if (!redirectResultPromise) redirectResultPromise = getRedirectResult(auth);
+  redirectResultPromise ??= getRedirectResult(auth);
   return redirectResultPromise;
+}
+
+async function readJson<T>(response: Response): Promise<T | null> {
+  try {
+    return (await response.json()) as T;
+  } catch {
+    return null;
+  }
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [data, setRawData] = useState<AppData>(defaultData);
-  const setData = React.useCallback<React.Dispatch<React.SetStateAction<AppData>>>((update) => {
-    setRawData((previous) => {
-      const next = typeof update === "function" ? update(previous) : update;
-      return sanitizeAppData(next);
-    });
-  }, []);
-  const [currentSubject, setCurrentSubject] = useState<SubjectKey>('sft');
-  const [currentView, setCurrentView] = useState<ViewKey>('paper-structure');
-  const [theme, setThemeState] = useState<ThemeKey>('slate');
+  const [user, setUser] = useState<AppUser | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [currentSubject, setCurrentSubject] = useState<SubjectKey>("sft");
+  const [currentView, setCurrentView] = useState<ViewKey>("paper-structure");
+  const [theme, setTheme] = useState<ThemeKey>("slate");
   const [isSidebarOpen, setSidebarOpen] = useState(false);
   const [isAdvisorOpen, setAdvisorOpen] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
-
   const [isAuthLoading, setIsAuthLoading] = useState(true);
-  const googleLoginInFlightRef = useRef(false);
-  const serverSessionBootstrappedUidRef = useRef<string | null>(null);
   const [isUserDataLoading, setIsUserDataLoading] = useState(false);
   const [hasHydratedUserData, setHasHydratedUserData] = useState(false);
-  const [youtubeCookies, setYoutubeCookies] = useState<string>('');
-
-  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [pushNotifications, setPushNotifications] = useState<PushNotification[]>([]);
-  const [localFriends, setLocalFriends] = useState<string[]>(['dilshan@alblueprint.com', 'amara@alblueprint.com']);
-
   const [adminTargetEmail, setAdminTargetEmailState] = useState<string | null>(null);
-
-  const fetchProfile = async (rawEmail: string) => {
-    const email = rawEmail.toLowerCase();
-    try {
-      const res = await apiFetch(`/api/profile?email=${encodeURIComponent(email)}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.profile) {
-          setProfile(data.profile);
-          return;
-        }
-      }
-    } catch (e) {
-      console.warn("Express fetch profile failed: ", e);
-    }
-    setProfile({
-      email,
-      username: email.split('@')[0],
-      picture: user?.picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(email)}`,
-      bio: 'උසස් පෙළ තාක්ෂණවේදය හදාරන ශිෂ්‍යයෙක්.',
-      updatedAt: new Date().toISOString()
-    });
-  };
-
-  const setAdminTargetEmail = async (email: string | null) => {
-    setAdminTargetEmailState(email);
-    if (email) {
-      showNotification(`Entering admin mode for user: ${email}`, 'info');
-      await fetchUserDataFromDB(email);
-      await fetchProfile(email);
-    } else {
-      showNotification(`Exited admin mode`, 'info');
-      if (user?.email) {
-        await fetchUserDataFromDB(user.email);
-        await fetchProfile(user.email);
-      } else {
-        clearLocalStorage();
-      }
-    }
-  };
-
-  const saveProfile = async (nextProfile: UserProfile) => {
-    setProfile(nextProfile);
-    let rawEmail = adminTargetEmail || user?.email || 'local_user';
-    const email = rawEmail.toLowerCase();
-    try {
-      await apiFetch('/api/profile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, profile: nextProfile })
-      });
-    } catch (e) {
-      console.error("Express save profile failed: ", e);
-    }
-  };
-
-  useEffect(() => {
-    const email = user?.email;
-    if (!email) {
-      const localNotifs = localStorage.getItem('local_push_notifications');
-      if (localNotifs) {
-        try {
-          setPushNotifications(JSON.parse(localNotifs));
-        } catch (e) {
-          console.warn("Cleared corrupted local push notifications cache:", e);
-          localStorage.removeItem('local_push_notifications');
-        }
-      } else {
-        const welcomeNotifs: PushNotification[] = [
-          {
-            id: 'welcome-1',
-            title: 'Welcome to AL Blueprint!',
-            message: 'Track your SFT, ET, and ICT syllabus progress using our intuitive dashboard and reach your past paper target marks! Need any study tips? Chat with our AI Study Assistant anytime.',
-            type: 'announcement',
-            senderName: 'AL Blueprint Admin',
-            senderEmail: 'system@alblueprint.com',
-            read: false,
-            timestamp: new Date().toISOString()
-          }
-        ];
-        setPushNotifications(welcomeNotifs);
-        localStorage.setItem('local_push_notifications', JSON.stringify(welcomeNotifs));
-      }
-      setProfile({
-        email: 'local_user',
-        username: 'LocalStudent',
-        picture: `https://api.dicebear.com/7.x/bottts/svg?seed=LocalStudent`,
-        bio: 'Student on A/L Tech/SFT/ICT journey!',
-        updatedAt: new Date().toISOString()
-      });
-      return;
-    }
-
-    const fetchExpressNotifications = async () => {
-      try {
-        const res = await apiFetch(`/api/notifications?email=${encodeURIComponent(email)}`);
-        if (res.ok) {
-          const resp = await res.json();
-          if (resp.notifications) {
-            setPushNotifications(resp.notifications);
-          }
-        }
-      } catch (err) {
-        console.error("Fetch express notifications failed:", err);
-      }
-    };
-
-    let unsubscribe: () => void = () => {};
-    let isCancelled = false;
-
-    const timer = setTimeout(() => {
-      if (isCancelled) return;
-      fetchProfile(email);
-      fetchExpressNotifications();
-
-      // Notifications are read through the authenticated API only. A direct
-      // users/{email}/notifications listener used a different document key
-      // from Firebase Auth's uid and repeatedly produced permission errors (or
-      // anonymous reads) while sign-in was settling. The server verifies the
-      // ID token and owns the Firestore access, so one polling path is both
-      // safer and consistent with Vercel/Firebase rules.
-      const intervalId = window.setInterval(fetchExpressNotifications, 20_000);
-      unsubscribe = () => window.clearInterval(intervalId);
-    }, 1200);
-
-    return () => {
-      isCancelled = true;
-      clearTimeout(timer);
-      if (unsubscribe) unsubscribe();
-    };
-  }, [user]);
-
-  const triggerPushNotification = async (
-    title: string, 
-    message: string, 
-    type: 'message' | 'friend_request' | 'announcement',
-    senderEmail?: string,
-    senderName?: string
-  ) => {
-    const email = user?.email || 'local_user';
-    const newNotif: PushNotification = {
-      id: Date.now().toString() + Math.random().toString().substring(2, 6),
-      title,
-      message,
-      type,
-      senderEmail: senderEmail || 'system@alblueprint.com',
-      senderName: senderName || 'AL Blueprint Admin',
-      read: false,
-      timestamp: new Date().toISOString()
-    };
-
-    if (!user?.email) {
-      const nextList = [newNotif, ...pushNotifications];
-      setPushNotifications(nextList);
-      localStorage.setItem('local_push_notifications', JSON.stringify(nextList));
-      showNotification(`Push Alert: ${title}`, 'info');
-      return;
-    }
-
-    try {
-      await apiFetch('/api/notifications/trigger', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, notification: newNotif })
-      });
-      showNotification(`Push Alert: ${title}`, 'info');
-    } catch (e) {
-      console.error("Express push trigger failed: ", e);
-    }
-  };
-
-  const markPushNotificationAsRead = async (id: string) => {
-    const updated = pushNotifications.map((n) => n.id === id ? { ...n, read: true } : n);
-    setPushNotifications(updated);
-    
-    if (!user?.email) {
-      localStorage.setItem('local_push_notifications', JSON.stringify(updated));
-      return;
-    }
-
-    try {
-      await apiFetch('/api/notifications/read', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: user.email, notificationId: id })
-      });
-    } catch (e) {}
-  };
-
-  const markAllPushNotificationsAsRead = async () => {
-    const updated = pushNotifications.map((n) => ({ ...n, read: true }));
-    setPushNotifications(updated);
-
-    if (!user?.email) {
-      localStorage.setItem('local_push_notifications', JSON.stringify(updated));
-      return;
-    }
-
-    try {
-      await apiFetch('/api/notifications/read', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: user.email, readAll: true })
-      });
-    } catch (e) {}
-  };
-
-  const deletePushNotification = async (id: string) => {
-    const updated = pushNotifications.filter((n) => n.id !== id);
-    setPushNotifications(updated);
-
-    if (!user?.email) {
-      localStorage.setItem('local_push_notifications', JSON.stringify(updated));
-      return;
-    }
-
-    try {
-      await apiFetch('/api/notifications/delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: user.email, notificationId: id })
-      });
-    } catch (e) {}
-  };
-
-  const addFriend = (emailAddress: string) => {
-    if (!localFriends.includes(emailAddress)) {
-      setLocalFriends([...localFriends, emailAddress]);
-      showNotification("Added study buddy!", "success");
-    }
-  };
-
-  const [autoEmailLogin, setAutoEmailLogin] = useState<boolean>(() => {
-    const saved = localStorage.getItem('auto_email_login_enabled');
-    return saved !== null ? saved === 'true' : false;
-  });
-
-  const toggleAutoEmailLogin = () => {
-    setAutoEmailLogin((p) => {
-      const next = !p;
-      localStorage.setItem('auto_email_login_enabled', next ? 'true' : 'false');
-      showNotification(next ? "Automated login reports enabled!" : "Automated login reports disabled.", "info");
-      return next;
-    });
-  };
-
-  const b64EncodeUnicode = (str: string) => {
-    return btoa(
-      encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (match, p1) => {
-        return String.fromCharCode(parseInt(p1, 16));
-      })
-    );
-  };
-
-  const sendGmailProgressEmail = async (overrideEmail?: string, tokenOverride?: string): Promise<boolean> => {
-    const activeUser = user;
-    const token = tokenOverride || activeUser?.token;
-    if (!activeUser || !token) {
-      showNotification("Please login with Google to enable Gmail sending.", "error");
-      return false;
-    }
-
-    const recipient = overrideEmail || activeUser.email;
-
-    try {
-            
-      const sftGradeInfo = calculateCurrentGradeFromData(data, 'sft');
-      const etGradeInfo = calculateCurrentGradeFromData(data, 'et');
-      const ictGradeInfo = calculateCurrentGradeFromData(data, 'ict');
-
-      const subjectsHtml = `
-        <div style="margin: 20px 0; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; font-family: sans-serif;">
-          <h3 style="margin-top: 0; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;">📚 Your Study Progress Snapshot</h3>
-          <table style="width: 100%; border-collapse: collapse; text-align: left;">
-            <thead>
-              <tr style="border-bottom: 1px solid #cbd5e1; color: #64748b; font-size: 13px;">
-                <th style="padding: 8px 0; width: 60%;">Subject</th>
-                <th style="padding: 8px 0; text-align: center; width: 20%;">Current Grade</th>
-                <th style="padding: 8px 0; text-align: right; width: 20%;">Roster Completion</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr style="border-bottom: 1px solid #f1f5f9;">
-                <td style="padding: 10px 0; font-weight: bold; color: #334155;">Science for Technology (SFT)</td>
-                <td style="padding: 10px 0; text-align: center;"><span style="background: #eff6ff; color: #2563eb; padding: 4px 10px; border-radius: 6px; font-weight: 800; border: 1px solid #dbeafe;">${sftGradeInfo.grade}</span></td>
-                <td style="padding: 10px 0; text-align: right; font-weight: bold; color: #475569;">Level ${sftGradeInfo.level >= 0 ? sftGradeInfo.level : '-'}</td>
-              </tr>
-              <tr style="border-bottom: 1px solid #f1f5f9;">
-                <td style="padding: 10px 0; font-weight: bold; color: #334155;">Engineering Technology (ET)</td>
-                <td style="padding: 10px 0; text-align: center;"><span style="background: #f0fdf4; color: #16a34a; padding: 4px 10px; border-radius: 6px; font-weight: 800; border: 1px solid #dcfce7;">${etGradeInfo.grade}</span></td>
-                <td style="padding: 10px 0; text-align: right; font-weight: bold; color: #475569;">Level ${etGradeInfo.level >= 0 ? etGradeInfo.level : '-'}</td>
-              </tr>
-              <tr>
-                <td style="padding: 10px 0; font-weight: bold; color: #334155;">Information & Communication Tech (ICT)</td>
-                <td style="padding: 10px 0; text-align: center;"><span style="background: #fdf2f8; color: #db2777; padding: 4px 10px; border-radius: 6px; font-weight: 800; border: 1px solid #fce7f3;">${ictGradeInfo.grade}</span></td>
-                <td style="padding: 10px 0; text-align: right; font-weight: bold; color: #475569;">Level ${ictGradeInfo.level >= 0 ? ictGradeInfo.level : '-'}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      `;
-
-      const welcomeHtml = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <title>A/L Tech Blueprint Summary</title>
-        </head>
-        <body style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1e293b; background-color: #f8fafc; margin: 0; padding: 10px;">
-          <div style="max-width: 600px; margin: 0 auto; padding: 24px; background-color: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; margin-top: 24px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);">
-            <div style="border-bottom: 1px solid #e2e8f0; padding-bottom: 16px; margin-bottom: 20px;">
-              <h2 style="color: #2563eb; font-size: 20px; font-weight: 800; margin: 0;">🚀 A/L Tech Blueprint Progress Report</h2>
-              <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0;">Automated account login status report</p>
-            </div>
-            <div style="font-size: 14px; margin-bottom: 24px;">
-              <p>Hi <strong>${activeUser.name}</strong>,</p>
-              <p>Welcome back! You have successfully signed in using Google Authentication.</p>
-              
-              ${subjectsHtml}
-
-              <p>Ready to update your targets or consult the AI Study Assistant? Go back to the learning playground directly:</p>
-              <div style="text-align: center; margin: 20px 0;">
-                <a href="${window.location.origin}" style="display: inline-block; padding: 12px 24px; background-color: #2563eb; color: #ffffff !important; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 13px;">Open Study Playground</a>
-              </div>
-            </div>
-            <div style="border-top: 1px solid #e2e8f0; padding-top: 16px; font-size: 11px; color: #94a3b8; text-align: center;">
-              <p>This automated message was sent securely on your behalf. To configure or turn off automated login emails, please visit your account dashboard.</p>
-              <p>&copy; ${new Date().getFullYear()} A/L Tech Blueprint.</p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `;
-
-      // Base64URL encoding matching RFC 4648
-      const emailContent = [
-        `To: ${recipient}`,
-        `Subject: 🚀 A/L Tech Blueprint Auto-Sync Progress Report`,
-        `MIME-Version: 1.0`,
-        `Content-Type: text/html; charset=utf-8`,
-        `Content-Transfer-Encoding: 7bit`,
-        ``,
-        welcomeHtml
-      ].join('\r\n');
-
-      const encodedMessage = b64EncodeUnicode(emailContent)
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
-
-      const response = await apiFetch('/api/send-email', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          token,
-          raw: encodedMessage
-        })
-      });
-
-      if (response.ok) {
-        showNotification("Success! Status report email sent via Gmail API.", "success");
-        await triggerPushNotification(
-          "Email Progress Report Sent",
-          `Automatically dispatched study progress report to ${recipient} successfully. Check your login inbox!`,
-          "announcement"
-        );
-        return true;
-      } else {
-        const errorData = await response.json().catch(() => null);
-        console.error("Gmail send failed:", errorData);
-        
-        let customErrorMsg = "";
-        if (errorData) {
-          if (typeof errorData.error === 'object' && errorData.error !== null) {
-            customErrorMsg = errorData.error.message || JSON.stringify(errorData.error);
-          } else if (typeof errorData.error === 'string') {
-            try {
-              const innerJs = JSON.parse(errorData.error);
-              customErrorMsg = innerJs.error?.message || innerJs.message || errorData.error;
-            } catch {
-              customErrorMsg = errorData.error;
-            }
-          }
-        }
-
-        if (response.status === 401 || response.status === 403) {
-          const detail = customErrorMsg ? ` (Details: ${customErrorMsg})` : "";
-          showNotification(`Your Google authentication has expired or lacks Gmail permissions. Please sign out and sign in with Google again to renew.${detail}`, "error");
-        } else {
-          const detail = customErrorMsg ? ` (Details: ${customErrorMsg})` : " Ensure Google credentials are fresh and verified.";
-          showNotification(`Gmail automated send skipped.${detail}`, "info");
-        }
-        return false;
-      }
-
-    } catch (e: any) {
-      console.error("Error sending progress email:", e);
-      const errMsg = e?.message || String(e);
-      if (errMsg.includes("Failed to fetch")) {
-        showNotification("Error sending progress email: Failed to fetch Gmail services from sandbox constraint.", "error");
-      }
-      return false;
-    }
-  };
-
-  const bootstrapServerSession = async (firebaseUser: any) => {
-    if (!firebaseUser || firebaseUser.isAnonymous) return;
-    if (serverSessionBootstrappedUidRef.current === firebaseUser.uid) return;
-    serverSessionBootstrappedUidRef.current = firebaseUser.uid;
-    try {
-      const idToken = await firebaseUser.getIdToken();
-      const response = await apiFetch("/api/auth/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idToken }),
-      });
-      if (!response.ok) {
-        serverSessionBootstrappedUidRef.current = null;
-        return;
-      }
-      const payload = await response.json().catch(() => null);
-      if (payload?.profile) {
-        setProfile(payload.profile);
-        localStorage.setItem("email_user_profile", JSON.stringify(payload.profile));
-      }
-    } catch (sessionError) {
-      serverSessionBootstrappedUidRef.current = null;
-      if (import.meta.env.DEV) console.warn("Server session bootstrap skipped", sessionError);
-    }
-  };
-
-  useEffect(() => {
-    let unsubscribeAutoAuth = () => {};
-    let disposed = false;
-    
-    if (isFirebaseEnabled && auth) {
-      // Wait for local persistence before subscribing. Otherwise the first
-      // transient null event during redirect restoration can replace a valid user with the
-      // sign-in screen while Firebase is restoring its IndexedDB session.
-      void authPersistenceReady.then(() => {
-        if (disposed) return;
-
-        // Complete the redirect fallback before subscribing to the stable
-        // auth state. The application deliberately uses top-level redirect auth
-        // on every device so Firebase never polls popupWindow.closed. The same-origin /__/auth handler keeps the result in
-        // Firebase's persistent browser session.
-        void getRedirectResultOnce().then((redirectResult) => {
-          if (!redirectResult || disposed) return;
-          const credential = GoogleAuthProvider.credentialFromResult(redirectResult);
-          if (credential?.accessToken) {
-            localStorage.setItem('google_access_token', credential.accessToken);
-          }
-          const redirectedUser: User = {
-            email: redirectResult.user.email || '',
-            name: redirectResult.user.displayName || '',
-            picture: redirectResult.user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(redirectResult.user.email || '')}`,
-            token: credential?.accessToken || '',
-            emailVerified: redirectResult.user.emailVerified,
-          };
-          setUser(redirectedUser);
-          void bootstrapServerSession(redirectResult.user);
-        }).catch((redirectError) => {
-          if (import.meta.env.DEV) console.warn('Google redirect result could not be restored', redirectError);
-        });
-
-        unsubscribeAutoAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-        if (firebaseUser) {
-          if (firebaseUser.isAnonymous) {
-            // Never promote an anonymous Firebase identity to a cached email
-            // session. Do not call signOut here: an asynchronous anonymous
-            // cleanup can race with redirect restoration and sign out the newly
-            // authenticated Google user after the account flow returns.
-            // apiFetch already refuses anonymous ID tokens, so leaving the
-            // anonymous identity in place until the explicit sign-in is safe.
-            setUser(null);
-            setProfile(null);
-            setIsAuthLoading(false);
-            return;
-          }
-          const savedToken = localStorage.getItem('google_access_token') || '';
-          setUser({
-            email: firebaseUser.email || '',
-            name: firebaseUser.displayName || '',
-            picture: firebaseUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(firebaseUser.email || '')}`,
-            token: savedToken,
-            emailVerified: firebaseUser.emailVerified
-          });
-          void bootstrapServerSession(firebaseUser);
-
-          const savedData = localStorage.getItem(`student_progress_data_${(firebaseUser.email || '').toLowerCase()}`);
-          if (savedData) {
-             try { setData(JSON.parse(savedData)); } catch(e) {}
-          }
-
-          setIsAuthLoading(false);
-          void fetchUserDataFromDB(firebaseUser.email || '', { showLoading: !savedData });
-          setTimeout(() => {
-            fetchYoutubeCookies(firebaseUser.email || '').catch(() => {});
-          }, 1500);
-          setIsAuthLoading(false);
-        } else {
-          setUser(null);
-          setProfile(null);
-          setIsAuthLoading(false);
-        }
-        });
-      }).catch(() => {
-        if (!disposed) setIsAuthLoading(false);
-      });
-    } else {
-      // Production access requires a verified Firebase identity. A cached local
-      // profile must never grant application access when authentication is not
-      // configured or unavailable.
-      setUser(null);
-      setProfile(null);
-      setIsAuthLoading(false);
-    }
-
-    const localCookies = localStorage.getItem('youtube_bypass_cookies');
-    if (localCookies) {
-        setYoutubeCookies(localCookies);
-    }
-
-    return () => {
-      disposed = true;
-      unsubscribeAutoAuth();
-    };
-  }, [isFirebaseEnabled]);
-
-  
-  // Popup auth is the reliable default on Vercel. Mobile/PWA redirect auth is
-  // enabled only when the same-origin /__/auth proxy and OAuth redirect URI
-  // have explicitly been configured.
-  const loginWithGoogle = async () => {
-    if (googleLoginInFlightRef.current) return;
-    googleLoginInFlightRef.current = true;
-    setIsAuthLoading(true);
-
-    try {
-      if (!isFirebaseEnabled || !auth) {
-        showNotification("Firebase configuration is required for Google sign-in.", "error");
-        return;
-      }
-
-      const provider = new GoogleAuthProvider();
-      provider.addScope("openid");
-      provider.addScope("https://www.googleapis.com/auth/userinfo.email");
-      provider.addScope("https://www.googleapis.com/auth/userinfo.profile");
-      provider.setCustomParameters({ prompt: "select_account" });
-      await authPersistenceReady;
-
-      const redirectConfigured =
-        String(import.meta.env.VITE_FIREBASE_REDIRECT_AUTH_ENABLED || "").toLowerCase() === "true" &&
-        String(import.meta.env.VITE_FIREBASE_USE_CUSTOM_AUTH_DOMAIN || "").toLowerCase() === "true";
-      const useRedirect = shouldUseRedirectAuth({
-        standalone: window.matchMedia?.("(display-mode: standalone)").matches === true,
-        userAgent: navigator.userAgent,
-        viewportWidth: window.innerWidth,
-        redirectConfigured,
-      });
-
-      if (useRedirect) {
-        await signInWithRedirect(auth, provider);
-        return;
-      }
-
-      try {
-        const result = await signInWithPopup(auth, provider);
-        const credential = GoogleAuthProvider.credentialFromResult(result);
-        if (credential?.accessToken) {
-          localStorage.setItem("google_access_token", credential.accessToken);
-        }
-        setUser({
-          email: result.user.email || "",
-          name: result.user.displayName || "",
-          picture: result.user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(result.user.email || "")}`,
-          token: credential?.accessToken || "",
-          emailVerified: result.user.emailVerified,
-        });
-        void bootstrapServerSession(result.user);
-      } catch (popupError: any) {
-        const popupCode = String(popupError?.code || "");
-        const canFallbackToRedirect = redirectConfigured && [
-          "auth/popup-blocked",
-          "auth/operation-not-supported-in-this-environment",
-          "auth/web-storage-unsupported",
-        ].includes(popupCode);
-        if (canFallbackToRedirect) {
-          await signInWithRedirect(auth, provider);
-          return;
-        }
-        throw popupError;
-      }
-    } catch (error: any) {
-      const code = String(error?.code || "");
-      const currentHost = typeof window !== "undefined" ? window.location.hostname : "this domain";
-      const message = code === "auth/unauthorized-domain"
-        ? `Google sign-in is not authorized for ${currentHost}. Add this hostname in Firebase Authentication > Settings > Authorized domains.`
-        : code === "auth/popup-blocked"
-          ? "The Google sign-in popup was blocked. Allow popups for this site and try again."
-          : code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request"
-            ? "Google sign-in was cancelled."
-            : code === "auth/web-storage-unsupported"
-              ? "This browser cannot save the Google sign-in session. Disable private browsing or allow site storage, then try again."
-              : code === "auth/operation-not-allowed"
-                ? "Google sign-in is disabled in Firebase Authentication."
-                : "Google sign-in failed. Please try again.";
-      showNotification(message, "error");
-      if (import.meta.env.DEV) console.error("Google sign-in failed", error);
-    } finally {
-      googleLoginInFlightRef.current = false;
-      setIsAuthLoading(false);
-    }
-  };
-
-  const fetchUserInfo = async (token: string) => {
-    setIsAuthLoading(true);
-    try {
-      const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        
-        if (isFirebaseEnabled && auth) {
-          try {
-            const credential = GoogleAuthProvider.credential(null, token);
-            await signInWithCredential(auth, credential);
-            console.log("Firebase Auth signed in via standard token!");
-          } catch (e) {
-            throw new Error('Google Firebase session could not be verified. Please sign in again.');
-          }
-        }
-
-        setUser({
-          email: data.email,
-          name: data.name,
-          picture: data.picture,
-          token,
-          emailVerified: data.email_verified === true || data.email_verified === 'true' || true
-        });
-
-        const savedData = localStorage.getItem(`student_progress_data_${data.email.toLowerCase()}`);
-        if (savedData) {
-           try { setData(JSON.parse(savedData)); } catch(e) {}
-        }
-
-        await fetchUserDataFromDB(data.email);
-        await fetchYoutubeCookies(data.email);
-      } else {
-        localStorage.removeItem('google_access_token');
-      }
-    } catch (err) {
-      console.error("fetchUserInfo Error (safe to ignore in offline sandbox):", err);
-    }
-    setIsAuthLoading(false);
-  };
-
-  const logout = async () => {
-    if (auth) { try { await signOut(auth); } catch(e){} }
-    setIsAuthLoading(true);
-    localStorage.removeItem('google_access_token');
-    localStorage.removeItem('email_user_session');
-    localStorage.removeItem('email_user_profile');
-    setUser(null);
-    setData(defaultData);
-    setYoutubeCookies('');
-    setIsAuthLoading(false);
-  };
-
-  const fetchUserDataFromDB = async (
-    rawEmail: string,
-    options: { showLoading?: boolean } = {},
-  ) => {
-      const email = rawEmail.toLowerCase();
-      const showLoading = options.showLoading !== false;
-      if (showLoading) setIsUserDataLoading(true);
-      try {
-         const res = await apiFetch(`/api/data?email=${encodeURIComponent(email)}`);
-         if (res.ok) {
-             const result = await res.json();
-             if (result.data) {
-                 setData(result.data);
-                 localStorage.setItem(`student_progress_data_${email}`, JSON.stringify(result.data));
-                 return;
-             }
-         }
-
-         // Fallback to local storage if both failed or returned no data
-         const savedData = localStorage.getItem(`student_progress_data_${email}`);
-         if (savedData) {
-            try {
-               setData(JSON.parse(savedData));
-               if (import.meta.env.DEV) console.info("Student progress restored from the local cache.");
-            } catch(e) {}
-         }
-      } catch (e) {
-         console.error('Failed to load DB data', e);
-         // Final safety fallback
-         const savedData = localStorage.getItem(`student_progress_data_${email}`);
-         if (savedData) {
-            try {
-               setData(JSON.parse(savedData));
-            } catch(err) {}
-         }
-      } finally {
-         setHasHydratedUserData(true);
-         if (showLoading) setIsUserDataLoading(false);
-      }
-  };
-
-  const fetchYoutubeCookies = async (rawEmail: string) => {
-     const email = rawEmail.toLowerCase();
-     try {
-        const res = await apiFetch(`/api/cookies?email=${encodeURIComponent(email)}`);
-        if (res.ok) {
-           const result = await res.json();
-           if (result.cookies) {
-              setYoutubeCookies(result.cookies);
-              localStorage.setItem('youtube_bypass_cookies', result.cookies);
-              return;
-           }
-        }
-     } catch (err) {}
-     
-     const savedLocally = localStorage.getItem('youtube_bypass_cookies');
-     if (savedLocally) {
-        setYoutubeCookies(savedLocally);
-     }
-  };
-
-  const saveYoutubeCookies = async (cookies: string) => {
-     setYoutubeCookies(cookies);
-     localStorage.setItem('youtube_bypass_cookies', cookies);
-     if (!user?.email) return;
-     const email = user.email.toLowerCase();
-     try {
-        await apiFetch('/api/cookies', {
-           method: 'POST',
-           headers: { 'Content-Type': 'application/json' },
-           body: JSON.stringify({ email: email, cookies })
-        });
-     } catch (err) {}
-  };
-
+  const [adminTargetUid, setAdminTargetUid] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const notificationTimersRef = useRef(new Map<string, number>());
-  const recentNotificationRef = useRef(new Map<string, number>());
-
   const [modals, setModals] = useState<ModalsState>({
-    playlist: { open: false, topic: '' },
+    playlist: { open: false, topic: "" },
     addPaperMark: { open: false, editIndex: -1 },
-    silencePlayer: { open: false, videoUrl: '', title: '' },
+    silencePlayer: { open: false, videoUrl: "", title: "" },
   });
 
-  const [stars, setStars] = useState<StarItem[]>([]);
+  const loginInFlightRef = useRef(false);
+  const sessionUidRef = useRef<string | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSaveRef = useRef<AppData | null>(null);
+  const notificationTimersRef = useRef(new Map<string, number>());
+  const recentNotificationsRef = useRef(new Map<string, number>());
 
-  const triggerStars = () => {
-    const newStars: StarItem[] = Array.from({ length: 25 }).map((_, i) => ({
-      id: Date.now() + i,
-      x: Math.random() * 100,
-      y: Math.random() * 100,
-      size: Math.random() * 1.2 + 0.4,
-      driftX: (Math.random() - 0.5) * 15,
-      driftY: -(Math.random() * 15 + 10),
-      duration: 1.2 + Math.random() * 1.0,
-      rotateDeg: Math.random() * 360,
-    }));
-    setStars(newStars);
-    setTimeout(() => setStars([]), 4000);
-  };
+  const setData = useCallback<React.Dispatch<React.SetStateAction<AppData>>>((update) => {
+    setRawData((previous) => sanitizeAppData(typeof update === "function" ? update(previous) : update));
+  }, []);
 
-  const removeNotification = React.useCallback((id: string) => {
+  const removeNotification = useCallback((id: string) => {
     const timer = notificationTimersRef.current.get(id);
     if (timer !== undefined) window.clearTimeout(timer);
     notificationTimersRef.current.delete(id);
-    setNotifications((previous) => previous.filter((notification) => notification.id !== id));
+    setNotifications((items) => items.filter((item) => item.id !== id));
   }, []);
 
-  const showNotification = React.useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
-    const normalizedMessage = normalizeSinhalaDisplayText(message).trim();
-    if (!normalizedMessage) return;
-    const now = Date.now();
-    const dedupeKey = `${type}:${normalizedMessage}`;
-    const lastShown = recentNotificationRef.current.get(dedupeKey) || 0;
-    if (now - lastShown < 1500) return;
-    recentNotificationRef.current.set(dedupeKey, now);
-
-    const id = crypto.randomUUID();
-    setNotifications((previous) => [...previous, { id, message: normalizedMessage, type }].slice(-3));
-    if (!notificationTimersRef.current.has(id)) {
+  const showNotification = useCallback(
+    (message: string, type: NotificationItem["type"] = "success") => {
+      const text = normalizeSinhalaDisplayText(message).trim();
+      if (!text) return;
+      const key = `${type}:${text}`;
+      const now = Date.now();
+      if (now - (recentNotificationsRef.current.get(key) || 0) < 1500) return;
+      recentNotificationsRef.current.set(key, now);
+      const id = crypto.randomUUID();
+      setNotifications((items) => [...items, { id, message: text, type }].slice(-3));
       const timer = window.setTimeout(() => removeNotification(id), 4000);
       notificationTimersRef.current.set(id, timer);
+    },
+    [removeNotification],
+  );
+
+  const loadProfile = useCallback(async () => {
+    const response = await apiFetch("/api/profile");
+    if (!response.ok) throw new Error("Profile could not be loaded.");
+    const payload = await readJson<{ profile?: UserProfile }>(response);
+    if (payload?.profile) setProfile(payload.profile);
+  }, []);
+
+  const loadNotifications = useCallback(async () => {
+    const response = await apiFetch("/api/notifications");
+    if (!response.ok) return;
+    const payload = await readJson<{ notifications?: PushNotification[] }>(response);
+    setPushNotifications(Array.isArray(payload?.notifications) ? payload.notifications : []);
+  }, []);
+
+  const loadOwnData = useCallback(async () => {
+    setIsUserDataLoading(true);
+    try {
+      const response = await apiFetch("/api/data");
+      if (!response.ok) throw new Error("Progress data could not be loaded.");
+      const payload = await readJson<{ data?: AppData | null }>(response);
+      setData(sanitizeAppData(payload?.data));
+    } catch (error) {
+      setData(defaultData);
+      showNotification(error instanceof Error ? error.message : "Progress data could not be loaded.", "error");
+    } finally {
+      setHasHydratedUserData(true);
+      setIsUserDataLoading(false);
     }
-  }, [removeNotification]);
+  }, [setData, showNotification]);
+
+  const bootstrapAuthenticatedUser = useCallback(
+    async (firebaseUser: FirebaseUser) => {
+      const nextUser: AppUser = {
+        uid: firebaseUser.uid,
+        email: firebaseUser.email || "",
+        name: firebaseUser.displayName || firebaseUser.email?.split("@")[0] || "Student",
+        picture: firebaseUser.photoURL || undefined,
+        emailVerified: firebaseUser.emailVerified,
+      };
+      setUser(nextUser);
+
+      if (sessionUidRef.current !== firebaseUser.uid) {
+        try {
+          const idToken = await firebaseUser.getIdToken();
+          const response = await apiFetch("/api/auth/session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ idToken }),
+          });
+          if (response.ok) sessionUidRef.current = firebaseUser.uid;
+        } catch {
+          // Firebase remains the source of truth. A temporary server-session failure
+          // must not sign out a valid Firebase user.
+        }
+      }
+
+      const results = await Promise.allSettled([loadOwnData(), loadProfile(), loadNotifications()]);
+      if (results[1].status === "rejected") {
+        setProfile({
+          email: nextUser.email,
+          username: nextUser.name,
+          picture: nextUser.picture || "",
+          bio: "",
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      try {
+        const response = await apiFetch("/api/auth/context");
+        const contextPayload = await readJson<{ roles?: string[] }>(response);
+        if (response.ok && Array.isArray(contextPayload?.roles)) {
+          setProfile((current) => current ? {
+            ...current,
+            role: contextPayload.roles?.[0],
+            roles: contextPayload.roles,
+          } : current);
+        }
+      } catch {
+        // Role-dependent server routes still enforce authorization independently.
+      }
+    },
+    [loadNotifications, loadOwnData, loadProfile],
+  );
+
+  useEffect(() => {
+    let unsubscribe: () => void = () => {};
+    let cancelled = false;
+
+    void (async () => {
+      if (!isFirebaseEnabled || !auth) {
+        if (!cancelled) setIsAuthLoading(false);
+        return;
+      }
+      await authPersistenceReady;
+      try {
+        await getRedirectResultOnce();
+      } catch (error) {
+        if (!cancelled) {
+          showNotification(error instanceof Error ? error.message : "Google sign-in failed.", "error");
+        }
+      }
+      unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+        void (async () => {
+          if (cancelled) return;
+          setIsAuthLoading(true);
+          if (!firebaseUser) {
+            sessionUidRef.current = null;
+            setUser(null);
+            setProfile(null);
+            setPushNotifications([]);
+            setData(defaultData);
+            setHasHydratedUserData(false);
+            setIsAuthLoading(false);
+            return;
+          }
+          await bootstrapAuthenticatedUser(firebaseUser);
+          if (!cancelled) setIsAuthLoading(false);
+        })();
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [bootstrapAuthenticatedUser, setData, showNotification]);
+
+  const loginWithGoogle = useCallback(async () => {
+    if (!auth || !isFirebaseEnabled || loginInFlightRef.current) return;
+    loginInFlightRef.current = true;
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+      if (shouldUseRedirectAuth()) {
+        await signInWithRedirect(auth, provider);
+        return;
+      }
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+      const message = code.includes("popup-blocked")
+        ? "Google sign-in popup was blocked. Allow popups and try again."
+        : code.includes("unauthorized-domain")
+          ? "This domain is not authorized in Firebase Authentication."
+          : error instanceof Error ? error.message : "Google sign-in failed.";
+      showNotification(message, "error");
+    } finally {
+      loginInFlightRef.current = false;
+    }
+  }, [showNotification]);
+
+  const logout = useCallback(async () => {
+    try {
+      await apiFetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      if (auth) await signOut(auth);
+      sessionUidRef.current = null;
+      setAdminTargetEmailState(null);
+      setAdminTargetUid(null);
+      setData(defaultData);
+    }
+  }, [setData]);
+
+  const persistData = useCallback(async (nextData: AppData) => {
+    const targetUid = adminTargetUid;
+    const response = targetUid
+      ? await apiFetch("/api/admin/support/data", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            targetUid,
+            operation: "edit",
+            reason: "Administrator updated student progress from the support console.",
+            data: nextData,
+          }),
+        })
+      : await apiFetch("/api/data", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data: nextData }),
+        });
+    if (!response.ok) throw new Error("Progress could not be synchronized.");
+  }, [adminTargetUid]);
+
+  const saveData = useCallback((nextData: AppData) => {
+    const sanitized = sanitizeAppData(nextData);
+    setData(sanitized);
+    pendingSaveRef.current = sanitized;
+    if (!user || isAuthLoading) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      const pending = pendingSaveRef.current;
+      if (!pending) return;
+      void persistData(pending)
+        .then(() => { pendingSaveRef.current = null; })
+        .catch(() => showNotification("Progress is waiting to sync. It will retry when the connection returns.", "info"));
+    }, 650);
+  }, [isAuthLoading, persistData, setData, showNotification, user]);
+
+  useEffect(() => {
+    const retryPending = () => {
+      const pending = pendingSaveRef.current;
+      if (!pending || !user) return;
+      void persistData(pending)
+        .then(() => {
+          pendingSaveRef.current = null;
+          showNotification("Pending progress was synchronized.", "success");
+        })
+        .catch(() => undefined);
+    };
+    window.addEventListener("online", retryPending);
+    return () => window.removeEventListener("online", retryPending);
+  }, [persistData, showNotification, user]);
 
   useEffect(() => () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     notificationTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     notificationTimersRef.current.clear();
-    recentNotificationRef.current.clear();
+    recentNotificationsRef.current.clear();
   }, []);
 
-  const setTheme = (newTheme: ThemeKey) => {
-    setThemeState(newTheme);
-    localStorage.setItem('sftAppTheme', newTheme);
-  };
+  const clearLocalStorage = useCallback(() => {
+    // Kept as a compatibility name for existing widgets. No browser storage is
+    // touched; this resets the authenticated user's cloud progress record.
+    saveData(defaultData);
+  }, [saveData]);
 
-  useEffect(() => {
-    const savedTheme = localStorage.getItem('sftAppTheme') as ThemeKey;
-    if (savedTheme) {
-      setThemeState(savedTheme);
-    }
+  const toggleTopic = useCallback((topic: string) => {
+    const previousGrade = calculateCurrentGradeFromData(data, currentSubject);
+    const nextData = structuredClone(data);
+    const current = nextData[currentSubject].topics[topic];
+    nextData[currentSubject].topics[topic] = current
+      ? { ...current, checked: !current.checked }
+      : { checked: true, videos: [] };
+    nextData[currentSubject].lessonHistory ||= [];
+    nextData[currentSubject].lessonHistory?.push({
+      topic,
+      done: nextData[currentSubject].topics[topic].checked,
+      date: new Date().toISOString(),
+    });
+    const nextGrade = calculateCurrentGradeFromData(nextData, currentSubject);
+    showNotification(
+      nextGrade.level > previousGrade.level
+        ? `Subject grade upgraded to ${nextGrade.grade}.`
+        : `Status updated: ${topic}`,
+      "success",
+    );
+    saveData(nextData);
+  }, [currentSubject, data, saveData, showNotification]);
+
+  const updateTopicNotes = useCallback((topic: string, notes: string) => {
+    const nextData = structuredClone(data);
+    const current = nextData[currentSubject].topics[topic];
+    nextData[currentSubject].topics[topic] = current
+      ? { ...current, notes }
+      : { checked: false, videos: [], notes };
+    saveData(nextData);
+    showNotification(`Notes saved for ${topic}.`, "success");
+  }, [currentSubject, data, saveData, showNotification]);
+
+  const triggerStars = useCallback(() => {
+    // Celebration is intentionally event-driven. The visual component owns its
+    // animation so the provider does not retain decorative state globally.
+    window.dispatchEvent(new CustomEvent("clora-celebrate"));
   }, []);
 
-  // Online / Offline synchronization logic
-  useEffect(() => {
-    const handleOnline = async () => {
-      const email = user?.email;
-      if (!email) return;
+  const saveProfile = useCallback(async (nextProfile: UserProfile) => {
+    const response = await apiFetch("/api/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: nextProfile }),
+    });
+    if (!response.ok) throw new Error("Profile could not be saved.");
+    setProfile((current) => ({ ...current, ...nextProfile }));
+    showNotification("Profile saved.", "success");
+  }, [showNotification]);
 
-      const unsyncedKey = `al_blueprint_unsynced_data_${email}`;
-      const unsyncedRaw = localStorage.getItem(unsyncedKey);
-      if (unsyncedRaw) {
-        try {
-          const unsyncedData = JSON.parse(unsyncedRaw);
-          showNotification("Connection restored. Syncing offline changes…", "info");
+  const markPushNotificationAsRead = useCallback(async (id: string) => {
+    setPushNotifications((items) => items.map((item) => item.id === id ? { ...item, read: true } : item));
+    const response = await apiFetch("/api/notifications/read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notificationId: id }),
+    });
+    if (!response.ok) await loadNotifications();
+  }, [loadNotifications]);
 
-          let serverSynced = false;
-
-          try {
-            const res = await apiFetch('/api/data', {
-               method: 'POST',
-               headers: { 'Content-Type': 'application/json' },
-               body: JSON.stringify({ email: email, data: unsyncedData })
-            });
-            if (res.ok) {
-              serverSynced = true;
-            }
-          } catch (e) {
-            console.warn("Express sync failed during auto-sync:", e);
-          }
-
-          if (serverSynced) {
-            localStorage.removeItem(unsyncedKey);
-            showNotification("Offline changes were synced to the cloud.", "success");
-            setData(unsyncedData);
-          }
-        } catch (e) {
-          console.error("Failed to parse or sync local data", e);
-        }
-      }
-    };
-
-    window.addEventListener('online', handleOnline);
-    return () => {
-      window.removeEventListener('online', handleOnline);
-    };
-  }, [user]);
-
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingSaveRef = useRef<AppData | null>(null);
-
-  const saveData = React.useCallback(async (newData: AppData) => {
-    setData(newData);
-    let rawEmail = adminTargetEmail || user?.email;
-    const currentUserEmail = rawEmail?.toLowerCase();
-    if (currentUserEmail) {
-      localStorage.setItem(`student_progress_data_${currentUserEmail}`, JSON.stringify(newData));
-    }
-
-    if (isAuthLoading) {
-      pendingSaveRef.current = newData;
+  const setAdminTargetEmail = useCallback(async (email: string | null) => {
+    const normalized = email?.trim().toLowerCase() || null;
+    if (!normalized) {
+      setAdminTargetEmailState(null);
+      setAdminTargetUid(null);
+      await loadOwnData();
+      showNotification("Exited admin support mode.", "info");
       return;
     }
-
-    if (!currentUserEmail) return;
-
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    
-    saveTimeoutRef.current = setTimeout(async () => {
-      try {
-        const response = await apiFetch('/api/data', {
-           method: 'POST',
-           headers: { 'Content-Type': 'application/json' },
-           body: JSON.stringify({ email: currentUserEmail, data: newData })
-        });
-        if (!response.ok) {
-          const payload = await response.json().catch(() => null);
-          throw new Error(payload?.message || payload?.error || `Progress sync failed (${response.status})`);
-        }
-        localStorage.removeItem(`al_blueprint_unsynced_data_${currentUserEmail}`);
-      } catch (err) {
-        localStorage.setItem(`al_blueprint_unsynced_data_${currentUserEmail}`, JSON.stringify(newData));
-        console.warn("Progress was saved locally and queued for cloud synchronization.", err);
-      }
-    }, 1500);
-  }, [adminTargetEmail, user?.email, isAuthLoading]);
-
-  useEffect(() => {
-    if (isAuthLoading || !pendingSaveRef.current) return;
-    const pendingData = pendingSaveRef.current;
-    pendingSaveRef.current = null;
-    void saveData(pendingData);
-  }, [isAuthLoading, saveData]);
-
-  useEffect(() => () => {
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-  }, []);
-
-  const clearLocalStorage = async () => {
-    setData(defaultData);
-    if (!user?.email) return;
-
-    try {
-      await apiFetch('/api/data', {
-         method: 'POST',
-         headers: { 'Content-Type': 'application/json' },
-         body: JSON.stringify({ email: user.email, data: defaultData })
-      });
-    } catch (e) {}
-  };
-
-  const toggleTopic = (topic: string) => {
-    const prevGrade = calculateCurrentGradeFromData(data, currentSubject);
-    const nextData = structuredClone(data);
-    if (!nextData[currentSubject].topics[topic]) {
-      nextData[currentSubject].topics[topic] = { checked: true, videos: [] };
-    } else {
-      nextData[currentSubject].topics[topic].checked = !nextData[currentSubject].topics[topic].checked;
+    const resolveResponse = await apiFetch(`/api/admin/users/resolve?email=${encodeURIComponent(normalized)}`);
+    const resolvePayload = await readJson<{ uid?: string }>(resolveResponse);
+    if (!resolveResponse.ok || !resolvePayload?.uid) {
+      showNotification("The requested user could not be found or you do not have access.", "error");
+      return;
     }
-    
-    const isDone = nextData[currentSubject].topics[topic].checked;
-    if (!nextData[currentSubject].lessonHistory) {
-      nextData[currentSubject].lessonHistory = [];
-    }
-    nextData[currentSubject].lessonHistory.push({
-      topic,
-      done: isDone,
-      date: new Date().toISOString()
+    const supportResponse = await apiFetch("/api/admin/support/data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targetUid: resolvePayload.uid,
+        operation: "view",
+        reason: "Administrator opened student progress in the support console.",
+      }),
     });
-    
-    const nextGrade = calculateCurrentGradeFromData(nextData, currentSubject);
-    if (nextGrade.level > prevGrade.level) {
-      triggerStars();
-      showNotification(`Subject Grade Upgraded to ${nextGrade.grade}!`, 'success');
-    } else {
-      showNotification(`Status updated: ${topic}`, 'success');
+    const supportPayload = await readJson<{ data?: AppData }>(supportResponse);
+    if (!supportResponse.ok) {
+      showNotification("Student data could not be opened.", "error");
+      return;
     }
-    
-    saveData(nextData);
-  };
+    setAdminTargetEmailState(normalized);
+    setAdminTargetUid(resolvePayload.uid);
+    setData(sanitizeAppData(supportPayload?.data));
+    showNotification(`Admin support mode: ${normalized}`, "info");
+  }, [loadOwnData, setData, showNotification]);
 
-  const updateTopicNotes = (topic: string, notes: string) => {
-    const nextData = structuredClone(data);
-    if (!nextData[currentSubject].topics[topic]) {
-      nextData[currentSubject].topics[topic] = { checked: false, videos: [], notes };
-    } else {
-      nextData[currentSubject].topics[topic].notes = notes;
-    }
-    saveData(nextData);
-    showNotification(`Notes saved for ${topic}`, 'success');
-  };
-
-  const loginWithEmailAndPassword = async (email: string, password: string) => {
-    setIsAuthLoading(true);
-    try {
-      if (isFirebaseEnabled && auth) {
-        const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
-        const idToken = await credential.user.getIdToken();
-        
-        const res = await apiFetch('/api/auth/session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ idToken })
-        });
-        const resData = await res.json();
-        
-        if (res.ok) {
-          setUser(resData.user);
-          setProfile(resData.profile);
-          localStorage.setItem('email_user_session', JSON.stringify(resData.user));
-          localStorage.setItem('email_user_profile', JSON.stringify(resData.profile));
-
-          const savedData = localStorage.getItem(`student_progress_data_${resData.user.email.toLowerCase()}`);
-          if (savedData) {
-             try { setData(JSON.parse(savedData)); } catch(e) {}
-          }
-
-          await fetchUserDataFromDB(resData.user.email);
-          await fetchYoutubeCookies(resData.user.email);
-          showNotification("Signed in successfully.", "success");
-          setIsAuthLoading(false);
-          return { success: true };
-        } else {
-          showNotification(resData.error || "Login failed", "error");
-          setIsAuthLoading(false);
-          return { error: resData.error || "Login failed" };
-        }
-      } else {
-        // Fallback to pseudo-login if Firebase is disabled
-        const res = await apiFetch('/api/auth/email-login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password })
-        });
-        const resData = await res.json();
-        if (res.ok) {
-          if (resData.requiresVerification) {
-            setIsAuthLoading(false);
-            return { requiresVerification: true, email: resData.email, debugCode: resData.debugCode };
-          }
-          setUser(resData.user);
-          setProfile(resData.profile);
-          localStorage.setItem('email_user_session', JSON.stringify(resData.user));
-          localStorage.setItem('email_user_profile', JSON.stringify(resData.profile));
-
-          const savedData = localStorage.getItem(`student_progress_data_${resData.user.email.toLowerCase()}`);
-          if (savedData) {
-             try { setData(JSON.parse(savedData)); } catch(e) {}
-          }
-
-          await fetchUserDataFromDB(resData.user.email);
-          await fetchYoutubeCookies(resData.user.email);
-          showNotification("Signed in successfully.", "success");
-          setIsAuthLoading(false);
-          return { success: true };
-        } else {
-          showNotification(resData.error || "Login failed", "error");
-          setIsAuthLoading(false);
-          return { error: resData.error || "Login failed" };
-        }
-      }
-    } catch (e: any) {
-      showNotification("Firebase login failed or network error. " + (e.message || ""), "error");
-      setIsAuthLoading(false);
-      return { error: e.message || "Network error" };
-    }
-  };
-
-  const registerWithEmailAndDetails = async (params: any) => {
-    setIsAuthLoading(true);
-    try {
-      if (isFirebaseEnabled && auth) {
-        const credential = await createUserWithEmailAndPassword(auth, params.email.trim(), params.password);
-        const idToken = await credential.user.getIdToken();
-
-        const res = await apiFetch('/api/auth/session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ idToken, profileData: params })
-        });
-        const resData = await res.json();
-
-        if (res.ok) {
-          setUser(resData.user);
-          setProfile(resData.profile);
-          localStorage.setItem('email_user_session', JSON.stringify(resData.user));
-          localStorage.setItem('email_user_profile', JSON.stringify(resData.profile));
-
-          const savedData = localStorage.getItem(`student_progress_data_${resData.user.email.toLowerCase()}`);
-          if (savedData) {
-             try { setData(JSON.parse(savedData)); } catch(e) {}
-          }
-
-          await fetchUserDataFromDB(resData.user.email);
-          await fetchYoutubeCookies(resData.user.email);
-          showNotification(resData.message || "Registration successful.", "success");
-          setIsAuthLoading(false);
-          return { success: true };
-        } else {
-          showNotification(resData.error || "Registration failed", "error");
-          setIsAuthLoading(false);
-          return { error: resData.error || "Registration failed" };
-        }
-      } else {
-        const res = await apiFetch('/api/auth/register-start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(params)
-        });
-        const resData = await res.json();
-        if (res.ok) {
-          setUser(resData.user);
-          setProfile(resData.profile);
-          localStorage.setItem('email_user_session', JSON.stringify(resData.user));
-          localStorage.setItem('email_user_profile', JSON.stringify(resData.profile));
-
-          const savedData = localStorage.getItem(`student_progress_data_${resData.user.email.toLowerCase()}`);
-          if (savedData) {
-             try { setData(JSON.parse(savedData)); } catch(e) {}
-          }
-
-          await fetchUserDataFromDB(resData.user.email);
-          await fetchYoutubeCookies(resData.user.email);
-          showNotification(resData.message || "Registration successful.", "success");
-          setIsAuthLoading(false);
-          return { success: true };
-        } else {
-          showNotification(resData.error || "Registration failed", "error");
-          setIsAuthLoading(false);
-          return { error: resData.error || "Registration failed" };
-        }
-      }
-    } catch (e: any) {
-      showNotification("Firebase registration failed or network error. " + (e.message || ""), "error");
-      setIsAuthLoading(false);
-      return { error: e.message || "Network error" };
-    }
-  };
-
-  const verifyEmailCode = async (email: string, code: string) => {
-    setIsAuthLoading(true);
-    try {
-      const res = await apiFetch('/api/auth/verify-code', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, code })
-      });
-      const resData = await res.json();
-      if (res.ok) {
-        setUser(resData.user);
-        setProfile(resData.profile);
-        
-        const savedData = localStorage.getItem(`student_progress_data_${resData.user.email.toLowerCase()}`);
-        if (savedData) {
-           try { setData(JSON.parse(savedData)); } catch(e) {}
-        }
-
-        await fetchUserDataFromDB(resData.user.email);
-        await fetchYoutubeCookies(resData.user.email);
-        showNotification("Email verified and signed in.", "success");
-        setIsAuthLoading(false);
-        return { success: true };
-      } else {
-        showNotification(resData.error || "Verification failed", "error");
-        setIsAuthLoading(false);
-        return { error: resData.error || "Verification failed" };
-      }
-    } catch (e: any) {
-      showNotification("Could not connect to the verification server.", "error");
-      setIsAuthLoading(false);
-      return { error: e.message || "Network error" };
-    }
-  };
-
-  const contextValue = React.useMemo(() => ({
+  const value = useMemo<AppContextType>(() => ({
     data,
     setData,
     user,
-    setUser,
     currentSubject,
     setCurrentSubject,
     currentView,
@@ -1354,46 +551,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
     updateTopicNotes,
     saveData,
     clearLocalStorage,
-    stars,
     triggerStars,
-    fetchUserInfo,
     loginWithGoogle,
     isAuthLoading,
     isUserDataLoading,
     hasHydratedUserData,
     logout,
-    youtubeCookies,
-    saveYoutubeCookies,
     profile,
     saveProfile,
     pushNotifications,
-    triggerPushNotification,
     markPushNotificationAsRead,
-    markAllPushNotificationsAsRead,
-    deletePushNotification,
-    localFriends,
-    addFriend,
-    autoEmailLogin,
-    toggleAutoEmailLogin,
-    sendGmailProgressEmail,
     adminTargetEmail,
     setAdminTargetEmail,
-    loginWithEmailAndPassword,
-    registerWithEmailAndDetails,
-    verifyEmailCode
   }), [
-    data, user, currentSubject, currentView, theme, isSidebarOpen, isAdvisorOpen, modals, notifications, stars, isAuthLoading, isUserDataLoading, hasHydratedUserData, youtubeCookies, profile, pushNotifications, localFriends, autoEmailLogin, adminTargetEmail
+    adminTargetEmail,
+    clearLocalStorage,
+    currentSubject,
+    currentView,
+    data,
+    hasHydratedUserData,
+    isAdvisorOpen,
+    isAuthLoading,
+    isSidebarOpen,
+    isUserDataLoading,
+    loginWithGoogle,
+    logout,
+    markPushNotificationAsRead,
+    modals,
+    notifications,
+    profile,
+    pushNotifications,
+    removeNotification,
+    saveData,
+    saveProfile,
+    setAdminTargetEmail,
+    setData,
+    showNotification,
+    theme,
+    toggleTopic,
+    triggerStars,
+    updateTopicNotes,
+    user,
   ]);
 
-  return (
-    <AppContext.Provider value={contextValue}>
-      {children}
-    </AppContext.Provider>
-  );
+  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 
 export function useApp() {
   const context = useContext(AppContext);
-  if (!context) throw new Error('useApp must be used within an AppProvider');
+  if (!context) throw new Error("useApp must be used within an AppProvider");
   return context;
 }

@@ -76,7 +76,7 @@ export function ToolCommandPalette({ isOpen, searchQuery, onSelect, onClose, pos
           <div className="px-4 py-3 text-sm text-slate-500 text-center">No commands found</div>
         ) : (
           filteredOptions.map((opt, idx) => (
-            <button
+            <button type="button"
               key={opt.id}
               onClick={() => onSelect(opt)}
               className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors cursor-pointer ${

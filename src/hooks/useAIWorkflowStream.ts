@@ -1,11 +1,10 @@
 import { useState, useRef } from "react";
 import { auth } from "../lib/firebase";
-import { apiFetch, getAuthToken } from "../lib/api";
+import { apiFetch } from "../lib/api";
 import { SSEParser } from "../lib/sseParser";
 import { stripRawVisualBlocks } from "../lib/ai/stripVisualBlocks";
 import { getUnclosedMathInfo, sanitizeMathMarkdown } from "../lib/mathSanitizer";
 import { extractVisualBlocks } from "../lib/visualBlockExtractor";
-import { apiUrl } from "../lib/apiBase";
 import { askDirectPdfQa } from "../lib/ai/directPdfQa";
 
 export function useAIWorkflowStream() {
@@ -137,14 +136,10 @@ export function useAIWorkflowStream() {
 
       while (attempt < maxAttempts) {
         try {
-          const token = await getAuthToken();
-          response = await fetch(apiUrl(endpoint), {
+          response = await apiFetch(endpoint, {
             method: "POST",
             signal: controller.signal,
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token || ""}`,
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });
           if (response.ok) {

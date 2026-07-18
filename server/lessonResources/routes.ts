@@ -5,7 +5,10 @@ import { assertContentManager, isContentManager, isStudentVisibleSource } from "
 import { normalizeDisplayPriority, normalizeLessonId, resourceTimestampMillis } from "./service";
 import { invalidateInventoryCache } from "../sources/sourceInventoryService";
 
+import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
+
 export const lessonResourceRoutes = Router();
+lessonResourceRoutes.use(requireFirebaseUser, requireFirebaseAppCheck);
 
 lessonResourceRoutes.get("/lesson-resources", requireFirebaseUser, async (req: any, res) => {
   try {
@@ -21,7 +24,7 @@ lessonResourceRoutes.get("/lesson-resources", requireFirebaseUser, async (req: a
     const subjectVariants = Array.from(new Set([subject, subject.toLowerCase(), subject[0] + subject.slice(1).toLowerCase()]));
     const loadSubjectDocs = async (collection: any) => {
       const snapshots = await Promise.allSettled(
-        subjectVariants.map((variant) => collection.where("subject", "==", variant).get()),
+        subjectVariants.map((variant) => collection.where("subject", "==", variant).limit(200).get()),
       );
       const merged = new Map<string, any>();
       for (const snapshot of snapshots) {
@@ -74,17 +77,23 @@ lessonResourceRoutes.get("/lesson-resources", requireFirebaseUser, async (req: a
       normalizeLessonId(requestedLessonTitle),
       normalizeLessonId(requestedLessonTitle.replace(/[–—:()\[\]]/g, " ")),
     ].filter(Boolean));
-    const lessonTokens = new Set(requestedLessonId.split("-").filter((token) => token.length > 1));
+    const requestedTokens = requestedLessonId.split("-").filter((token) => token.length > 1);
     const matchesLesson = (resource: any) => {
-      const candidates = [resource.lessonId, resource.lessonTitle, resource.lesson, resource.topic, resource.tags?.join?.(" ")]
+      const stableLessonId = normalizeLessonId(resource.lessonId);
+      if (stableLessonId) return aliases.has(stableLessonId);
+
+      // Legacy records without a stable lessonId may use a conservative title
+      // fallback. Never attach a resource on a partial substring alone.
+      const candidates = [resource.lessonTitle, resource.lesson, resource.topic]
         .map((value) => normalizeLessonId(value))
         .filter(Boolean);
       if (candidates.some((candidate) => aliases.has(candidate))) return true;
-      if (candidates.some((candidate) => candidate.includes(requestedLessonId) || requestedLessonId.includes(candidate))) return true;
+      if (requestedTokens.length < 2) return false;
       return candidates.some((candidate) => {
         const candidateTokens = new Set(candidate.split("-").filter((token) => token.length > 1));
-        const overlap = [...lessonTokens].filter((token) => candidateTokens.has(token)).length;
-        return lessonTokens.size > 0 && overlap / lessonTokens.size >= 0.6;
+        const overlap = requestedTokens.filter((token) => candidateTokens.has(token)).length;
+        const union = new Set([...requestedTokens, ...candidateTokens]).size;
+        return overlap >= 2 && union > 0 && overlap / union >= 0.85;
       });
     };
 
@@ -126,7 +135,7 @@ lessonResourceRoutes.get("/lesson-resources", requireFirebaseUser, async (req: a
     res.setHeader("Cache-Control", "private, no-store, max-age=0");
     return res.json({ ok: true, resources, canManageLessonResources: manager, lessonId: requestedLessonId });
   } catch (error: any) {
-    return res.status(500).json({ ok: false, code: "LESSON_RESOURCES_READ_FAILED", message: error.message });
+    return res.status(500).json({ ok: false, code: "LESSON_RESOURCES_READ_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -160,7 +169,7 @@ lessonResourceRoutes.patch("/lesson-resources/:resourceId", requireFirebaseUser,
     invalidateInventoryCache(req.user.uid);
     return res.json({ ok: true });
   } catch (error: any) {
-    return res.status(error.status || 500).json({ ok: false, code: error.code || "LESSON_RESOURCE_UPDATE_FAILED", message: error.message });
+    return res.status(error.status || 500).json({ ok: false, code: error.code || "LESSON_RESOURCE_UPDATE_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -177,10 +186,10 @@ lessonResourceRoutes.delete("/lesson-resources/:resourceId", requireFirebaseUser
       await db.collection("videos").doc(String(resource.videoId)).set({ status: "archived", isPublished: false, allowPlayback: false, updatedAt: new Date().toISOString() }, { merge: true });
     }
     if (resource.storagePath) {
-      await getAdminBucket().file(String(resource.storagePath)).delete({ ignoreNotFound: true }).catch(() => undefined);
+      await getAdminBucket().file(String(resource.storagePath)).delete({ ignoreNotFound: true });
     }
     if (resource.sourceId) {
-      await db.collection("rag_sources").doc(String(resource.sourceId)).delete().catch(() => undefined);
+      await db.collection("rag_sources").doc(String(resource.sourceId)).delete();
       const chunks = await db.collection("rag_chunks").where("sourceId", "==", String(resource.sourceId)).get();
       await Promise.all(chunks.docs.map((document: any) => document.ref.delete()));
     }
@@ -188,6 +197,6 @@ lessonResourceRoutes.delete("/lesson-resources/:resourceId", requireFirebaseUser
     invalidateInventoryCache(req.user.uid);
     return res.json({ ok: true });
   } catch (error: any) {
-    return res.status(error.status || 500).json({ ok: false, code: error.code || "LESSON_RESOURCE_DELETE_FAILED", message: error.message });
+    return res.status(error.status || 500).json({ ok: false, code: error.code || "LESSON_RESOURCE_DELETE_FAILED", message: "The operation failed. Please try again." });
   }
 });

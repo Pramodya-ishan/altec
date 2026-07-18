@@ -1,4 +1,5 @@
 import { Menu, Search, Bell, X, LogOut, User, ChevronRight, XCircle, Book, Clock, Cloud, RefreshCw, HardDrive, Plus } from "lucide-react";
+import { setPendingTopicHighlight } from "../../lib/navigationIntent";
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
@@ -12,7 +13,7 @@ function SubjectToggle({ layoutIdPrefix, currentSubject, setCurrentSubject }: { 
   return (
     <div id={`${layoutIdPrefix}-subject-toggle-wrapper`} className="flex bg-slate-100/80 p-1 rounded-full gap-1 shadow-inner border border-slate-200 w-full sm:w-auto relative items-center">
       {(['sft', 'et', 'ict'] as const).map(sub => (
-        <button
+        <button type="button"
           key={sub}
           id={`${layoutIdPrefix}-toggle-btn-${sub}`}
           onClick={() => setCurrentSubject(sub)}
@@ -114,7 +115,7 @@ export function TopNav() {
 
   const handleTopicSelect = (subject: 'sft' | 'et' | 'ict', topic: string, view: 'paper-structure') => {
     setCurrentSubject(subject);
-    localStorage.setItem('search_highlight_topic', topic);
+    setPendingTopicHighlight(topic);
     navigate(`/${view}`);
     setSearchQuery("");
     setShowSearchResults(false);
@@ -136,7 +137,7 @@ export function TopNav() {
         />
         
         {searchQuery && (
-          <button 
+          <button type="button" 
             onClick={() => {
               setSearchQuery("");
               setShowSearchResults(false);
@@ -183,7 +184,7 @@ export function TopNav() {
                     </div>
                     
                     <div className="flex items-center gap-1 shrink-0">
-                      <button
+                      <button type="button"
                         onClick={() => handleTopicSelect(item.subject, item.topic, 'paper-structure')}
                         className="flex items-center gap-1 bg-primary-50 hover:bg-primary-600 text-primary-700 hover:text-white px-2.5 py-1 rounded-lg text-[9px] font-black transition-colors cursor-pointer border border-primary-100"
                         title="Jump to Syllabus, Notes and Files"
@@ -301,7 +302,7 @@ export function TopNav() {
           <div className="flex items-center gap-3">
             
             <div className="relative">
-              <button
+              <button type="button"
                 onClick={() => setShowProfilePopup(!showProfilePopup)}
                 className={cn(
                 "w-10 h-10 rounded-full overflow-hidden border-2 bg-slate-50 relative shadow-sm hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0",
@@ -347,7 +348,7 @@ export function TopNav() {
                     </div>
                   </div>
                   
-                  <button
+                  <button type="button"
                     onClick={() => {
                       navigate('/profile');
                       setShowProfilePopup(false);
@@ -363,7 +364,7 @@ export function TopNav() {
                   
                   <div className="h-px w-full bg-slate-100 my-1"></div>
                   
-                  <button
+                  <button type="button"
                     onClick={() => {
                       logout();
                       setShowProfilePopup(false);

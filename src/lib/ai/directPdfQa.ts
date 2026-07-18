@@ -4,6 +4,7 @@ import { normalizeStoragePath } from "./normalizeStoragePath";
 import { getLargeEndpointUrl } from "../apiBase";
 import type { VisualBlock } from "../visualBlocks";
 import { formatDirectPdfAnswer } from "./directPdfAnswerFormatter";
+import { apiFetch } from "../api";
 
 export type DirectPdfQaResult = {
   ok: boolean;
@@ -99,18 +100,14 @@ export async function askDirectPdfQa(params: {
     const endpoint = getLargeEndpointUrl("/api/pdf/direct-qa-file");
     onProgress?.("scanning", { serverSide: true });
 
-    const token = await auth.currentUser?.getIdToken();
     const backendController = new AbortController();
     if (signal) {
       signal.addEventListener("abort", () => backendController.abort(new Error("USER_CANCELLED")));
     }
     const backendTimeout = window.setTimeout(() => backendController.abort(), 150000);
 
-    const postDirectQa = (url: string) => fetch(url, {
+    const postDirectQa = (url: string) => apiFetch(url, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token || ""}`,
-      },
       body: formData,
       signal: backendController.signal,
     });
@@ -170,12 +167,9 @@ export async function askDirectPdfQa(params: {
       && (source.id || source.sourceId)
     ) {
       try {
-        const previewResponse = await fetch(getLargeEndpointUrl("/api/pdf/question-preview"), {
+        const previewResponse = await apiFetch(getLargeEndpointUrl("/api/pdf/question-preview"), {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token || ""}`,
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             sourceId: source.id || source.sourceId,
             storagePath: normalized ? (normalized.kind === "path" ? normalized.path : normalized.url) : source.storagePath,

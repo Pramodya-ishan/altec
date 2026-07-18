@@ -103,7 +103,7 @@ export const SourceCard: React.FC<SourceCardProps> = ({
           </div>
         </div>
         <div className="shrink-0 flex items-center gap-1.5 pr-1">
-           <button 
+           <button type="button" 
              onClick={handleDownload}
              className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:text-indigo-600 hover:border-indigo-200 hover:bg-indigo-50 transition-colors shadow-sm"
              title="Download PDF"

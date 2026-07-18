@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useApp } from '../../context/AppContext';
 
 type TimerMode = 'work' | 'short' | 'long';
 
@@ -10,26 +11,25 @@ interface Task {
 }
 
 export function FocusTodoView() {
+ const { data, saveData } = useApp();
  const [mode, setMode] = useState<TimerMode>('work');
  const [timeLeft, setTimeLeft] = useState(25 * 60);
  const [isActive, setIsActive] = useState(false);
  const [completedSessions, setCompletedSessions] = useState(0);
  
- const [tasks, setTasks] = useState<Task[]>(() => {
- const saved = localStorage.getItem('focus_tasks');
- return saved ? JSON.parse(saved) : [
+ const [tasks, setTasks] = useState<Task[]>(() => data.focusTasks || [
  { id: '1', text: 'SFT Past Paper MCQ Analysis', completed: false },
  { id: '2', text: 'Revise ET Hydraulics and Pneumatics', completed: false },
  { id: '3', text: 'Practice ICT Database queries', completed: false }
- ];
- });
+ ]);
  const [newTaskText, setNewTaskText] = useState('');
  const [showIframe, setShowIframe] = useState(false);
 
  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
  useEffect(() => {
- localStorage.setItem('focus_tasks', JSON.stringify(tasks));
+   if (data.focusTasks === tasks) return;
+   saveData({ ...data, focusTasks: tasks });
  }, [tasks]);
 
  const modeSettings = {
@@ -129,7 +129,7 @@ export function FocusTodoView() {
  </div>
 
  <div className="flex gap-2 w-full sm:w-auto">
- <button
+ <button type="button"
  onClick={() => setShowIframe(!showIframe)}
  className="flex-1 sm:flex-none px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-extrabold transition-all border border-slate-700/50 shadow-sm cursor-pointer"
  >
@@ -169,7 +169,7 @@ export function FocusTodoView() {
  {/* Mode Selectors */}
  <div className="flex bg-slate-950/60 p-1.5 rounded-2xl gap-1 border border-slate-800/80 mb-8">
  {(['work', 'short', 'long'] as TimerMode[]).map((m) => (
- <button
+ <button type="button"
  key={m}
  onClick={() => setMode(m)}
  className={`flex-1 py-2 text-xs font-extrabold rounded-xl uppercase tracking-wider transition-all cursor-pointer ${
@@ -220,7 +220,7 @@ export function FocusTodoView() {
 
  {/* Controls */}
  <div className="flex justify-center items-center gap-4">
- <button
+ <button type="button"
  onClick={resetTimer}
  className="w-12 h-12 rounded-2xl bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-all flex items-center justify-center cursor-pointer shadow-sm"
  title="Reset Timer"
@@ -228,7 +228,7 @@ export function FocusTodoView() {
  <i className="fa-solid fa-rotate-left text-base"></i>
  </button>
 
- <button
+ <button type="button"
  onClick={toggleTimer}
  className={`px-8 py-3.5 rounded-2xl font-black text-sm uppercase tracking-wider transition-all cursor-pointer shadow-lg hover:shadow-xl active:scale-[0.98] ${
  isActive
@@ -311,7 +311,7 @@ export function FocusTodoView() {
  <span className="text-xs font-semibold select-none leading-relaxed break-words">{task.text}</span>
  </div>
 
- <button
+ <button type="button"
  onClick={() => deleteTask(task.id)}
  className="text-slate-500 hover:text-rose-500 p-1.5 rounded-lg hover:bg-slate-900 transition-all cursor-pointer"
  >

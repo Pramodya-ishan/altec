@@ -152,6 +152,6 @@ export async function searchPastPapers(req: any, res: any) {
 
   } catch (error: any) {
     console.error("Past Paper Search failed:", error);
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 }

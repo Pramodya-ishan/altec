@@ -519,7 +519,7 @@ export const DiagnosticJsonDashboard = ({
       {/* QUICK ACTIONS ROW */}
       {onActionClick && (
         <div className="flex flex-col sm:flex-row flex-wrap items-stretch gap-2 pt-2 pb-2">
-          <button
+          <button type="button"
             onClick={() =>
               onActionClick(
                 "Generate a structured dynamic action plan with daily targets and success metrics based on my CURRENT progress.",
@@ -530,7 +530,7 @@ export const DiagnosticJsonDashboard = ({
             <Zap className="w-5 h-5 text-amber-500" /> Plan Generator
           </button>
 
-          <button
+          <button type="button"
             onClick={() =>
               onActionClick(
                 "Generate a perfect day plan explaining how to execute this strategy hour by hour.",
@@ -541,7 +541,7 @@ export const DiagnosticJsonDashboard = ({
             <Clock className="w-5 h-5 text-indigo-500" /> Perfect Day Plan
           </button>
 
-          <button
+          <button type="button"
             onClick={() =>
               onActionClick(
                 "Give me a long detailed explanation of these strategies.",
@@ -605,7 +605,7 @@ const renderMessageContent = (
             unreadable. This occurs occasionally with AI output.
           </p>
           <div className="mt-3 flex">
-            <button
+            <button type="button"
               onClick={() =>
                 onActionClick &&
                 onActionClick("Please try again and generate the report")
@@ -636,13 +636,7 @@ export default function AdmissionPredictorView() {
   );
 
   // Target settings
-  const [targetZ, setTargetZ] = useState<number>(() => {
-    if (data.targetZ !== undefined) return data.targetZ;
-
-    const saved = localStorage.getItem("admission_target_z_score");
-
-    return saved ? Number(saved) : 2.5;
-  });
+  const [targetZ, setTargetZ] = useState<number>(() => data.targetZ ?? 2.5);
 
   const [calcMarks, setCalcMarks] = useState({ sft: 50, et: 50, ict: 50 });
 
@@ -653,8 +647,6 @@ export default function AdmissionPredictorView() {
   }, [data.targetZ]);
 
   const handleTargetZChange = (val: number) => {
-    localStorage.setItem("admission_target_z_score", val.toString());
-
     setTargetZ(val);
 
     saveData({ ...data, targetZ: val });
@@ -1077,7 +1069,7 @@ export function NotebookLMAdvisor({ appData }: { appData: any }) {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button
+          <button type="button"
             onClick={handleCopyData}
             className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 px-3 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-sm active:scale-95"
           >
@@ -1285,28 +1277,12 @@ export function AiProgressDiagnosticsSummary({
 
   const [quizState, setQuizState] = useState<{
     questions: RequirementQuestion[];
-
-    answers: Record<string, any>;
-
+    answers: Record<string, unknown>;
     isComplete: boolean;
-  }>(() => {
-    try {
-      const savedAnswers = localStorage.getItem("clora_advisor_quiz_answers");
-
-      const isCompleteStr = localStorage.getItem("clora_advisor_quiz_complete");
-
-      return {
-        questions: DEFAULT_PLANNING_QUESTIONS,
-        answers: savedAnswers ? JSON.parse(savedAnswers) : {},
-        isComplete: isCompleteStr === "true",
-      };
-    } catch (e) {
-      return {
-        questions: DEFAULT_PLANNING_QUESTIONS,
-        answers: {},
-        isComplete: false,
-      };
-    }
+  }>({
+    questions: DEFAULT_PLANNING_QUESTIONS,
+    answers: {},
+    isComplete: false,
   });
 
   const handleQuizSubmit = (submittedAnswers: any) => {
@@ -1318,76 +1294,13 @@ export function AiProgressDiagnosticsSummary({
 
     setQuizState(updatedState);
 
-    localStorage.setItem(
-      "clora_advisor_quiz_answers",
-      JSON.stringify(submittedAnswers),
-    );
-
-    localStorage.setItem("clora_advisor_quiz_complete", "true");
   };
 
   const currentFootprint = `${sftMark}-${etMark}-${ictMark}-${targetZ}`;
 
-  const [lastAnalysisFootprint, setLastAnalysisFootprint] = useState<
-    string | null
-  >(() => {
-    return localStorage.getItem("clora_advisor_last_footprint");
-  });
+  const [lastAnalysisFootprint, setLastAnalysisFootprint] = useState<string | null>(null);
 
-  const [messages, setMessages] = useState<AdvisorMessage[]>(() => {
-    try {
-      const cachedV3 = localStorage.getItem("clora_advisor_messages_v3");
-
-      if (cachedV3) return JSON.parse(cachedV3);
-
-      const cachedV1 = localStorage.getItem("clora_advisor_messages_v1");
-
-      const cachedV2 = localStorage.getItem("clora_advisor_messages_v2");
-
-      let oldMessages = [];
-
-      if (cachedV2) {
-        oldMessages = JSON.parse(cachedV2);
-      } else if (cachedV1) {
-        oldMessages = JSON.parse(cachedV1);
-      }
-
-      if (oldMessages.length > 0) {
-        const migrated = oldMessages
-          .map((msg: any) => {
-            if (
-              msg.sender === "assistant" &&
-              typeof msg.text === "string" &&
-              !msg.report
-            ) {
-              const processed = processAdvisorResponse(msg.text);
-
-              return {
-                ...msg,
-                text: processed.cleanText,
-                report: processed.report || null,
-                parseError: processed.parseError,
-              };
-            }
-            return msg;
-          })
-          .filter(
-            (msg: any) =>
-              !(msg.sender === "assistant" && msg.parseError && !msg.report),
-          );
-
-        localStorage.setItem(
-          "clora_advisor_messages_v3",
-          JSON.stringify(migrated),
-        );
-
-        return migrated;
-      }
-      return [];
-    } catch (e) {
-      return [];
-    }
-  });
+  const [messages, setMessages] = useState<AdvisorMessage[]>([]);
 
   const isZChanged =
     messages &&
@@ -1396,15 +1309,7 @@ export function AiProgressDiagnosticsSummary({
 
   const [userInput, setUserInput] = useState<string>("");
 
-  const [suggestions, setSuggestions] = useState<string[]>(() => {
-    try {
-      const cached = localStorage.getItem("clora_advisor_suggestions_v1");
-
-      return cached ? JSON.parse(cached) : [];
-    } catch (e) {
-      return [];
-    }
-  });
+  const [suggestions, setSuggestions] = useState<string[]>([]);
 
   const [isThinkingProgress, setIsThinkingProgress] = useState<boolean>(false);
 
@@ -1435,27 +1340,9 @@ export function AiProgressDiagnosticsSummary({
     }
   }, [messages.length, loading, isThinkingProgress, initialPromptSent]);
 
-  useEffect(() => {
-    if (messages.length > 0) {
-      localStorage.setItem(
-        "clora_advisor_messages_v3",
-        JSON.stringify(messages),
-      );
-    } else {
-      localStorage.removeItem("clora_advisor_messages_v3");
-    }
-  }, [messages]);
 
-  useEffect(() => {
-    if (suggestions.length > 0) {
-      localStorage.setItem(
-        "clora_advisor_suggestions_v1",
-        JSON.stringify(suggestions),
-      );
-    } else {
-      localStorage.removeItem("clora_advisor_suggestions_v1");
-    }
-  }, [suggestions]);
+
+
 
   const handleReply = async (textToSend: string, isHidden: boolean = false) => {
     if (!textToSend.trim() || loading) return;
@@ -1630,7 +1517,7 @@ export function AiProgressDiagnosticsSummary({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
+          <button type="button"
             onClick={() => {
               if (!confirmClearChat) {
                 setConfirmClearChat(true);
@@ -1647,21 +1534,13 @@ export function AiProgressDiagnosticsSummary({
 
               setSuggestions([]);
 
-              localStorage.removeItem("al_predictor_z_daily_history");
 
-              localStorage.removeItem("clora_advisor_quiz_answers");
 
-              localStorage.removeItem("clora_advisor_quiz_complete");
 
-              localStorage.removeItem("clora_advisor_messages_v1");
 
-              localStorage.removeItem("clora_advisor_messages_v2");
 
-              localStorage.removeItem("clora_advisor_messages_v3");
 
-              localStorage.removeItem("clora_advisor_suggestions_v1");
 
-              localStorage.removeItem("clora_advisor_last_footprint");
             }}
             className={cn(
               "w-10 h-10 rounded-full flex items-center justify-center transition-colors",
@@ -1697,7 +1576,7 @@ export function AiProgressDiagnosticsSummary({
             <p className="text-xs leading-relaxed text-rose-800 font-bold">
               {error}
             </p>
-            <button
+            <button type="button"
               onClick={() => handleReply("Retry")}
               className="text-xs font-black text-indigo-600 hover:underline cursor-pointer"
             >
@@ -1758,7 +1637,7 @@ export function AiProgressDiagnosticsSummary({
                     {/* Inline Message Actions */}
                     {isAssistant && (
                       <div className="flex items-center gap-4 pl-14 text-slate-400 text-xs py-1.5 select-none flex-wrap">
-                        <button
+                        <button type="button"
                           onClick={() => {
                             navigator.clipboard.writeText(m.text);
 
@@ -1770,7 +1649,7 @@ export function AiProgressDiagnosticsSummary({
                           <Copy className="w-4 h-4" />
                         </button>
 
-                        <button
+                        <button type="button"
                           onClick={() =>
                             showNotification(
                               "Thanks for your feedback!",
@@ -1782,7 +1661,7 @@ export function AiProgressDiagnosticsSummary({
                           <ThumbsUp className="w-4 h-4" />
                         </button>
 
-                        <button
+                        <button type="button"
                           onClick={() =>
                             showNotification("Feedback noted.", "info")
                           }
@@ -1798,7 +1677,7 @@ export function AiProgressDiagnosticsSummary({
                       <div className="pl-0 sm:pl-14 mt-2 w-full text-left">
                         <div className="flex flex-wrap gap-2 pt-2">
                           {suggestions.map((sug, sIdx) => (
-                            <button
+                            <button type="button"
                               key={sIdx}
                               onClick={() => handleReply(sug)}
                               disabled={loading}
@@ -1830,7 +1709,7 @@ export function AiProgressDiagnosticsSummary({
                   className="w-full bg-transparent p-3 pr-12 text-xs sm:text-sm font-semibold outline-none text-left text-slate-800 placeholder-slate-400"
                   disabled={loading}
                 />
-                <button
+                <button type="button"
                   onClick={() => handleReply(userInput)}
                   disabled={loading || !userInput.trim()}
                   className="absolute right-2 w-10 h-10 bg-slate-800 hover:bg-slate-900 disabled:opacity-30 text-white rounded-full shadow-sm flex items-center justify-center shrink-0 cursor-pointer transition-all active:scale-95"

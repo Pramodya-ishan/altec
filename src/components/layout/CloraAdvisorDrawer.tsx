@@ -45,7 +45,7 @@ export function CloraAdvisorDrawer() {
                   <p className="text-[10px] uppercase tracking-widest font-bold text-slate-400 mt-1">Sinhala-Enabled Technical Mentor</p>
                 </div>
               </div>
-              <button
+              <button type="button"
                 onClick={() => setAdvisorOpen(false)}
                 className="w-8 h-8 flex items-center justify-center rounded-xl hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
               >

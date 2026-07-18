@@ -111,7 +111,7 @@ export const OcrTextModal: React.FC<OcrTextModalProps> = ({ sourceId, title, onC
               </p>
             </div>
           </div>
-          <button
+          <button type="button"
             onClick={onClose}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
           >
@@ -133,7 +133,7 @@ export const OcrTextModal: React.FC<OcrTextModalProps> = ({ sourceId, title, onC
               <AlertCircle className="w-12 h-12 text-rose-500 mb-3" />
               <h4 className="font-bold text-slate-800 mb-1">The text could not be loaded</h4>
               <p className="text-slate-500 text-xs max-w-md mb-4">{error}</p>
-              <button
+              <button type="button"
                 onClick={onClose}
                 className="px-4 py-2 text-xs font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-xl transition-all"
               >
@@ -153,7 +153,7 @@ export const OcrTextModal: React.FC<OcrTextModalProps> = ({ sourceId, title, onC
               {/* Sidebar: Page selection tabs */}
               <div className="w-full md:w-56 border-b md:border-b-0 md:border-r border-slate-100 flex flex-row md:flex-col shrink-0 overflow-x-auto md:overflow-y-auto p-3 gap-1.5 bg-slate-50/50">
                 {pages.map((p, idx) => (
-                  <button
+                  <button type="button"
                     key={p.pageNumber}
                     onClick={() => setSelectedPageIdx(idx)}
                     className={`px-3 py-2 text-xs font-bold rounded-lg transition-all text-left shrink-0 flex items-center justify-between gap-2 ${
@@ -195,7 +195,7 @@ export const OcrTextModal: React.FC<OcrTextModalProps> = ({ sourceId, title, onC
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <button
+                    <button type="button"
                       onClick={handleCopyPage}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-indigo-200 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 text-xs font-bold transition-all shadow-sm"
                     >
@@ -211,7 +211,7 @@ export const OcrTextModal: React.FC<OcrTextModalProps> = ({ sourceId, title, onC
                         </>
                       )}
                     </button>
-                    <button
+                    <button type="button"
                       onClick={handleDownloadTranscript}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-indigo-200 hover:bg-indigo-50 text-slate-600 hover:text-indigo-600 text-xs font-bold transition-all shadow-sm"
                     >

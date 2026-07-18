@@ -294,7 +294,7 @@ export function KnowledgeBaseView() {
                 <BookOpen className="w-5 h-5 text-green-400" />
                 Available Sources
               </h2>
-              <button onClick={fetchData} className="text-sm text-gray-400 hover:text-white">Refresh</button>
+              <button type="button" onClick={fetchData} className="text-sm text-gray-400 hover:text-white">Refresh</button>
             </div>
             
             {loading ? (
@@ -328,7 +328,7 @@ export function KnowledgeBaseView() {
                     </div>
                     <div className="flex items-center gap-2">
                       {(src.status === 'needs_ocr' || src.chunkCount === 0) && (
-                        <button
+                        <button type="button"
                           onClick={() => handleReindex(src.id)}
                           disabled={reindexingId !== null}
                           className="px-2.5 py-1 text-xs bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 rounded-lg border border-amber-500/20 transition-colors flex items-center gap-1.5"
@@ -339,7 +339,7 @@ export function KnowledgeBaseView() {
                         </button>
                       )}
                       {src.uploadedByUid === (user as any)?.uid && (
-                        <button 
+                        <button type="button" 
                           onClick={() => handleDelete(src.id)}
                           className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
                           title="Delete source"

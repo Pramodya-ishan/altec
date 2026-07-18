@@ -11,7 +11,10 @@ import { isGeminiPdfOcrConfigured } from "../pdf/geminiPdfOcr";
 import { assertContentManager, isContentManager, isSharedSourceScope } from "../utils/contentPermissions";
 import { normalizeDisplayPriority, normalizeLessonId, resourceTimestampMillis, upsertLessonResource } from "../lessonResources/service";
 
+import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
+
 export const ragRoutes = Router();
+ragRoutes.use(requireNonAnonymousUser, requireFirebaseAppCheck);
 const upload = multer({ storage: multer.memoryStorage() });
 
 export function normalizeSubject(sub: string): string {
@@ -243,7 +246,7 @@ ragRoutes.get("/sources/:sourceId/download", requireFirebaseUser, async (req: an
         message: "The server could not read this source. Check the runtime service-account Storage permissions."
       });
     }
-    return res.status(500).json({ ok: false, code: "SOURCE_DOWNLOAD_FAILED", message: e.message });
+    return res.status(500).json({ ok: false, code: "SOURCE_DOWNLOAD_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -641,7 +644,7 @@ ragRoutes.delete("/sources/:sourceId", requireNonAnonymousUser, async (req: any,
         message: "Firestore Admin/IAM permission issue."
       });
     }
-    return res.status(500).json({ ok: false, error: error.message });
+    return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -1078,6 +1081,6 @@ ragRoutes.get("/sources/:sourceId/chunks", requireFirebaseUser, async (req: any,
     });
   } catch (err: any) {
     console.error("Error fetching chunks:", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });

@@ -186,7 +186,7 @@ export function AddPaperMarksModal() {
             </div>
           )}
 
-          <button
+          <button type="button"
             onClick={handleSave}
             className="w-full py-3 bg-primary-600 text-white font-bold rounded-xl mt-2 hover:bg-primary-700 active:scale-[0.98] transition-all shadow-sm"
           >

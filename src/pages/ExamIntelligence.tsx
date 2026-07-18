@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
-import { auth } from '../lib/firebase';
 import { 
   BarChart3, 
   PieChart, 
@@ -14,6 +13,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
+import { apiFetch } from '../lib/api';
 
 type Subject = 'SFT' | 'ET' | 'ICT';
 
@@ -28,15 +28,9 @@ export default function ExamIntelligence() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const token = user?.token || await auth.currentUser?.getIdToken();
-      
       const [reportRes, probRes] = await Promise.all([
-        fetch(`/api/exam-intel/report?subject=${activeSubject}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        }),
-        fetch(`/api/exam-intel/probability?subject=${activeSubject}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        })
+        apiFetch(`/api/exam-intel/report?subject=${activeSubject}`),
+        apiFetch(`/api/exam-intel/probability?subject=${activeSubject}`)
       ]);
       
       const reportData = await reportRes.json();
@@ -68,7 +62,7 @@ export default function ExamIntelligence() {
 
         <div className="flex bg-gray-100 p-1 rounded-xl">
           {(['SFT', 'ET', 'ICT'] as Subject[]).map(sub => (
-            <button
+            <button type="button"
               key={sub}
               onClick={() => setActiveSubject(sub)}
               className={cn(
@@ -85,7 +79,7 @@ export default function ExamIntelligence() {
       {/* Tabs */}
       <div className="flex border-b border-gray-200 gap-8">
         {(['Pattern', '2026 Prediction', 'Unasked Topics'] as const).map(tab => (
-          <button
+          <button type="button"
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={cn(

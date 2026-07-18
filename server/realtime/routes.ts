@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { verifyAndExtractUser } from "../firebase/authMiddleware";
+import { requireFirebaseUser, verifyAndExtractUser } from "../firebase/authMiddleware";
 import { getRealtimeConfig } from "./config";
 
 const requireUser = async (req: any) => {
@@ -8,7 +8,10 @@ const requireUser = async (req: any) => {
   return user;
 };
 
+import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
+
 const router = Router();
+router.use(requireFirebaseUser, requireFirebaseAppCheck);
 
 router.get("/status", (req, res) => {
   const cfg = getRealtimeConfig();
@@ -40,7 +43,7 @@ router.get("/self-test", async (req, res) => {
     }
     res.json({ ok: true });
   } catch (err: any) {
-    res.json({ ok: false, code: "TEST_FAILED", message: err.message });
+    res.json({ ok: false, code: "TEST_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -167,7 +170,7 @@ If user mentions PDF, paper, question, Q1, MCQ, essay, structured, marking schem
     });
   } catch (error: any) {
     console.error("Error creating realtime session:", error);
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -198,6 +201,6 @@ router.post("/tool-result", async (req, res) => {
     return res.json({ ok: true, output: { message: "Tool not fully implemented yet." } });
   } catch (error: any) {
     console.error("Error executing tool:", error);
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });

@@ -191,7 +191,7 @@ function AuthOverlay() {
           </div>
         </div>
 
-        <button
+        <button type="button"
           onClick={handleGoogleLogin}
           disabled={actionLoading}
           className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-800 font-bold py-3.5 px-6 rounded-xl cursor-pointer active:scale-[0.98] transition-all text-sm flex items-center justify-center gap-3 shadow-sm"

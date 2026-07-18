@@ -4,6 +4,7 @@ import { Mic, MicOff, X, Loader2, Sparkles, AlertCircle } from 'lucide-react';
 import { auth } from '../../lib/firebase';
 import { RealtimeVoiceClient } from '../../lib/realtimeVoiceClient';
 import { cn } from '../../lib/utils';
+import { apiFetch } from "../../lib/api";
 
 interface RealtimeLiveCallPanelProps {
   isOpen: boolean;
@@ -40,7 +41,7 @@ export function RealtimeLiveCallPanel({
 
       try {
         const token = await auth.currentUser?.getIdToken();
-        const res = await fetch("/api/realtime/session", {
+        const res = await apiFetch("/api/realtime/session", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -84,7 +85,7 @@ export function RealtimeLiveCallPanel({
 
         client.on("tool_call", async (data: any) => {
            try {
-              const toolRes = await fetch("/api/realtime/tool-result", {
+              const toolRes = await apiFetch("/api/realtime/tool-result", {
                  method: "POST",
                  headers: {
                     "Content-Type": "application/json",
@@ -155,7 +156,7 @@ export function RealtimeLiveCallPanel({
   return (
     <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center font-sans text-white">
       <div className="absolute top-6 right-6">
-        <button onClick={endCall} className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors">
+        <button type="button" onClick={endCall} className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors">
           <X className="w-6 h-6" />
         </button>
       </div>
@@ -171,7 +172,7 @@ export function RealtimeLiveCallPanel({
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center gap-4 text-center max-w-md px-6">
           <AlertCircle className="w-12 h-12 text-red-500" />
           <p className="text-xl font-medium text-white">{errorMsg}</p>
-          <button onClick={endCall} className="mt-4 px-6 py-2 bg-white/10 hover:bg-white/20 rounded-full">Close</button>
+          <button type="button" onClick={endCall} className="mt-4 px-6 py-2 bg-white/10 hover:bg-white/20 rounded-full">Close</button>
         </motion.div>
       )}
 
@@ -223,13 +224,13 @@ export function RealtimeLiveCallPanel({
 
           {/* Bottom Controls */}
           <div className="flex items-center gap-6 mt-auto">
-            <button
+            <button type="button"
               onClick={toggleMute}
               className={cn("p-6 rounded-full transition-all duration-300", isMuted ? "bg-red-500/20 text-red-400 hover:bg-red-500/30" : "bg-white/10 text-white hover:bg-white/20")}
             >
               {isMuted ? <MicOff className="w-8 h-8" /> : <Mic className="w-8 h-8" />}
             </button>
-            <button
+            <button type="button"
               onClick={endCall}
               className="px-8 py-5 rounded-full bg-red-600 hover:bg-red-500 transition-colors text-white font-medium text-lg tracking-wide"
             >

@@ -25,7 +25,7 @@ export function SilencePlayerModal() {
 
   return (
     <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/90 p-4">
-      <button 
+      <button type="button" 
          onClick={() => setModals(prev => ({ ...prev, silencePlayer: { open: false, videoUrl: '', title: '' } }))}
          className="absolute top-4 right-4 z-50 w-12 h-12 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center text-xl transition-all"
       >

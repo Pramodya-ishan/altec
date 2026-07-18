@@ -44,7 +44,7 @@ router.get("/capabilities", async (req, res) => {
       features: visibleFeatures,
     });
   } catch (error: any) {
-    return res.status(500).json({ ok: false, code: "CAPABILITY_CATALOG_FAILED", message: error.message });
+    return res.status(500).json({ ok: false, code: "CAPABILITY_CATALOG_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -72,7 +72,7 @@ router.get("/health", async (req, res) => {
       admin,
     });
   } catch (error: any) {
-    return res.status(500).json({ ok: false, code: "PLATFORM_HEALTH_FAILED", message: error.message });
+    return res.status(500).json({ ok: false, code: "PLATFORM_HEALTH_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -100,7 +100,7 @@ router.get("/source-review-queue", async (req, res) => {
       }));
     return res.json({ ok: true, sources, total: sources.length });
   } catch (error: any) {
-    return res.status(500).json({ ok: false, code: "SOURCE_REVIEW_QUEUE_FAILED", message: error.message });
+    return res.status(500).json({ ok: false, code: "SOURCE_REVIEW_QUEUE_FAILED", message: "The operation failed. Please try again." });
   }
 });
 

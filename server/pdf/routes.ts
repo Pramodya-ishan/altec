@@ -13,7 +13,10 @@ import { invalidateInventoryCache } from "../sources/sourceInventoryService";
 import { createPdfQuestionPreview } from "./questionPreview";
 import { hasExactQuestionMarker } from "../ai-core/pdf/indexedQuestionSelection";
 
+import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
+
 export const pdfRoutes = Router();
+pdfRoutes.use(requireFirebaseUser, requireFirebaseAppCheck);
 const upload = multer({ storage: multer.memoryStorage() });
 
 import { isAiBillingCircuitOpen, getAiBillingState } from "../ai/aiCircuitBreaker";
@@ -325,7 +328,7 @@ pdfRoutes.post("/reprocess/:sourceId", requireFirebaseUser, upload.single("file"
     return res.json(result);
   } catch (err: any) {
     console.error("Error in reprocess route:", err);
-    return res.status(err.status || 500).json({ ok: false, code: err.code || "SOURCE_REPROCESS_FAILED", message: err.message });
+    return res.status(err.status || 500).json({ ok: false, code: err.code || "SOURCE_REPROCESS_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -407,7 +410,7 @@ pdfRoutes.get("/ocr-status/:sourceId", requireFirebaseUser, async (req: any, res
     });
   } catch (err: any) {
     console.error("Error in ocr-status route:", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -474,7 +477,7 @@ pdfRoutes.get("/ocr-text/:sourceId", requireFirebaseUser, async (req: any, res) 
     });
   } catch (err: any) {
     console.error("Error in ocr-text route:", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -492,7 +495,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
 
     const cooldownUntil = failedDirectQaCooldown.get(idempotencyKey);
     if ((cooldownUntil && Date.now() < cooldownUntil) || isAiBillingCircuitOpen()) {
-      return res.status(429).json({
+      return res.status(503).json({
         ok: false,
         found: false,
         errorCode: "AI_BILLING_EXHAUSTED",
@@ -513,7 +516,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         }
         return res.json(result);
       } catch (e: any) {
-        return res.status(500).json({ ok: false, errorCode: "DIRECT_QA_BACKEND_ERROR", error: e.message });
+        return res.status(500).json({ ok: false, errorCode: "DIRECT_QA_BACKEND_ERROR", error: "Internal operation failed." });
       }
     }
 
@@ -833,7 +836,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
             if (fallbackResult.errorCode === "AI_BILLING_EXHAUSTED" || fallbackResult.errorCode === "AI_RATE_LIMITED") {
               return {
                 ok: false,
-                status: fallbackResult.errorCode === "AI_RATE_LIMITED" ? 429 : 503,
+                status: 503,
                 found: false,
                 errorCode: fallbackResult.errorCode,
                 stage: "MODEL_CALL",
@@ -965,7 +968,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
        found: false,
        errorCode: err.code || err.errorCode || "DIRECT_QA_BACKEND_FAILED",
        stage: err.stage || "MODEL_CALL",
-       message: err.message || "Direct PDF QA failed"
+       message: "The operation failed. Please try again."
     });
   }
 });
@@ -1042,7 +1045,7 @@ pdfRoutes.get("/question-cache", requireFirebaseUser, async (req: any, res) => {
     });
   } catch (err: any) {
     console.error("Error in question-cache route:", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -1060,7 +1063,7 @@ pdfRoutes.post("/question-cache/:docId/reject", requireFirebaseUser, async (req:
     });
     return res.json({ ok: true });
   } catch (err: any) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -1102,7 +1105,7 @@ pdfRoutes.post("/question-cache/:docId/resolve", requireFirebaseUser, async (req
 
     return res.status(500).json({ ok: false, error: "Solver failed to return result" });
   } catch (err: any) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -1118,7 +1121,7 @@ pdfRoutes.get("/verified-answers/:sourceId", requireFirebaseUser, async (req: an
     const items = snap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
     return res.json({ ok: true, items });
   } catch (err: any) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -1150,7 +1153,7 @@ pdfRoutes.post("/verified-answers", requireFirebaseUser, async (req: any, res) =
     await db.collection("verified_answers").doc(docId).set(verifiedDoc, { merge: true });
     return res.json({ ok: true, id: docId });
   } catch (err: any) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -1172,7 +1175,7 @@ pdfRoutes.get("/sources", requireFirebaseUser, async (req: any, res) => {
 
     return res.json({ ok: true, sources });
   } catch (err: any) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -1214,6 +1217,6 @@ pdfRoutes.post("/admin/repair-source/:sourceId", requireFirebaseUser, async (req
     return res.json({ ok: true, message: "Repair queued." });
   } catch (err: any) {
     console.error("Error in repair endpoint:", err);
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });

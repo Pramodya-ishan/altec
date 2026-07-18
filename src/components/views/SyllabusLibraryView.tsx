@@ -372,7 +372,7 @@ export default function SyllabusLibraryView() {
 
         <div className="flex bg-slate-100/80 p-1.5 rounded-2xl gap-1 border border-slate-200/50 w-full sm:w-[350px] shadow-inner relative">
           {(['ALL', 'SFT', 'ET', 'ICT'] as const).map((tab) => (
-            <button
+            <button type="button"
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={cn(
@@ -483,7 +483,7 @@ export default function SyllabusLibraryView() {
                         {r.chunkCount || 0}
                       </td>
                       <td className="p-4 text-right">
-                        <button
+                        <button type="button"
                           onClick={() => handleDelete(r.id)}
                           className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer"
                           aria-label="Delete indexed resource"

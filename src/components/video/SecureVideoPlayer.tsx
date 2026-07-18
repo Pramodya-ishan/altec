@@ -14,14 +14,11 @@ type SessionResponse = {
   watermark: { userId: string; label: string };
 };
 
+const pageDeviceId = crypto.randomUUID();
+const playbackResumeByVideo = new Map<string, number>();
+
 function getDeviceId() {
-  const key = "clora_x_video_device_id";
-  let value = localStorage.getItem(key);
-  if (!value) {
-    value = crypto.randomUUID();
-    localStorage.setItem(key, value);
-  }
-  return value;
+  return pageDeviceId;
 }
 
 interface SecureVideoPlayerProps {
@@ -161,7 +158,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
           speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
         });
 
-        const resumeAt = Number(localStorage.getItem(`clora_video_resume_${videoId}`) || 0);
+        const resumeAt = playbackResumeByVideo.get(videoId) || 0;
         if (resumeAt > 5 && Number.isFinite(resumeAt)) video.currentTime = resumeAt;
 
         loadTimeout = window.setTimeout(() => {
@@ -185,7 +182,7 @@ export function SecureVideoPlayer({ videoId, title, onClose }: SecureVideoPlayer
 
     const saveProgress = () => {
       if (Number.isFinite(video.currentTime)) {
-        localStorage.setItem(`clora_video_resume_${videoId}`, String(video.currentTime));
+        playbackResumeByVideo.set(videoId, video.currentTime);
       }
     };
 

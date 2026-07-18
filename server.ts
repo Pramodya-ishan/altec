@@ -12,6 +12,7 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import fs from "fs";
+import crypto from "node:crypto";
 import { aiRoutes } from "./server/ai/routes";
 import { ragRoutes } from "./server/rag/routes";
 import { syllabusRoutes } from "./server/syllabus/routes";
@@ -27,10 +28,19 @@ import { voiceRoutes } from "./server/voice/routes";
 import { videoRoutes } from "./server/video/routes";
 import { lessonResourceRoutes } from "./server/lessonResources/routes";
 
-import { globalLimiter, aiLimiter, adminLimiter } from "./server/utils/rateLimiter";
 import { restoreVercelApiPathMiddleware } from "./server/utils/vercelApiPath";
 
 const app = express();
+app.disable("x-powered-by");
+app.use((req, res, next) => {
+  const incoming = req.header("x-request-id");
+  const requestId = incoming && /^[A-Za-z0-9._:-]{8,128}$/.test(incoming)
+    ? incoming
+    : crypto.randomUUID();
+  res.setHeader("x-request-id", requestId);
+  (req as any).requestId = requestId;
+  next();
+});
 // Restore the original nested API path before security headers, parsers, rate
 // limiters, authentication, and Express routers inspect req.path.
 app.use(restoreVercelApiPathMiddleware);
@@ -44,7 +54,7 @@ const videoCdnOrigin = (() => {
 app.use((req, res, next) => {
   const cspHeader = [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com https://www.gstatic.com https://*.firebaseapp.com",
+    "script-src 'self' https://apis.google.com https://www.gstatic.com https://*.firebaseapp.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob: https://*.googleusercontent.com https://api.dicebear.com https://*.firebaseapp.com https://*.firebasestorage.app",
@@ -52,7 +62,7 @@ app.use((req, res, next) => {
     `media-src 'self' blob: https://storage.googleapis.com https://*.storage.googleapis.com https://*.googleapis.com https://*.firebasestorage.app ${videoCdnOrigin}`.trim(),
     "frame-src 'self' https://*.firebaseapp.com https://*.google.com https://accounts.google.com",
     "object-src 'none'",
-    "frame-ancestors 'self' https://ai.studio https://*.google.com"
+    "frame-ancestors 'self'"
   ].join("; ");
 
   res.setHeader("Content-Security-Policy", cspHeader);
@@ -62,11 +72,10 @@ app.use((req, res, next) => {
   }
 
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
   res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), autoplay=(self), clipboard-write=(self), fullscreen=(self)");
+  res.setHeader("Permissions-Policy", "camera=(self), microphone=(self), geolocation=(), autoplay=(self), clipboard-write=(self), fullscreen=(self)");
 
   if (req.path.startsWith("/api/")) {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
@@ -78,12 +87,19 @@ app.use((req, res, next) => {
 const vercelRuntimeOrigins = [process.env.VERCEL_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]
   .filter(Boolean)
   .map((host) => `https://${String(host).replace(/^https?:\/\//, "")}`);
-const allowedOrigins = [...new Set([...(env.ALLOWED_ORIGINS.length > 0 ? env.ALLOWED_ORIGINS : [
+const productionOriginDefaults = [
   "https://tecal.vercel.app",
   "https://a-l-tech-blueprint-807408268472.us-west1.run.app",
+];
+const developmentOriginDefaults = [
+  ...productionOriginDefaults,
   "http://localhost:5173",
-  "http://localhost:3000"
-]), ...vercelRuntimeOrigins])];
+  "http://localhost:3000",
+];
+const configuredOrigins = env.ALLOWED_ORIGINS.length > 0
+  ? env.ALLOWED_ORIGINS
+  : (env.NODE_ENV === "production" ? productionOriginDefaults : developmentOriginDefaults);
+const allowedOrigins = [...new Set([...configuredOrigins, ...vercelRuntimeOrigins])];
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -108,11 +124,15 @@ app.use(cors({
 app.use(express.json({ limit: `${env.MAX_BODY_LIMIT_MB}mb` }));
 
 import { requireFirebaseUser, optionalFirebaseUser } from "./server/firebase/authMiddleware";
-import { requireUser, getAdminDb } from "./server/firebase/admin";
+import { requireFirebaseAppCheck } from "./server/firebase/appCheckMiddleware";
+import { requireUser, getAdminAuth, getAdminDb } from "./server/firebase/admin";
 
-// Global limiter on all API routes
-app.use("/api", globalLimiter);
 
+// Authentication endpoints establish/clear the HttpOnly session cookie and are
+// intentionally mounted before App Check enforcement. Every other API route
+// requires a valid application attestation in production.
+app.use('/api/auth', authRoutes);
+app.use('/api', requireFirebaseAppCheck);
 
 // API Routes
 
@@ -130,9 +150,9 @@ app.use("/api", lessonResourceRoutes);
 
 import { getSourceInventory } from "./server/sources/sourceInventoryService";
 
-app.get("/api/sources/inventory", async (req, res) => {
+app.get("/api/sources/inventory", requireFirebaseUser, async (req: any, res) => {
   try {
-    const user = await requireUser(req);
+    const user = req.user;
     const uid = user.uid;
     const userEmail = (user.email || "").toLowerCase();
     const isAdmin = !!(user.admin || (user.roles && user.roles.includes("admin")));
@@ -155,7 +175,8 @@ app.get("/api/sources/inventory", async (req, res) => {
       total: inventory.total
     });
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    console.error("[SOURCE_INVENTORY] Failed", { requestId: (req as any).requestId, code: error?.code });
+    res.status(500).json({ ok: false, error: "Source inventory could not be loaded." });
   }
 });
 
@@ -164,7 +185,7 @@ app.get("/api/notifications", requireFirebaseUser, async (req: any, res) => {
   try {
     const user = req.user;
     const db = getAdminDb();
-    const snap = await db.collection("users").doc(user.email?.toLowerCase() || user.uid).collection("notifications").orderBy("timestamp", "desc").limit(50).get();
+    const snap = await db.collection("users").doc(user.uid).collection("notifications").orderBy("timestamp", "desc").limit(50).get();
     const notifications = snap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
     res.json({ ok: true, notifications });
   } catch (error: any) {
@@ -172,15 +193,20 @@ app.get("/api/notifications", requireFirebaseUser, async (req: any, res) => {
   }
 });
 
-app.post("/api/notifications/trigger", requireFirebaseUser, adminLimiter, async (req: any, res) => {
+app.post("/api/notifications/trigger", requireFirebaseUser, requireRole("admin", "ops"), async (req: any, res) => {
   try {
     const user = req.user;
-    const { notification } = req.body;
-    if (!notification || !notification.title || !notification.message) {
-      return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "Missing title or message" });
+    const { notification, targetUid } = req.body;
+    if (!notification || !notification.title || !notification.message || !targetUid) {
+      return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "Missing targetUid, title, or message" });
     }
     const db = getAdminDb();
-    const id = notification.id || db.collection("users").doc(user.email?.toLowerCase() || user.uid).collection("notifications").doc().id;
+    const targetRef = db.collection("users").doc(String(targetUid));
+    const target = await targetRef.get();
+    if (!target.exists) {
+      return res.status(404).json({ ok: false, code: "USER_NOT_FOUND", message: "The target user was not found." });
+    }
+    const id = notification.id || targetRef.collection("notifications").doc().id;
     const newNotif = {
       id,
       title: notification.title,
@@ -191,7 +217,7 @@ app.post("/api/notifications/trigger", requireFirebaseUser, adminLimiter, async 
       read: false,
       timestamp: notification.timestamp || new Date().toISOString()
     };
-    await db.collection("users").doc(user.email?.toLowerCase() || user.uid).collection("notifications").doc(id).set(newNotif, { merge: true });
+    await db.collection("users").doc(String(targetUid)).collection("notifications").doc(id).set(newNotif, { merge: false });
     res.json({ ok: true, success: true, notification: newNotif });
   } catch (error: any) {
     res.status(500).json({ ok: false, code: "NOTIFICATIONS_TRIGGER_FAILED", message: error.message });
@@ -203,7 +229,7 @@ app.post("/api/notifications/read", requireFirebaseUser, async (req: any, res) =
     const user = req.user;
     const { notificationId, readAll } = req.body;
     const db = getAdminDb();
-    const coll = db.collection("users").doc(user.email?.toLowerCase() || user.uid).collection("notifications");
+    const coll = db.collection("users").doc(user.uid).collection("notifications");
 
     if (readAll) {
       const snap = await coll.where("read", "==", false).get();
@@ -231,48 +257,53 @@ app.post("/api/notifications/delete", requireFirebaseUser, async (req: any, res)
       return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "Missing notificationId" });
     }
     const db = getAdminDb();
-    await db.collection("users").doc(user.email?.toLowerCase() || user.uid).collection("notifications").doc(notificationId).delete();
+    await db.collection("users").doc(user.uid).collection("notifications").doc(notificationId).delete();
     res.json({ ok: true, success: true });
   } catch (error: any) {
     res.status(500).json({ ok: false, code: "NOTIFICATIONS_DELETE_FAILED", message: error.message });
   }
 });
 
-// Real Profile & AppData routes with Firebase Admin Firestore
-app.get("/api/profile", async (req, res) => {
+// Canonical UID-based profile routes. Email is metadata, never a document key.
+app.get("/api/profile", requireFirebaseUser, async (req: any, res, next) => {
   try {
-    const user = await requireUser(req);
+    const user = req.user;
     const db = getAdminDb();
-    const uidDoc = await db.collection("users").doc(user.uid).get();
-    let profileData = uidDoc.exists ? uidDoc.data() : {};
-
-    if (user.email) {
-      const emailDoc = await db.collection("users").doc(user.email.toLowerCase()).get();
-      if (emailDoc.exists) {
-        profileData = { ...emailDoc.data(), ...profileData };
-      }
-    }
-    res.json({ ok: true, profile: profileData });
-  } catch (error: any) {
-    res.status(401).json({ ok: false, error: error.message });
+    const profileDoc = await db.collection("users").doc(user.uid).collection("profile").doc("main").get();
+    const rootDoc = await db.collection("users").doc(user.uid).get();
+    const rootData = rootDoc.exists ? rootDoc.data() : {};
+    const profile = profileDoc.exists
+      ? profileDoc.data()
+      : {
+          email: user.email || "",
+          username: user.name || user.email?.split("@")[0] || "Student",
+          picture: rootData?.picture || "",
+          bio: rootData?.bio || "",
+          updatedAt: rootData?.updatedAt || new Date().toISOString(),
+        };
+    res.json({ ok: true, profile });
+  } catch (error) {
+    next(error);
   }
 });
 
-app.post("/api/profile", async (req, res) => {
+app.post("/api/profile", requireFirebaseUser, async (req: any, res, next) => {
   try {
-    const user = await requireUser(req);
+    const user = req.user;
     const db = getAdminDb();
-    const profileData = req.body.profile || req.body;
-
-    const batch = db.batch();
-    batch.set(db.collection("users").doc(user.uid), profileData, { merge: true });
-    if (user.email) {
-      batch.set(db.collection("users").doc(user.email.toLowerCase()), profileData, { merge: true });
+    const input = req.body?.profile || req.body || {};
+    const allowedKeys = new Set(["username", "picture", "bio", "nic", "mobileNumber", "bday", "gender"]);
+    const profile: Record<string, unknown> = {
+      email: user.email || "",
+      updatedAt: new Date().toISOString(),
+    };
+    for (const [key, value] of Object.entries(input)) {
+      if (allowedKeys.has(key)) profile[key] = value;
     }
-    await batch.commit();
+    await db.collection("users").doc(user.uid).collection("profile").doc("main").set(profile, { merge: true });
     res.json({ ok: true });
-  } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -375,8 +406,24 @@ app.post("/api/data", requireFirebaseUser, async (req: any, res) => {
   }
 });
 
+app.get("/api/admin/users/resolve", requireFirebaseUser, requireRole("admin"), async (req: any, res, next) => {
+  try {
+    const email = String(req.query.email || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "A valid email address is required." });
+    }
+    const record = await getAdminAuth().getUserByEmail(email);
+    return res.json({ ok: true, uid: record.uid, email: record.email || email });
+  } catch (error: any) {
+    if (error?.code === "auth/user-not-found") {
+      return res.status(404).json({ ok: false, code: "USER_NOT_FOUND", message: "The user was not found." });
+    }
+    next(error);
+  }
+});
+
 // Separate, explicit, audited Admin Support & Impersonation endpoint
-app.post("/api/admin/support/data", requireFirebaseUser, requireRole("admin"), adminLimiter, async (req: any, res) => {
+app.post("/api/admin/support/data", requireFirebaseUser, requireRole("admin"), async (req: any, res) => {
   try {
     const adminUser = req.user;
     const { targetUid, operation, reason, data } = req.body;
@@ -457,37 +504,17 @@ app.post("/api/admin/support/data", requireFirebaseUser, requireRole("admin"), a
       return res.status(400).json({ ok: false, error: `Unsupported administrative operation: ${operation}` });
     }
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    console.error("[ADMIN_SUPPORT_DATA] Failed", { requestId: req.requestId, code: error?.code });
+    res.status(500).json({ ok: false, error: "The administrative operation failed." });
   }
 });
 
-app.get("/api/quota", async (req, res) => {
-  res.status(501).json({ ok: false, error: "not_implemented" });
-});
-
-
-app.post("/api/send-email", async (req, res) => {
-  res.status(501).json({ ok: false, error: "not_implemented" });
-});
-
-app.post("/api/quiz", async (req, res) => {
-  res.status(501).json({ ok: false, error: "not_implemented" });
-});
-
-app.post("/api/lesson-optimizer", async (req, res) => {
-  res.status(501).json({ ok: false, error: "not_implemented" });
-});
-
-app.get("/api/past-papers/local/:id", async (req, res) => {
-  res.status(501).json({ ok: false, error: "not_implemented" });
-});
-
-app.get("/api/cookies", (req, res) => res.json({}));
-
-app.use('/api/auth', authRoutes);
-
-import { startOcrWorker } from "./server/ocr/ocrWorker";
-startOcrWorker();
+async function startBackgroundWorkersForStandaloneServer() {
+  if (process.env.VERCEL || process.env.NODE_ENV === "test") return;
+  if (String(process.env.ENABLE_BACKGROUND_WORKERS || "").toLowerCase() !== "true") return;
+  const { startOcrWorker } = await import("./server/ocr/ocrWorker");
+  startOcrWorker();
+}
 import aiCoreRoutes from './server/ai-core/routes';
 app.use('/api', aiCoreRoutes);
 
@@ -497,9 +524,9 @@ app.use("/api/realtime", realtimeRoutes);
 
 import { AI_MODELS, getAIClient } from "./server/ai/client";
 
-app.post("/api/profile/target-zscore", async (req, res) => {
+app.post("/api/profile/target-zscore", requireFirebaseUser, async (req: any, res) => {
   try {
-    const user = await requireUser(req);
+    const user = req.user;
     const { targetZScore } = req.body;
 
     if (targetZScore === undefined || typeof targetZScore !== 'number' || targetZScore < 0 || targetZScore > 4) {
@@ -518,12 +545,6 @@ app.post("/api/profile/target-zscore", async (req, res) => {
     const progRef = db.collection("users").doc(user.uid).collection("progress").doc("data");
     batch.set(progRef, { targetZScore, data: { targetZ: targetZScore }, updatedAt: new Date().toISOString() }, { merge: true });
 
-    if (user.email) {
-       const emailRef = db.collection("users").doc(user.email.toLowerCase()).collection("profile").doc("main");
-       batch.set(emailRef, { targetZScore, updatedAt: new Date().toISOString() }, { merge: true });
-       batch.set(db.collection("users").doc(user.email.toLowerCase()), { targetZScore, updatedAt: new Date().toISOString() }, { merge: true });
-    }
-
     await batch.commit();
 
     // Re-fetch context
@@ -532,11 +553,12 @@ app.post("/api/profile/target-zscore", async (req, res) => {
 
     res.json({ ok: true, targetZScore, zScoreContext: ctx?.zScoreContext });
   } catch(e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    console.error("[TARGET_ZSCORE] Failed", { requestId: req.requestId, code: e?.code });
+    res.status(500).json({ ok: false, error: "The target Z-score could not be saved." });
   }
 });
 
-app.post("/api/ai/model-test", requireFirebaseUser, adminLimiter, async (req: any, res, next) => {
+app.post("/api/ai/model-test", requireFirebaseUser, async (req: any, res, next) => {
   try {
      const user = req.user;
      const isAdmin = !!(user.admin || (user.roles && user.roles.includes("admin")));
@@ -620,7 +642,8 @@ if (process.env.NODE_ENV !== "production") {
       app.use(vite.middlewares);
       if (process.env.NODE_ENV !== ('test' as string) && !process.env.VERCEL) {
         app.listen(PORT, "0.0.0.0", () => {
-          console.log(`Server running on port ${PORT}`);
+          void startBackgroundWorkersForStandaloneServer();
+      console.log(`Server running on port ${PORT}`);
         });
       }
     });

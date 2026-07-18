@@ -17,10 +17,7 @@ export interface ServerEnv {
   ENABLE_IMAGE_GENERATION: boolean;
   OCR_ENABLED: boolean;
   MAX_BODY_LIMIT_MB: number;
-  RATE_LIMIT_IP_WINDOW_MS: number;
-  RATE_LIMIT_IP_MAX: number;
-  RATE_LIMIT_UID_WINDOW_MS: number;
-  RATE_LIMIT_UID_MAX: number;
+  FIREBASE_APP_CHECK_REQUIRED: boolean;
   ENABLE_VIDEO: boolean;
   ENABLE_VIDEO_TRANSCODING: boolean;
   VIDEO_REQUIRE_APP_CHECK: boolean;
@@ -115,11 +112,7 @@ const ENABLE_IMAGE_GENERATION = validateBoolean("ENABLE_IMAGE_GENERATION", true)
 const OCR_ENABLED = validateBoolean("OCR_ENABLED", false);
 
 const MAX_BODY_LIMIT_MB = validateNumber("MAX_BODY_LIMIT_MB", 2, 0.1, 100);
-const RATE_LIMIT_IP_WINDOW_MS = validateNumber("RATE_LIMIT_IP_WINDOW_MS", 60000, 1000);
-const RATE_LIMIT_IP_MAX = validateNumber("RATE_LIMIT_IP_MAX", 100, 1);
-const RATE_LIMIT_UID_WINDOW_MS = validateNumber("RATE_LIMIT_UID_WINDOW_MS", 60000, 1000);
-const RATE_LIMIT_UID_MAX = validateNumber("RATE_LIMIT_UID_MAX", 100, 1);
-
+const FIREBASE_APP_CHECK_REQUIRED = validateBoolean("FIREBASE_APP_CHECK_REQUIRED", NODE_ENV === "production");
 const ENABLE_VIDEO = validateBoolean("ENABLE_VIDEO", true);
 const ENABLE_VIDEO_TRANSCODING = validateBoolean("ENABLE_VIDEO_TRANSCODING", false);
 const VIDEO_REQUIRE_APP_CHECK = validateBoolean("VIDEO_REQUIRE_APP_CHECK", false);
@@ -137,8 +130,20 @@ const VIDEO_SESSION_TTL_SECONDS = validateNumber("VIDEO_SESSION_TTL_SECONDS", 60
 const ENABLE_4K = validateBoolean("ENABLE_4K", false);
 
 if (NODE_ENV === "production") {
+  if (ALLOWED_ORIGINS.length === 0) {
+    errors.push("ALLOWED_ORIGINS must list the production and preview application origins.");
+  }
   if (ALLOWED_ORIGINS.includes("*")) {
     errors.push("CORS Wildcard origin is not permitted in production.");
+  }
+  if (ALLOWED_ORIGINS.some((origin) => /localhost|127\.0\.0\.1/i.test(origin))) {
+    errors.push("Localhost origins are not permitted in production ALLOWED_ORIGINS.");
+  }
+  if (!FIREBASE_APP_CHECK_REQUIRED) {
+    errors.push("FIREBASE_APP_CHECK_REQUIRED must be true in production.");
+  }
+  if (!VIDEO_REQUIRE_APP_CHECK) {
+    errors.push("VIDEO_REQUIRE_APP_CHECK must be true in production.");
   }
   if (DEV_BYPASS_AUTH) {
     errors.push("Development authentication bypass (DEV_BYPASS_AUTH) is not allowed in production.");
@@ -183,10 +188,7 @@ export const env: ServerEnv = {
   ENABLE_IMAGE_GENERATION,
   OCR_ENABLED,
   MAX_BODY_LIMIT_MB,
-  RATE_LIMIT_IP_WINDOW_MS,
-  RATE_LIMIT_IP_MAX,
-  RATE_LIMIT_UID_WINDOW_MS,
-  RATE_LIMIT_UID_MAX,
+  FIREBASE_APP_CHECK_REQUIRED,
   ENABLE_VIDEO,
   ENABLE_VIDEO_TRANSCODING,
   VIDEO_REQUIRE_APP_CHECK,
@@ -205,14 +207,19 @@ export const env: ServerEnv = {
 };
 
 export function logEnvConfig() {
-  console.log("🔒 Safe Environment Config Loaded:");
-  Object.keys(env).forEach(key => {
-    const value = (env as any)[key];
-    const isSecret = key.includes("KEY") || key.includes("SECRET") || key.includes("TOKEN") || key.includes("PASSWORD");
-    if (isSecret) {
-      console.log(`  - ${key}: [REDACTED] (${value ? "Configured" : "Not Configured"})`);
-    } else {
-      console.log(`  - ${key}: ${JSON.stringify(value)}`);
-    }
+  console.log("[CONFIG] Environment validated", {
+    nodeEnv: env.NODE_ENV,
+    port: env.PORT,
+    allowedOriginCount: env.ALLOWED_ORIGINS.length,
+    googleProject: env.GOOGLE_CLOUD_PROJECT,
+    firebaseProject: env.FIREBASE_PROJECT_ID,
+    firestoreDatabaseConfigured: Boolean(env.FIRESTORE_DATABASE_ID),
+    geminiModel: env.GEMINI_DEFAULT_MODEL,
+    imageGenerationEnabled: env.ENABLE_IMAGE_GENERATION,
+    ocrEnabled: env.OCR_ENABLED,
+    videoEnabled: env.ENABLE_VIDEO,
+    videoTranscodingEnabled: env.ENABLE_VIDEO_TRANSCODING,
+    appCheckRequired: env.FIREBASE_APP_CHECK_REQUIRED,
+    videoAppCheckRequired: env.VIDEO_REQUIRE_APP_CHECK,
   });
 }

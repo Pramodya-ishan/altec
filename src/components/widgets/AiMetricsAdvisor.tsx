@@ -49,13 +49,9 @@ export function AiMetricsAdvisor({
   overallZ: number;
   targetZ: number;
 }) {
-  const { currentSubject } = useApp();
-  const [district, setDistrict] = useState(() => {
-    return localStorage.getItem("al_advisor_district") || "Colombo";
-  });
-  const [preferredCourse, setPreferredCourse] = useState(() => {
-    return localStorage.getItem("al_advisor_course") || "engineering_tech";
-  });
+  const { currentSubject, data, saveData } = useApp();
+  const [district, setDistrict] = useState(() => data.advisorPreferences?.district || "Colombo");
+  const [preferredCourse, setPreferredCourse] = useState(() => data.advisorPreferences?.preferredCourse || "engineering_tech");
 
   const [loading, setLoading] = useState(false);
   const [analysisText, setAnalysisText] = useState("");
@@ -66,12 +62,13 @@ export function AiMetricsAdvisor({
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    localStorage.setItem("al_advisor_district", district);
-  }, [district]);
-
-  useEffect(() => {
-    localStorage.setItem("al_advisor_course", preferredCourse);
-  }, [preferredCourse]);
+    const current = data.advisorPreferences || {};
+    if (current.district === district && current.preferredCourse === preferredCourse) return;
+    saveData({
+      ...data,
+      advisorPreferences: { district, preferredCourse },
+    });
+  }, [district, preferredCourse]);
 
   const sftZ = calculateSubjectZ("sft", sftMark);
   const etZ = calculateSubjectZ("et", etMark);

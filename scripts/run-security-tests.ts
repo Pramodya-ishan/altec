@@ -60,7 +60,7 @@ async function runTests() {
     }
 
     // Case 4: Student accessing official source
-    const officialSource = { ownerUid: "admin_1", visibility: "official" as const };
+    const officialSource = { ownerUid: "admin_1", visibility: "official" as const, published: true };
     const studentOfficialCaps = computeSourceCapabilities(studentAuth, officialSource);
     if (studentOfficialCaps.canView && !studentOfficialCaps.canDelete && !studentOfficialCaps.canRepairSource) {
       logTest("Student accessing official source", true);

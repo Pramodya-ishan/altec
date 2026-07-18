@@ -10,18 +10,15 @@ export function PredictorWidget() {
   const { data, currentSubject, saveData, clearLocalStorage, showNotification } = useApp();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(() => {
-    try {
-      const stored = localStorage.getItem('predictorWidget_isCollapsed');
-      if (stored !== null) return JSON.parse(stored);
-    } catch(e) {}
-    return true;
-  });
+  const [isCollapsed, setIsCollapsed] = useState(() => data.collapsedStates?.predictorWidget ?? true);
 
   const toggleCollapse = () => {
-    setIsCollapsed((prev: boolean) => {
-      const next = !prev;
-      localStorage.setItem('predictorWidget_isCollapsed', JSON.stringify(next));
+    setIsCollapsed((previous) => {
+      const next = !previous;
+      saveData({
+        ...data,
+        collapsedStates: { ...data.collapsedStates, predictorWidget: next },
+      });
       return next;
     });
   };

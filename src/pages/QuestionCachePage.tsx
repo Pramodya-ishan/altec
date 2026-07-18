@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { auth } from '../lib/firebase';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { 
   History, 
@@ -16,6 +15,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
+import { apiFetch } from '../lib/api';
 
 interface CachedQuestion {
   id: string;
@@ -50,13 +50,10 @@ export default function QuestionCachePage() {
   const fetchCache = async () => {
     setLoading(true);
     try {
-      const token = user?.token || await auth.currentUser?.getIdToken();
       let url = '/api/pdf/question-cache';
       if (sourceIdFilter) url += `?sourceId=${sourceIdFilter}`;
       
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const res = await apiFetch(url);
       const data = await res.json();
       if (data.ok) {
         setItems(data.items);
@@ -75,15 +72,10 @@ export default function QuestionCachePage() {
   const handleStatusChange = async (id: string, status: string) => {
     setActionLoading(`${id}_${status}`);
     try {
-      const token = user?.token || await auth.currentUser?.getIdToken();
-      const res = await fetch(`/api/pdf/question-cache/${id}/status`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}` 
-        },
-        body: JSON.stringify({ status })
-      });
+      const endpoint = status === "rejected"
+        ? `/api/pdf/question-cache/${id}/reject`
+        : `/api/pdf/question-cache/${id}/resolve`;
+      const res = await apiFetch(endpoint, { method: "POST" });
       const data = await res.json();
       if (data.ok) {
         showNotification(`Updated to ${status}`, "success");
@@ -99,11 +91,7 @@ export default function QuestionCachePage() {
   const handleResolve = async (id: string) => {
     setActionLoading(`${id}_resolve`);
     try {
-      const token = user?.token || await auth.currentUser?.getIdToken();
-      const res = await fetch(`/api/pdf/question-cache/${id}/resolve`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const res = await apiFetch(`/api/pdf/question-cache/${id}/resolve`, { method: "POST" });
       const data = await res.json();
       if (data.ok) {
         showNotification("Question re-solved successfully", "success");
@@ -126,7 +114,7 @@ export default function QuestionCachePage() {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
-          <button 
+          <button type="button" 
             onClick={() => navigate(-1)}
             className="w-10 h-10 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-500 hover:text-slate-900 transition-all cursor-pointer shadow-sm"
           >
@@ -233,7 +221,7 @@ export default function QuestionCachePage() {
                 </div>
 
                 <div className="flex gap-2 items-end">
-                  <button 
+                  <button type="button" 
                     onClick={() => handleStatusChange(item.id, 'verified')}
                     disabled={!!actionLoading}
                     className="h-9 px-4 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"
@@ -241,7 +229,7 @@ export default function QuestionCachePage() {
                     {actionLoading === `${item.id}_verified` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
                     Verify
                   </button>
-                  <button 
+                  <button type="button" 
                     onClick={() => handleResolve(item.id)}
                     disabled={!!actionLoading}
                     className="h-9 px-4 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"
@@ -249,7 +237,7 @@ export default function QuestionCachePage() {
                     {actionLoading === `${item.id}_resolve` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
                     Re-solve
                   </button>
-                  <button 
+                  <button type="button" 
                     onClick={() => handleStatusChange(item.id, 'rejected')}
                     disabled={!!actionLoading}
                     className="h-9 px-4 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer"

@@ -21,7 +21,7 @@ router.get("/student/diagnosis", async (req, res) => {
     const result = await diagnoseStudent(user.uid, String(subject));
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -31,7 +31,7 @@ router.post("/study/war-plan", async (req, res) => {
     const result = await generateWarPlan({ ...req.body, uid: user.uid });
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -41,7 +41,7 @@ router.post("/study/mock-result", async (req, res) => {
     const result = await updateStudentForecast(user.uid);
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -51,7 +51,7 @@ router.get("/mistakes", async (req, res) => {
     const result = await getTodayRetries(user.uid);
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -61,7 +61,7 @@ router.post("/mistakes", async (req, res) => {
     const result = await addMistake(user.uid, req.body);
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -70,7 +70,7 @@ router.post("/exam-intel/build-index", async (req, res) => {
     const result = await buildExamIndex();
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -80,7 +80,7 @@ router.get("/exam-intel/report", async (req, res) => {
     const result = await buildPatternReport(String(subject));
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -90,7 +90,7 @@ router.get("/exam-intel/probability", async (req, res) => {
     const result = await rankTopicProbability(String(subject));
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -100,7 +100,7 @@ router.get("/exam-intel/unasked", async (req, res) => {
     const result = await detectUnaskedTopics(String(subject));
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -110,7 +110,7 @@ router.post("/exam-intel/predicted-paper", async (req, res) => {
     const result = await generatePredictedPaper({ ...req.body, uid: user.uid });
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -120,7 +120,7 @@ router.post("/reports/student-weekly", async (req, res) => {
     const result = await generateStudentWeeklyReport(user.uid);
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -152,7 +152,7 @@ router.post("/admin/repair-data", requireFirebaseUser, requireRole("admin"), asy
     res.json({ message: `Repair finished. Deleted ${deletedCount} invalid documents.`, ok: true });
   } catch (err: any) {
     console.error("Repair error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 

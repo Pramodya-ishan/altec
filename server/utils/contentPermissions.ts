@@ -20,22 +20,13 @@ export function isSharedSourceScope(scope: unknown) {
 }
 
 /**
- * Returns true when a source is intentionally shared with students.
- *
- * Older administrator uploads were incorrectly persisted with
- * `visibility: "private"`. Their `sourceScope` still identifies them as
- * shared curriculum content. Treat those legacy rows as visible unless an
- * administrator has explicitly unpublished them. Personal/chat uploads never
- * match SHARED_SOURCE_SCOPES and therefore remain private.
+ * Returns true only when a source was explicitly published. Legacy rows with
+ * missing `published` must be migrated and reviewed before students can see
+ * them; sourceScope alone is never treated as publication consent.
  */
 export function isStudentVisibleSource(source: Record<string, unknown> | null | undefined) {
-  if (!source) return false;
+  if (!source || source.published !== true) return false;
   const visibility = String(source.visibility || "").trim().toLowerCase();
-  if (["public", "official", "shared", "class", "institution"].includes(visibility)) {
-    return source.published !== false;
-  }
-
-  return isSharedSourceScope(source.sourceScope)
-    && source.published !== false
+  return ["public", "official", "shared", "class", "institution"].includes(visibility)
     && String(source.processingStatus || "").toLowerCase() !== "archived";
 }

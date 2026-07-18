@@ -1,8 +1,12 @@
 import { Router } from "express";
 import { getAdminDb, getAdminBucket, requireUser } from "../firebase/admin";
 import { invalidateInventoryCache } from "../sources/sourceInventoryService";
+import { requireFirebaseUser } from "../firebase/authMiddleware";
+
+import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
 
 export const syllabusRoutes = Router();
+syllabusRoutes.use(requireFirebaseUser, requireFirebaseAppCheck);
 
 export async function requireSyllabusOwner(req: any) {
   const user = await requireUser(req);
@@ -54,7 +58,7 @@ syllabusRoutes.get("/debug", async (req, res) => {
       firestoreDatabaseId: process.env.FIRESTORE_DATABASE_ID
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -101,7 +105,7 @@ syllabusRoutes.get("/resources", async (req, res) => {
     
     res.json({ ok: true, resources });
   } catch (e: any) {
-    res.status(403).json({ ok: false, error: e.message });
+    res.status(403).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -167,7 +171,7 @@ syllabusRoutes.delete("/resources/:resourceId", async (req, res) => {
       }
     });
   } catch (e: any) {
-    res.status(Number(e?.status) || 500).json({ ok: false, code: e?.code || "SYLLABUS_RESOURCE_DELETE_FAILED", error: e.message });
+    res.status(Number(e?.status) || 500).json({ ok: false, code: e?.code || "SYLLABUS_RESOURCE_DELETE_FAILED", error: "Internal operation failed." });
   }
 });
 
@@ -233,6 +237,6 @@ syllabusRoutes.get("/resources/:resourceId/download", async (req, res) => {
     res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(data.fileName || "syllabus_resource.pdf")}"`);
     file.createReadStream().pipe(res);
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });

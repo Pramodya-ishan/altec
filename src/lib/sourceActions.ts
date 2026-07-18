@@ -1,6 +1,7 @@
 import { getDownloadURL, ref } from "firebase/storage";
 import { auth, storage } from "./firebase";
 import { apiUrl as resolveApiUrl } from "./apiBase";
+import { apiFetch } from "./api";
 
 type PdfSource = {
   id?: string;
@@ -57,11 +58,10 @@ async function responseError(response: Response) {
 }
 
 async function fetchProtectedPdfBlobUrl(apiRoute: string): Promise<string> {
-  const token = await getAuthTokenOrThrow();
+  await getAuthTokenOrThrow();
   const streamRoute = addQuery(apiRoute, "stream", "true");
-  const response = await fetch(resolveApiUrl(streamRoute), {
+  const response = await apiFetch(resolveApiUrl(streamRoute), {
     method: "GET",
-    headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });
 
@@ -78,11 +78,10 @@ async function fetchProtectedPdfBlobUrl(apiRoute: string): Promise<string> {
 }
 
 export async function getProtectedPdfUrl(apiRoute: string): Promise<string> {
-  const token = await getAuthTokenOrThrow();
+  await getAuthTokenOrThrow();
   const metadataRoute = addQuery(apiRoute, "format", "json");
-  const response = await fetch(resolveApiUrl(metadataRoute), {
+  const response = await apiFetch(resolveApiUrl(metadataRoute), {
     method: "GET",
-    headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });
 
@@ -128,7 +127,10 @@ export async function openProtectedApiPdf(apiRoute: string) {
   if (popup) {
     popup.opener = null;
     popup.document.title = "Opening PDF…";
-    popup.document.body.innerHTML = '<p style="font:14px system-ui;padding:24px;color:#475569">Opening secure PDF…</p>';
+    const status = popup.document.createElement("p");
+    status.textContent = "Opening secure PDF…";
+    status.style.cssText = "font:14px system-ui;padding:24px;color:#475569";
+    popup.document.body.replaceChildren(status);
   }
 
   try {

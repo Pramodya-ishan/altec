@@ -8,7 +8,7 @@ type SupportedSubject = "SFT" | "ET" | "ICT";
 
 const CACHE_TTL_MS = 15 * 60 * 1000;
 const cache = new Map<string, { expiresAt: number; value: Promise<GroundingPdf | null> }>();
-const DEFAULT_SFT_SYLLABUS_STORAGE_PATH = "users/7kUEmzikv8hat7KQg8pCNGR1ZUd2/syllabus/SFT/syllabus/general/2deba588-86ac-4393-b001-c6fe657a48c3/sALSyl_SFT.pdf";
+const DEFAULT_SFT_SYLLABUS_STORAGE_PATH = "official/syllabus/SFT/sALSyl_SFT.pdf";
 
 function normalizeSubject(value: unknown): SupportedSubject | null {
   const subject = String(value || "").trim().toUpperCase();
@@ -64,7 +64,7 @@ async function findSubjectSyllabusSource(uid: string, subject: SupportedSubject)
       || source.createdBy === uid
       || source.published === true
       || ["public", "official", "shared", "class"].includes(visibility)
-      || source.sourceScope === "owner_syllabus";
+;
   });
 
   const ranked = visibleCandidates.sort((left, right) => {

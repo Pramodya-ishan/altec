@@ -14,51 +14,22 @@ export type UploadTaskControls = {
   cancel: () => boolean;
 };
 
-const PERSONAL_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const SHARED_SCOPES = new Set(["paper_structure", "past_paper", "owner_syllabus", "shared_lesson", "official"]);
-const MB = 1024 * 1024;
 
-export function safeFileName(name: string) {
-  return String(name || "file")
-    .replace(/(\.[a-z0-9]{2,5})(?:\1)+$/i, "$1")
-    .replace(/[^\w.\-]+/g, "_")
-    .replace(/_+/g, "_")
-    .slice(0, 120);
-}
-
-function effectiveMimeType(file: File) {
-  if (file.type) return file.type.toLowerCase();
-  if (file.name.toLowerCase().endsWith(".pdf")) return "application/pdf";
-  return "";
-}
-
-export function validatePersonalAssistantFile(file: File) {
-  const mimeType = effectiveMimeType(file);
-  const isPdf = mimeType === "application/pdf";
-  const isImage = PERSONAL_IMAGE_TYPES.has(mimeType);
-  if (!isPdf && !isImage) {
-    throw new Error("Only PDF, PNG, JPEG, and WebP files are allowed.");
-  }
-  const maxBytes = isPdf ? 25 * MB : 10 * MB;
-  if (!Number.isFinite(file.size) || file.size <= 0 || file.size > maxBytes) {
-    throw new Error(`The selected ${isPdf ? "PDF" : "image"} exceeds the ${isPdf ? "25 MB" : "10 MB"} limit.`);
-  }
-  return { mimeType, kind: isPdf ? "pdf" : "image" as const };
-}
-
-function validateSharedResourceFile(file: File) {
-  const mimeType = effectiveMimeType(file);
-  const isPdf = mimeType === "application/pdf";
-  const isImage = PERSONAL_IMAGE_TYPES.has(mimeType);
-  if (!isPdf && !isImage) {
-    throw new Error("Shared lesson resources must be PDF, PNG, JPEG, or WebP files. Use the secure video uploader for video.");
-  }
-  const maxBytes = isPdf ? 50 * MB : 20 * MB;
-  if (!Number.isFinite(file.size) || file.size <= 0 || file.size > maxBytes) {
-    throw new Error(`The shared resource exceeds the ${isPdf ? "50 MB" : "20 MB"} limit.`);
-  }
-  return { mimeType, kind: isPdf ? "pdf" : "image" as const };
-}
+export {
+  effectiveMimeType,
+  safeFileName,
+  validateFileSignature,
+  validatePersonalAssistantFile,
+} from "./uploadValidation";
+import {
+  effectiveMimeType,
+  isPersonalImageType,
+  safeFileName,
+  validateFileSignature,
+  validatePersonalAssistantFile,
+  validateSharedResourceFile,
+} from "./uploadValidation";
 
 async function uploadValidatedFile(params: {
   file: File;
@@ -120,6 +91,8 @@ export async function uploadPdfWithClientStorage({
   const validation = SHARED_SCOPES.has(sourceScope)
     ? validateSharedResourceFile(file)
     : validatePersonalAssistantFile(file);
+  await validateFileSignature(file, validation.mimeType);
+
   const uid = user.uid;
   const sourceId = crypto.randomUUID();
   const fileName = safeFileName(file.name);
@@ -174,7 +147,8 @@ export async function uploadImageWithClientStorage({
   onTask?: (controls: UploadTaskControls) => void;
 }) {
   validatePersonalAssistantFile(file);
-  if (!PERSONAL_IMAGE_TYPES.has(effectiveMimeType(file))) throw new Error("Only PNG, JPEG, and WebP images are allowed.");
+  if (!isPersonalImageType(effectiveMimeType(file))) throw new Error("Only PNG, JPEG, and WebP images are allowed.");
+  await validateFileSignature(file, effectiveMimeType(file));
   const user = auth.currentUser;
   if (!user || user.isAnonymous) throw new Error("Please sign in before uploading images.");
   const sourceId = crypto.randomUUID();

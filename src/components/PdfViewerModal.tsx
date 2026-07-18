@@ -61,7 +61,7 @@ export function PdfViewerModal({ isOpen, onClose, pdfUrl, title }: PdfViewerModa
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50">
               <h3 className="font-bold text-slate-800 text-sm truncate pr-4">{title}</h3>
               <div className="flex items-center gap-1 shrink-0">
-                <button 
+                <button type="button" 
                   onClick={() => setScale(s => Math.max(0.5, s - 0.25))}
                   className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded-lg transition"
                 >
@@ -70,14 +70,14 @@ export function PdfViewerModal({ isOpen, onClose, pdfUrl, title }: PdfViewerModa
                 <span className="text-xs font-mono font-medium text-slate-500 w-12 text-center">
                   {Math.round(scale * 100)}%
                 </span>
-                <button 
+                <button type="button" 
                   onClick={() => setScale(s => Math.min(3, s + 0.25))}
                   className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-200 rounded-lg transition"
                 >
                   <ZoomIn className="w-4 h-4" />
                 </button>
                 <div className="w-px h-4 bg-slate-300 mx-2" />
-                <button onClick={onClose} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition">
+                <button type="button" onClick={onClose} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition">
                   <X className="w-5 h-5" />
                 </button>
               </div>
@@ -96,7 +96,7 @@ export function PdfViewerModal({ isOpen, onClose, pdfUrl, title }: PdfViewerModa
                   <div className="bg-rose-50 p-4 rounded-xl border border-rose-200 text-center max-w-md">
                     <p className="font-bold mb-1">The PDF could not be opened</p>
                     <p className="text-xs">{error}</p>
-                    <button 
+                    <button type="button" 
                       onClick={() => window.open(pdfUrl, '_blank')}
                       className="mt-4 text-xs font-bold underline hover:text-rose-700"
                     >
@@ -127,7 +127,7 @@ export function PdfViewerModal({ isOpen, onClose, pdfUrl, title }: PdfViewerModa
             {/* Footer / Controls */}
             {numPages && (
               <div className="flex items-center justify-center gap-4 px-4 py-3 border-t border-slate-100 bg-white">
-                <button
+                <button type="button"
                   disabled={pageNumber <= 1}
                   onClick={() => setPageNumber(prev => Math.max(1, prev - 1))}
                   className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg disabled:opacity-30 disabled:hover:bg-transparent transition"
@@ -137,7 +137,7 @@ export function PdfViewerModal({ isOpen, onClose, pdfUrl, title }: PdfViewerModa
                 <span className="text-sm font-bold text-slate-600 font-mono">
                   {pageNumber} <span className="text-slate-400">/</span> {numPages}
                 </span>
-                <button
+                <button type="button"
                   disabled={pageNumber >= numPages}
                   onClick={() => setPageNumber(prev => Math.min(numPages, prev + 1))}
                   className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg disabled:opacity-30 disabled:hover:bg-transparent transition"

@@ -6,6 +6,7 @@ import { cn } from '../../../lib/utils';
 import { GeminiLiveClient } from '../../../lib/geminiLiveClient';
 import { PcmMicrophone } from '../../../lib/audio/PcmMicrophone';
 import { PcmAudioPlayer } from '../../../lib/audio/PcmAudioPlayer';
+import { apiFetch } from "../../../lib/api";
 
 interface RealtimeLiveCallPanelProps {
   isOpen: boolean;
@@ -105,7 +106,7 @@ export function RealtimeLiveCallPanel({
       // 1. Check Server Realtime Status
       let statusResponse;
       try {
-        statusResponse = await fetch("/api/realtime/status", {
+        statusResponse = await apiFetch("/api/realtime/status", {
           cache: "no-store",
           signal: controller.signal,
         });
@@ -143,7 +144,7 @@ export function RealtimeLiveCallPanel({
 
       const firebaseToken = await user.getIdToken();
 
-      const tokenResponse = await fetch("/api/realtime/session", {
+      const tokenResponse = await apiFetch("/api/realtime/session", {
         method: "POST",
         signal: controller.signal,
         headers: {
@@ -283,7 +284,7 @@ Rules:
   return (
     <div className="fixed inset-0 z-[100] bg-slate-50/95 backdrop-blur-md flex flex-col items-center justify-center font-sans text-slate-800">
       <div className="absolute top-6 right-6">
-        <button onClick={endCall} className="p-3 bg-slate-200/60 hover:bg-slate-200 rounded-full transition-colors active:scale-95 cursor-pointer">
+        <button type="button" onClick={endCall} className="p-3 bg-slate-200/60 hover:bg-slate-200 rounded-full transition-colors active:scale-95 cursor-pointer">
           <X className="w-6 h-6 text-slate-600" />
         </button>
       </div>
@@ -301,7 +302,7 @@ Rules:
                 Talk with Tec A/L about lessons, calculations, and questions.
               </p>
             </div>
-            <button
+            <button type="button"
               onClick={handleStartCall}
               className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl transition-all shadow-md hover:shadow-lg active:scale-95 flex items-center justify-center gap-2.5 cursor-pointer text-base"
             >
@@ -331,10 +332,10 @@ Rules:
               <p className="text-sm text-slate-600 mt-2 leading-relaxed">{errorMsg}</p>
             </div>
             <div className="flex gap-3 w-full">
-              <button onClick={handleStartCall} className="flex-1 py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-bold rounded-xl transition-all cursor-pointer text-sm border border-indigo-100">
+              <button type="button" onClick={handleStartCall} className="flex-1 py-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-bold rounded-xl transition-all cursor-pointer text-sm border border-indigo-100">
                 Try again
               </button>
-              <button onClick={endCall} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl transition-all cursor-pointer text-sm">
+              <button type="button" onClick={endCall} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl transition-all cursor-pointer text-sm">
                 Close
               </button>
             </div>
@@ -352,10 +353,10 @@ Rules:
               <p className="text-sm text-red-600 mt-2 leading-relaxed">{errorMsg}</p>
             </div>
             <div className="flex gap-3 w-full">
-              <button onClick={handleStartCall} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all cursor-pointer text-sm shadow-md">
+              <button type="button" onClick={handleStartCall} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition-all cursor-pointer text-sm shadow-md">
                 Try again
               </button>
-              <button onClick={endCall} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl transition-all cursor-pointer text-sm">
+              <button type="button" onClick={endCall} className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl transition-all cursor-pointer text-sm">
                 Close
               </button>
             </div>
@@ -394,7 +395,7 @@ Rules:
 
             {/* Bottom Controls */}
             <div className="flex items-center gap-4 mt-auto w-full">
-              <button
+              <button type="button"
                 onClick={toggleMute}
                 className={cn("p-4 rounded-2xl transition-all duration-300 border cursor-pointer active:scale-95 flex-1 flex items-center justify-center gap-2", 
                   isMuted 
@@ -414,7 +415,7 @@ Rules:
                   </>
                 )}
               </button>
-              <button
+              <button type="button"
                 onClick={endCall}
                 className="py-4 rounded-2xl bg-red-600 hover:bg-red-700 transition-colors text-white font-bold text-sm tracking-wider cursor-pointer active:scale-95 shadow-md flex-1 text-center"
               >

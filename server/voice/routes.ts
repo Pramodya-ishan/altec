@@ -7,8 +7,12 @@ import { callGeminiWithFallback } from "../ai/modelRouter";
 import crypto from "crypto";
 import { APP_ASSISTANT_RESPONSE_GUIDE } from "../ai/assistantBehavior";
 import { isSimpleGreeting, sanitizeAssistantText, simpleGreetingReply } from "../ai/responseHygiene";
+import { requireFirebaseUser } from "../firebase/authMiddleware";
+
+import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
 
 export const voiceRoutes = Router();
+voiceRoutes.use(requireFirebaseUser, requireFirebaseAppCheck);
 
 voiceRoutes.post("/live-turn", async (req, res) => {
   try {
@@ -132,6 +136,6 @@ Question: ${transcript}` : transcript,
     });
   } catch (err: any) {
     console.error("Live turn error:", err);
-    res.status(500).json({ ok: false, message: err.message });
+    res.status(500).json({ ok: false, message: "The operation failed. Please try again." });
   }
 });

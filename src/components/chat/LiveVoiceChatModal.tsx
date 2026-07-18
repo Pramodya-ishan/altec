@@ -4,6 +4,7 @@ import { auth, storage } from '../../lib/firebase';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { apiUrl } from '../../lib/apiBase';
 import { useAIWorkflowStream } from '../../hooks/useAIWorkflowStream';
+import { apiFetch } from "../../lib/api";
 
 interface LiveVoiceChatModalProps {
 
@@ -100,7 +101,7 @@ export function LiveVoiceChatModal({ isOpen, onClose, currentSubject, activeSour
     
     try {
       const token = await auth.currentUser?.getIdToken();
-      const res = await fetch(apiUrl("/api/voice/live-turn"), {
+      const res = await apiFetch(apiUrl("/api/voice/live-turn"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -175,7 +176,7 @@ export function LiveVoiceChatModal({ isOpen, onClose, currentSubject, activeSour
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <h2 className="text-base font-bold text-white">Live voice chat</h2>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 transition-colors">
+          <button type="button" onClick={onClose} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -186,7 +187,7 @@ export function LiveVoiceChatModal({ isOpen, onClose, currentSubject, activeSour
             <div className="flex-1 flex flex-col items-center justify-center text-slate-500 gap-4">
                <Phone className="w-10 h-10 text-indigo-500 opacity-80" />
                <p className="text-sm text-center max-w-xs">Speak with Tec A/L and ask questions about a PDF or lesson.</p>
-               <button onClick={startCall} className="mt-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex items-center gap-2 cursor-pointer transition-colors shadow-md">
+               <button type="button" onClick={startCall} className="mt-2 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex items-center gap-2 cursor-pointer transition-colors shadow-md">
                  <Play className="w-4 h-4 fill-white" /> Start
                </button>
             </div>
@@ -232,7 +233,7 @@ export function LiveVoiceChatModal({ isOpen, onClose, currentSubject, activeSour
             {status === 'ready' ? 'Ready to Call' : status === 'listening' ? 'Listening...' : status === 'speaking' ? 'Clora is speaking...' : status === 'processing' ? 'Processing...' : status === 'permission_denied' ? 'Permission Denied' : 'Ready'}
           </div>
           <div className="flex items-center justify-center gap-6">
-            <button
+            <button type="button"
               onClick={toggleMute}
               disabled={status === 'ready' || status === 'permission_denied'}
               className={`w-14 h-14 rounded-full flex items-center justify-center transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
@@ -241,7 +242,7 @@ export function LiveVoiceChatModal({ isOpen, onClose, currentSubject, activeSour
             >
               {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
             </button>
-            <button
+            <button type="button"
               onClick={onClose}
               className="w-16 h-16 rounded-full bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center shadow-lg transition-transform hover:scale-105 cursor-pointer"
             >

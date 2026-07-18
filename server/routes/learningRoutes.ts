@@ -83,7 +83,7 @@ router.post("/attempts", async (req, res) => {
 
     return res.json({ ok: true, attemptId: attemptRef.id, analysis });
   } catch (error: any) {
-    return res.status(500).json({ ok: false, code: "ATTEMPT_SAVE_FAILED", message: error.message });
+    return res.status(500).json({ ok: false, code: "ATTEMPT_SAVE_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -109,7 +109,7 @@ router.get("/revision-queue", async (req, res) => {
       .slice(0, limit);
     return res.json({ ok: true, items, total: items.length });
   } catch (error: any) {
-    return res.status(500).json({ ok: false, code: "REVISION_QUEUE_FAILED", message: error.message });
+    return res.status(500).json({ ok: false, code: "REVISION_QUEUE_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -139,7 +139,7 @@ router.post("/revision-plan", async (req, res) => {
     await planRef.set({ id: planRef.id, days, dailyMinutes, examDate: examDate?.toISOString() || null, plan, createdAt: new Date().toISOString() });
     return res.json({ ok: true, planId: planRef.id, plan });
   } catch (error: any) {
-    return res.status(500).json({ ok: false, code: "REVISION_PLAN_FAILED", message: error.message });
+    return res.status(500).json({ ok: false, code: "REVISION_PLAN_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -162,7 +162,7 @@ router.post("/grade", async (req, res) => {
     });
     return res.json({ ok: true, result });
   } catch (error: any) {
-    return res.status(500).json({ ok: false, code: "ANSWER_GRADING_FAILED", message: error.message });
+    return res.status(500).json({ ok: false, code: "ANSWER_GRADING_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -192,7 +192,7 @@ router.get("/daily-quiz", async (req, res) => {
       }));
     return res.json({ ok: true, subject, weakLessons, questions });
   } catch (error: any) {
-    return res.status(500).json({ ok: false, code: "DAILY_QUIZ_FAILED", message: error.message });
+    return res.status(500).json({ ok: false, code: "DAILY_QUIZ_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -217,7 +217,7 @@ router.post("/bookmarks", async (req, res) => {
     }, { merge: true });
     return res.json({ ok: true, id: ref.id });
   } catch (error: any) {
-    return res.status(500).json({ ok: false, code: "BOOKMARK_SAVE_FAILED", message: error.message });
+    return res.status(500).json({ ok: false, code: "BOOKMARK_SAVE_FAILED", message: "The operation failed. Please try again." });
   }
 });
 

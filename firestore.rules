@@ -1,212 +1,205 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Global Catch-all safety net
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // Standard security helpers
     function signedIn() {
-      return request.auth != null;
+      return request.auth != null && request.auth.token.firebase.sign_in_provider != "anonymous";
     }
 
-    function isOwner(userId) {
+    function hasRole(role) {
       return signedIn() && (
-        request.auth.uid == userId ||
-        (request.auth.token != null && request.auth.token.email != null && request.auth.token.email == userId)
-      );
-    }
-
-    function isContentManager() {
-      return signedIn() && (
-        request.auth.token.admin == true ||
-        request.auth.token.role in ["admin", "ops", "content_editor", "teacher"] ||
-        (request.auth.token.roles != null && (
-          "admin" in request.auth.token.roles ||
-          "ops" in request.auth.token.roles ||
-          "content_editor" in request.auth.token.roles ||
-          "teacher" in request.auth.token.roles
-        ))
-      );
-    }
-
-    function isReviewer() {
-      return signedIn() && (
-        request.auth.token.admin == true ||
-        request.auth.token.role in ["admin", "ops", "reviewer"] ||
-        (request.auth.token.roles != null && (
-          "admin" in request.auth.token.roles ||
-          "ops" in request.auth.token.roles ||
-          "reviewer" in request.auth.token.roles
-        ))
+        request.auth.token.role == role ||
+        (request.auth.token.roles != null && role in request.auth.token.roles)
       );
     }
 
     function isAdmin() {
-      return isContentManager();
+      return signedIn() && (request.auth.token.admin == true || hasRole("admin"));
     }
 
-    function isPersonalScope(data) {
-      return data.visibility == "private"
+    function isOps() {
+      return hasRole("ops");
+    }
+
+    function canManageContent() {
+      return isAdmin() || isOps() || hasRole("content_editor") || hasRole("teacher");
+    }
+
+    function isReviewer() {
+      return isAdmin() || isOps() || hasRole("reviewer");
+    }
+
+    function isOwnerUid(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isPersonalSource(data) {
+      return data.ownerUid == request.auth.uid
+        && data.visibility == "private"
+        && data.published == false
         && data.sourceScope in ["personal", "chat_upload", "images"];
     }
 
-    // Users collection and sub-collections
-    match /users/{userId} {
-      allow read, write: if isOwner(userId) || isAdmin();
+    function hasClassAudience(data) {
+      return data.visibility == "class"
+        && data.classId != null
+        && request.auth.token.classIds != null
+        && data.classId in request.auth.token.classIds;
+    }
 
-      match /notifications/{docId} {
-        allow read, write: if isOwner(userId) || isAdmin();
-      }
+    function hasInstitutionAudience(data) {
+      return data.visibility == "institution"
+        && data.institutionId != null
+        && request.auth.token.institutionIds != null
+        && data.institutionId in request.auth.token.institutionIds;
+    }
 
-      match /profile/{docId} {
-        allow read, write: if isOwner(userId) || isAdmin();
-      }
+    function isPublishedForUser(data) {
+      return data.published == true && (
+        data.visibility in ["public", "official", "shared"] ||
+        hasClassAudience(data) ||
+        hasInstitutionAudience(data)
+      );
+    }
 
-      match /{allSubcollections=**} {
-        allow read, write: if isOwner(userId) || isAdmin();
+    function canReadSource(data) {
+      return signedIn() && (
+        data.ownerUid == request.auth.uid ||
+        isPublishedForUser(data) ||
+        canManageContent() ||
+        isReviewer()
+      );
+    }
+
+    // Private user records are owner-only. Only true administrators and ops can
+    // perform support access; teachers/content editors never inherit user-data access.
+    match /users/{uid} {
+      allow read, write: if isOwnerUid(uid) || isAdmin() || isOps();
+
+      match /{subPath=**} {
+        allow read, write: if isOwnerUid(uid) || isAdmin() || isOps();
       }
     }
 
-    // User Roles collection
-    match /user_roles/{userId} {
-      allow read: if signedIn();
-      allow write: if isAdmin();
+    match /user_roles/{uid} {
+      allow get: if isOwnerUid(uid) || isAdmin() || isOps();
+      allow list: if isAdmin() || isOps();
+      allow create, update, delete: if isAdmin();
     }
 
-    // RAG sources and chunks
     match /rag_sources/{id} {
-      allow read: if signedIn() && (
-        resource.data.visibility in ["official", "shared", "class", "institution", "public"] ||
-        resource.data.ownerUid == request.auth.uid ||
-        isAdmin()
+      allow read: if canReadSource(resource.data);
+      allow create: if signedIn() && (
+        isPersonalSource(request.resource.data) || canManageContent()
       );
-      allow create: if signedIn()
-        && request.resource.data.ownerUid == request.auth.uid
-        && (isPersonalScope(request.resource.data) || isContentManager());
-      allow update: if signedIn() && (
-        isContentManager() || (
-          resource.data.ownerUid == request.auth.uid
-          && isPersonalScope(resource.data)
-          && isPersonalScope(request.resource.data)
-        )
+      allow update: if canManageContent() || (
+        isPersonalSource(resource.data) &&
+        isPersonalSource(request.resource.data) &&
+        request.resource.data.ownerUid == resource.data.ownerUid &&
+        request.resource.data.sourceScope == resource.data.sourceScope &&
+        request.resource.data.visibility == resource.data.visibility &&
+        request.resource.data.published == resource.data.published
       );
-      allow delete: if signedIn() && (
-        isContentManager() || (resource.data.ownerUid == request.auth.uid && isPersonalScope(resource.data))
-      );
+      allow delete: if canManageContent() || isPersonalSource(resource.data);
     }
 
     match /rag_chunks/{id} {
-      allow read: if signedIn() && (
-        resource.data.visibility in ["official", "shared", "class", "institution", "public"] ||
-        resource.data.ownerUid == request.auth.uid ||
-        isAdmin()
+      allow read: if canReadSource(resource.data);
+      allow create: if signedIn() && (
+        isPersonalSource(request.resource.data) || canManageContent()
       );
-      allow create: if signedIn()
-        && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.visibility == "private";
-      allow update, delete: if isContentManager();
+      allow update, delete: if canManageContent() || (
+        resource.data.ownerUid == request.auth.uid &&
+        resource.data.visibility == "private" &&
+        request.resource.data.ownerUid == resource.data.ownerUid &&
+        request.resource.data.visibility == "private"
+      );
     }
 
-    // Past papers
     match /past_papers/{id} {
-      allow read: if signedIn();
-      allow create, update, delete: if isContentManager();
+      allow read: if signedIn() && (
+        isPublishedForUser(resource.data) || canManageContent() || isReviewer()
+      );
+      allow create, update, delete: if canManageContent();
     }
-
 
     match /lesson_resources/{id} {
-      allow read: if signedIn() && (
-        resource.data.ownerUid == request.auth.uid ||
-        (resource.data.published == true && resource.data.visibility in ["official", "shared", "class", "institution", "public"]) ||
-        isContentManager()
-      );
-      allow create, update, delete: if isContentManager();
+      allow read: if canReadSource(resource.data);
+      allow create, update, delete: if canManageContent();
     }
 
-    // Knowledge base
     match /knowledge_sources/{id} {
-      allow read: if signedIn();
-      allow write: if isAdmin();
+      allow read: if canReadSource(resource.data);
+      allow create, update, delete: if canManageContent();
     }
 
     match /knowledge_chunks/{id} {
-      allow read: if signedIn();
-      allow write: if isAdmin();
+      allow read: if canReadSource(resource.data);
+      allow create, update, delete: if canManageContent();
     }
 
-    // Indexes and metadata
-    match /exam_question_index/{id} {
-      allow read: if signedIn();
-      allow write: if isAdmin();
-    }
-
-    match /syllabus_nodes/{id} {
-      allow read: if signedIn();
-      allow write: if isAdmin();
-    }
-
-    match /exam_pattern_reports/{id} {
-      allow read: if signedIn();
-      allow write: if isAdmin();
-    }
-
-    match /prediction_reports/{id} {
-      allow read: if signedIn();
-      allow write: if isAdmin();
-    }
-
-    // PDF caching
-    match /pdf_question_cache/{id} {
-      allow read: if signedIn();
-      allow create, update, delete: if isContentManager() || isReviewer();
-    }
-
-    // Verified answers
-    match /verified_answers/{id} {
-      allow read: if signedIn();
-      allow write: if isAdmin();
-    }
-
-    // Audit events (Immutable: write-once, never delete or update)
-    match /audit_events/{id} {
-      allow read: if isAdmin();
-      allow create: if signedIn();
-      allow update, delete: if false;
-    }
-
-    // Canonical Source Registry. Video writes are server-only.
     match /sources/{id} {
-      allow read: if signedIn() && (
-        resource.data.ownerUid == request.auth.uid ||
-        resource.data.visibility in ["official", "shared", "class", "institution", "public"] ||
-        isAdmin()
+      allow read: if canReadSource(resource.data);
+      allow create: if signedIn() && (
+        isPersonalSource(request.resource.data) || canManageContent()
       );
-      allow create: if signedIn()
-        && request.resource.data.ownerUid == request.auth.uid
-        && (isPersonalScope(request.resource.data) || isContentManager());
-      allow update, delete: if isContentManager();
+      allow update: if canManageContent() || (
+        isPersonalSource(resource.data) &&
+        isPersonalSource(request.resource.data) &&
+        request.resource.data.ownerUid == resource.data.ownerUid &&
+        request.resource.data.sourceScope == resource.data.sourceScope &&
+        request.resource.data.visibility == "private" &&
+        request.resource.data.published == false
+      );
+      allow delete: if canManageContent() || isPersonalSource(resource.data);
     }
 
     match /videos/{id} {
       allow read: if signedIn() && (
-        isAdmin() || (
+        canManageContent() || (
+          resource.data.status == "ready" &&
           resource.data.isPublished == true &&
           resource.data.allowPlayback == true &&
-          resource.data.status == "ready" &&
-          resource.data.visibility in ["class", "institution", "public"]
+          (
+            resource.data.visibility in ["public", "shared"] ||
+            hasClassAudience(resource.data) ||
+            hasInstitutionAudience(resource.data)
+          )
         )
       );
       allow write: if false;
     }
 
-    match /videoPlaybackSessions/{id} {
-      allow read, write: if false;
+    // These are exposed only through authenticated server endpoints. This
+    // prevents clients from enumerating private answers, OCR text, or audit data.
+    match /pdf_question_cache/{id} { allow read, write: if false; }
+    match /verified_answers/{id} { allow read, write: if false; }
+    match /audit_events/{id} { allow read, write: if false; }
+    match /audit_logs/{id} { allow read, write: if false; }
+    match /videoPlaybackSessions/{id} { allow read, write: if false; }
+    match /videoAuditLogs/{id} { allow read, write: if false; }
+
+    match /exam_question_index/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /syllabus_nodes/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /exam_pattern_reports/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /prediction_reports/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /learning_signal_aggregates/{id} {
+      allow read: if signedIn();
+      allow write: if false;
     }
 
-    match /videoAuditLogs/{id} {
+    match /{document=**} {
       allow read, write: if false;
     }
   }

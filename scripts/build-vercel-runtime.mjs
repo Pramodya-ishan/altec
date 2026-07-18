@@ -12,13 +12,11 @@ const nativeCanvasSource = new URL("../node_modules/@napi-rs/canvas/", import.me
 const nativeCanvasTarget = new URL("node_modules/@napi-rs/canvas/", outputDirectory);
 const nativeCanvasLinuxSource = new URL("../node_modules/@napi-rs/canvas-linux-x64-gnu/", import.meta.url);
 const nativeCanvasLinuxTarget = new URL("node_modules/@napi-rs/canvas-linux-x64-gnu/", outputDirectory);
-const authoritativeSourceDirectory = new URL("../assets/authoritative/", import.meta.url);
-const authoritativeOutputDirectory = new URL("authoritative/", outputDirectory);
 
+console.log("[runtime] preparing output directory");
 await mkdir(outputDirectory, { recursive: true });
 await rm(protoOutputDirectory, { recursive: true, force: true });
 await rm(new URL("node_modules/", outputDirectory), { recursive: true, force: true });
-await rm(authoritativeOutputDirectory, { recursive: true, force: true });
 
 const googleGaxProtoPathPlugin = {
   name: "google-gax-proto-path",
@@ -48,6 +46,7 @@ const googleGaxProtoPathPlugin = {
   },
 };
 
+console.log("[runtime] starting esbuild bundle");
 const result = await build({
   entryPoints: ["server.ts"],
   bundle: true,
@@ -73,12 +72,16 @@ const result = await build({
   outfile: "vercel-runtime/server.mjs",
 });
 
+console.log("[runtime] esbuild bundle complete");
+console.log("[runtime] copying google-gax protos");
 await cp(protoSourceDirectory, protoOutputDirectory, { recursive: true });
+console.log("[runtime] copying PDF.js worker");
 try {
   await cp(pdfWorkerSource, pdfWorkerTarget);
 } catch (error) {
   throw new Error(`PDF.js worker is missing and cannot be packaged: ${error instanceof Error ? error.message : String(error)}`);
 }
+console.log("[runtime] copying native canvas assets");
 try {
   await mkdir(new URL("node_modules/@napi-rs/", outputDirectory), { recursive: true });
   await cp(nativeCanvasSource, nativeCanvasTarget, { recursive: true });
@@ -86,7 +89,7 @@ try {
 } catch (error) {
   throw new Error(`Native PDF preview renderer is missing and cannot be packaged: ${error instanceof Error ? error.message : String(error)}`);
 }
-await cp(authoritativeSourceDirectory, authoritativeOutputDirectory, { recursive: true });
+console.log("[runtime] writing metadata");
 await writeFile(metafilePath, JSON.stringify(result.metafile));
 await writeFile(declarationTarget, 'declare const app: import("express").Express;\nexport default app;\n');
-console.log("Built a self-contained Vercel API runtime with Google protobuf, PDF.js worker, native PDF preview assets, and authoritative syllabus grounding.");
+console.log("Built a self-contained Vercel API runtime with Google protobuf, PDF.js worker, and native PDF preview assets. Authoritative documents remain in private cloud storage.");

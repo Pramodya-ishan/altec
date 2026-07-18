@@ -24,7 +24,7 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
           </div>
           <h3 className="text-sm font-bold text-slate-800">Sources used</h3>
         </div>
-        <button
+        <button type="button"
           onClick={onClose}
           className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
         >
@@ -74,7 +74,7 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
 
               {/* Keep the source action simple: open the authenticated document. */}
               <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-slate-100" onClick={e => e.stopPropagation()}>
-                <button
+                <button type="button"
                   onClick={() => onSourceClick(source, false)}
                   className="flex flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg bg-slate-900 px-2 py-1.5 text-[11px] font-bold text-white transition hover:bg-black"
                 >

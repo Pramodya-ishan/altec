@@ -279,14 +279,30 @@ export async function verifyFirebaseToken(authHeader: string | undefined) {
 }
 
 export async function requireUser(req: any) {
+  if (req?.user?.uid && req.user.isAnonymous !== true) return req.user;
   return await verifyFirebaseToken(req.headers.authorization);
 }
 
 export async function requireAdmin(req: any) {
   const user = await requireUser(req);
-  const canManageContent = user.admin || user.roles?.includes('content_editor') || user.roles?.includes('teacher') || user.roles?.includes('ops');
-  if (!canManageContent && process.env.DEV_BYPASS_AUTH !== 'true') {
-    throw new Error('Forbidden: Admin access required');
+  const isAdmin = user.admin === true || user.roles?.includes("admin");
+  if (!isAdmin && !(process.env.DEV_BYPASS_AUTH === "true" && process.env.NODE_ENV !== "production")) {
+    const error = new Error("Forbidden: Admin access required");
+    (error as any).status = 403;
+    throw error;
+  }
+  return user;
+}
+
+export async function requireContentManager(req: any) {
+  const user = await requireUser(req);
+  const allowed = user.admin === true || user.roles?.some((role: string) =>
+    ["admin", "ops", "content_editor", "teacher"].includes(role),
+  );
+  if (!allowed && !(process.env.DEV_BYPASS_AUTH === "true" && process.env.NODE_ENV !== "production")) {
+    const error = new Error("Forbidden: Content manager access required");
+    (error as any).status = 403;
+    throw error;
   }
   return user;
 }

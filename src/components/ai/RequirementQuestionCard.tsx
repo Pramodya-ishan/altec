@@ -33,7 +33,7 @@ export function RequirementQuestionCard({
         )}
 
         {question.type === 'single_choice' && question.options?.map((opt, i) => (
-          <button
+          <button type="button"
             key={i}
             onClick={() => onChange(opt.value)}
             className={`w-full text-left p-3 rounded-xl border transition-colors ${value === opt.value ? 'bg-primary-50 border-primary-500 ring-1 ring-primary-500' : 'bg-white border-slate-200 hover:border-slate-300'}`}

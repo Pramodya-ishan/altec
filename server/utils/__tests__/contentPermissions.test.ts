@@ -20,9 +20,9 @@ assert.equal(isSharedSourceScope("chat_upload"), false);
 assert.equal(isSharedSourceScope("personal"), false);
 
 assert.equal(isStudentVisibleSource({ visibility: "public", published: true }), true);
-assert.equal(isStudentVisibleSource({ visibility: "class" }), true);
+assert.equal(isStudentVisibleSource({ visibility: "class", published: true }), true);
 assert.equal(isStudentVisibleSource({ visibility: "class", published: false }), false);
-assert.equal(isStudentVisibleSource({ visibility: "private", sourceScope: "paper_structure" }), true);
+assert.equal(isStudentVisibleSource({ visibility: "private", sourceScope: "paper_structure" }), false);
 assert.equal(isStudentVisibleSource({ visibility: "private", sourceScope: "past_paper", published: false }), false);
 assert.equal(isStudentVisibleSource({ visibility: "private", sourceScope: "chat_upload" }), false);
 assert.equal(isStudentVisibleSource({ visibility: "private", sourceScope: "personal" }), false);

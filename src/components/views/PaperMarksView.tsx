@@ -113,7 +113,7 @@ export default function PaperMarksView() {
  <h3 className="text-sm font-black text-slate-500 tracking-wide flex items-center gap-2">
  <div className="w-1.5 h-4 bg-slate-700 rounded-full"></div> Total marks progress
  </h3>
- <button
+ <button type="button"
  onClick={() => setModals(prev => ({ ...prev, addPaperMark: { open: true, editIndex: -1 } }))}
  className="bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg w-8 h-8 flex items-center justify-center transition-colors shadow-sm cursor-pointer"
  title="Add marks"
@@ -202,7 +202,7 @@ export default function PaperMarksView() {
 
  {/* HISTORICS LOG TABLE */}
  <div className="bg-white border border-slate-200 rounded-[1.8rem] shadow-sm overflow-hidden hover:shadow-[0_8px_30px_rgb(0,0,0,0.04)] transition-all">
- <button 
+ <button type="button" 
  onClick={toggleCollapsedLog}
  className="w-full flex justify-between items-center px-6 py-5 bg-slate-50/55 hover:bg-slate-50 border-b border-slate-100 transition-colors cursor-pointer"
  >
@@ -270,15 +270,15 @@ export default function PaperMarksView() {
  {confirmDeleteIdx === idx ? (
  <div className="flex items-center justify-end gap-1.5">
  <span className="text-xs text-rose-600 font-extrabold">Remove this record?</span>
- <button onClick={() => confirmDelete(idx)} className="px-2 py-1 bg-rose-600 text-white text-xs font-bold rounded-lg hover:bg-rose-700 cursor-pointer">Yes</button>
- <button onClick={() => setConfirmDeleteIdx(null)} className="px-2 py-1 bg-slate-200 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-300 cursor-pointer">No</button>
+ <button type="button" onClick={() => confirmDelete(idx)} className="px-2 py-1 bg-rose-600 text-white text-xs font-bold rounded-lg hover:bg-rose-700 cursor-pointer">Yes</button>
+ <button type="button" onClick={() => setConfirmDeleteIdx(null)} className="px-2 py-1 bg-slate-200 text-slate-700 text-xs font-bold rounded-lg hover:bg-slate-300 cursor-pointer">No</button>
  </div>
  ) : (
  <div className="flex items-center justify-end gap-2 text-slate-400">
- <button onClick={() => handleEdit(idx)} className="hover:text-primary-600 p-1 cursor-pointer transition-colors" title="Edit Log">
+ <button type="button" onClick={() => handleEdit(idx)} className="hover:text-primary-600 p-1 cursor-pointer transition-colors" title="Edit Log">
  <i className="fa-solid fa-pen-to-square"></i>
  </button>
- <button onClick={() => setConfirmDeleteIdx(idx)} className="hover:text-rose-600 p-1 cursor-pointer transition-colors" title="Remove record">
+ <button type="button" onClick={() => setConfirmDeleteIdx(idx)} className="hover:text-rose-600 p-1 cursor-pointer transition-colors" title="Remove record">
  <i className="fa-solid fa-trash-can"></i>
  </button>
  </div>

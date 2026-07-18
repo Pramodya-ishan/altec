@@ -1,4 +1,5 @@
 import { apiFetch } from "../../lib/api";
+import { consumePendingTopicHighlight } from "../../lib/navigationIntent";
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { SYLLABUS } from '../../constants/syllabus';
@@ -46,7 +47,7 @@ export default function PaperStructureView() {
 
  // Automatically expand sections and scroll to target topic if selected from Global Search
  useEffect(() => {
- const highlightTopic = localStorage.getItem('search_highlight_topic');
+ const highlightTopic = consumePendingTopicHighlight();
  if (highlightTopic) {
  setCollapsedSections({
  mcq: false,
@@ -58,8 +59,7 @@ export default function PaperStructureView() {
  if (element) {
  element.scrollIntoView({ behavior: 'smooth', block: 'center' });
  element.classList.add('animate-highlight-flash');
- localStorage.removeItem('search_highlight_topic');
- }
+  }
  }, 500);
 
  return () => clearTimeout(timer);
@@ -437,7 +437,7 @@ export default function PaperStructureView() {
  const isChecked = subjectData.topics[topic]?.checked;
 
  return (
- <button
+ <button type="button"
  className={cn(
  "shrink-0 flex items-center gap-1.5 transition-all text-xl cursor-pointer active:scale-95",
  isChecked ? "text-emerald-600 drop-shadow-[0_1px_1px_rgba(5,150,105,0.18)]" : "text-slate-300 hover:text-slate-400"
@@ -499,7 +499,7 @@ export default function PaperStructureView() {
  {isTopicSelectionMode ? "Choose a lesson" : selectedTopic}
  </h3>
  </div>
- <button
+ <button type="button"
  onClick={() => setQuizModalOpen(false)}
  className="text-white/80 hover:text-white p-2 rounded-xl bg-white/10 hover:bg-white/20 transition-all cursor-pointer"
  >
@@ -536,7 +536,7 @@ export default function PaperStructureView() {
  </div>
  </div>
  <div className="pt-4 flex justify-end">
- <button
+ <button type="button"
  onClick={() => {
  if (selectedTopic) {
  setIsTopicSelectionMode(false);
@@ -585,7 +585,7 @@ export default function PaperStructureView() {
  <h4 className="text-sm font-bold text-slate-800">Questions could not be loaded</h4>
  <p className="text-xs text-slate-500 max-w-xs">{quizError}</p>
  </div>
- <button
+ <button type="button"
  onClick={() => fetchQuizQuestions(selectedTopic)}
  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition-all"
  >
@@ -668,7 +668,7 @@ export default function PaperStructureView() {
  }
 
  return (
- <button
+ <button type="button"
  key={idx}
  disabled={isAnswerSubmitted}
  onClick={() => setSelectedAnswer(idx)}
@@ -717,7 +717,7 @@ export default function PaperStructureView() {
  </span>
  
  {!isAnswerSubmitted ? (
- <button
+ <button type="button"
  disabled={selectedAnswer === null}
  onClick={handleSubmitAnswer}
  className="bg-indigo-600 disabled:opacity-40 hover:bg-indigo-700 disabled:hover:bg-indigo-600 text-white font-black text-xs md:text-sm px-6 py-2.5 rounded-xl shadow-md transition-all active:scale-[0.98] cursor-pointer"
@@ -725,7 +725,7 @@ export default function PaperStructureView() {
  Submit Answer
  </button>
  ) : (
- <button
+ <button type="button"
  onClick={handleNextQuestion}
  className="bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs md:text-sm px-6 py-2.5 rounded-xl shadow-md transition-all active:scale-[0.98] cursor-pointer"
  >
@@ -762,7 +762,7 @@ export default function PaperStructureView() {
  </div>
  </div>
 
- <button
+ <button type="button"
  onClick={() => {
  setQuizModalOpen(false);
  }}

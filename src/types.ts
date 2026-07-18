@@ -100,6 +100,8 @@ export type AppData = {
   targetZ?: number;
   studyPlan?: string;
   collapsedStates?: Record<string, boolean>;
+  advisorPreferences?: { district?: string; preferredCourse?: string };
+  focusTasks?: Array<{ id: string; text: string; completed: boolean }>;
 };
 
 export type SubjectKey = 'sft' | 'et' | 'ict';

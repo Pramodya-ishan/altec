@@ -121,23 +121,7 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.ok) throw new Error(payload?.error || "The mistake could not be saved.");
 
-      const localRecord = {
-        id: payload.id,
-        subject,
-        lesson: lesson.trim(),
-        errorText: errorText.trim(),
-        imageStoragePath: image.storagePath || null,
-        imageMimeType: image.mimeType || null,
-        createdAt: new Date().toISOString(),
-      };
-      const localKey = `local_mistake_notebook_${user.email.toLowerCase()}`;
-      let previous: unknown = [];
-      try {
-        previous = JSON.parse(localStorage.getItem(localKey) || "[]");
-      } catch {
-        previous = [];
-      }
-      localStorage.setItem(localKey, JSON.stringify([localRecord, ...(Array.isArray(previous) ? previous : [])].slice(0, 100)));
+
 
       showNotification("Saved. The Assistant can now use it for revision and practice.", "success");
       reset();

@@ -1,4 +1,3 @@
-import { readUser, syncUserFromFirestore } from "../data/userRepository";
 import { getAdminDb } from "./admin";
 import { buildExamScorePrediction } from "../../src/lib/scoreUtils";
 
@@ -44,20 +43,6 @@ export async function loadUserAIContext(uid: string, email?: string) {
       profileData = { ...profileData, ...uidProfileSnap.data() };
     }
     
-    // 2.5 LOAD FROM LOCAL DB EXPORT (OLD SCHEMA)
-    let localDbData: any = null;
-    if (email) {
-      try {
-        await syncUserFromFirestore(email);
-        localDbData = readUser(email);
-        if (localDbData && Object.keys(localDbData).length > 0) {
-          if (localDbData.profile) profileData = { ...localDbData.profile, ...profileData };
-        }
-      } catch (e) {
-        console.warn("Failed to read local user data:", e);
-      }
-    }
-
     // 3. Extract AppData
     let appData: any = null;
     let loadedFrom = "none";
@@ -77,12 +62,6 @@ export async function loadUserAIContext(uid: string, email?: string) {
     } else if (profileData.data) {
       appData = profileData.data;
       loadedFrom = "root_data";
-    }
-
-    // 2. Local DB Fallback
-    if (!appData && localDbData && (localDbData.data || localDbData.appData)) {
-      appData = localDbData.data || localDbData.appData;
-      loadedFrom = "local_db_fallback";
     }
 
     // 4. Fetch memory and chat history from both paths (uniquely merged)

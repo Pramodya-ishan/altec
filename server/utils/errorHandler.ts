@@ -10,10 +10,23 @@ export type PublicApiError = {
 };
 
 export function globalErrorHandler(err: any, req: Request, res: Response, next: NextFunction) {
-  const requestId = crypto.randomUUID?.() || Math.random().toString(36).substring(2, 15);
+  const requestId = String((req as Request & { requestId?: string }).requestId || crypto.randomUUID());
   
-  // Log the actual internal details server-side
-  console.error(`[ERROR] RequestId: ${requestId} | Path: ${req.path} | Error:`, err);
+  // Log a bounded, redacted diagnostic. Never serialize request bodies,
+  // authorization headers, signed URLs, cookies, or provider payloads.
+  const internalDiagnostic = {
+    requestId,
+    method: req.method,
+    path: req.path,
+    name: String(err?.name || "Error"),
+    code: String(err?.code || "INTERNAL_ERROR").slice(0, 80),
+    status: Number(err?.status || 500),
+    message: String(err?.message || "Internal failure")
+      .replace(/https?:\/\/\S+/g, "[URL_REDACTED]")
+      .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+/gi, "Bearer [REDACTED]")
+      .slice(0, 300),
+  };
+  console.error("[API_ERROR]", internalDiagnostic);
 
   let status = 500;
   let code = "INTERNAL_ERROR";
@@ -49,9 +62,9 @@ export function globalErrorHandler(err: any, req: Request, res: Response, next: 
     code = "FORBIDDEN";
     message = "You do not have permission to perform this action.";
   } else if (err.code === "RATE_LIMITED" || err.status === 429) {
-    status = 429;
-    code = "RATE_LIMITED";
-    message = err.message || "Too many requests. Please try again later.";
+    status = 503;
+    code = "PROVIDER_BUSY";
+    message = "The AI provider is temporarily busy. Please retry shortly.";
     retryable = true;
   } else if (err.code === "FEATURE_NOT_AVAILABLE") {
     status = 501;
@@ -66,9 +79,10 @@ export function globalErrorHandler(err: any, req: Request, res: Response, next: 
     code = "DEPENDENCY_UNAVAILABLE";
     message = "A required dependency service is temporarily unavailable.";
   } else if (err.code === "QUOTA_EXCEEDED") {
-    status = 429;
-    code = "QUOTA_EXCEEDED";
-    message = "API request quota has been exceeded.";
+    status = 503;
+    code = "PROVIDER_QUOTA_UNAVAILABLE";
+    message = "The external AI provider is temporarily unavailable.";
+    retryable = true;
   } else if (err.code === "REQUEST_TIMEOUT" || err.status === 408) {
     status = 408;
     code = "REQUEST_TIMEOUT";

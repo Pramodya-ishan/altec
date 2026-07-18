@@ -193,7 +193,7 @@ const [messages, setMessages] = useState<{
     setIsSpeaking(true);
 
     try {
-      const ttsRes = await fetch(apiUrl("/api/tts/generate"), {
+      const ttsRes = await apiFetch(apiUrl("/api/tts/generate"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -645,7 +645,7 @@ const [messages, setMessages] = useState<{
 
     try {
       // 1. Fetch from proxy
-      const proxyRes = await fetch(apiUrl("/api/web/pdf-proxy"), {
+      const proxyRes = await apiFetch(apiUrl("/api/web/pdf-proxy"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: candidate.url })
@@ -724,7 +724,7 @@ const [messages, setMessages] = useState<{
   const handleWrongAnswer = async (msg: any) => {
     if (!msg.paperInfo) return;
     try {
-      const response = await fetch(apiUrl("/api/ai/feedback/wrong-answer"), {
+      const response = await apiFetch(apiUrl("/api/ai/feedback/wrong-answer"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1140,7 +1140,7 @@ const [messages, setMessages] = useState<{
         const referenceText = [...messages]
           .reverse()
           .find((message) => message.role === 'assistant' && message.content)?.content || '';
-        const imageRes = await fetch(apiUrl("/api/image/generate"), {
+        const imageRes = await apiFetch(apiUrl("/api/image/generate"), {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

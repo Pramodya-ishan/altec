@@ -148,7 +148,7 @@ export default function AdminDashboardView() {
  <div className="p-4 text-center text-slate-400 font-bold text-sm">No users found.</div>
  ) : (
  users.map(u => (
- <button
+ <button type="button"
  key={u.email}
  onClick={() => handleSelectUser(u.email)}
  className={`w-full text-left p-3.5 rounded-2xl border-2 flex items-center gap-3 transition-colors ${selectedUserEmail === u.email ? 'bg-indigo-50 border-indigo-400 text-indigo-950 shadow-sm' : 'bg-white border-transparent hover:bg-slate-50 hover:border-slate-200 text-slate-700'}`}
@@ -176,7 +176,7 @@ export default function AdminDashboardView() {
  <p className="text-xs text-slate-400 mt-1 font-mono">Editing: <span className="text-white font-bold">{selectedUserEmail}</span></p>
  </div>
  <div className="flex gap-2">
- <button onClick={handleSaveData} className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-extrabold text-xs tracking-wide uppercase rounded-xl transition-all cursor-pointer shadow-lg active:scale-95 flex items-center gap-2 whitespace-nowrap">
+ <button type="button" onClick={handleSaveData} className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-extrabold text-xs tracking-wide uppercase rounded-xl transition-all cursor-pointer shadow-lg active:scale-95 flex items-center gap-2 whitespace-nowrap">
  <i className="fa-solid fa-floppy-disk"></i> Force Overwrite DB
  </button>
  </div>
@@ -185,7 +185,7 @@ export default function AdminDashboardView() {
  <div className="mb-4 bg-slate-800 border border-slate-700/50 rounded-xl p-4 shadow-sm">
  <h4 className="text-emerald-400 text-xs font-bold uppercase tracking-wider mb-3"><i className="fa-solid fa-bolt mr-2"></i> Quick Edits</h4>
  <div className="flex gap-2 text-xs flex-wrap">
- <button onClick={() => {
+ <button type="button" onClick={() => {
  try{ 
  const d = JSON.parse(jsonInput); 
  d.zScoreHistory = Array.isArray(d.zScoreHistory)
@@ -196,7 +196,7 @@ export default function AdminDashboardView() {
  }} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded shadow-sm border border-slate-600 transition-colors whitespace-nowrap">
  <i className="fa-solid fa-broom text-emerald-400 mr-1.5"></i> Clean Invalid Z History
  </button>
- <button onClick={() => {
+ <button type="button" onClick={() => {
  try{ 
  const d = JSON.parse(jsonInput); 
  d.targetZ = 2.5; 

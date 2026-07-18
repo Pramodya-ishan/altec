@@ -1,74 +1,59 @@
-import { getAIClient } from './client';
+import { getAIClient } from "./client";
+
 export const ai = getAIClient();
-export const RPM_LIMIT = 15;
-export const RPD_LIMIT = 1500;
-export let requestCountPM = 0;
-export let requestCountPD = 0;
-export let lastResetPM = Date.now();
-export let lastResetPD = Date.now();
-export const MAX_CONCURRENT_GEMINI = 1;
-export let currentGeminiRequests = 0;
-export const geminiQueue: (() => void)[] = [];
-export async function enqueueGeminiRequest() {
-  if (currentGeminiRequests >= MAX_CONCURRENT_GEMINI) {
-    await new Promise<void>((resolve) => geminiQueue.push(resolve));
+
+// This is a capacity semaphore, not a user/IP rate limit. Requests wait rather
+// than receiving 429 responses. Provider quotas and Vercel execution limits
+// still apply and cannot be disabled by application code.
+const configuredConcurrency = Number(process.env.GEMINI_MAX_CONCURRENCY || 4);
+export const MAX_CONCURRENT_GEMINI = Number.isFinite(configuredConcurrency)
+  ? Math.max(1, Math.min(16, Math.floor(configuredConcurrency)))
+  : 4;
+
+let activeRequests = 0;
+const waiters: Array<() => void> = [];
+
+async function acquire() {
+  if (activeRequests >= MAX_CONCURRENT_GEMINI) {
+    await new Promise<void>((resolve) => waiters.push(resolve));
   }
-  currentGeminiRequests++;
-  if (Date.now() - lastResetPM > 60000) {
-    requestCountPM = 0;
-    lastResetPM = Date.now();
-  }
-  if (Date.now() - lastResetPD > 86400000) {
-    requestCountPD = 0;
-    lastResetPD = Date.now();
-  }
-  requestCountPM++;
-  requestCountPD++;
+  activeRequests += 1;
 }
-export function dequeueGeminiRequest() {
-  currentGeminiRequests--;
-  if (geminiQueue.length > 0) {
-    const next = geminiQueue.shift();
-    if (next) next();
-  }
+
+function release() {
+  activeRequests = Math.max(0, activeRequests - 1);
+  waiters.shift()?.();
+}
+
+function isRetryableProviderError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const status = "status" in error ? Number(error.status) : 0;
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
 }
 
 export async function enqueueGeminiTask<T>(task: () => Promise<T>): Promise<T> {
-  await enqueueGeminiRequest();
+  await acquire();
   try {
-    let retries = 1; // Only retry once per model to avoid hanging the chat
-    let delayMs = 1500;
-    while (retries > 0) {
-      try {
-        return await task();
-      } catch (e: any) {
-        if (e.status === 503 || e.status === 429) {
-          if (e.message && e.message.includes("limit: 0")) {
-             // fast fail to next model if quota limit is strictly 0
-             throw e;
-          }
-          retries--;
-          if (retries === 0) throw e;
-          console.warn(`Gemini API returned ${e.status}. Retrying in ${delayMs}ms...`);
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-          delayMs *= 2;
-        } else {
-          throw e; // throw immediately if not 503 or 429
-        }
-      }
+    try {
+      return await task();
+    } catch (error) {
+      if (!isRetryableProviderError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 800 + Math.floor(Math.random() * 400)));
+      return await task();
     }
-    return await task();
   } finally {
-    dequeueGeminiRequest();
+    release();
   }
 }
 
-export async function callPollinationsAI(messages: any[], jsonMode = false): Promise<string> {
+export async function enqueueGeminiRequest() {
+  await acquire();
+}
+
+export function dequeueGeminiRequest() {
+  release();
+}
+
+export async function callPollinationsAI(): Promise<string> {
   throw new Error("External fallbacks are disabled for academic data.");
-}
-
-export function cleanRequestLog() {
-  if (Date.now() - lastResetPM > 60000) {
-    requestCountPM = 0;
-  }
 }

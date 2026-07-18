@@ -1,5 +1,8 @@
 process.env.NODE_ENV = "production";
 process.env.VERCEL = "1";
+process.env.ALLOWED_ORIGINS = "https://smoke.invalid";
+process.env.FIREBASE_APP_CHECK_REQUIRED = "true";
+process.env.VIDEO_REQUIRE_APP_CHECK = "true";
 
 import { once } from "node:events";
 import { cp, mkdtemp, rm } from "node:fs/promises";
@@ -45,16 +48,16 @@ try {
   }
 
   const checks = [
-    { path: "/api/auth/context", method: "GET" },
-    { path: "/api/pdf/direct-qa-file", method: "POST" },
-    { path: "/api?__path=pdf%2Fdirect-qa-file", method: "POST" },
+    { path: "/api/auth/context", method: "GET", expectedCodes: ["LOGIN_REQUIRED"] },
+    { path: "/api/pdf/direct-qa-file", method: "POST", expectedCodes: ["APP_CHECK_REQUIRED", "LOGIN_REQUIRED"] },
+    { path: "/api?__path=pdf%2Fdirect-qa-file", method: "POST", expectedCodes: ["APP_CHECK_REQUIRED", "LOGIN_REQUIRED"] },
   ];
 
   for (const check of checks) {
     const response = await fetch(`http://127.0.0.1:${address.port}${check.path}`, { method: check.method });
     const contentType = response.headers.get("content-type") || "";
     const payload = await response.json();
-    if (response.status !== 401 || !contentType.includes("application/json") || payload?.code !== "LOGIN_REQUIRED") {
+    if (response.status !== 401 || !contentType.includes("application/json") || !check.expectedCodes.includes(payload?.code)) {
       throw new Error(`Unexpected API smoke response for ${check.path}: ${response.status} ${contentType} ${JSON.stringify(payload)}`);
     }
     if (payload?.code === "API_NOT_FOUND") {

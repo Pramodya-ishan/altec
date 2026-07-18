@@ -1,12 +1,10 @@
-import { apiFetch } from "../../lib/api";
 import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { saveVideoFile, deleteVideoFile } from '../../lib/indexedDB';
-import { isFirebaseEnabled } from '../../lib/firebase';
 
 export function PlaylistModal() {
-  const { modals, setModals, data, currentSubject, saveData, showNotification, youtubeCookies, saveYoutubeCookies } = useApp();
+  const { modals, setModals, data, currentSubject, saveData, showNotification } = useApp();
   const [showAddForm, setShowAddForm] = useState(false);
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
@@ -138,40 +136,6 @@ export function PlaylistModal() {
       const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
       return v.toString(16);
     });
-  };
-
-  const handleDirectDownload = (videoUrl: string, videoTitle: string, index: number) => {
-    showNotification('Starting direct web download...', 'info');
-    apiFetch(`/api/yt-download?url=${encodeURIComponent(videoUrl)}&title=${encodeURIComponent(videoTitle)}&cookies=${encodeURIComponent(youtubeCookies)}`)
-      .then(async (res) => {
-         if (!res.ok) {
-            const err = await res.text();
-            showNotification(`Direct download failed: ${err}. Please use the High-Speed local script option.`, 'error');
-            return;
-         }
-         const blob = await res.blob();
-         if (blob.size < 200000) {
-            showNotification(`The file returned is too small (Incomplete/Bot restriction). Please use the Local High-Speed script instead.`, 'error');
-            return;
-         }
-         const blobUrl = URL.createObjectURL(blob);
-         const a = document.createElement('a');
-         a.href = blobUrl;
-         a.download = `${videoTitle.replace(/[^a-zA-Z0-9]/g, "_").substring(0, 20)}.mp4`;
-         document.body.appendChild(a);
-         a.click();
-         document.body.removeChild(a);
-         URL.revokeObjectURL(blobUrl);
-         
-         showNotification('Download completed! Please attach the downloaded file...', 'info');
-         setTimeout(() => {
-            document.getElementById(`attach-file-${index}`)?.click();
-         }, 1500);
-         setDownloadOptionVideo(null);
-      })
-      .catch((err) => {
-         showNotification('Direct download failed due to network error.', 'error');
-      });
   };
 
   const handleDownloadBat = (videoUrl: string, videoTitle: string) => {
@@ -582,7 +546,7 @@ if exist "%OUT_FILE%" (
           </h2>
           <div className="flex items-center gap-2">
             {!showAddForm && (
-              <button 
+              <button type="button" 
                 onClick={openAddForm} 
                 className="w-8 h-8 flex items-center justify-center rounded-full bg-primary-100 text-primary-600 hover:bg-primary-200 transition-colors"
                 title="Add Video"
@@ -590,7 +554,7 @@ if exist "%OUT_FILE%" (
                 <i className="fa-solid fa-plus"></i>
               </button>
             )}
-            <button onClick={close} className="w-8 h-8 flex items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-red-500 transition-colors">
+            <button type="button" onClick={close} className="w-8 h-8 flex items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-red-500 transition-colors">
               <i className="fa-solid fa-xmark text-lg"></i>
             </button>
           </div>
@@ -606,7 +570,7 @@ if exist "%OUT_FILE%" (
                 className="overflow-hidden"
               >
                 <div className="bg-slate-50 p-5 rounded-xl border border-slate-200 flex flex-col gap-4 relative">
-                  <button 
+                  <button type="button" 
                     onClick={() => setShowAddForm(false)}
                     className="absolute top-3 right-3 w-6 h-6 flex items-center justify-center rounded-full bg-slate-200 text-slate-500 hover:bg-red-100 hover:text-red-500 transition-colors text-xs"
                   >
@@ -632,7 +596,7 @@ if exist "%OUT_FILE%" (
                           onChange={e => setUrl(e.target.value)}
                           className="flex-1 px-4 py-2.5 bg-white border border-slate-300 rounded-lg text-sm outline-none focus:border-primary-500 focus:ring-4 focus:ring-primary-50 transition-all"
                         />
-                        <button
+                        <button type="button"
                           onClick={handleAdd}
                           className="px-5 py-2.5 bg-primary-600 text-white font-bold rounded-lg hover:bg-primary-700 active:scale-[0.98] transition-all whitespace-nowrap shadow-sm"
                         >
@@ -647,7 +611,7 @@ if exist "%OUT_FILE%" (
                         className="hidden" 
                         onChange={handleFileChange} 
                       />
-                      <button
+                      <button type="button"
                         onClick={() => fileInputRef.current?.click()}
                         className="w-full px-4 py-2.5 bg-white border-2 border-dashed border-slate-300 text-slate-600 font-bold text-sm rounded-lg hover:bg-slate-50 hover:border-primary-400 hover:text-primary-600 transition-all flex items-center justify-center gap-2"
                       >
@@ -668,7 +632,7 @@ if exist "%OUT_FILE%" (
                 </div>
                 <p className="text-slate-500 text-sm font-bold">No videos saved yet.</p>
                 {!showAddForm && (
-                  <button 
+                  <button type="button" 
                     onClick={openAddForm}
                     className="text-primary-600 text-sm font-bold mt-2 hover:underline"
                   >
@@ -679,7 +643,7 @@ if exist "%OUT_FILE%" (
             ) : (
               videos.map((video, index) => (
                 <li key={index} className="flex flex-col bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow group relative">
-                  <button
+                  <button type="button"
                     onClick={() => removeVideo(index)}
                     className="absolute top-2 right-2 w-7 h-7 flex items-center justify-center bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-all z-10 scale-95 hover:scale-100"
                     title="Remove Video"
@@ -710,7 +674,7 @@ if exist "%OUT_FILE%" (
                     <div className="font-extrabold text-slate-800 text-[15px] leading-snug line-clamp-2" title={video.title}>{video.title}</div>
                     
                     <div className="flex gap-2 items-center mt-auto">
-                      <button
+                      <button type="button"
                         onClick={() => downloadBatAndPlay(video.url, video.title, index)}
                         className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-slate-50 border border-slate-200 text-slate-700 hover:bg-slate-100 hover:border-slate-300 hover:text-emerald-600 font-bold text-xs rounded-lg transition-all"
                         title={video.url.startsWith('localdb://') || video.url.startsWith('blob:') ? "Play Local Video" : "Download & Play"}
@@ -727,7 +691,7 @@ if exist "%OUT_FILE%" (
                               className="hidden" 
                               onChange={(e) => handleAttachFileChange(e, index)} 
                           />
-                          <button
+                          <button type="button"
                             onClick={() => document.getElementById(`attach-file-${index}`)?.click()}
                             className="w-9 h-9 flex items-center justify-center bg-slate-50 border border-slate-200 text-slate-500 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-600 rounded-lg transition-all"
                             title="Attach Local File"
@@ -737,7 +701,7 @@ if exist "%OUT_FILE%" (
                         </div>
                       )}
 
-                      <button
+                      <button type="button"
                         onClick={() => handleCopy(video.url, index)}
                         className="w-9 h-9 flex items-center justify-center bg-slate-50 border border-slate-200 text-slate-500 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-600 rounded-lg transition-all"
                         title="Copy URL"
@@ -764,7 +728,7 @@ if exist "%OUT_FILE%" (
                 <i className="fa-solid fa-download text-emerald-500"></i>
                 <span>Configure Download Options</span>
               </h3>
-              <button 
+              <button type="button" 
                 onClick={() => setDownloadOptionVideo(null)}
                 className="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 transition-all text-xs"
               >
@@ -842,27 +806,9 @@ if exist "%OUT_FILE%" (
                   <option value="edge">Microsoft Edge (Authed session)</option>
                   <option value="firefox">Mozilla Firefox (Authed session)</option>
                   <option value="brave">Brave Browser (Authed session)</option>
-                  <option value="custom">Cloud Bypass - Custom YouTube Cookie Header</option>
                   <option value="none">No Cookies (Anonymous Fetch)</option>
                 </select>
-                <p className="text-[11px] text-slate-400">Integrates cookies dynamically. {cookiesBrowser === 'custom' ? "Enter your cookies below to bypass datacenter IP restrictions." : "Make sure you are logged into your Google/YouTube account inside the chosen browser!"}</p>
-                
-                {cookiesBrowser === 'custom' && (
-                  <div className="mt-2 flex flex-col gap-1.5 p-3.5 bg-slate-50 border border-slate-200 rounded-xl">
-                    <span className="font-extrabold text-[11px] text-slate-700 flex items-center gap-1.5">
-                      <i className="fa-solid fa-cookie text-emerald-500"></i> YouTube Cookie String:
-                    </span>
-                    <textarea
-                      value={youtubeCookies}
-                      onChange={(e) => saveYoutubeCookies(e.target.value)}
-                      placeholder="Paste cookies here (e.g., SIDS=...; HSID=...)"
-                      className="w-full h-20 p-2.5 bg-white border border-slate-200 rounded-lg outline-none focus:border-emerald-500 text-[10px] font-mono"
-                    />
-                    <p className="text-[10px] text-slate-400 leading-relaxed">
-                      Your cookies are synced to {isFirebaseEnabled ? 'Firebase Firestore' : 'Encrypted Cloud Storage'} to bypass video-download blocks. Only the watch stream receives these credentials securely.
-                    </p>
-                  </div>
-                )}
+                <p className="text-[11px] text-slate-400">The generated script reads the selected browser session locally on your computer. No account cookies are uploaded to Clora X.</p>
               </div>
 
               {/* FFmpeg Combine Toggle */}
@@ -951,13 +897,6 @@ if exist "%OUT_FILE%" (
 
               <button
                 type="button"
-                onClick={() => handleDirectDownload(downloadOptionVideo.url, downloadOptionVideo.title, downloadOptionVideo.index)}
-                className="w-full px-4 py-2.5 bg-emerald-600 text-white font-extrabold text-xs rounded-xl hover:bg-emerald-700 active:scale-[0.98] transition-all shadow-sm flex items-center justify-center gap-1.5"
-              >
-                <i className="fa-solid fa-globe"></i> Run Direct Web-Browser Download
-              </button>
-
-              <button
                 onClick={() => setDownloadOptionVideo(null)}
                 className="text-center font-bold text-slate-400 hover:text-red-500 transition-colors text-xs py-1"
               >

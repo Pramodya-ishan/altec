@@ -15,7 +15,7 @@ import {
   AppRole,
   createAuditEvent 
 } from "../utils/authContext";
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID } from "node:crypto";
 
 /**
  * Supported Source Operations for Authorization
@@ -128,7 +128,7 @@ export class SourceRepository {
    * Create a new canonical source record
    */
   static async createSource(auth: AuthContext, input: any): Promise<SourceRecord> {
-    const sourceId = uuidv4();
+    const sourceId = randomUUID();
     const originalFileName = String(input.originalFileName || "untitled");
     const normalizedName = String(input.normalizedName || originalFileName)
       .normalize("NFKC")

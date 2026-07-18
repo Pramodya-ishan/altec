@@ -1,6 +1,7 @@
 import { getDownloadURL, ref } from "firebase/storage";
 import { storage, auth } from "./firebase";
 import { apiUrl } from "./apiBase";
+import { apiFetch } from "./api";
 
 export async function resolveTtsAudioUrl(data: any) {
   if (data.audioUrl) return data.audioUrl;
@@ -10,7 +11,7 @@ export async function resolveTtsAudioUrl(data: any) {
 
 export async function generateTts(text: string, options: any = {}) {
   const token = await auth.currentUser?.getIdToken();
-  const res = await fetch(apiUrl("/api/tts/generate"), {
+  const res = await apiFetch(apiUrl("/api/tts/generate"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

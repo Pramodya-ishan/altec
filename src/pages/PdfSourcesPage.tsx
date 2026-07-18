@@ -15,6 +15,7 @@ import {
   Calendar,
   Book
 } from 'lucide-react';
+import { apiFetch } from "../lib/api";
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 
@@ -44,8 +45,8 @@ export default function PdfSourcesPage() {
   const fetchSources = async () => {
     setLoading(true);
     try {
-      const token = user?.token || await auth.currentUser?.getIdToken();
-      const res = await fetch('/api/pdf/sources', {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await apiFetch('/api/pdf/sources', {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -66,7 +67,7 @@ export default function PdfSourcesPage() {
   const handleAction = async (sourceId: string, action: string) => {
     setActionLoading(`${sourceId}_${action}`);
     try {
-      const token = user?.token || await auth.currentUser?.getIdToken();
+      const token = await auth.currentUser?.getIdToken();
       let endpoint = '';
       let method = 'POST';
 
@@ -77,7 +78,7 @@ export default function PdfSourcesPage() {
         method = 'DELETE';
       }
 
-      const res = await fetch(endpoint, {
+      const res = await apiFetch(endpoint, {
         method,
         headers: { 
           'Content-Type': 'application/json',
@@ -178,13 +179,13 @@ export default function PdfSourcesPage() {
                 )}
 
                 <div className="pt-4 border-t border-slate-100 flex flex-wrap gap-2">
-                  <button 
+                  <button type="button" 
                     onClick={() => navigate(`/question-cache?sourceId=${source.id}`)}
                     className="flex-1 min-w-[100px] h-9 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer"
                   >
                     <Eye className="w-3.5 h-3.5" /> Cache
                   </button>
-                  <button 
+                  <button type="button" 
                     onClick={() => handleAction(source.id, 'reindex')}
                     disabled={!!actionLoading}
                     className="flex-1 min-w-[100px] h-9 bg-slate-50 text-slate-600 hover:bg-slate-100 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer"
@@ -192,7 +193,7 @@ export default function PdfSourcesPage() {
                     {actionLoading === `${source.id}_reindex` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
                     Reindex
                   </button>
-                  <button 
+                  <button type="button" 
                     onClick={() => handleAction(source.id, 'delete')}
                     className="h-9 w-9 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
                   >

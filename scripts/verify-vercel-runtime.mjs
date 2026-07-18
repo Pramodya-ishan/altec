@@ -7,7 +7,6 @@ const protoAssetPath = new URL("../vercel-runtime/google-gax-protos/google/longr
 const pdfWorkerPath = new URL("../vercel-runtime/pdf.worker.mjs", import.meta.url);
 const nativeCanvasPath = new URL("../vercel-runtime/node_modules/@napi-rs/canvas/index.js", import.meta.url);
 const nativeCanvasBinaryPath = new URL("../vercel-runtime/node_modules/@napi-rs/canvas-linux-x64-gnu/skia.linux-x64-gnu.node", import.meta.url);
-const authoritativeSftSyllabusPath = new URL("../vercel-runtime/authoritative/sft/sALSyl_SFT.pdf", import.meta.url);
 const vercelConfigPath = new URL("../vercel.json", import.meta.url);
 const source = await readFile(runtimePath, "utf8");
 const metafile = JSON.parse(await readFile(metafilePath, "utf8"));
@@ -67,8 +66,11 @@ await access(protoAssetPath);
 await access(pdfWorkerPath);
 await access(nativeCanvasPath);
 await access(nativeCanvasBinaryPath);
-await access(authoritativeSftSyllabusPath);
 
+
+if (source.includes("vercel-runtime/authoritative") || source.includes("authoritative/sft/SFT Bio Book.pdf")) {
+  throw new Error("Large authoritative PDFs must not be embedded in the Vercel function runtime.");
+}
 const functionEntries = Object.entries(vercelConfig.functions || {});
 const expectedFunctions = new Set(["api/index.ts"]);
 if (functionEntries.length !== expectedFunctions.size || functionEntries.some(([name]) => !expectedFunctions.has(name))) {

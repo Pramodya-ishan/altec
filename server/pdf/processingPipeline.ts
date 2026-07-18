@@ -337,11 +337,11 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
     return {
       ok: false,
       status: "failed",
-      message: err.message,
+      message: "The operation failed. Please try again.",
       chunkCount: 0,
       needsOcr: true,
       extractionMethod: "none",
-      error: err.message
+      error: "Internal operation failed."
     };
   }
 }

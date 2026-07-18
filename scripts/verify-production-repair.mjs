@@ -1,4 +1,4 @@
-import { access, readFile, stat } from "node:fs/promises";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 
 const read = (path) => readFile(path, "utf8");
 const assert = (condition, message) => {
@@ -12,6 +12,7 @@ const bubble = await read("src/components/ui/clora/CloraMessageBubble.tsx");
 const chartShell = await read("src/components/ui/ResponsiveChartShell.tsx");
 const videoPlayer = await read("src/components/video/SecureVideoPlayer.tsx");
 const upload = await read("src/lib/clientStorageUpload.ts");
+const uploadValidation = await read("src/lib/uploadValidation.ts");
 const vercel = JSON.parse(await read("vercel.json"));
 const envExample = await read(".env.example");
 const npmrc = await read(".npmrc");
@@ -32,7 +33,14 @@ assert(bubble.includes("Thinking") && bubble.includes("Copy answer") && bubble.i
 assert(chartShell.includes("ResizeObserver") && chartShell.includes("IntersectionObserver"), "Chart shell is missing visibility-aware measurement");
 assert(!chartShell.includes("ResponsiveContainer"), "ResponsiveChartShell must not depend on ResponsiveContainer");
 assert(videoPlayer.includes("Preparing video…") && videoPlayer.includes("Retry") && !videoPlayer.includes("<header"), "Video player overlay repair is incomplete");
-assert(upload.includes("validatePersonalAssistantFile") && upload.includes("25 * MB") && upload.includes("10 * MB"), "Personal attachment validation is incomplete");
+assert(
+  upload.includes("validatePersonalAssistantFile")
+    && upload.includes("validateFileSignature")
+    && uploadValidation.includes("25 * MB")
+    && uploadValidation.includes("10 * MB")
+    && uploadValidation.includes("Only PDF, PNG, JPEG, and WebP files are allowed."),
+  "Personal attachment validation is incomplete",
+);
 assert(vercel?.functions?.["api/index.ts"]?.includeFiles === "vercel-runtime/**", "Vercel root API runtime assets are not fully included");
 assert(vercel.installCommand.includes("registry.npmjs.org"), "Vercel install command must force the public npm registry");
 assert(npmrc.includes("registry=https://registry.npmjs.org/"), ".npmrc does not force the public npm registry");
@@ -49,7 +57,12 @@ const respondStream = await read("server/ai/respondStream.ts");
 assert(appContext.includes("signInWithPopup") && appContext.includes("signInWithRedirect") && appContext.includes("shouldUseRedirectAuth"), "Google auth must use popup-first with an explicitly configured mobile redirect fallback");
 assert(apiPath.includes("restoreVercelApiPath") && apiPath.includes("__path"), "Express path restoration middleware is missing");
 assert(responseHygiene.includes("turn_off_indicator_lights_on_the_router"), "Known internal directive leak filter is missing");
-assert(contentPermissions.includes("isStudentVisibleSource") && contentPermissions.includes("isSharedSourceScope(source.sourceScope)"), "Legacy shared administrator resources are not safely visible to students");
+assert(
+  contentPermissions.includes("isStudentVisibleSource")
+    && contentPermissions.includes("source.published !== true")
+    && contentPermissions.includes("sourceScope alone is never treated as publication consent"),
+  "Published-resource visibility checks are incomplete",
+);
 assert(knowledgeRouter.includes("asksWhichPdfCanAnswer") && knowledgeRouter.includes("inventoryMode: asksWhichPdfCanAnswer ? \"answerable\" : \"all\""), "Singlish answerable-PDF inventory routing is missing");
 assert(respondStream.includes("Ready for secure direct PDF scan") && respondStream.includes("answerableSources"), "Saved PDFs without chunks are not handed to Direct PDF QA");
 assert(envExample.includes("ENABLE_IMAGE_GENERATION=true") && envExample.includes("DISABLE_IMAGE_GENERATION=false"), "Image generation production defaults are incomplete");
@@ -150,13 +163,113 @@ assert(sftReferencesV10.includes("SFT_PHYSICS_REFERENCE_STORAGE_PATH") && sftRef
 assert(pdfSolver.includes("inSyllabus") && pdfSolver.includes("syllabusBasis") && pdfSolver.includes("do not answer from general memory"), "V10 syllabus-scope enforcement is incomplete");
 assert(clientSinhalaV10.includes("normalizeMathSegment") && !clientSinhalaV10.includes("replace(/[\u200C\u200D\uFEFF]/g"), "V10 client rendering still strips Sinhala joiners globally");
 assert(evidenceCacheV10.includes("evidenceVersion") && evidenceCacheV10.includes("rejected") && evidenceCacheV10.includes("validationStatus"), "V10 stale/rejected answer-cache protection is missing");
-for (const path of [
-  "vercel-runtime/authoritative/sft/sALSyl_SFT.pdf",
-  "vercel-runtime/authoritative/sft/SFT Maths book 1.pdf",
-  "vercel-runtime/authoritative/sft/SFT Chemistry Book 1.pdf",
-  "vercel-runtime/authoritative/sft/SFT Bio Book.pdf",
-  "vercel-runtime/authoritative/sft/SFT Physics book2.pdf",
-  "vercel-runtime/authoritative/sft/sGr12OM SFT ResourceBookNew.pdf",
-]) await access(path);
+const runtimeBuilderV11 = await readFile("scripts/build-vercel-runtime.mjs", "utf8");
+assert(!runtimeBuilderV11.includes("authoritativeSourceDirectory") && !runtimeBuilderV11.includes("await cp(authoritativeSourceDirectory"), "V11 still duplicates authoritative PDFs into the Vercel runtime");
 
 console.log("V10 authoritative SFT syllabus, Sinhala display, prediction, and lesson-resource checks passed.");
+
+
+// V11 security, unlimited-capacity, privacy, and deployment checks.
+const firestoreRulesV11 = await read("firestore.rules");
+const storageRulesV11 = await read("storage.rules");
+const rateLimiterV11 = await read("server/utils/rateLimiter.ts");
+const appCheckV11 = await read("server/firebase/appCheckMiddleware.ts");
+const serverEntryV11 = await read("server.ts");
+const authRoutesV11 = await read("server/auth/routes.ts");
+const safeRemotePdfV11 = await read("server/utils/safeRemotePdf.ts");
+const uploadValidationV11 = await read("src/lib/uploadValidation.ts");
+const appContextV11 = await read("src/context/AppContext.tsx");
+const browserE2EV11 = await read("scripts/run-browser-e2e.mjs");
+const tsconfigScriptsV11 = await read("tsconfig.scripts.json");
+
+assert(
+  firestoreRulesV11.includes("function isAdmin()")
+    && firestoreRulesV11.includes("function canManageContent()")
+    && firestoreRulesV11.includes("teachers/content editors never inherit user-data access"),
+  "V11 admin and content-manager roles are not separated",
+);
+assert(firestoreRulesV11.includes("request.auth.uid == uid") && firestoreRulesV11.includes("match /users/{uid}"), "V11 private user records are not UID-owned");
+assert(firestoreRulesV11.includes("match /{document=**}") && firestoreRulesV11.includes("allow read, write: if false"), "V11 Firestore catch-all deny is missing");
+assert(
+  storageRulesV11.includes("match /rag_uploads/{uid}/{sourceId}/{fileName}")
+    && storageRulesV11.includes("match /users/{uid}/attachments/{allPaths=**}")
+    && storageRulesV11.includes("request.auth.uid == uid"),
+  "V11 personal Storage ownership rules are missing",
+);
+assert(
+  storageRulesV11.includes("match /shared_resources/{resourceId}/{allPaths=**}")
+    && storageRulesV11.includes("canManageContent()")
+    && storageRulesV11.includes("allow read: if false"),
+  "V11 shared-resource Storage authorization is missing",
+);
+assert(rateLimiterV11.includes("X-Application-Rate-Limit") && rateLimiterV11.includes("disabled") && !rateLimiterV11.includes("res.status(429)"), "V11 application request caps still emit 429");
+assert(appCheckV11.includes("verifyToken") && appCheckV11.includes("X-Firebase-AppCheck"), "V11 Firebase App Check verification is missing");
+assert(
+  serverEntryV11.includes("requireFirebaseAppCheck")
+    && (serverEntryV11.includes('app.use("/api", requireFirebaseAppCheck)') || serverEntryV11.includes("app.use('/api', requireFirebaseAppCheck)")),
+  "V11 application-wide App Check middleware is not mounted",
+);
+assert(authRoutesV11.includes("createSessionCookie") && authRoutesV11.includes("httpOnly: true") && authRoutesV11.includes("sameSite"), "V11 secure HttpOnly Firebase session cookies are incomplete");
+assert(
+  safeRemotePdfV11.includes("dns.lookup")
+    && safeRemotePdfV11.includes("isPrivateAddress")
+    && safeRemotePdfV11.includes("PDF_PROXY_HOST_NOT_ALLOWED")
+    && safeRemotePdfV11.includes("%PDF-"),
+  "V11 remote PDF SSRF/signature protections are incomplete",
+);
+assert(
+  uploadValidationV11.includes("[0x25, 0x50, 0x44, 0x46, 0x2d]")
+    && uploadValidationV11.includes("[0x89, 0x50, 0x4e, 0x47")
+    && uploadValidationV11.includes("[0x52, 0x49, 0x46, 0x46]")
+    && uploadValidationV11.includes("[0x57, 0x45, 0x42, 0x50]"),
+  "V11 client upload magic-byte validation is incomplete",
+);
+assert(!appContextV11.includes("localStorage") && !appContextV11.includes("sessionStorage"), "V11 still persists auth/session/user data in browser storage");
+assert(!appContextV11.includes("youtubeCookies") && !appContextV11.includes("googleAccessToken"), "V11 still stores raw Google/YouTube credentials in application state");
+assert(packageJson.scripts?.["test:e2e"] && packageJson.scripts?.["test:integration"], "V11 browser/integration test commands are missing");
+assert(
+  browserE2EV11.includes("document.documentElement.scrollWidth")
+    && browserE2EV11.includes("Firebase popup polling warning detected")
+    && browserE2EV11.includes("Recharts negative-dimension warning detected"),
+  "V11 mobile overflow/auth warning browser checks are incomplete",
+);
+assert(tsconfigScriptsV11.includes('"scripts/**/*.ts"'), "V11 operational scripts are excluded from typechecking");
+
+const productionFilesV11 = (await readdir("src", { recursive: true }))
+  .filter((entry) => /\.(ts|tsx|js|jsx)$/.test(String(entry)))
+  .map((entry) => `src/${entry}`);
+for (const path of productionFilesV11) {
+  const content = await read(path);
+  assert(!content.includes("localStorage") && !content.includes("sessionStorage"), `V11 browser persistence remains in ${path}`);
+  assert(!/fetch\(\s*[`'"]\/api\//.test(content), `V11 protected API call bypasses apiFetch in ${path}`);
+}
+
+let legacyServerAppMissing = false;
+try {
+  await access("server/app.ts");
+} catch {
+  legacyServerAppMissing = true;
+}
+assert(legacyServerAppMissing, "V11 insecure legacy server/app.ts still exists");
+
+let legacyUserRepositoryMissing = false;
+try {
+  await access("server/data/userRepository.ts");
+} catch {
+  legacyUserRepositoryMissing = true;
+}
+assert(legacyUserRepositoryMissing, "V11 legacy local/email-keyed user repository still exists");
+let bundledUserSeedMissing = false;
+try {
+  await access("data_users");
+} catch {
+  bundledUserSeedMissing = true;
+}
+assert(bundledUserSeedMissing, "V11 still packages private pre-existing user data");
+const userContextV11 = await read("server/firebase/userContext.ts");
+assert(!userContextV11.includes("syncUserFromFirestore") && !userContextV11.includes("local_db_fallback"), "V11 user AI context still reads legacy local/email backup files");
+
+const runtimeEntriesV11 = await readdir("vercel-runtime", { recursive: true });
+assert(!runtimeEntriesV11.some((entry) => String(entry).toLowerCase().endsWith(".pdf")), "V11 accidentally embeds authoritative PDFs in the Vercel function bundle");
+
+console.log("V11 security, privacy, unlimited-capacity, App Check, and deployment checks passed.");

@@ -192,7 +192,7 @@ export async function generateEducationalImage(req: any) {
     return {
       ok: false,
       code: "IMAGE_GENERATION_FAILED",
-      error: error.message || "Failed to generate educational diagram."
+      error: "Internal operation failed."
     };
   }
 }

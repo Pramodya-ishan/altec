@@ -13,6 +13,8 @@ export type AuthContext = {
   email?: string;
   roles: AppRole[];
   isAnonymous: boolean;
+  classIds?: string[];
+  institutionIds?: string[];
   tokenIssuedAt?: number;
   authTime?: number;
 };
@@ -39,7 +41,11 @@ export function computeSourceCapabilities(
   auth: AuthContext,
   source: {
     ownerUid?: string;
-    visibility?: "private" | "shared" | "official" | "public";
+    visibility?: "private" | "shared" | "official" | "public" | "class" | "institution";
+    classId?: string;
+    institutionId?: string;
+    published?: boolean;
+    sourceScope?: string;
     resourceType?: string;
     authority?: string;
     status?: string;
@@ -55,6 +61,14 @@ export function computeSourceCapabilities(
   const visibility = source.visibility || "private";
   const isPublicOrOfficial = visibility === "public" || visibility === "official";
   const isShared = visibility === "shared";
+  const hasClassAccess = visibility === "class"
+    && Boolean(source.classId)
+    && (auth.classIds || []).includes(String(source.classId));
+  const hasInstitutionAccess = visibility === "institution"
+    && Boolean(source.institutionId)
+    && (auth.institutionIds || []).includes(String(source.institutionId));
+  const isPublished = source.published === true;
+  const isPrivatePersonal = isOwner && visibility === "private" && !isPublished;
 
   // 1. canView
   // Owners can view, Admin/Ops can view everything, Editors/Teachers can view public/official/shared.
@@ -62,10 +76,8 @@ export function computeSourceCapabilities(
   let canView = false;
   if (isOwner || isAdmin || isOps) {
     canView = true;
-  } else if (isPublicOrOfficial) {
+  } else if (isPublished && (isPublicOrOfficial || isShared || hasClassAccess || hasInstitutionAccess)) {
     canView = true;
-  } else if (isShared) {
-    canView = true; // For class/institution shared sources
   }
 
   // 2. canDownload & canAskAI
@@ -78,7 +90,7 @@ export function computeSourceCapabilities(
   let canDelete = false;
   if (isAdmin || isOps) {
     canDelete = true;
-  } else if (isOwner && !isPublicOrOfficial) {
+  } else if (isPrivatePersonal) {
     canDelete = true;
   }
 
@@ -92,7 +104,7 @@ export function computeSourceCapabilities(
     canReprocess = true;
     canReindex = true;
     canRunOcr = true;
-  } else if (isOwner && !isPublicOrOfficial) {
+  } else if (isPrivatePersonal) {
     canReprocess = true;
     canReindex = true;
     canRunOcr = true;
@@ -113,20 +125,19 @@ export function computeSourceCapabilities(
   // 7. canRepairSource
   // Official/shared sources must not be repairable by ordinary students.
   let canRepairSource = isAdmin || isOps;
-  if (isOwner && !isPublicOrOfficial) {
+  if (isPrivatePersonal) {
     canRepairSource = true;
   }
 
   // 8. canChangeVisibility
   // Changing source visibility (e.g. promoting to public/official)
-  let canChangeVisibility = isAdmin || isEditor;
-  if (isOwner && !isPublicOrOfficial) {
-    canChangeVisibility = true; // Can share their own
-  }
+  const canManageContent = isAdmin || isOps || isEditor || isTeacher;
+  const canChangeVisibility = canManageContent;
 
-  // 9. canEditMetadata
-  let canEditMetadata = isAdmin || isEditor;
-  if (isOwner && !isPublicOrOfficial) {
+  // Owners may edit descriptive metadata on private personal uploads, but they
+  // can never publish or promote them to a shared audience.
+  let canEditMetadata = canManageContent;
+  if (isOwner && visibility === "private" && source.published !== true) {
     canEditMetadata = true;
   }
 
@@ -169,7 +180,7 @@ export async function createAuditEvent(params: {
       ...params,
     };
     await docRef.set(auditRecord);
-    console.log(`[AUDIT] ${params.operation} by ${params.actorUid} on ${params.targetType}:${params.targetId} - ${params.result}`);
+    
   } catch (err) {
     console.error("Failed to write audit log:", err);
   }

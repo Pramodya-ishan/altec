@@ -17,21 +17,27 @@
     "bundle:vercel": "node scripts/build-vercel-runtime.mjs && node scripts/verify-vercel-runtime.mjs && node scripts/smoke-vercel-runtime.mjs",
     "validate:vercel-env": "node --import tsx scripts/validate-vercel-env.ts",
     "test": "npm run test:sources && npm run test:knowledge && npm run test:security && npm run test:video",
-    "test:sources": "node --import tsx src/shared/source-registry/__tests__/source.test.ts && node --import tsx src/shared/__tests__/zscore.test.ts && node --import tsx src/lib/markdown/__tests__/normalizeAnswerMarkdown.test.ts && node --import tsx server/sources/__tests__/run-repo-tests.ts && node --import tsx src/lib/__tests__/authStrategy.test.ts && node --import tsx server/pdf/__tests__/extractText.test.ts && node --import tsx server/pdf/__tests__/questionPreviewRenderer.test.ts && node --import tsx server/ai/__tests__/responseHygiene.test.ts && node --import tsx server/ai/__tests__/visualAidBuilder.test.ts && node --import tsx server/ai/__tests__/imageIntent.test.ts && node --import tsx src/lib/ai/__tests__/imageIntent.test.ts && node --import tsx src/lib/__tests__/assistantTextHygiene.test.ts && node --import tsx src/lib/ai/__tests__/directPdfAnswerFormatter.test.ts && node --import tsx server/utils/__tests__/vercelApiPath.test.ts && node --import tsx src/utils/__tests__/normalizeMathMarkdown.test.ts && node --import tsx server/ai/__tests__/sourceSelection.test.ts && node --import tsx server/ai-core/pdf/__tests__/indexedQuestionSelection.test.ts",
+    "test:sources": "node --import tsx src/shared/source-registry/__tests__/source.test.ts && node --import tsx src/shared/__tests__/zscore.test.ts && node --import tsx src/lib/markdown/__tests__/normalizeAnswerMarkdown.test.ts && node --import tsx server/sources/__tests__/run-repo-tests.ts && node --import tsx src/lib/__tests__/authStrategy.test.ts && node --import tsx server/pdf/__tests__/extractText.test.ts && node --import tsx server/pdf/__tests__/questionPreviewRenderer.test.ts && node --import tsx server/ai/__tests__/responseHygiene.test.ts && node --import tsx server/ai/__tests__/visualAidBuilder.test.ts && node --import tsx server/ai/__tests__/imageIntent.test.ts && node --import tsx src/lib/ai/__tests__/imageIntent.test.ts && node --import tsx src/lib/__tests__/assistantTextHygiene.test.ts && node --import tsx src/lib/ai/__tests__/directPdfAnswerFormatter.test.ts && node --import tsx server/utils/__tests__/vercelApiPath.test.ts && node --import tsx src/utils/__tests__/normalizeMathMarkdown.test.ts && node --import tsx server/ai/__tests__/sourceSelection.test.ts && node --import tsx server/ai-core/pdf/__tests__/indexedQuestionSelection.test.ts && node --import tsx src/lib/__tests__/uploadSignature.test.ts && node --import tsx server/utils/__tests__/unlimitedRequest.test.ts",
     "test:knowledge": "node --import tsx server/knowledge/__tests__/lessonResolver.test.ts && node --import tsx server/knowledge/__tests__/paperRoutingRegression.test.ts",
     "test:security": "node --import tsx scripts/run-security-tests.ts && node --import tsx server/utils/__tests__/contentPermissions.test.ts",
     "test:video": "node --import tsx server/video/__tests__/run-video-tests.ts",
     "start": "node dist/server.cjs",
     "preview": "node dist/server.cjs",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit",
-    "typecheck": "tsc --noEmit",
+    "lint": "npm run typecheck",
+    "typecheck": "npm run typecheck:app && npm run typecheck:scripts",
     "migrate:lesson-resources": "node --import tsx scripts/migrate-lesson-resources.ts",
     "configure:video-cors": "node --import tsx scripts/apply-video-cors.ts",
     "verify:repair": "node scripts/verify-production-repair.mjs",
     "check:npm-registry": "node scripts/check-npm-registry.mjs",
     "seed:sft-reference-library": "node --import tsx scripts/seed-sft-reference-library.ts",
-    "build:exam-index": "node --import tsx scripts/build-exam-index.ts"
+    "build:exam-index": "node --import tsx scripts/build-exam-index.ts",
+    "typecheck:app": "tsc --noEmit",
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json --noEmit",
+    "test:integration": "npm run test:knowledge && npm run test:security && node --import tsx server/ai/__tests__/sourceSelection.test.ts && node --import tsx server/ai-core/pdf/__tests__/indexedQuestionSelection.test.ts",
+    "test:e2e": "npm run build:frontend && node scripts/run-browser-e2e.mjs",
+    "test:e2e:pdf-grounding": "node --import tsx server/pdf/__tests__/extractText.test.ts && node --import tsx server/ai/__tests__/sourceSelection.test.ts && node --import tsx server/ai-core/pdf/__tests__/indexedQuestionSelection.test.ts",
+    "test:e2e:lesson-resources": "node --import tsx server/knowledge/__tests__/lessonResolver.test.ts && node --import tsx server/utils/__tests__/contentPermissions.test.ts"
   },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
@@ -92,11 +98,9 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.2.0",
     "@types/node": "^22.14.0",
-    "@types/pdfjs-dist": "^2.10.378",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/serve-static": "^2.2.0",
-    "@types/uuid": "^10.0.0",
     "ts-morph": "^28.0.0"
   }
 }

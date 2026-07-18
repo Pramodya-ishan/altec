@@ -12,6 +12,7 @@ import {
   BrainCircuit,
   Lightbulb
 } from 'lucide-react';
+import { apiFetch } from "../lib/api";
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 
@@ -27,8 +28,8 @@ export default function PredictionPapers() {
   const handleGenerate = async () => {
     setLoading(true);
     try {
-      const token = user?.token || await auth.currentUser?.getIdToken();
-      const res = await fetch('/api/exam-intel/predicted-paper', {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await apiFetch('/api/exam-intel/predicted-paper', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -69,7 +70,7 @@ export default function PredictionPapers() {
                 <label className="text-xs font-bold text-gray-400 uppercase tracking-widest block mb-3">Target Subject</label>
                 <div className="flex bg-gray-50 p-1 rounded-xl">
                   {['SFT', 'ET', 'ICT'].map(sub => (
-                    <button
+                    <button type="button"
                       key={sub}
                       onClick={() => setSubject(sub as any)}
                       className={cn(
@@ -91,7 +92,7 @@ export default function PredictionPapers() {
                     { id: 'balanced', title: 'Balanced / Standard', desc: 'Mix of high-yield and rotation topics.', icon: Target },
                     { id: 'surprise', title: 'Hard / Surprise', desc: 'Focus on rarely asked syllabus concepts.', icon: Dices },
                   ].map(m => (
-                    <button
+                    <button type="button"
                       key={m.id}
                       onClick={() => setMode(m.id as Mode)}
                       className={cn(
@@ -109,7 +110,7 @@ export default function PredictionPapers() {
                 </div>
               </div>
 
-              <button
+              <button type="button"
                 onClick={handleGenerate}
                 disabled={loading}
                 className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-600/20 disabled:opacity-50 flex items-center justify-center gap-2"
@@ -148,15 +149,15 @@ export default function PredictionPapers() {
       ) : (
         <div className="space-y-6">
           <div className="flex items-center justify-between">
-            <button 
+            <button type="button" 
               onClick={() => setPaper(null)}
               className="text-sm font-bold text-gray-500 hover:text-gray-700 flex items-center gap-1"
             >
               <ChevronRight className="w-4 h-4 rotate-180" /> Back to Settings
             </button>
             <div className="flex gap-2">
-              <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"><Eye className="w-5 h-5" /></button>
-              <button className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"><Download className="w-5 h-5" /></button>
+              <button type="button" className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"><Eye className="w-5 h-5" /></button>
+              <button type="button" className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg"><Download className="w-5 h-5" /></button>
             </div>
           </div>
 

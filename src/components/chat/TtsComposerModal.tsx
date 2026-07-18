@@ -51,7 +51,7 @@ export function TtsComposerModal({ isOpen, onClose, onComplete, uploadedFile }: 
             <Speaker className="w-5 h-5 text-indigo-600" />
             Text to Speech
           </h2>
-          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full text-slate-500 transition-colors">
+          <button type="button" onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full text-slate-500 transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -73,14 +73,14 @@ export function TtsComposerModal({ isOpen, onClose, onComplete, uploadedFile }: 
           )}
 
           <div className="flex items-center justify-end gap-3 mt-2">
-            <button
+            <button type="button"
               onClick={onClose}
               disabled={generating}
               className="px-5 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
             >
               Cancel
             </button>
-            <button
+            <button type="button"
               onClick={handleGenerate}
               disabled={generating || !text.trim()}
               className="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:hover:bg-indigo-600 rounded-xl transition-all shadow-sm flex items-center gap-2 cursor-pointer"

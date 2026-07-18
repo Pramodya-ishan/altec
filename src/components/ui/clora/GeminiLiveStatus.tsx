@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Mic, MicOff, AlertCircle } from 'lucide-react';
+import { apiFetch } from "../../../lib/api";
 
 export function GeminiLiveStatus() {
   const [status, setStatus] = useState<{
@@ -13,7 +14,7 @@ export function GeminiLiveStatus() {
   });
 
   useEffect(() => {
-    fetch('/api/realtime/status', { cache: 'no-store' })
+    apiFetch('/api/realtime/status', { cache: 'no-store' })
       .then(r => r.json())
       .then(data => {
         setStatus({

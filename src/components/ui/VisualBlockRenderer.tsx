@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   Table as TableIcon,
 } from "lucide-react";
+import { apiFetch } from "../../lib/api";
 import { CoordinatePlane } from "./CoordinatePlane";
 import { MessageRenderer } from "./MessageRenderer";
 import type { VisualBlock } from "../../lib/visualBlocks";
@@ -37,7 +38,7 @@ function PdfImagePreview({ block }: { block: PdfPreviewBlock }) {
     try {
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error("LOGIN_REQUIRED");
-      const response = await fetch(apiUrl("/api/pdf/question-preview"), {
+      const response = await apiFetch(apiUrl("/api/pdf/question-preview"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

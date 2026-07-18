@@ -16,7 +16,7 @@ router.post("/build-index", async (req, res) => {
     const results = await buildExamIndex();
     res.json({ ok: true, results });
   } catch (err: any) {
-    res.status(err.message.includes("Unauthorized") ? 401 : 500).json({ error: err.message });
+    res.status(err.message.includes("Unauthorized") ? 401 : 500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -37,7 +37,7 @@ router.get("/report", async (req, res) => {
       res.json({ subject, message: "Report not yet generated for this subject" });
     }
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -51,7 +51,7 @@ router.get("/probability", async (req, res) => {
     const rankings = await rankTopicProbability(subject as string);
     res.json(rankings);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -65,7 +65,7 @@ router.get("/unasked-topics", async (req, res) => {
     const data = await detectUnaskedTopics(subject as string);
     res.json(data);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -85,7 +85,7 @@ router.post("/predicted-paper", async (req, res) => {
     
     res.json(paper);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 

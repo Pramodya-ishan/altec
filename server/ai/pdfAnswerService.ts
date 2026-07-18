@@ -127,7 +127,7 @@ Output valid JSON.`;
     return {
       ok: false,
       code: "ERROR",
-      message: err.message,
+      message: "The operation failed. Please try again.",
       answer: "සමාවෙන්න, PDF එක පරීක්ෂා කිරීමේදී දෝෂයක් ඇති විය.",
       sources: [],
       evidenceLevel: "blocked"

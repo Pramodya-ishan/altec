@@ -29,7 +29,7 @@ export function assertAiAvailable() {
   if (isAiBillingCircuitOpen()) {
     const err: any = new Error("AI billing exhausted");
     err.code = "AI_BILLING_EXHAUSTED";
-    err.status = 429;
+    err.status = 503;
     err.userMessage = "AI credits අවසන් වෙලා තියෙනවා.";
     throw err;
   }
@@ -46,7 +46,7 @@ export function handleAiError(err: any) {
     openAiBillingCircuit(err);
     const e: any = new Error(classification.userMessage);
     e.code = "AI_BILLING_EXHAUSTED";
-    e.status = 429;
+    e.status = 503;
     e.retryable = false;
     e.originalError = err;
     throw e;

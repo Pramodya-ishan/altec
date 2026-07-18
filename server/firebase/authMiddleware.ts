@@ -16,6 +16,18 @@ export interface AuthenticatedRequest extends Request {
   authContext?: AuthContext;
 }
 
+function readCookie(req: Request, name: string) {
+  const header = req.headers.cookie || "";
+  for (const part of header.split(";")) {
+    const index = part.indexOf("=");
+    if (index < 0) continue;
+    const key = part.slice(0, index).trim();
+    if (key !== name) continue;
+    return decodeURIComponent(part.slice(index + 1).trim());
+  }
+  return "";
+}
+
 export async function verifyAndExtractUser(req: Request): Promise<any> {
   if (req.query && (req.query.token || req.query.auth || req.query.access_token)) {
     const err = new Error("Authentication tokens must be sent in the Authorization header.");
@@ -47,13 +59,16 @@ export async function verifyAndExtractUser(req: Request): Promise<any> {
   if (authHeader && authHeader.startsWith("Bearer ")) {
     token = authHeader.split("Bearer ")[1];
   }
+  const sessionCookie = token ? "" : readCookie(req, "__session");
 
-  if (!token) {
+  if (!token && !sessionCookie) {
     return null;
   }
 
   try {
-    const decodedToken = await getAdminAuth().verifyIdToken(token);
+    const decodedToken = token
+      ? await getAdminAuth().verifyIdToken(token, true)
+      : await getAdminAuth().verifySessionCookie(sessionCookie, true);
     const isAnonymous = decodedToken.firebase?.sign_in_provider === "anonymous";
     let admin = decodedToken.admin || false;
     let roles: string[] = ["student"];
@@ -100,6 +115,8 @@ export async function verifyAndExtractUser(req: Request): Promise<any> {
       email: decodedToken.email,
       roles: rolesTyped.length > 0 ? rolesTyped : ["student"],
       isAnonymous,
+      classIds: Array.isArray((decodedToken as any).classIds) ? (decodedToken as any).classIds.map(String) : [],
+      institutionIds: Array.isArray((decodedToken as any).institutionIds) ? (decodedToken as any).institutionIds.map(String) : [],
       tokenIssuedAt: decodedToken.iat,
       authTime: decodedToken.auth_time
     };
@@ -142,10 +159,10 @@ export async function requireFirebaseUser(
       return res.status(400).json({
         ok: false,
         code: "QUERY_TOKEN_NOT_ALLOWED",
-        message: err.message
+        message: "The operation failed. Please try again."
       });
     }
-    res.status(401).json({ ok: false, error: err.message });
+    res.status(401).json({ ok: false, error: "Internal operation failed." });
   }
 }
 
@@ -166,7 +183,7 @@ export async function optionalFirebaseUser(
       return res.status(400).json({
         ok: false,
         code: "QUERY_TOKEN_NOT_ALLOWED",
-        message: err.message
+        message: "The operation failed. Please try again."
       });
     }
     next();
@@ -195,9 +212,9 @@ export async function requireNonAnonymousUser(
       return res.status(400).json({
         ok: false,
         code: "QUERY_TOKEN_NOT_ALLOWED",
-        message: err.message
+        message: "The operation failed. Please try again."
       });
     }
-    res.status(401).json({ ok: false, error: err.message });
+    res.status(401).json({ ok: false, error: "Internal operation failed." });
   }
 }

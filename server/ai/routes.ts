@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireUser, getAdminDb, getAdminStorage } from "../firebase/admin";
+import { requireFirebaseUser, requireNonAnonymousUser } from "../firebase/authMiddleware";
 import { aiRespondStream, aiContinueStream, lastStreamTraces } from "./respondStream";
 import { processAIRequest } from "./respond";
 import { getAIClient, prepareGoogleCredentials } from "./client";
@@ -7,10 +8,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { aiBillingCircuitOpenUntil } from "./aiCircuitBreaker";
 import { lastOk, lastError, setLastOk } from "./modelRouter";
+import { requireRole } from "../utils/authGuards";
+import { readResponseWithLimit, validateRemotePdfUrl } from "../utils/safeRemotePdf";
+
+import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
 
 export const aiRoutes = Router();
+aiRoutes.use(requireNonAnonymousUser, requireFirebaseAppCheck);
 
-aiRoutes.get("/client-diagnostics", (req, res) => {
+aiRoutes.get("/client-diagnostics", requireRole("admin", "ops"), (req, res) => {
   const deployTarget = process.env.APP_DEPLOY_TARGET || "cloud_run";
   const useVertex = String(process.env.GEMINI_USE_VERTEX || "").toLowerCase() === "true";
   const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || "al-ai-chat";
@@ -37,7 +43,7 @@ aiRoutes.get("/client-diagnostics", (req, res) => {
 
 
 
-aiRoutes.get("/debug-knowledge", async (req, res) => {
+aiRoutes.get("/debug-knowledge", requireRole("admin", "ops"), async (req, res) => {
   try {
     const { routeKnowledgeRequest } = await import("../knowledge/knowledgeRouter");
     const route = await routeKnowledgeRequest({
@@ -51,12 +57,12 @@ aiRoutes.get("/debug-knowledge", async (req, res) => {
       hints: route.answerHints
     });
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
 // Self Test endpoint
-aiRoutes.get("/self-test", async (req, res) => {
+aiRoutes.get("/self-test", requireRole("admin", "ops"), async (req, res) => {
   try {
     prepareGoogleCredentials();
     const ai = getAIClient();
@@ -101,7 +107,25 @@ let cachedHealthTime = 0;
 const CACHE_TTL_MS = 45000; // 45 seconds
 
 // Comprehensive Health check endpoint
-aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async (req, res) => {
+// Minimal capability status used by the student UI. It intentionally omits
+// credentials, project identifiers, storage tests, and internal errors.
+aiRoutes.get("/model-health", (_req, res) => {
+  res.json({
+    ok: true,
+    models: {
+      tts: {
+        enabled: process.env.ENABLE_TTS !== "false",
+        available: process.env.ENABLE_TTS !== "false",
+      },
+      image: {
+        enabled: process.env.DISABLE_IMAGE_GENERATION !== "true",
+        available: process.env.DISABLE_IMAGE_GENERATION !== "true",
+      },
+    },
+  });
+});
+
+aiRoutes.get(["/health", "/model-healt", "/api/health"], requireRole("admin", "ops"), async (req, res) => {
   const now = Date.now();
   if (cachedHealthResponse && (now - cachedHealthTime < CACHE_TTL_MS)) {
     return res.json(cachedHealthResponse);
@@ -131,7 +155,7 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
     errors.push({
       test: "adminInitialized",
       code: err.code || "ADMIN_INIT_FAILED",
-      message: err.message,
+      message: "The operation failed. Please try again.",
       hint: "Check environment variables and credentials JSON."
     });
   }
@@ -144,7 +168,7 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
       errors.push({
         test: "getAdminDb",
         code: "FIRESTORE_GET_DB_FAILED",
-        message: err.message,
+        message: "The operation failed. Please try again.",
         hint: err.message.includes("CONFIG_ERROR_FIRESTORE_DATABASE_ID_MISSING")
           ? "FIRESTORE_DATABASE_ID environment variable is missing."
           : "Firestore database retrieval failed."
@@ -163,7 +187,7 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
       errors.push({
         test: "canWriteHealthDoc",
         code: isPermission ? "IAM_PERMISSION_DENIED" : "WRITE_HEALTH_DOC_FAILED",
-        message: err.message,
+        message: "The operation failed. Please try again.",
         hint: isPermission
           ? `Grant Cloud Datastore User or Cloud Datastore Owner to ${dbInfo.credentialsEmail || "your service account"} in project ${dbInfo.projectId || "al-ai-chat"}.`
           : "Unknown error writing to _health collection."
@@ -180,7 +204,7 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
       errors.push({
         test: "canReadHealthDoc",
         code: "READ_HEALTH_DOC_FAILED",
-        message: err.message
+        message: "The operation failed. Please try again."
       });
     }
   }
@@ -196,7 +220,7 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
       errors.push({
         test: "canQueryRagSources",
         code: isPermission ? "IAM_PERMISSION_DENIED" : "QUERY_RAG_SOURCES_FAILED",
-        message: err.message,
+        message: "The operation failed. Please try again.",
         hint: isPermission
           ? `Grant Cloud Datastore User or Cloud Datastore Owner to ${dbInfo.credentialsEmail || "your service account"} in project ${dbInfo.projectId || "al-ai-chat"}.`
           : "Unknown error querying rag_sources."
@@ -215,7 +239,7 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
       errors.push({
         test: "canQueryPastPapers",
         code: isPermission ? "IAM_PERMISSION_DENIED" : "QUERY_PAST_PAPERS_FAILED",
-        message: err.message,
+        message: "The operation failed. Please try again.",
         hint: isPermission
           ? `Grant Cloud Datastore User or Cloud Datastore Owner to ${dbInfo.credentialsEmail || "your service account"} in project ${dbInfo.projectId || "al-ai-chat"}.`
           : "Unknown error querying past_papers."
@@ -235,7 +259,7 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
       errors.push({
         test: "canSaveChat",
         code: "SAVE_CHAT_FAILED",
-        message: err.message
+        message: "The operation failed. Please try again."
       });
     }
   }
@@ -255,7 +279,7 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
         errors.push({
           test: "getAdminBucket",
           code: "STORAGE_BUCKET_GET_FAILED",
-          message: err.message,
+          message: "The operation failed. Please try again.",
           hint: "Check if storageBucket config or FIREBASE_STORAGE_BUCKET is correct."
         });
       }
@@ -282,7 +306,7 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
         errors.push({
           test: "canUploadStorage",
           code: isPermission ? "STORAGE_PERMISSION_DENIED" : "UPLOAD_STORAGE_FAILED",
-          message: err.message,
+          message: "The operation failed. Please try again.",
           hint: isPermission
             ? `Grant Storage Object Admin to ${dbInfo.credentialsEmail || "your service account"} in project ${dbInfo.projectId || "al-ai-chat"}.`
             : "Google auth token premature close or generic upload failure. Check credentials and retry."
@@ -303,7 +327,7 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
           errors.push({
             test: "canGenerateSignedUrl",
             code: "GENERATE_SIGNED_URL_FAILED",
-            message: err.message,
+            message: "The operation failed. Please try again.",
             hint: "Ensure the Service Account has the Service Account Token Creator role on itself or project."
           });
         }
@@ -452,7 +476,7 @@ aiRoutes.get(["/health", "/model-health", "/model-healt", "/api/health"], async 
 });
 
 // Debug Context endpoint
-aiRoutes.post("/debug-context", async (req, res) => {
+aiRoutes.post("/debug-context", requireRole("admin", "ops"), async (req, res) => {
   try {
     const user = await requireUser(req);
     const { loadUserAIContext } = await import("../firebase/userContext");
@@ -482,7 +506,7 @@ aiRoutes.post("/debug-context", async (req, res) => {
       loadedFrom: context.loadedFrom || "unknown",
     });
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -494,7 +518,7 @@ aiRoutes.post("/requests/:requestId/cancel", async (req, res) => {
     cancelRequest(req.params.requestId);
     res.json({ ok: true, cancelled: true });
   } catch (err: any) {
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 aiRoutes.post("/respond-stream", async (req, res) => {
@@ -507,7 +531,7 @@ aiRoutes.post("/respond-stream", async (req, res) => {
     res.status(unauthorized ? 401 : 500).json({
       ok: false,
       error: unauthorized ? "AUTH_REQUIRED" : error.message,
-      message: error.message,
+      message: "The operation failed. Please try again.",
     });
   }
 });
@@ -518,17 +542,17 @@ aiRoutes.post("/continue", async (req, res) => {
     (req as any).user = user;
     await aiContinueStream(req, res);
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
-aiRoutes.get("/stream-debug-last", async (req, res) => {
+aiRoutes.get("/stream-debug-last", requireRole("admin", "ops"), async (req, res) => {
   try {
     const user = await requireUser(req);
     // Anyone logged in can check the last 20 traces
     res.json(lastStreamTraces);
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -547,12 +571,12 @@ aiRoutes.post("/respond", async (req, res) => {
 
     const result = await processAIRequest(req);
     if (!result.ok) {
-       res.status((result as any).code === 'QUOTA_EXCEEDED' ? 429 : 500).json(result);
+       res.status((result as any).code === 'QUOTA_EXCEEDED' ? 503 : 500).json(result);
     } else {
        res.json(result);
     }
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -565,26 +589,20 @@ aiRoutes.post("/chat", async (req, res) => {
     if (!result.ok) res.status(500).json(result);
     else res.json(result);
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
 aiRoutes.post("/gemini-chat", async (req, res) => {
   try {
-    // If not authenticated properly, try bypass or throw
-    const user = await requireUser(req).catch(() => {
-        if(process.env.DEV_BYPASS_AUTH === 'true') {
-           return { uid: 'dev-user-id', email: 'dev@example.com', name: 'Dev User' };
-        }
-        throw new Error("Unauthorized");
-    });
+    const user = await requireUser(req);
     
     (req as any).user = user;
     const result = await processAIRequest(req);
     if (!result.ok) res.status(500).json(result);
     else res.json(result);
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -597,7 +615,7 @@ aiRoutes.post("/notebook-quiz", async (req, res) => {
     if (!result.ok) res.status(500).json(result);
     else res.json(result);
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -608,13 +626,13 @@ aiRoutes.get("/chat-history", async (req, res) => {
     const db = getAdminDb();
     const userUidRef = db.collection("users").doc(user.uid);
     
-    const [uidSnap, emailSnap] = await Promise.all([
-      userUidRef.collection("chat_history").orderBy("createdAt", "asc").limit(100).get().catch(() => ({ docs: [] })),
-      user.email ? db.collection("users").doc(user.email.toLowerCase()).collection("chat_history").orderBy("createdAt", "asc").limit(100).get().catch(() => ({ docs: [] })) : { docs: [] }
-    ]);
+    const uidSnap = await userUidRef.collection("chat_history")
+      .orderBy("createdAt", "asc")
+      .limit(100)
+      .get();
 
-    const docs = [...(uidSnap as any).docs, ...(emailSnap as any).docs];
-    const chatHistory = Array.from(new Map(docs.map(d => [d.id, { id: d.id, ...d.data() }])).values())
+    const docs = uidSnap.docs;
+    const chatHistory = Array.from(new Map(docs.map((document: any) => [document.id, { id: document.id, ...document.data() }])).values())
       .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
     res.json({ ok: true, chatHistory });
@@ -649,14 +667,11 @@ aiRoutes.post("/chat-history", async (req, res) => {
     };
     await docRef.set(messageData);
 
-    // Also mirror to email if email path exists
-    if (user.email) {
-      await db.collection("users").doc(user.email.toLowerCase()).collection("chat_history").doc(docRef.id).set(messageData).catch(() => null);
-    }
+
 
     res.json({ ok: true, id: docRef.id });
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -674,13 +689,6 @@ aiRoutes.post("/chat-history/clear", async (req, res) => {
       opCount++;
     });
 
-    if (user.email) {
-      const emailSnap = await db.collection("users").doc(user.email.toLowerCase()).collection("chat_history").get().catch(() => ({ docs: [] }));
-      emailSnap.docs.forEach((doc: any) => {
-        batch.delete(doc.ref);
-        opCount++;
-      });
-    }
 
     // Also delete current chat context
     const chatCtxRef = db.collection("users").doc(user.uid).collection("chat_context").doc("current");
@@ -690,7 +698,7 @@ aiRoutes.post("/chat-history/clear", async (req, res) => {
     await batch.commit();
     res.json({ ok: true, clearedCount: opCount });
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -707,7 +715,7 @@ aiRoutes.post("/image/generate", async (req, res) => {
       res.json(result);
     }
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -724,7 +732,7 @@ aiRoutes.post("/ai/image", async (req, res) => {
       res.json(result);
     }
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -755,7 +763,7 @@ aiRoutes.post("/answer-from-direct-pdf-result", async (req, res) => {
       messageId: chatRes.messageId
     });
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -781,7 +789,7 @@ aiRoutes.post("/feedback/wrong-answer", async (req, res) => {
     res.json(result);
   } catch (error: any) {
     console.error("[AI_ROUTES] feedback/wrong-answer error:", error);
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -793,91 +801,43 @@ aiRoutes.post("/past-papers/search", async (req, res) => {
     const { searchPastPapers } = await import("../pastPapers/search");
     await searchPastPapers(req, res);
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
 // POST /api/web/pdf-proxy
 aiRoutes.post("/web/pdf-proxy", async (req, res) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 25_000);
   try {
-    const user = await requireUser(req);
-    const { url } = req.body;
-    if (!url) {
-      return res.status(400).json({ ok: false, error: "URL is required" });
-    }
-
-    // SSRF Guard
-    try {
-      const parsed = new URL(url);
-      if (parsed.protocol !== "https:") {
-        return res.status(400).json({ ok: false, error: "Only secure HTTPS URLs are allowed" });
-      }
-      const host = parsed.hostname.toLowerCase();
-      const isPrivate = host === "localhost" ||
-        host === "127.0.0.1" ||
-        host === "::1" ||
-        host.startsWith("10.") ||
-        host.startsWith("192.168.") ||
-        host.startsWith("169.254.") ||
-        host.startsWith("172.16.") ||
-        host.startsWith("172.17.") ||
-        host.startsWith("172.18.") ||
-        host.startsWith("172.19.") ||
-        host.startsWith("172.20.") ||
-        host.startsWith("172.21.") ||
-        host.startsWith("172.22.") ||
-        host.startsWith("172.23.") ||
-        host.startsWith("172.24.") ||
-        host.startsWith("172.25.") ||
-        host.startsWith("172.26.") ||
-        host.startsWith("172.27.") ||
-        host.startsWith("172.28.") ||
-        host.startsWith("172.29.") ||
-        host.startsWith("172.30.") ||
-        host.startsWith("172.31.");
-
-      if (isPrivate) {
-        return res.status(400).json({ ok: false, error: "Access to private resources is forbidden" });
-      }
-    } catch {
-      return res.status(400).json({ ok: false, error: "Invalid URL format" });
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 25000); // 25 seconds timeout
-
-    const fetchResponse = await fetch(url, {
+    await requireUser(req);
+    const target = await validateRemotePdfUrl(req.body?.url);
+    const fetchResponse = await fetch(target, {
       signal: controller.signal,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      }
+      redirect: "error",
+      headers: { "User-Agent": "CloraX-PdfImporter/1.0" },
     });
-
-    clearTimeout(timeoutId);
-
     if (!fetchResponse.ok) {
-      return res.status(502).json({ ok: false, error: `Failed to fetch target URL. Status: ${fetchResponse.status}` });
+      return res.status(502).json({ ok: false, code: "PDF_PROXY_UPSTREAM_FAILED", message: "The document host could not provide the PDF." });
     }
-
-    const contentType = fetchResponse.headers.get("content-type") || "";
-    // Accept standard binary stream or pdf
-    if (!contentType.toLowerCase().includes("pdf") && !contentType.toLowerCase().includes("octet-stream") && !contentType.toLowerCase().includes("application/")) {
-      return res.status(400).json({ ok: false, error: "Target URL does not appear to point to a valid document file" });
+    const contentType = String(fetchResponse.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.includes("pdf") && !contentType.includes("octet-stream")) {
+      return res.status(400).json({ ok: false, code: "PDF_PROXY_CONTENT_TYPE_INVALID", message: "The selected URL is not a PDF." });
     }
-
-    const arrayBuffer = await fetchResponse.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    if (buffer.length > 50 * 1024 * 1024) {
-      return res.status(400).json({ ok: false, error: "File exceeds safe size limit of 50MB" });
-    }
-
+    const buffer = await readResponseWithLimit(fetchResponse, 50 * 1024 * 1024);
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="proxied_document.pdf"`);
-    res.send(buffer);
-
+    res.setHeader("Content-Disposition", 'inline; filename="proxied_document.pdf"');
+    return res.send(buffer);
   } catch (error: any) {
-    console.error("PDF proxy failed:", error);
-    res.status(500).json({ ok: false, error: error.message || "Fetch timeout or network issue" });
+    const code = String(error?.message || "PDF_PROXY_FAILED");
+    const clientError = /REQUIRED|FORBIDDEN|NOT_ALLOWED|INVALID|TOO_LARGE/.test(code);
+    console.error("[PDF_PROXY] Failed", { requestId: (req as any).requestId, code });
+    return res.status(clientError ? 400 : 502).json({
+      ok: false,
+      code,
+      message: clientError ? "This PDF URL is not allowed or is invalid." : "The PDF could not be imported from the remote host.",
+    });
+  } finally {
+    clearTimeout(timeoutId);
   }
 });

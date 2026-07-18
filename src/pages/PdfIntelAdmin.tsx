@@ -12,6 +12,7 @@ import {
   Zap,
   HardDrive
 } from 'lucide-react';
+import { apiFetch } from "../lib/api";
 import { cn } from '../lib/utils';
 
 export default function PdfIntelAdmin() {
@@ -24,8 +25,8 @@ export default function PdfIntelAdmin() {
     
     setLoading(true);
     try {
-      const token = user?.token || await auth.currentUser?.getIdToken();
-      const res = await fetch('/api/exam-intel/build-index', {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await apiFetch('/api/exam-intel/build-index', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -63,7 +64,7 @@ export default function PdfIntelAdmin() {
         </div>
 
         <div className="flex gap-3">
-          <button
+          <button type="button"
             onClick={async () => {
               if(!window.confirm("Purge app cache? This unregisters service workers and clears client storage for a clean hot update.")) return;
               setLoading(true);
@@ -95,13 +96,13 @@ export default function PdfIntelAdmin() {
             Clear App Cache
           </button>
 
-          <button
+          <button type="button"
             onClick={async () => {
               if(!window.confirm("Run Data Repair Tool? This will clean up invalid DB references.")) return;
               setLoading(true);
               try {
-                const token = user?.token || await auth.currentUser?.getIdToken();
-                const res = await fetch('/api/admin/repair-data', {
+                const token = await auth.currentUser?.getIdToken();
+                const res = await apiFetch('/api/admin/repair-data', {
                   method: 'POST',
                   headers: { Authorization: `Bearer ${token}` }
                 });
@@ -118,7 +119,7 @@ export default function PdfIntelAdmin() {
             Repair Data
           </button>
           
-          <button
+          <button type="button"
             onClick={handleBuildIndex}
             disabled={loading}
             className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-600/20 disabled:opacity-50"

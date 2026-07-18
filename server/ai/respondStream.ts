@@ -66,19 +66,24 @@ function emitSse(res: any, event: string, data?: any) {
   }
 }
 
-async function safeCall<T>(name: string, fn: () => Promise<T>, fallback: T, res: any): Promise<T> {
+async function safeCall<T>(
+  name: string,
+  fn: () => Promise<T>,
+  fallback: T,
+  res: any,
+  options: { critical?: boolean; publicMessage?: string } = {},
+): Promise<T> {
   try {
     return await fn();
-  } catch (err: any) {
-    console.error(`[STREAM_SAFE_CALL_FAILED] name=${name}`, err);
-    try {
-      emitSse(res, "status", {
-        step: "warning",
-        message: `${name} warning: continuing with available data`
-      });
-    } catch (e) {
-      // ignore
+  } catch (error) {
+    console.error(`[STREAM_DEPENDENCY_FAILED] name=${name}`, error);
+    if (options.critical) {
+      const failure = new Error(options.publicMessage || "Required document evidence could not be loaded.");
+      (failure as Error & { code?: string; isPublic?: boolean }).code = "EVIDENCE_DEPENDENCY_FAILED";
+      (failure as Error & { code?: string; isPublic?: boolean }).isPublic = true;
+      throw failure;
     }
+    emitSse(res, "status", { step: "warning", message: "Some optional context was unavailable." });
     return fallback;
   }
 }
@@ -145,10 +150,6 @@ export async function saveFinalChat(params: {uid: string, email?: string, userTe
     const historyRef = db.collection("users").doc(params.uid).collection("chat_history").doc(requestId);
     batch.set(historyRef, chatData);
 
-    if (params.email) {
-      const emailRef = db.collection("users").doc(params.email.toLowerCase()).collection("chat_history").doc(requestId);
-      batch.set(emailRef, chatData);
-    }
 
     await batch.commit();
     return { chatSaved: true, messageId: requestId };
@@ -1377,7 +1378,10 @@ export async function aiRespondStream(req: any, res: any) {
         questionNo: route.entities.questionNo,
         query: prompt,
         limit: 8
-      }), { chunks: [], source: null, hasExactQuestionText: false, needsOcr: false }, res);
+      }), { chunks: [], source: null, hasExactQuestionText: false, needsOcr: false }, res, {
+        critical: true,
+        publicMessage: "The selected PDF evidence could not be loaded. Please try again.",
+      });
 
       hasExactQuestionText = retrieveResult.hasExactQuestionText;
       needsOcr = retrieveResult.needsOcr;
@@ -1604,6 +1608,10 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         () => getSubjectSyllabusGroundingPdf(user.uid, groundingSubject),
         null,
         res,
+        {
+          critical: policy.requireEvidence,
+          publicMessage: `The authoritative ${groundingSubject} syllabus is temporarily unavailable.`,
+        },
       );
       if (syllabusPdf?.gcsUri) {
         contentsParts.unshift({ fileData: { fileUri: syllabusPdf.gcsUri, mimeType: "application/pdf" } });
@@ -2126,7 +2134,7 @@ Keep the same tone and language (Sinhala-first style).
     console.error("Continue Stream Error", err);
     trace.errorCode = err.code || "CONTINUE_FAILED";
     trace.errorMessage = err.message || String(err);
-    emitSse(res, "error", { ok: false, error: err.message, recoverable: true, code: "CONTINUE_FAILED" });
+    emitSse(res, "error", { ok: false, error: "Internal operation failed.", recoverable: true, code: "CONTINUE_FAILED" });
     emitSse(res, "done", { ok: false, completed: false, requestId, chatSaved: false });
     trace.doneSent = true;
     trace.lastEvent = "done";

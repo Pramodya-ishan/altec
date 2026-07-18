@@ -57,7 +57,7 @@ function ZScoreBrainCard({ data, user, onAskClora }: { data: any, user: any, onA
           <h2 className="text-xl font-bold font-sans tracking-tight mb-1">Z-Score Brain</h2>
           <p className="text-slate-400 text-sm font-sans">Firebase Sync & Prediction Engine</p>
         </div>
-        <button onClick={onAskClora} className="px-4 py-2 bg-indigo-500/20 text-indigo-300 font-medium text-sm rounded-lg hover:bg-indigo-500/30 transition-colors">
+        <button type="button" onClick={onAskClora} className="px-4 py-2 bg-indigo-500/20 text-indigo-300 font-medium text-sm rounded-lg hover:bg-indigo-500/30 transition-colors">
           Ask Clora
         </button>
       </div>
@@ -71,7 +71,7 @@ function ZScoreBrainCard({ data, user, onAskClora }: { data: any, user: any, onA
           <p className="text-xs text-slate-400 font-medium mb-1 uppercase tracking-wider">Target Z-Score</p>
           <div className="flex items-center gap-2">
             <input type="number" step="0.05" value={targetZ} onChange={e=>setTargetZ(e.target.value)} className="bg-slate-950/50 text-white text-xl font-mono w-24 px-2 py-1 rounded border border-slate-700 outline-none focus:border-blue-500 transition-colors" />
-            <button onClick={handleSave} disabled={saving} className="text-xs bg-blue-600 hover:bg-blue-500 px-3 py-1.5 rounded-lg font-medium transition-colors">Save</button>
+            <button type="button" onClick={handleSave} disabled={saving} className="text-xs bg-blue-600 hover:bg-blue-500 px-3 py-1.5 rounded-lg font-medium transition-colors">Save</button>
           </div>
         </div>
         <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 col-span-2 md:col-span-1">
@@ -100,7 +100,6 @@ export default function ProfileView() {
  const [editPicture, setEditPicture] = useState(profile?.picture || PRESET_AVATARS[0]);
  const [customPicUrl, setCustomPicUrl] = useState('');
 
- const [apiUsage, setApiUsage] = useState({ rpm: 0, rpd: 0, rpmLimit: 15, rpdLimit: 1500 });
  const [adminInput, setAdminInput] = useState('');
   const { setCurrentView } = useApp();
   const handleAskCloraZScore = () => {
@@ -400,19 +399,7 @@ export default function ProfileView() {
  };
 
  useEffect(() => {
- const updateUsage = async () => {
- try {
- const res = await apiFetch('/api/quota');
- if (res.ok) {
- const data = await res.json();
- setApiUsage({ rpm: data.rpmUsed, rpd: data.rpdUsed, rpmLimit: data.rpmLimit, rpdLimit: data.rpdLimit });
- }
- } catch(e) {}
- };
- updateUsage();
- loadStorageStats();
- const interval = setInterval(updateUsage, 5000);
- return () => clearInterval(interval);
+   void loadStorageStats();
  }, []);
 
  const handleEditInit = () => {
@@ -466,7 +453,7 @@ export default function ProfileView() {
  }}
  />
  {!isEditing && (
- <button
+ <button type="button"
  onClick={handleEditInit}
  className="absolute bottom-1 right-1 w-8 h-8 rounded-full bg-primary-600 text-white flex items-center justify-center border-2 border-white shadow hover:bg-primary-700 transition-colors z-20 cursor-pointer "
  title="Modify Profile"
@@ -672,7 +659,7 @@ export default function ProfileView() {
  </div>
  </div>
 
- <button
+ <button type="button"
  onClick={handleExportData}
  className="w-full md:w-auto px-6 py-4 bg-emerald-500 hover:bg-emerald-600 font-extrabold text-sm rounded-xl text-white transition-all shadow-md active:scale-95 flex items-center justify-center gap-2 cursor-pointer shrink-0"
  >

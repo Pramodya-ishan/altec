@@ -423,7 +423,7 @@ export default function PastPapersView() {
  <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
  <div className="flex gap-2 bg-slate-100 p-1 rounded-xl w-full md:w-auto overflow-x-auto">
  {categories.map(cat => (
- <button
+ <button type="button"
  key={cat}
  onClick={() => setSelectedCategory(cat)}
  className={cn(
@@ -566,7 +566,7 @@ export default function PastPapersView() {
     </label>
   )}
   {isDeleteAllowed(paper) && (
-    <button
+    <button type="button"
     onClick={(e) => handleDeletePaper(paper, e)}
     className="w-8 h-8 rounded-full bg-slate-50 border border-slate-200 text-slate-400 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-600 flex items-center justify-center transition-all shadow-sm cursor-pointer shrink-0"
     title="Delete paper"
@@ -610,7 +610,7 @@ export default function PastPapersView() {
  <i className="fa-solid fa-circle-info text-sm text-slate-300"></i>
  )}
  <span className="flex-1 leading-normal">{toast.message}</span>
- <button
+ <button type="button"
  onClick={() => setToast(null)}
  className="text-white/60 hover:text-white transition-colors cursor-pointer ml-1"
  >

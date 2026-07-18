@@ -58,7 +58,7 @@ export function VoiceAudioCard({ storagePath, audioUrl: initialAudioUrl, provide
         <a href={audioUrl} target="_blank" rel="noreferrer" className="p-2 hover:bg-slate-200 text-slate-500 hover:text-slate-700 rounded-full cursor-pointer transition-colors" title="Open in new tab">
           <ExternalLink className="w-4 h-4" />
         </a>
-        <button onClick={() => {
+        <button type="button" onClick={() => {
           navigator.clipboard.writeText(audioUrl);
           alert("Link copied!");
         }} className="p-2 hover:bg-slate-200 text-slate-500 hover:text-slate-700 rounded-full cursor-pointer transition-colors" title="Copy link">

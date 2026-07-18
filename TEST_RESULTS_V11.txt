@@ -1,0 +1,42 @@
+CLORA X PRODUCTION REPAIR V11 — FINAL VALIDATION
+
+PASS  Public npm-registry lockfile verification
+PASS  TypeScript application typecheck
+PASS  TypeScript operational-script typecheck
+PASS  Source registry and legacy source-converter tests
+PASS  Z-score regression tests
+PASS  Markdown and Sinhala normalization tests
+PASS  Google authentication strategy tests
+PASS  PDF extraction and question-preview tests
+PASS  AI response-hygiene and educational-visual tests
+PASS  Natural-language image-intent tests
+PASS  Direct PDF answer formatting tests
+PASS  Vercel API path restoration tests
+PASS  Exact PDF source and question-marker selection tests
+PASS  Upload MIME, size, and magic-byte validation tests
+PASS  Unlimited request middleware test — no application 429
+PASS  Lesson resolver and paper-routing tests
+PASS  Security capability matrix
+PASS  Literal-email authorization scan
+PASS  Configured administrator validation
+PASS  Google service-account parsing validation
+PASS  Shared-content permission tests
+PASS  Secure video tests
+PASS  Production repair static verification
+PASS  Legacy local/email user repository removed
+PASS  Bundled private data_users files removed
+PASS  Frontend production build
+PASS  Self-contained Vercel API runtime build
+PASS  Vercel runtime import and asset verification
+PASS  Isolated pure-ESM API smoke test
+PASS  ZIP integrity test
+
+BROWSER E2E
+SKIPPED LOCALLY: managed Chromium policy contains URLBlocklist=["*"].
+The included browser harness detects this restriction. Run it in Preview/CI.
+
+NOTES
+- Application request-count limits are disabled.
+- Authentication, App Check, authorization, payload limits, provider quotas,
+  billing limits, and infrastructure limits remain active.
+- Live Firebase, Google, Gemini, OCR, Storage, and video checks require Preview.

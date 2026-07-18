@@ -3,6 +3,11 @@ import { AuthenticatedRequest, verifyAndExtractUser } from "../firebase/authMidd
 import { getAdminDb } from "../firebase/admin";
 import { AppRole, SourceCapabilities, computeSourceCapabilities, createAuditEvent } from "./authContext";
 
+async function resolveAuthenticatedUser(req: AuthenticatedRequest) {
+  if (req.user?.uid) return req.user;
+  return await verifyAndExtractUser(req);
+}
+
 // Standard Error Payloads
 export function sendUnauthenticated(res: Response, message = "Authentication is required.") {
   return res.status(401).json({
@@ -25,7 +30,7 @@ export function sendForbidden(res: Response, message = "You do not have permissi
 export function requireAuth() {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      const user = await verifyAndExtractUser(req);
+      const user = await resolveAuthenticatedUser(req);
       if (!user) {
         return sendUnauthenticated(res);
       }
@@ -33,7 +38,7 @@ export function requireAuth() {
       req.authContext = user.authContext;
       next();
     } catch (err: any) {
-      return sendUnauthenticated(res, err.message);
+      return sendUnauthenticated(res);
     }
   };
 }
@@ -41,7 +46,7 @@ export function requireAuth() {
 export function requireNonAnonymous() {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      const user = await verifyAndExtractUser(req);
+      const user = await resolveAuthenticatedUser(req);
       if (!user || user.isAnonymous) {
         return sendUnauthenticated(res, "මෙම ක්‍රියාව සිදු කිරීම සඳහා කරුණාකර ඔබගේ ගිණුමට ලොග් වන්න. (Non-anonymous sign-in required)");
       }
@@ -49,7 +54,7 @@ export function requireNonAnonymous() {
       req.authContext = user.authContext;
       next();
     } catch (err: any) {
-      return sendUnauthenticated(res, err.message);
+      return sendUnauthenticated(res);
     }
   };
 }
@@ -57,7 +62,7 @@ export function requireNonAnonymous() {
 export function requireRole(...allowedRoles: AppRole[]) {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      const user = await verifyAndExtractUser(req);
+      const user = await resolveAuthenticatedUser(req);
       if (!user) {
         return sendUnauthenticated(res);
       }
@@ -83,7 +88,7 @@ export function requireRole(...allowedRoles: AppRole[]) {
       }
       next();
     } catch (err: any) {
-      return sendUnauthenticated(res, err.message);
+      return sendUnauthenticated(res);
     }
   };
 }
@@ -91,7 +96,7 @@ export function requireRole(...allowedRoles: AppRole[]) {
 export function requireCapability(capName: keyof SourceCapabilities) {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      const user = await verifyAndExtractUser(req);
+      const user = await resolveAuthenticatedUser(req);
       if (!user) {
         return sendUnauthenticated(res);
       }
@@ -120,7 +125,7 @@ export function requireCapability(capName: keyof SourceCapabilities) {
       }
       next();
     } catch (err: any) {
-      return sendUnauthenticated(res, err.message);
+      return sendUnauthenticated(res);
     }
   };
 }
@@ -128,7 +133,7 @@ export function requireCapability(capName: keyof SourceCapabilities) {
 export function requireSourceAccess(capName: keyof SourceCapabilities, sourceIdParamName = "sourceId") {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      const user = await verifyAndExtractUser(req);
+      const user = await resolveAuthenticatedUser(req);
       if (!user) {
         return sendUnauthenticated(res);
       }
@@ -188,7 +193,7 @@ export function requireSourceAccess(capName: keyof SourceCapabilities, sourceIdP
       (req as any).resolvedSource = sourceRecord;
       next();
     } catch (err: any) {
-      return sendUnauthenticated(res, err.message);
+      return sendUnauthenticated(res);
     }
   };
 }
@@ -196,7 +201,7 @@ export function requireSourceAccess(capName: keyof SourceCapabilities, sourceIdP
 export function requireSourceOwnerOrRole(sourceIdParamName = "sourceId", ...allowedRoles: AppRole[]) {
   return async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      const user = await verifyAndExtractUser(req);
+      const user = await resolveAuthenticatedUser(req);
       if (!user) {
         return sendUnauthenticated(res);
       }
@@ -239,7 +244,7 @@ export function requireSourceOwnerOrRole(sourceIdParamName = "sourceId", ...allo
       (req as any).resolvedSource = sourceRecord;
       next();
     } catch (err: any) {
-      return sendUnauthenticated(res, err.message);
+      return sendUnauthenticated(res);
     }
   };
 }

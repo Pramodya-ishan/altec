@@ -1,11 +1,14 @@
 import { Router } from "express";
 import { requireUser, getAdminDb, getAdminBucket } from "../firebase/admin";
 import crypto from "crypto";
+import { requireFirebaseUser } from "../firebase/authMiddleware";
+
+import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
 
 export const ttsRoutes = Router();
+ttsRoutes.use(requireFirebaseUser, requireFirebaseAppCheck);
 
 const TTS_MAX_CHARS = parseInt(process.env.TTS_MAX_CHARS || "4500", 10);
-const DAILY_TTS_LIMIT_PER_USER = 20;
 
 function createTextHash(text: string, language: string, voice: string) {
   const normalized = text.trim().toLowerCase();
@@ -49,19 +52,6 @@ ttsRoutes.post("/generate", async (req, res) => {
       }
     }
 
-    // Check Daily Limit
-    const today = new Date().toISOString().split("T")[0];
-    const usageRef = adminDb.collection("users").doc(user.uid).collection("usage").doc(`tts_${today}`);
-    let dailyUsage = 0;
-    
-    if (process.env.ENABLE_TTS_LIMITS === "true") {
-      const usageDoc = await usageRef.get();
-      dailyUsage = usageDoc.exists ? (usageDoc.data()?.count || 0) : 0;
-      if (dailyUsage >= DAILY_TTS_LIMIT_PER_USER) {
-        return res.status(429).json({ ok: false, code: "TTS_DAILY_LIMIT", message: "Daily TTS limit reached." });
-      }
-    }
-
     // Call Google Cloud TTS (use our generateGoogleTts but upload to bucket)
     const { generateGoogleTts } = await import("./googleTts");
     const audioData = await generateGoogleTts({ text: cleanText, languageCode: lang, voice });
@@ -94,9 +84,7 @@ ttsRoutes.post("/generate", async (req, res) => {
       await cacheRef.set({ storagePath, provider: "google_cloud", voice: audioData.voiceName || voice, createdAt: new Date().toISOString() });
     }
     
-    if (process.env.ENABLE_TTS_LIMITS === "true") {
-      await usageRef.set({ count: dailyUsage + 1 }, { merge: true });
-    }
+
 
     let audioUrl = "";
     try {
@@ -120,8 +108,8 @@ ttsRoutes.post("/generate", async (req, res) => {
     res.status(500).json({ 
       ok: false, 
       code: error.code || "TTS_FAILED", 
-      message: error.message,
-      providerError: error.providerError
+      message: "Text-to-speech generation failed. Please try again.",
+      requestId: (req as any).requestId
     });
   }
 });

@@ -10,11 +10,30 @@ export interface PendingSourceChoice {
   questionTypeHint?: SourceQuestionType | null;
 }
 
-const STOP_WORDS = new Set([
-  "pdf", "paper", "source", "file", "eka", "ek", "eke", "ekak", "karamu", "krmu",
-  "කරමු", "එක", "මේක", "වෙනත්", "ප්‍රශ්නයක්", "ප්රශ්නයක්", "answer", "answers",
-  "uththara", "denna", "give", "show", "open", "select", "choose", "sft", "et", "ict",
-]);
+const GENERIC_SOURCE_TERMS = /^(?:pdf|paper|source|file|answer|answers|give|show|open|select|choose|karamu|krmu|eka|eke|ekak|මේක|එක|කරමු|වෙනත්|ප්‍රශ්නයක්|ප්රශ්නයක්)$/u;
+
+function unicodeTokens(value: string) {
+  return value.match(/[\p{L}\p{N}]+/gu) || [];
+}
+
+function trigramSet(value: string) {
+  const compact = value.replace(/\s+/g, " ").trim();
+  const result = new Set<string>();
+  for (let index = 0; index <= compact.length - 3; index += 1) {
+    result.add(compact.slice(index, index + 3));
+  }
+  return result;
+}
+
+function diceSimilarity(left: string, right: string) {
+  const a = trigramSet(left);
+  const b = trigramSet(right);
+  if (!a.size || !b.size) return 0;
+  let overlap = 0;
+  for (const gram of a) if (b.has(gram)) overlap += 1;
+  return (2 * overlap) / (a.size + b.size);
+}
+
 
 export function normalizeSourceSearchText(value: unknown): string {
   return String(value || "")
@@ -58,7 +77,10 @@ function sourceDescriptorTokens(value: unknown): string[] {
     .replace(/(?:ප්‍රශ්නය|ප්රශ්නය)\s*\d{1,3}/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return normalized.split(" ").filter((token) => token.length > 0 && !STOP_WORDS.has(token));
+  return unicodeTokens(normalized).filter((token) => {
+    if (/^\d+$/.test(token)) return true;
+    return token.length > 1 && !GENERIC_SOURCE_TERMS.test(token);
+  });
 }
 
 export function scoreNamedSource(source: any, prompt: string): number {
@@ -72,9 +94,16 @@ export function scoreNamedSource(source: any, prompt: string): number {
   if (!sourceId || !title) return -1000;
 
   if (promptText.includes(title) || title.includes(promptText)) score += 500;
+  let tokenOverlap = 0;
   for (const token of promptTokens) {
-    if (titleTokens.has(token)) score += /^\d+$/.test(token) ? 90 : 55;
+    if (titleTokens.has(token)) {
+      tokenOverlap += 1;
+      score += /^\d+$/.test(token) ? 90 : 55;
+    }
   }
+  const tokenUnion = new Set([...promptTokens, ...titleTokens]).size;
+  if (tokenUnion > 0) score += Math.round((tokenOverlap / tokenUnion) * 180);
+  score += Math.round(diceSimilarity(title, promptText) * 140);
 
   const promptType = inferQuestionTypeFromText(promptText);
   const sourceType = inferQuestionTypeFromText(title);

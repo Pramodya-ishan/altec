@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   Lock
 } from 'lucide-react';
+import { apiFetch } from "../lib/api";
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 
@@ -24,8 +25,8 @@ export default function A3WarRoom() {
   const fetchPlan = async () => {
     setLoading(true);
     try {
-      const token = user?.token || await auth.currentUser?.getIdToken();
-      const res = await fetch('/api/student/diagnosis?subject=SFT', {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await apiFetch('/api/student/diagnosis?subject=SFT', {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -41,8 +42,8 @@ export default function A3WarRoom() {
   const handleGenerate = async () => {
     setGenerating(true);
     try {
-      const token = user?.token || await auth.currentUser?.getIdToken();
-      const res = await fetch('/api/student/war-plan', {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await apiFetch('/api/student/war-plan', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -84,7 +85,7 @@ export default function A3WarRoom() {
         </div>
         
         {!plan && (
-          <button
+          <button type="button"
             onClick={handleGenerate}
             disabled={generating}
             className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-600/20 disabled:opacity-50"

@@ -15,7 +15,7 @@ router.get("/diagnosis", async (req, res) => {
     const diagnosis = await diagnoseStudent(user.uid, subject as string);
     res.json(diagnosis);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -36,7 +36,7 @@ router.post("/war-plan", async (req, res) => {
     
     res.json(plan);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -73,7 +73,7 @@ router.post("/mock-result", async (req, res) => {
     
     res.json({ ok: true, id: resultRef.id });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 
@@ -103,7 +103,7 @@ router.get("/mistakes", async (req, res) => {
     }));
     res.json({ ok: true, mistakes });
   } catch (err: any) {
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
 });
 
@@ -146,7 +146,7 @@ router.post("/mistake", async (req, res) => {
     
     res.json({ ok: true, id: document.id });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal operation failed." });
   }
 });
 

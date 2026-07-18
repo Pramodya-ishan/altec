@@ -16,7 +16,7 @@ service firebase.storage {
       );
     }
 
-    function canManageLessonResources() {
+    function canManageContent() {
       return signedIn() && (
         request.auth.token.admin == true ||
         hasRole("admin") || hasRole("content_editor") || hasRole("teacher") || hasRole("ops")
@@ -32,7 +32,7 @@ service firebase.storage {
         || (isAllowedImage() && request.resource.size <= 10 * 1024 * 1024);
     }
 
-    function isAllowedSharedResource() {
+    function isAllowedSharedDocument() {
       return (request.resource.contentType == "application/pdf" && request.resource.size <= 50 * 1024 * 1024)
         || (isAllowedImage() && request.resource.size <= 20 * 1024 * 1024);
     }
@@ -55,22 +55,30 @@ service firebase.storage {
       allow delete: if isOwner(uid);
     }
 
-    match /users/{uid}/paper_structure/{allPaths=**} {
-      allow read: if signedIn();
-      allow create, update: if isOwner(uid) && canManageLessonResources() && isAllowedSharedResource();
-      allow delete: if isOwner(uid) && canManageLessonResources();
+    // Shared files are never read directly with the Firebase client SDK. The
+    // authenticated API checks publication/audience metadata and returns a
+    // short-lived signed URL or secure stream.
+    match /shared_resources/{resourceId}/{allPaths=**} {
+      allow read: if false;
+      allow create, update: if canManageContent() && isAllowedSharedDocument();
+      allow delete: if canManageContent();
     }
 
-    match /users/{uid}/past_papers/{allPaths=**} {
-      allow read: if signedIn();
-      allow create, update: if isOwner(uid) && canManageLessonResources() && isAllowedSharedResource();
-      allow delete: if isOwner(uid) && canManageLessonResources();
+    // Legacy paths remain writable only by a content manager who owns the
+    // prefix. Direct reads are disabled to avoid bypassing publication checks.
+    match /users/{uid}/{scope}/{allPaths=**} {
+      allow read: if false;
+      allow create, update: if isOwner(uid)
+        && canManageContent()
+        && scope in ["paper_structure", "past_papers", "syllabus"]
+        && isAllowedSharedDocument();
+      allow delete: if isOwner(uid)
+        && canManageContent()
+        && scope in ["paper_structure", "past_papers", "syllabus"];
     }
 
-    match /users/{uid}/syllabus/{allPaths=**} {
-      allow read: if signedIn();
-      allow create, update: if isOwner(uid) && canManageLessonResources() && isAllowedSharedResource();
-      allow delete: if isOwner(uid) && canManageLessonResources();
+    match /videos/{allPaths=**} {
+      allow read, write: if false;
     }
 
     match /{allPaths=**} {

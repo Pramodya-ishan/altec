@@ -4,7 +4,7 @@ import { env } from "../utils/env";
 import {
   getAdminBucketByName,
   getAdminDb,
-  requireAdmin,
+  requireContentManager,
   requireUser,
 } from "../firebase/admin";
 import {
@@ -78,7 +78,7 @@ videoRoutes.post("/admin/videos", async (req, res) => {
   try {
     requireVideoEnabled();
     await verifyVideoAppCheck(req);
-    const admin = await requireAdmin(req);
+    const admin = await requireContentManager(req);
     const {
       title,
       description,
@@ -208,7 +208,7 @@ videoRoutes.post("/admin/videos", async (req, res) => {
     res.status(201).json({ ok: true, videoId: video.id, sourceId: video.sourceId, version });
   } catch (error: any) {
     const status = String(error?.message).includes("Forbidden") ? 403 : 500;
-    res.status(status).json({ ok: false, code: "VIDEO_CREATE_FAILED", message: error.message });
+    res.status(status).json({ ok: false, code: "VIDEO_CREATE_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -216,7 +216,7 @@ videoRoutes.post("/admin/videos/:videoId/create-upload", async (req, res) => {
   try {
     requireVideoEnabled();
     await verifyVideoAppCheck(req);
-    const admin = await requireAdmin(req);
+    const admin = await requireContentManager(req);
     const video = await loadVideo(req.params.videoId);
     if (video.createdBy !== admin.uid && !admin.admin) throw new Error("VIDEO_FORBIDDEN");
     if (!["draft", "uploading", "failed"].includes(video.status)) throw new Error("VIDEO_UPLOAD_STATE_INVALID");
@@ -249,7 +249,7 @@ videoRoutes.post("/admin/videos/:videoId/create-upload", async (req, res) => {
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     });
   } catch (error: any) {
-    res.status(400).json({ ok: false, code: "VIDEO_UPLOAD_SESSION_FAILED", message: error.message });
+    res.status(400).json({ ok: false, code: "VIDEO_UPLOAD_SESSION_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -257,7 +257,7 @@ videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
   try {
     requireVideoEnabled();
     await verifyVideoAppCheck(req);
-    const admin = await requireAdmin(req);
+    const admin = await requireContentManager(req);
     const video = await loadVideo(req.params.videoId);
     if (["queued", "transcoding", "ready"].includes(video.status)) {
       return res.json({
@@ -344,14 +344,14 @@ videoRoutes.post("/admin/videos/:videoId/upload-complete", async (req, res) => {
       playbackMode: transcode.enabled ? "hls" : "direct",
     });
   } catch (error: any) {
-    res.status(400).json({ ok: false, code: "VIDEO_FINALIZE_FAILED", message: error.message });
+    res.status(400).json({ ok: false, code: "VIDEO_FINALIZE_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
 videoRoutes.post("/admin/videos/:videoId/transcode", async (req, res) => {
   try {
     await verifyVideoAppCheck(req);
-    await requireAdmin(req);
+    await requireContentManager(req);
     const video = await loadVideo(req.params.videoId);
     if (!["uploaded", "failed"].includes(video.status)) throw new Error("VIDEO_TRANSCODE_STATE_INVALID");
     const result = await startTranscode(video);
@@ -359,14 +359,14 @@ videoRoutes.post("/admin/videos/:videoId/transcode", async (req, res) => {
     await getAdminDb().collection("videos").doc(video.id).set({ status: "queued", transcoderJobName: result.jobName, updatedAt: new Date().toISOString() }, { merge: true });
     res.json({ ok: true, status: "queued" });
   } catch (error: any) {
-    res.status(400).json({ ok: false, code: "VIDEO_TRANSCODE_FAILED", message: error.message });
+    res.status(400).json({ ok: false, code: "VIDEO_TRANSCODE_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
 videoRoutes.post("/admin/videos/:videoId/reprocess", async (req, res) => {
   try {
     await verifyVideoAppCheck(req);
-    await requireAdmin(req);
+    await requireContentManager(req);
     const current = await loadVideo(req.params.videoId);
     if (!["ready", "failed", "uploaded", "unpublished"].includes(current.status)) throw new Error("VIDEO_REPROCESS_STATE_INVALID");
     const nextVersion = current.version + 1;
@@ -398,14 +398,14 @@ videoRoutes.post("/admin/videos/:videoId/reprocess", async (req, res) => {
     }, { merge: true });
     res.json({ ok: true, status: "queued", version: nextVersion });
   } catch (error: any) {
-    res.status(400).json({ ok: false, code: "VIDEO_REPROCESS_FAILED", message: error.message });
+    res.status(400).json({ ok: false, code: "VIDEO_REPROCESS_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
 videoRoutes.patch("/admin/videos/:videoId", async (req, res) => {
   try {
     await verifyVideoAppCheck(req);
-    const admin = await requireAdmin(req);
+    const admin = await requireContentManager(req);
     const video = await loadVideo(req.params.videoId);
     const allowed = ["title", "description", "subject", "lesson", "concept", "visibility", "allowedRoles", "allowedUserIds", "watermarkEnabled", "maxConcurrentSessions", "qualityProfiles"];
     const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
@@ -423,7 +423,7 @@ videoRoutes.patch("/admin/videos/:videoId", async (req, res) => {
     invalidateInventoryCache(admin.uid);
     res.json({ ok: true });
   } catch (error: any) {
-    res.status(400).json({ ok: false, code: "VIDEO_UPDATE_FAILED", message: error.message });
+    res.status(400).json({ ok: false, code: "VIDEO_UPDATE_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -431,7 +431,7 @@ for (const action of ["publish", "unpublish"] as const) {
   videoRoutes.post(`/admin/videos/:videoId/${action}`, async (req, res) => {
     try {
       await verifyVideoAppCheck(req);
-      await requireAdmin(req);
+      await requireContentManager(req);
       const video = await loadVideo(req.params.videoId);
       if (action === "publish" && video.status !== "ready") throw new Error("VIDEO_NOT_READY");
       await getAdminDb().collection("videos").doc(video.id).set({
@@ -447,7 +447,7 @@ for (const action of ["publish", "unpublish"] as const) {
       });
       res.json({ ok: true, published: action === "publish" });
     } catch (error: any) {
-      res.status(400).json({ ok: false, code: `VIDEO_${action.toUpperCase()}_FAILED`, message: error.message });
+      res.status(400).json({ ok: false, code: `VIDEO_${action.toUpperCase()}_FAILED`, message: "The operation failed. Please try again." });
     }
   });
 }
@@ -455,37 +455,37 @@ for (const action of ["publish", "unpublish"] as const) {
 videoRoutes.delete("/admin/videos/:videoId", async (req, res) => {
   try {
     await verifyVideoAppCheck(req);
-    await requireAdmin(req);
+    await requireContentManager(req);
     const video = await loadVideo(req.params.videoId);
     await getAdminDb().collection("videos").doc(video.id).set({ status: "archived", isPublished: false, allowPlayback: false, updatedAt: new Date().toISOString() }, { merge: true });
     await getAdminDb().collection("sources").doc(video.sourceId).set({ processingStatus: "deleted", deletedAt: new Date().toISOString() }, { merge: true });
     await updateLessonResourceProcessing(video.sourceId, { processingStatus: "archived", published: false });
     res.json({ ok: true, archived: true });
   } catch (error: any) {
-    res.status(400).json({ ok: false, code: "VIDEO_DELETE_FAILED", message: error.message });
+    res.status(400).json({ ok: false, code: "VIDEO_DELETE_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
 videoRoutes.get("/admin/videos", async (req, res) => {
   try {
     await verifyVideoAppCheck(req);
-    await requireAdmin(req);
+    await requireContentManager(req);
     const snapshot = await getAdminDb().collection("videos").orderBy("createdAt", "desc").limit(100).get();
     const videos = await refreshVisibleVideoStatuses(snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as VideoDocument)));
     res.json({ ok: true, videos: videos.map(publicVideo) });
   } catch (error: any) {
-    res.status(400).json({ ok: false, code: "VIDEOS_LIST_FAILED", message: error.message });
+    res.status(400).json({ ok: false, code: "VIDEOS_LIST_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
 videoRoutes.get("/admin/videos/:videoId", async (req, res) => {
   try {
     await verifyVideoAppCheck(req);
-    await requireAdmin(req);
+    await requireContentManager(req);
     const video = await refreshTranscodeStatus(await loadVideo(req.params.videoId));
     res.json({ ok: true, video: publicVideo(video) });
   } catch (error: any) {
-    res.status(404).json({ ok: false, code: "VIDEO_NOT_FOUND", message: error.message });
+    res.status(404).json({ ok: false, code: "VIDEO_NOT_FOUND", message: "The operation failed. Please try again." });
   }
 });
 
@@ -503,7 +503,7 @@ videoRoutes.get("/videos", async (req, res) => {
       .map(publicVideo);
     res.json({ ok: true, videos });
   } catch (error: any) {
-    res.status(401).json({ ok: false, code: "VIDEOS_ACCESS_FAILED", message: error.message });
+    res.status(401).json({ ok: false, code: "VIDEOS_ACCESS_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -515,7 +515,7 @@ videoRoutes.get("/videos/:videoId", async (req, res) => {
     if (!canUserPlayVideo(video, user)) return res.status(403).json({ ok: false, code: "VIDEO_FORBIDDEN" });
     res.json({ ok: true, video: publicVideo(video) });
   } catch (error: any) {
-    res.status(404).json({ ok: false, code: "VIDEO_NOT_FOUND", message: error.message });
+    res.status(404).json({ ok: false, code: "VIDEO_NOT_FOUND", message: "The operation failed. Please try again." });
   }
 });
 
@@ -592,7 +592,7 @@ videoRoutes.post("/videos/:videoId/playback-session", async (req, res) => {
       watermark: { userId: user.uid, label: user.email || user.uid },
     });
   } catch (error: any) {
-    res.status(400).json({ ok: false, code: "PLAYBACK_SESSION_FAILED", message: error.message });
+    res.status(400).json({ ok: false, code: "PLAYBACK_SESSION_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -612,7 +612,7 @@ videoRoutes.post("/video-sessions/:sessionId/heartbeat", async (req, res) => {
     await ref.set({ lastHeartbeatAt: new Date().toISOString(), expiresAt: new Date(expiresAtMs).toISOString(), expiresAtMs }, { merge: true });
     res.json({ ok: true, expiresAt: new Date(expiresAtMs).toISOString() });
   } catch (error: any) {
-    res.status(400).json({ ok: false, code: "SESSION_HEARTBEAT_FAILED", message: error.message });
+    res.status(400).json({ ok: false, code: "SESSION_HEARTBEAT_FAILED", message: "The operation failed. Please try again." });
   }
 });
 
@@ -629,6 +629,6 @@ videoRoutes.post("/video-sessions/:sessionId/end", async (req, res) => {
     await ref.set({ status: "revoked", endedAt: new Date().toISOString() }, { merge: true });
     res.json({ ok: true });
   } catch (error: any) {
-    res.status(400).json({ ok: false, code: "SESSION_END_FAILED", message: error.message });
+    res.status(400).json({ ok: false, code: "SESSION_END_FAILED", message: "The operation failed. Please try again." });
   }
 });

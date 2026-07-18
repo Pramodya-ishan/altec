@@ -74,7 +74,7 @@ export function CloraToolPalette({ isOpen, query, onSelect, position }: CloraToo
           <div className="max-h-64 overflow-y-auto p-1">
             {filteredTools.length > 0 ? (
               filteredTools.map((tool, index) => (
-                <button
+                <button type="button"
                   key={tool.id}
                   onClick={() => onSelect(tool)}
                   className="w-full cursor-pointer rounded-xl p-2 text-left outline-none transition-colors hover:bg-slate-100 focus:bg-slate-100 flex items-start gap-3"
