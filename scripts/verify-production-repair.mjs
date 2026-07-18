@@ -294,4 +294,35 @@ assert(!userContextV11.includes("syncUserFromFirestore") && !userContextV11.incl
 const runtimeEntriesV11 = await readdir("vercel-runtime", { recursive: true });
 assert(!runtimeEntriesV11.some((entry) => String(entry).toLowerCase().endsWith(".pdf")), "V11 accidentally embeds authoritative PDFs in the Vercel function bundle");
 
-console.log("V11 security, privacy, unlimited-capacity, App Check, and deployment checks passed.");
+
+const progressStoreV15 = await read("server/firebase/progressStore.ts");
+const progressDataV15 = await read("src/shared/progressData.ts");
+const zscoreV15 = await read("src/shared/zscore.ts");
+const admissionV15 = await read("src/components/views/AdmissionPredictorView.tsx");
+assert(
+  progressStoreV15.includes("progress_sections")
+    && progressStoreV15.includes("sectioned: true")
+    && progressStoreV15.includes("1 MiB failures"),
+  "V15 progress data is still stored as one oversized Firestore document",
+);
+assert(
+  !appContextV11.includes("Progress data could not be loaded.")
+    && !appContextV11.includes("Progress is waiting to sync. It will retry when the connection returns.")
+    && appContextV11.includes("scheduleSaveFlush")
+    && appContextV11.includes("loadOwnDataRef"),
+  "V15 progress loading/synchronization still emits false failure notices or lacks background retry",
+);
+assert(
+  progressDataV15.includes("normalizeZScoreHistory")
+    && zscoreV15.includes("upsertDailyPredictorHistory")
+    && zscoreV15.includes("slice(-1000)"),
+  "V15 Z-score history normalization/preservation is incomplete",
+);
+assert(
+  admissionV15.includes("hasHydratedUserData")
+    && admissionV15.includes("upsertDailyPredictorHistory")
+    && !admissionV15.includes("const fingerprint = `predictor:${day}"),
+  "V15 Admission Predictor can still create repeated history writes before hydration",
+);
+
+console.log("V15 security, progress synchronization, Z-score history, and deployment checks passed.");

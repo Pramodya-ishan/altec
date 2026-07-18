@@ -1,8 +1,15 @@
 import { getAdminDb } from "./admin";
 import { buildExamScorePrediction } from "../../src/lib/scoreUtils";
+import { readProgressData } from "./progressStore";
 
 const contextCache = new Map<string, { data: any; timestamp: number }>();
 const CACHE_TTL = 10000; // 10 seconds cache to be responsive to changes
+
+export function invalidateUserAIContext(uid: string) {
+  for (const key of contextCache.keys()) {
+    if (key === uid || key.startsWith(`${uid}_`)) contextCache.delete(key);
+  }
+}
 
 export async function loadUserAIContext(uid: string, email?: string) {
   const cacheKey = `${uid}_${email || ""}`;
@@ -19,14 +26,13 @@ export async function loadUserAIContext(uid: string, email?: string) {
     const userUidRef = db.collection("users").doc(uid);
     const userEmailRef = email ? db.collection("users").doc(email.toLowerCase()) : null;
 
-    // 2. Fetch root, profile, and progress snapshots in one network round-trip.
-    const [uidSnap, emailSnap, uidProfileSnap, emailProfileSnap, uidProg, emailProg] = await Promise.all([
+    // 2. Fetch root, profile, and normalized progress in one round-trip.
+    const [uidSnap, emailSnap, uidProfileSnap, emailProfileSnap, progressResult] = await Promise.all([
       userUidRef.get().catch(() => null),
       userEmailRef ? userEmailRef.get().catch(() => null) : null,
       userUidRef.collection("profile").doc("main").get().catch(() => null),
       userEmailRef ? userEmailRef.collection("profile").doc("main").get().catch(() => null) : null,
-      userUidRef.collection("progress").doc("data").get().catch(() => null),
-      userEmailRef ? userEmailRef.collection("progress").doc("data").get().catch(() => null) : null,
+      readProgressData(uid, email),
     ]);
 
     let profileData: any = {};
@@ -43,26 +49,9 @@ export async function loadUserAIContext(uid: string, email?: string) {
       profileData = { ...profileData, ...uidProfileSnap.data() };
     }
     
-    // 3. Extract AppData
-    let appData: any = null;
-    let loadedFrom = "none";
-    
-    // 1. Canonical UID progress wins over root/legacy copies.
-    if (uidProg && uidProg.exists) {
-      const p = uidProg.data();
-      appData = p?.data || p;
-      loadedFrom = "uid_progress_data";
-    } else if (emailProg && emailProg.exists) {
-      const p = emailProg.data();
-      appData = p?.data || p;
-      loadedFrom = "email_progress_data";
-    } else if (profileData.appData) {
-      appData = profileData.appData;
-      loadedFrom = "root_appData";
-    } else if (profileData.data) {
-      appData = profileData.data;
-      loadedFrom = "root_data";
-    }
+    // 3. Extract AppData from the same normalized progress store used by the UI.
+    const appData: any = progressResult.data;
+    const loadedFrom = progressResult.source;
 
     // 4. Fetch memory and chat history from both paths (uniquely merged)
     const [memoryUid, memoryEmail] = await Promise.all([
@@ -186,8 +175,6 @@ export async function loadUserAIContext(uid: string, email?: string) {
     // Extract target Z-score
     const targetZ = profileData.targetZScore ?? profileData.targetZ ?? profileData.zTarget ??
                     profileData.profile?.targetZScore ?? profileData.profile?.targetZ ??
-                    (uidProg && uidProg.exists ? uidProg.data()?.targetZScore ?? uidProg.data()?.data?.targetZ : undefined) ??
-                    (emailProg && emailProg.exists ? emailProg.data()?.targetZScore ?? emailProg.data()?.data?.targetZ : undefined) ??
                     appData?.targetZScore ?? appData?.targetZ ?? appData?.zTarget ?? appData?.profile?.targetZ;
     if (targetZ !== undefined && targetZ !== null) {
        zScoreContext.targetZScore = Number(targetZ);

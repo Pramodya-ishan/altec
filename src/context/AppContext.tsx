@@ -23,6 +23,7 @@ import { shouldUseRedirectAuth } from "../lib/authStrategy";
 import { auth, authPersistenceReady, isFirebaseEnabled } from "../lib/firebase";
 import { calculateCurrentGradeFromData } from "../lib/utils";
 import type { AppData, SubjectKey, ThemeKey, ViewKey } from "../types";
+import { normalizeProgressData } from "../shared/progressData";
 
 type ModalsState = {
   playlist: { open: boolean; topic: string };
@@ -114,23 +115,7 @@ const defaultData: AppData = {
 };
 
 function sanitizeAppData(value: AppData | null | undefined): AppData {
-  const source = value && typeof value === "object" ? value : defaultData;
-  return {
-    ...defaultData,
-    ...source,
-    sft: { ...defaultData.sft, ...(source.sft || {}) },
-    et: { ...defaultData.et, ...(source.et || {}) },
-    ict: { ...defaultData.ict, ...(source.ict || {}) },
-    zScoreHistory: Array.isArray(source.zScoreHistory)
-      ? source.zScoreHistory
-          .filter((entry) => Boolean(entry?.date) && Number.isFinite(Number(entry?.zScore)))
-          .map((entry) => ({
-            ...entry,
-            calculationBasis: entry.calculationBasis || "legacy_exam_score_predictor",
-            official: false as const,
-          }))
-      : [],
-  };
+  return normalizeProgressData(value);
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -174,8 +159,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const loginInFlightRef = useRef(false);
   const sessionUidRef = useRef<string | null>(null);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+  const saveRetryTimerRef = useRef<number | null>(null);
+  const loadRetryTimerRef = useRef<number | null>(null);
   const pendingSaveRef = useRef<AppData | null>(null);
+  const saveInFlightRef = useRef(false);
+  const loadInFlightRef = useRef(false);
+  const saveRetryAttemptRef = useRef(0);
+  const loadRetryAttemptRef = useRef(0);
+  const progressRevisionRef = useRef<string | null>(null);
+  const flushPendingSaveRef = useRef<() => void>(() => undefined);
+  const loadOwnDataRef = useRef<() => void>(() => undefined);
   const notificationTimersRef = useRef(new Map<string, number>());
   const recentNotificationsRef = useRef(new Map<string, number>());
 
@@ -221,20 +215,59 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loadOwnData = useCallback(async () => {
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
     setIsUserDataLoading(true);
+
     try {
-      const response = await apiFetch("/api/data");
-      if (!response.ok) throw new Error("Progress data could not be loaded.");
-      const payload = await readJson<{ data?: AppData | null }>(response);
-      setData(sanitizeAppData(payload?.data));
-    } catch (error) {
-      setData(defaultData);
-      showNotification(error instanceof Error ? error.message : "Progress data could not be loaded.", "error");
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const controller = new AbortController();
+          const timeout = window.setTimeout(() => controller.abort(), 12_000);
+          const response = await apiFetch("/api/data", { signal: controller.signal })
+            .finally(() => window.clearTimeout(timeout));
+          const payload = await readJson<{
+            data?: AppData | null;
+            revision?: string | null;
+            updatedAt?: string | null;
+          }>(response);
+          if (!response.ok) {
+            throw new Error(`Progress request failed (${response.status}).`);
+          }
+
+          progressRevisionRef.current = payload?.revision || null;
+          const serverData = sanitizeAppData(payload?.data);
+          setData(pendingSaveRef.current || serverData);
+          setHasHydratedUserData(true);
+          loadRetryAttemptRef.current = 0;
+          if (loadRetryTimerRef.current) {
+            clearTimeout(loadRetryTimerRef.current);
+            loadRetryTimerRef.current = null;
+          }
+          return;
+        } catch (error) {
+          lastError = error;
+          if (attempt < 2) {
+            await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
+          }
+        }
+      }
+
+      // Keep the current in-memory state. Never replace a student's progress
+      // with empty defaults because a temporary request failed.
+      loadRetryAttemptRef.current += 1;
+      const delay = Math.min(30_000, 2_000 * 2 ** Math.min(loadRetryAttemptRef.current - 1, 4));
+      if (loadRetryTimerRef.current) clearTimeout(loadRetryTimerRef.current);
+      loadRetryTimerRef.current = window.setTimeout(() => loadOwnDataRef.current(), delay);
+      if (import.meta.env.DEV) console.warn("Progress load will retry in the background", lastError);
     } finally {
-      setHasHydratedUserData(true);
       setIsUserDataLoading(false);
+      loadInFlightRef.current = false;
     }
-  }, [setData, showNotification]);
+  }, [setData]);
+  loadOwnDataRef.current = () => { void loadOwnData(); };
+
 
   const bootstrapAuthenticatedUser = useCallback(
     async (firebaseUser: FirebaseUser) => {
@@ -313,6 +346,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setIsAuthLoading(true);
           if (!firebaseUser) {
             sessionUidRef.current = null;
+            progressRevisionRef.current = null;
+            pendingSaveRef.current = null;
+            saveRetryAttemptRef.current = 0;
+            loadRetryAttemptRef.current = 0;
+            if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+            if (saveRetryTimerRef.current) clearTimeout(saveRetryTimerRef.current);
+            if (loadRetryTimerRef.current) clearTimeout(loadRetryTimerRef.current);
             setUser(null);
             setProfile(null);
             setPushNotifications([]);
@@ -363,32 +403,86 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } finally {
       if (auth) await signOut(auth);
       sessionUidRef.current = null;
+      progressRevisionRef.current = null;
+      pendingSaveRef.current = null;
+      saveRetryAttemptRef.current = 0;
+      loadRetryAttemptRef.current = 0;
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (saveRetryTimerRef.current) clearTimeout(saveRetryTimerRef.current);
+      if (loadRetryTimerRef.current) clearTimeout(loadRetryTimerRef.current);
       setAdminTargetEmailState(null);
       setAdminTargetUid(null);
+      setHasHydratedUserData(false);
       setData(defaultData);
     }
   }, [setData]);
 
   const persistData = useCallback(async (nextData: AppData) => {
     const targetUid = adminTargetUid;
-    const response = targetUid
-      ? await apiFetch("/api/admin/support/data", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            targetUid,
-            operation: "edit",
-            reason: "Administrator updated student progress from the support console.",
-            data: nextData,
-          }),
-        })
-      : await apiFetch("/api/data", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: nextData }),
-        });
-    if (!response.ok) throw new Error("Progress could not be synchronized.");
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = targetUid
+        ? await apiFetch("/api/admin/support/data", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              targetUid,
+              operation: "edit",
+              reason: "Administrator updated student progress from the support console.",
+              data: nextData,
+            }),
+            signal: controller.signal,
+          })
+        : await apiFetch("/api/data", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              data: nextData,
+              baseRevision: progressRevisionRef.current,
+            }),
+            signal: controller.signal,
+          });
+      const payload = await readJson<{ revision?: string | null; updatedAt?: string | null; code?: string }>(response);
+      if (!response.ok) {
+        const error = new Error(`Progress save failed (${response.status}).`);
+        (error as any).status = response.status;
+        (error as any).code = payload?.code;
+        throw error;
+      }
+      progressRevisionRef.current = payload?.revision || progressRevisionRef.current;
+      return payload;
+    } finally {
+      window.clearTimeout(timeout);
+    }
   }, [adminTargetUid]);
+
+  const scheduleSaveFlush = useCallback((delay: number) => {
+    if (saveRetryTimerRef.current) clearTimeout(saveRetryTimerRef.current);
+    saveRetryTimerRef.current = window.setTimeout(() => flushPendingSaveRef.current(), delay);
+  }, []);
+
+  const flushPendingSave = useCallback(async () => {
+    if (saveInFlightRef.current || !pendingSaveRef.current || !user || isAuthLoading) return;
+    const snapshot = pendingSaveRef.current;
+    saveInFlightRef.current = true;
+    try {
+      await persistData(snapshot);
+      if (pendingSaveRef.current === snapshot) pendingSaveRef.current = null;
+      saveRetryAttemptRef.current = 0;
+      if (pendingSaveRef.current) scheduleSaveFlush(50);
+    } catch (error) {
+      saveRetryAttemptRef.current += 1;
+      const online = typeof navigator === "undefined" || navigator.onLine !== false;
+      const baseDelay = online ? 1_000 : 5_000;
+      const delay = Math.min(30_000, baseDelay * 2 ** Math.min(saveRetryAttemptRef.current - 1, 5));
+      scheduleSaveFlush(delay);
+      if (import.meta.env.DEV) console.warn("Progress save will retry in the background", error);
+    } finally {
+      saveInFlightRef.current = false;
+    }
+  }, [isAuthLoading, persistData, scheduleSaveFlush, user]);
+  flushPendingSaveRef.current = () => { void flushPendingSave(); };
 
   const saveData = useCallback((nextData: AppData) => {
     const sanitized = sanitizeAppData(nextData);
@@ -396,36 +490,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
     pendingSaveRef.current = sanitized;
     if (!user || isAuthLoading) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      const pending = pendingSaveRef.current;
-      if (!pending) return;
-      void persistData(pending)
-        .then(() => { pendingSaveRef.current = null; })
-        .catch(() => showNotification("Progress is waiting to sync. It will retry when the connection returns.", "info"));
-    }, 650);
-  }, [isAuthLoading, persistData, setData, showNotification, user]);
+    saveTimerRef.current = window.setTimeout(() => flushPendingSaveRef.current(), 400);
+  }, [isAuthLoading, setData, user]);
 
   useEffect(() => {
     const retryPending = () => {
-      const pending = pendingSaveRef.current;
-      if (!pending || !user) return;
-      void persistData(pending)
-        .then(() => {
-          pendingSaveRef.current = null;
-          showNotification("Pending progress was synchronized.", "success");
-        })
-        .catch(() => undefined);
+      if (pendingSaveRef.current) scheduleSaveFlush(0);
+      if (!pendingSaveRef.current && user) loadOwnDataRef.current();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") retryPending();
     };
     window.addEventListener("online", retryPending);
-    return () => window.removeEventListener("online", retryPending);
-  }, [persistData, showNotification, user]);
+    window.addEventListener("focus", retryPending);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("online", retryPending);
+      window.removeEventListener("focus", retryPending);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [scheduleSaveFlush, user]);
 
   useEffect(() => () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    if (saveRetryTimerRef.current) clearTimeout(saveRetryTimerRef.current);
+    if (loadRetryTimerRef.current) clearTimeout(loadRetryTimerRef.current);
     notificationTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     notificationTimersRef.current.clear();
     recentNotificationsRef.current.clear();
   }, []);
+
 
   const clearLocalStorage = useCallback(() => {
     // Kept as a compatibility name for existing widgets. No browser storage is

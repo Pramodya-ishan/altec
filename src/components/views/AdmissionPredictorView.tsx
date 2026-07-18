@@ -63,6 +63,7 @@ import { cn } from "../../lib/utils";
 import { SYLLABUS } from "../../constants/syllabus";
 
 import { buildExamScorePrediction, calculateSubjectZ } from "../../lib/scoreUtils";
+import { upsertDailyPredictorHistory } from "../../shared/zscore";
 
 import { RequirementQuestion } from "../../types";
 
@@ -629,7 +630,7 @@ const renderMessageContent = (
 };
 
 export default function AdmissionPredictorView() {
-  const { data, saveData, isAuthLoading } = useApp();
+  const { data, saveData, isAuthLoading, isUserDataLoading, hasHydratedUserData } = useApp();
 
   const [zTab, setZTab] = useState<"detector" | "analytics" | "advisor">(
     "detector",
@@ -660,49 +661,44 @@ export default function AdmissionPredictorView() {
   const etZ = prediction.subjectZScores.et;
   const ictZ = prediction.subjectZScores.ict;
   const overallZScore = prediction.zScore;
+  const hasPredictorEvidence = useMemo(() =>
+    (["sft", "et", "ict"] as const).some((subject) => {
+      const subjectData = data[subject];
+      return Object.keys(subjectData?.topics || {}).length > 0
+        || (subjectData?.paperMarks?.length || 0) > 0
+        || Object.keys(subjectData?.questionMarks || {}).length > 0;
+    }), [data.sft, data.et, data.ict]);
 
   const [historyPoints, setHistoryPoints] = useState<any[]>(() =>
     (data.zScoreHistory || []).filter((point: any) => Number.isFinite(Number(point?.zScore))),
   );
 
   useEffect(() => {
-    if (isAuthLoading) return;
+    const history = Array.isArray(data.zScoreHistory)
+      ? data.zScoreHistory.filter((point: any) => Number.isFinite(Number(point?.zScore)))
+      : [];
+    setHistoryPoints(history);
+  }, [data.zScoreHistory]);
 
-    const savedHistory = Array.isArray(data.zScoreHistory) ? data.zScoreHistory : [];
-    let points = savedHistory.filter((point: any) => Number.isFinite(Number(point?.zScore)));
-    const day = new Date().toISOString().slice(0, 10);
-    const fingerprint = `predictor:${day}:${sftMark}:${etMark}:${ictMark}`;
-    const point = {
-      date: new Date().toISOString(),
+  useEffect(() => {
+    if (isAuthLoading || isUserDataLoading || !hasHydratedUserData || !hasPredictorEvidence) return;
+
+    const result = upsertDailyPredictorHistory(data, {
       zScore: overallZScore,
       subjectZScores: { sft: sftZ, et: etZ, ict: ictZ },
       projectedMarks: { sft: sftMark, et: etMark, ict: ictMark },
       estimatedDistrictRank: prediction.estimatedDistrictRank,
       estimatedIslandRank: prediction.estimatedIslandRank,
-      calculationBasis: "exam_score_predictor" as const,
-      official: false as const,
-      fingerprint,
       reason: "Exam Score Predictor progress updated",
-    };
-    const sameDayIndex = points.findIndex((entry: any) =>
-      entry?.calculationBasis === "exam_score_predictor" && String(entry?.date || "").slice(0, 10) === day,
-    );
-    if (sameDayIndex >= 0) points[sameDayIndex] = point;
-    else points.push(point);
-    // Preserve the previous project's real timeline; only apply a generous
-    // safety cap so historical records are not silently discarded.
-    points = points.slice(-1000);
+    });
 
-    setHistoryPoints(points);
-    if (JSON.stringify(points) !== JSON.stringify(savedHistory)) {
-      const newData = structuredClone(data);
-      newData.zScoreHistory = points;
-      const timer = setTimeout(() => saveData?.(newData), 600);
-      return () => clearTimeout(timer);
+    if (result.changed) {
+      const timer = window.setTimeout(() => saveData(result.data), 600);
+      return () => window.clearTimeout(timer);
     }
   }, [
+    data,
     overallZScore,
-    data.zScoreHistory,
     saveData,
     sftZ,
     etZ,
@@ -711,6 +707,9 @@ export default function AdmissionPredictorView() {
     etMark,
     ictMark,
     isAuthLoading,
+    isUserDataLoading,
+    hasHydratedUserData,
+    hasPredictorEvidence,
     prediction.estimatedDistrictRank,
     prediction.estimatedIslandRank,
   ]);
@@ -737,11 +736,18 @@ export default function AdmissionPredictorView() {
     const byDay = new Map<string, any>();
     normalized.forEach((point) => {
       const name = point.normalizedDate.toISOString().slice(0, 10);
-      byDay.set(name, {
-        name,
-        "Calculated Z-score": Number(point.zScore),
-        reason: point.reason,
-      });
+      const basis = String(point.calculationBasis || "legacy_exam_score_predictor");
+      const priority = basis === "actual_saved_paper_marks" ? 3 : basis === "exam_score_predictor" ? 2 : 1;
+      const existing = byDay.get(name);
+      if (!existing || priority >= existing.priority) {
+        byDay.set(name, {
+          name,
+          "Calculated Z-score": Number(point.zScore),
+          reason: point.reason,
+          calculationBasis: basis,
+          priority,
+        });
+      }
     });
 
     const uniquePoints = Array.from(byDay.values());
@@ -767,6 +773,9 @@ export default function AdmissionPredictorView() {
     return (
       <div className="pointer-events-none max-w-[170px] rounded-xl border border-slate-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
         <p className="truncate text-[10px] font-semibold text-slate-500">{label}</p>
+        <p className="mt-0.5 truncate text-[9px] font-medium text-slate-400">
+          {payload[0]?.payload?.calculationBasis === "actual_saved_paper_marks" ? "Saved paper marks" : "Exam Score Predictor"}
+        </p>
         <div className="mt-1 flex items-center justify-between gap-3">
           <span className="truncate text-[11px] font-medium text-slate-600">Z-score</span>
           <strong className="shrink-0 text-xs tabular-nums text-slate-900">{Number(entry.value) > 0 ? "+" : ""}{entry.value}</strong>

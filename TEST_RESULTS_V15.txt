@@ -1,0 +1,34 @@
+CLORA X V15 VALIDATION RESULTS
+==============================
+
+PASS  TypeScript syntax transpilation:
+      src/App.tsx
+      src/context/AppContext.tsx
+      src/components/views/AdmissionPredictorView.tsx
+      src/lib/api.ts
+      src/shared/progressData.ts
+      src/shared/zscore.ts
+      server/firebase/progressStore.ts
+      server/firebase/userContext.ts
+      server.ts
+
+PASS  Pure progress data tests:
+      - split and combine preserve SFT/ET/ICT data
+      - Z-score history is normalized and deduplicated
+      - large Base64/raw resource fields are removed
+      - stable resource URLs/storage paths remain
+
+PASS  Pure Z-score history tests:
+      - paper-mark history preserves predictor history
+      - unchanged daily predictor state does not generate another write
+      - mixed calculation-basis history remains available
+
+PASS  node scripts/verify-production-repair.mjs
+PASS  node scripts/check-npm-registry.mjs
+PASS  obsolete-file cleanup and TypeScript exclusion checks
+
+NOT RUN TO COMPLETION IN THIS SANDBOX
+-------------------------------------
+npm ci / full npm typecheck / Vite + Vercel bundle build.
+Reason: npm registry access stalled in the sandbox after creating empty package directories.
+The project contains the public registry lockfile and Vercel should perform a clean install.

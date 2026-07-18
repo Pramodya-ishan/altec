@@ -3,6 +3,8 @@ import {
   buildPracticeZSnapshot,
   calculateOfficialZ,
   summarizeSavedPaperMarks,
+  appendPracticeZHistory,
+  upsertDailyPredictorHistory,
 } from "../zscore";
 import { buildExamScorePrediction, getEstimatedDistrictRank, getEstimatedIslandRank } from "../../lib/scoreUtils";
 import { SYLLABUS } from "../../constants/syllabus";
@@ -58,5 +60,33 @@ assert.ok(predictor.projectedMarks.sft > 0);
 assert.ok(predictor.estimatedIslandRank >= 1);
 assert.ok(getEstimatedIslandRank(2.2) < getEstimatedIslandRank(1.2), "higher Z should produce a better island rank");
 assert.ok(getEstimatedDistrictRank(2.2) < getEstimatedDistrictRank(1.2), "higher Z should produce a better district rank");
+
+const mixedHistory = appendPracticeZHistory({
+  sft: { paperMarks: [{ title: "SFT", total: 60, time: 1 }] },
+  et: { paperMarks: [{ title: "ET", total: 60, time: 1 }] },
+  ict: { paperMarks: [{ title: "ICT", total: 60, time: 1 }] },
+  zScoreHistory: [{
+    date: "2026-07-01T00:00:00.000Z",
+    zScore: 1.1,
+    fingerprint: "predictor-old",
+    calculationBasis: "exam_score_predictor",
+  }],
+}, "Saved paper");
+assert.equal(mixedHistory.zScoreHistory.length, 2, "saving paper marks must preserve predictor history");
+
+const predictorOnce = upsertDailyPredictorHistory(mixedHistory, {
+  date: "2026-07-18T10:00:00.000Z",
+  zScore: 1.5,
+  subjectZScores: { sft: 1.4, et: 1.5, ict: 1.6 },
+  projectedMarks: { sft: 60, et: 61, ict: 62 },
+});
+assert.equal(predictorOnce.changed, true);
+const predictorAgain = upsertDailyPredictorHistory(predictorOnce.data, {
+  date: "2026-07-18T11:00:00.000Z",
+  zScore: 1.5,
+  subjectZScores: { sft: 1.4, et: 1.5, ict: 1.6 },
+  projectedMarks: { sft: 60, et: 61, ict: 62 },
+});
+assert.equal(predictorAgain.changed, false, "unchanged predictor data must not create a write loop");
 
 console.log("Z-score regression tests passed");

@@ -141,11 +141,13 @@ export function appendPracticeZHistory<T extends Record<string, any>>(appData: T
   const nextData = structuredClone(appData);
   const snapshot = buildPracticeZSnapshot(nextData);
   const existing = Array.isArray((nextData as any).zScoreHistory)
-    ? (nextData as any).zScoreHistory.filter((entry: any) => entry?.calculationBasis === "actual_saved_paper_marks")
+    ? (nextData as any).zScoreHistory
+        .filter((entry: any) => Number.isFinite(Number(entry?.zScore ?? entry?.overall)))
+        .map((entry: any) => ({ ...entry, zScore: Number(entry.zScore ?? entry.overall) }))
     : [];
 
   if (!snapshot.complete || snapshot.overall === null) {
-    (nextData as any).zScoreHistory = existing;
+    (nextData as any).zScoreHistory = existing.slice(-1000);
     return nextData;
   }
 
@@ -191,6 +193,60 @@ export function appendPracticeZHistory<T extends Record<string, any>>(appData: T
   const duplicateIndex = existing.findIndex((entry: any) => entry?.fingerprint === fingerprint);
   if (duplicateIndex >= 0) existing[duplicateIndex] = point;
   else existing.push(point);
-  (nextData as any).zScoreHistory = existing.slice(-60);
+  (nextData as any).zScoreHistory = existing
+    .sort((left: any, right: any) => Date.parse(String(left?.date || "")) - Date.parse(String(right?.date || "")))
+    .slice(-1000);
   return nextData;
 }
+
+export function upsertDailyPredictorHistory<T extends Record<string, any>>(
+  appData: T,
+  input: {
+    date?: string;
+    zScore: number;
+    subjectZScores: { sft: number; et: number; ict: number };
+    projectedMarks: { sft: number; et: number; ict: number };
+    estimatedDistrictRank?: number;
+    estimatedIslandRank?: number;
+    reason?: string;
+  },
+): { data: T; changed: boolean } {
+  const nextData = structuredClone(appData);
+  const history = Array.isArray((nextData as any).zScoreHistory)
+    ? (nextData as any).zScoreHistory.filter((entry: any) => Number.isFinite(Number(entry?.zScore ?? entry?.overall)))
+    : [];
+  const parsedDate = new Date(input.date || new Date().toISOString());
+  const timestamp = Number.isFinite(parsedDate.getTime()) ? parsedDate.toISOString() : new Date().toISOString();
+  const day = timestamp.slice(0, 10);
+  const fingerprint = `predictor:${day}:${input.projectedMarks.sft}:${input.projectedMarks.et}:${input.projectedMarks.ict}:${input.zScore}`;
+  const point = {
+    date: timestamp,
+    zScore: Number(input.zScore.toFixed(4)),
+    subjectZScores: input.subjectZScores,
+    projectedMarks: input.projectedMarks,
+    estimatedDistrictRank: input.estimatedDistrictRank,
+    estimatedIslandRank: input.estimatedIslandRank,
+    calculationBasis: "exam_score_predictor" as const,
+    official: false as const,
+    fingerprint,
+    reason: input.reason || "Exam Score Predictor progress updated",
+  };
+
+  const exactIndex = history.findIndex((entry: any) => entry?.fingerprint === fingerprint);
+  if (exactIndex >= 0) {
+    (nextData as any).zScoreHistory = history.slice(-1000);
+    return { data: nextData, changed: false };
+  }
+
+  const sameDayIndex = history.findIndex((entry: any) =>
+    entry?.calculationBasis === "exam_score_predictor" && String(entry?.date || "").slice(0, 10) === day,
+  );
+  if (sameDayIndex >= 0) history[sameDayIndex] = point;
+  else history.push(point);
+
+  (nextData as any).zScoreHistory = history
+    .sort((left: any, right: any) => Date.parse(String(left?.date || "")) - Date.parse(String(right?.date || "")))
+    .slice(-1000);
+  return { data: nextData, changed: true };
+}
+

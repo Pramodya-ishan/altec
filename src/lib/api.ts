@@ -54,11 +54,35 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     finalUrl = getLargeEndpointUrl((input as Request).url);
   }
 
-  // Ensure options.headers matches the Headers object
-  const response = await globalThis.fetch(finalUrl, {
+  // Ensure options.headers matches the Headers object. Expired Firebase ID
+  // tokens are refreshed once so progress reads/writes do not surface as false
+  // offline failures after a long-running browser session.
+  let response = await globalThis.fetch(finalUrl, {
     ...options,
-    headers
+    headers,
   });
+
+  if (response.status === 401 && auth?.currentUser && !(typeof ReadableStream !== "undefined" && options.body instanceof ReadableStream)) {
+    let code = "";
+    try {
+      const authError = await response.clone().json();
+      code = String(authError?.code || "");
+    } catch {
+      // Non-JSON 401 responses are not retried automatically.
+    }
+    if (["LOGIN_REQUIRED", "UNAUTHENTICATED", "AUTHENTICATED_USER_REQUIRED"].includes(code)) {
+      try {
+        const refreshedToken = await auth.currentUser.getIdToken(true);
+        headers.set("Authorization", `Bearer ${refreshedToken}`);
+        response = await globalThis.fetch(finalUrl, {
+          ...options,
+          headers,
+        });
+      } catch {
+        // Preserve the original authentication failure response semantics.
+      }
+    }
+  }
 
   const jsonSource = response.clone();
   response.json = async function() {

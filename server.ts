@@ -27,6 +27,8 @@ import { ttsRoutes } from "./server/tts/routes";
 import { voiceRoutes } from "./server/voice/routes";
 import { videoRoutes } from "./server/video/routes";
 import { lessonResourceRoutes } from "./server/lessonResources/routes";
+import { patchProgressMeta, readProgressData, summarizeProgressForAudit, writeProgressData } from "./server/firebase/progressStore";
+import { invalidateUserAIContext } from "./server/firebase/userContext";
 
 import { restoreVercelApiPathMiddleware } from "./server/utils/vercelApiPath";
 
@@ -313,96 +315,76 @@ import { requireRole } from "./server/utils/authGuards";
 app.get("/api/data", requireFirebaseUser, async (req: any, res) => {
   try {
     const user = req.user;
-    const db = getAdminDb();
-    let appData: any = null;
-
-    // 1. Fetch from progress/data under users/{uid} (canonical path)
-    const uidRef = db.collection("users").doc(user.uid).collection("progress").doc("data");
-    const uidSnap = await uidRef.get();
-    if (uidSnap.exists) {
-      appData = uidSnap.data()?.data || uidSnap.data();
-    }
-
-    // 2. Compatibility Adapter fallback to root users/{uid}
-    if (!appData) {
-      const rootUidSnap = await db.collection("users").doc(user.uid).get();
-      if (rootUidSnap.exists) {
-        appData = rootUidSnap.data()?.appData || rootUidSnap.data()?.data;
-      }
-    }
-
-    // 3. Compatibility Adapter fallback to legacy email documents
-    if (!appData && user.email) {
-      const legacyEmail = user.email.toLowerCase();
-      const emailRef = db.collection("users").doc(legacyEmail).collection("progress").doc("data");
-      const emailSnap = await emailRef.get();
-      if (emailSnap.exists) {
-        appData = emailSnap.data()?.data || emailSnap.data();
-      }
-
-      if (!appData) {
-        const rootEmailSnap = await db.collection("users").doc(legacyEmail).get();
-        if (rootEmailSnap.exists) {
-          appData = rootEmailSnap.data()?.appData || rootEmailSnap.data()?.data;
-        }
-      }
-
-      // If legacy data was found, migrate it synchronously to the canonical UID path
-      if (appData) {
-        console.log(`[DATA MIGRATION] Migrating data for user ${user.uid} from legacy email ${legacyEmail}`);
-        const batch = db.batch();
-        const payload = {
-          email: legacyEmail,
-          data: appData,
-          updatedAt: new Date().toISOString()
-        };
-        batch.set(uidRef, payload, { merge: true });
-        batch.set(db.collection("users").doc(user.uid), { appData }, { merge: true });
-        await batch.commit();
-      }
-    }
-
-    res.json({ ok: true, data: appData || null });
+    const progress = await readProgressData(user.uid, user.email);
+    res.json({
+      ok: true,
+      data: progress.data,
+      revision: progress.revision,
+      updatedAt: progress.updatedAt,
+      source: progress.source,
+      migrated: progress.migrated,
+    });
   } catch (error: any) {
-    res.status(401).json({ ok: false, error: error.message });
+    console.error("[PROGRESS_LOAD_FAILED]", {
+      requestId: req.requestId,
+      uid: req.user?.uid,
+      code: error?.code,
+      message: error?.message,
+    });
+    res.status(503).json({
+      ok: false,
+      code: "PROGRESS_LOAD_FAILED",
+      message: "Progress is temporarily unavailable. The app will retry automatically.",
+      requestId: req.requestId,
+    });
   }
 });
 
 app.post("/api/data", requireFirebaseUser, async (req: any, res) => {
   try {
     const user = req.user;
-    // Strictly ignore client-supplied 'email' or 'uid' or role fields to prevent role/admin forgery
-    const { data } = req.body;
+    const { data } = req.body || {};
 
-    // Validate schema - prevent role/admin/ownership fields from being written
-    if (data && (data.role || data.roles || data.admin || data.uid)) {
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
       return res.status(400).json({
         ok: false,
         code: "VALIDATION_FAILED",
-        message: "Modifying security-related fields is strictly prohibited."
+        message: "A valid progress payload is required.",
+      });
+    }
+    if (data.role || data.roles || data.admin || data.uid) {
+      return res.status(400).json({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        message: "Modifying security-related fields is strictly prohibited.",
       });
     }
 
-    const db = getAdminDb();
-    const batch = db.batch();
-
-    const payload = {
-      email: user.email?.toLowerCase() || "",
-      data: data || {},
-      updatedAt: new Date().toISOString()
-    };
-
-    // Set inside canonical path: users/{uid}/progress/data
-    const uidDocRef = db.collection("users").doc(user.uid).collection("progress").doc("data");
-    batch.set(uidDocRef, payload, { merge: true });
-
-    // Backup to root: users/{uid}
-    batch.set(db.collection("users").doc(user.uid), { appData: data || {} }, { merge: true });
-
-    await batch.commit();
-    res.json({ success: true, ok: true });
+    const result = await writeProgressData(user.uid, user.email, data);
+    invalidateUserAIContext(user.uid);
+    res.json({
+      success: true,
+      ok: true,
+      revision: result.revision,
+      updatedAt: result.updatedAt,
+    });
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: error.message });
+    console.error("[PROGRESS_SAVE_FAILED]", {
+      requestId: req.requestId,
+      uid: req.user?.uid,
+      code: error?.code,
+      message: error?.message,
+    });
+    const tooLarge = String(error?.message || "").toLowerCase().includes("too large")
+      || String(error?.code || "").includes("invalid-argument");
+    res.status(tooLarge ? 413 : 503).json({
+      ok: false,
+      code: tooLarge ? "PROGRESS_PAYLOAD_TOO_LARGE" : "PROGRESS_SAVE_FAILED",
+      message: tooLarge
+        ? "Progress contains too much embedded resource data. Remove duplicated local resource metadata and retry."
+        : "Progress could not be saved right now. The app will retry automatically.",
+      requestId: req.requestId,
+    });
   }
 });
 
@@ -426,86 +408,81 @@ app.get("/api/admin/users/resolve", requireFirebaseUser, requireRole("admin"), a
 app.post("/api/admin/support/data", requireFirebaseUser, requireRole("admin"), async (req: any, res) => {
   try {
     const adminUser = req.user;
-    const { targetUid, operation, reason, data } = req.body;
+    const { targetUid, operation, reason, data } = req.body || {};
 
     if (!targetUid || !operation || !reason) {
       return res.status(400).json({
         ok: false,
         code: "VALIDATION_FAILED",
-        message: "Missing targetUid, operation, or reason for administrative action."
+        message: "Missing targetUid, operation, or reason for administrative action.",
       });
     }
 
-    const db = getAdminDb();
-    const targetRef = db.collection("users").doc(targetUid);
-    const targetSnap = await targetRef.get();
-
-    if (!targetSnap.exists) {
-      return res.status(404).json({ ok: false, error: "Target user profile not found." });
+    let targetAuth: any = null;
+    try {
+      targetAuth = await getAdminAuth().getUser(String(targetUid));
+    } catch (error: any) {
+      if (error?.code === "auth/user-not-found") {
+        return res.status(404).json({ ok: false, code: "USER_NOT_FOUND", message: "Target user not found." });
+      }
+      throw error;
     }
 
-    let previousStateSummary = {};
-    if (targetSnap.exists) {
-      previousStateSummary = { appData: targetSnap.data()?.appData || {} };
-    }
+    const current = await readProgressData(String(targetUid), targetAuth.email || undefined);
+    const previousStateSummary = summarizeProgressForAudit(current.data);
 
     if (operation === "view") {
-      // Fetch target's progress data
-      let targetData: any = null;
-      const progRef = targetRef.collection("progress").doc("data");
-      const progSnap = await progRef.get();
-      if (progSnap.exists) {
-        targetData = progSnap.data()?.data || progSnap.data();
-      } else {
-        targetData = targetSnap.data()?.appData || targetSnap.data()?.data;
-      }
-
       await createAuditEvent({
         actorUid: adminUser.uid,
         actorRoles: adminUser.roles || ["admin"],
         operation: "admin_view_user_data",
         targetType: "user_data",
-        targetId: targetUid,
+        targetId: String(targetUid),
         previousState: previousStateSummary,
-        newState: { action: "viewed" },
+        newState: { action: "viewed", progressRevision: current.revision },
         reason,
-        result: "success"
+        result: "success",
       });
+      return res.json({
+        ok: true,
+        data: current.data,
+        revision: current.revision,
+        updatedAt: current.updatedAt,
+      });
+    }
 
-      return res.json({ ok: true, data: targetData });
-    } else if (operation === "edit") {
-      if (!data) {
-        return res.status(400).json({ ok: false, error: "Missing data payload for edit operation." });
+    if (operation === "edit") {
+      if (!data || typeof data !== "object") {
+        return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "Missing data payload for edit operation." });
       }
-
-      const batch = db.batch();
-      const payload = {
-        data,
-        updatedAt: new Date().toISOString()
-      };
-      batch.set(targetRef.collection("progress").doc("data"), payload, { merge: true });
-      batch.set(targetRef, { appData: data }, { merge: true });
-      await batch.commit();
-
+      const saved = await writeProgressData(String(targetUid), targetAuth.email || undefined, data);
+      invalidateUserAIContext(String(targetUid));
       await createAuditEvent({
         actorUid: adminUser.uid,
         actorRoles: adminUser.roles || ["admin"],
         operation: "admin_edit_user_data",
         targetType: "user_data",
-        targetId: targetUid,
+        targetId: String(targetUid),
         previousState: previousStateSummary,
-        newState: { appData: data },
+        newState: {
+          ...summarizeProgressForAudit(data),
+          progressRevision: saved.revision,
+        },
         reason,
-        result: "success"
+        result: "success",
       });
-
-      return res.json({ ok: true, message: "User data updated successfully by admin." });
-    } else {
-      return res.status(400).json({ ok: false, error: `Unsupported administrative operation: ${operation}` });
+      return res.json({
+        ok: true,
+        message: "User data updated successfully by admin.",
+        revision: saved.revision,
+        updatedAt: saved.updatedAt,
+      });
     }
+
+    return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: `Unsupported administrative operation: ${operation}` });
   } catch (error: any) {
     console.error("[ADMIN_SUPPORT_DATA] Failed", { requestId: req.requestId, code: error?.code });
-    res.status(500).json({ ok: false, error: "The administrative operation failed." });
+    res.status(503).json({ ok: false, code: "ADMIN_SUPPORT_DATA_FAILED", message: "The administrative operation failed." });
   }
 });
 
@@ -534,18 +511,14 @@ app.post("/api/profile/target-zscore", requireFirebaseUser, async (req: any, res
     }
 
     const db = getAdminDb();
+    const updatedAt = new Date().toISOString();
     const batch = db.batch();
-
-    // Write to profile/main
     const uidRef = db.collection("users").doc(user.uid).collection("profile").doc("main");
-    batch.set(uidRef, { targetZScore, updatedAt: new Date().toISOString() }, { merge: true });
-    batch.set(db.collection("users").doc(user.uid), { targetZScore, updatedAt: new Date().toISOString() }, { merge: true });
-
-    // Also write to progress/data for consistency
-    const progRef = db.collection("users").doc(user.uid).collection("progress").doc("data");
-    batch.set(progRef, { targetZScore, data: { targetZ: targetZScore }, updatedAt: new Date().toISOString() }, { merge: true });
-
+    batch.set(uidRef, { targetZScore, updatedAt }, { merge: true });
+    batch.set(db.collection("users").doc(user.uid), { targetZScore, updatedAt }, { merge: true });
     await batch.commit();
+    await patchProgressMeta(user.uid, { targetZ: targetZScore });
+    invalidateUserAIContext(user.uid);
 
     // Re-fetch context
     const { loadUserAIContext } = await import("./server/firebase/userContext");

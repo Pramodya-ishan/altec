@@ -216,7 +216,7 @@ function AuthOverlay() {
 }
 
 function AppContent() {
-  const { theme, isSidebarOpen, setCurrentView, user, isUserDataLoading, hasHydratedUserData } = useApp();
+  const { theme, isSidebarOpen, setCurrentView, user, hasHydratedUserData } = useApp();
   const location = useLocation();
   const isChatRoute = location.pathname === "/clora-x" || location.pathname === "/ai-chat";
 
@@ -258,7 +258,7 @@ function AppContent() {
               className="relative flex h-full min-h-0 w-full flex-1 flex-col"
             >
               <Suspense fallback={<PageSkeleton pathname={location.pathname} />}>
-                {user && isUserDataLoading && !hasHydratedUserData ? (
+                {user && !hasHydratedUserData ? (
                   <PageSkeleton pathname={location.pathname} />
                 ) : (
                 <Routes location={location}>
