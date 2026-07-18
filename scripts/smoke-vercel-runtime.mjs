@@ -1,6 +1,7 @@
 process.env.NODE_ENV = "production";
 process.env.VERCEL = "1";
 process.env.ALLOWED_ORIGINS = "https://smoke.invalid";
+process.env.VITE_FIREBASE_APP_CHECK_SITE_KEY = "test-app-check-site-key";
 process.env.FIREBASE_APP_CHECK_REQUIRED = "true";
 process.env.VIDEO_REQUIRE_APP_CHECK = "true";
 

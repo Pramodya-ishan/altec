@@ -112,10 +112,22 @@ const ENABLE_IMAGE_GENERATION = validateBoolean("ENABLE_IMAGE_GENERATION", true)
 const OCR_ENABLED = validateBoolean("OCR_ENABLED", false);
 
 const MAX_BODY_LIMIT_MB = validateNumber("MAX_BODY_LIMIT_MB", 2, 0.1, 100);
-const FIREBASE_APP_CHECK_REQUIRED = validateBoolean("FIREBASE_APP_CHECK_REQUIRED", NODE_ENV === "production");
+const FIREBASE_APP_CHECK_SITE_KEY = validateOptional("VITE_FIREBASE_APP_CHECK_SITE_KEY", "");
+const FIREBASE_APP_CHECK_CONFIGURED = Boolean(FIREBASE_APP_CHECK_SITE_KEY);
+const FIREBASE_APP_CHECK_REQUESTED = validateBoolean(
+  "FIREBASE_APP_CHECK_REQUIRED",
+  NODE_ENV === "production" && FIREBASE_APP_CHECK_CONFIGURED,
+);
+// Never require an App Check token that the browser cannot create. Firebase
+// Authentication and every route-level authorization check remain mandatory.
+const FIREBASE_APP_CHECK_REQUIRED = FIREBASE_APP_CHECK_REQUESTED && FIREBASE_APP_CHECK_CONFIGURED;
 const ENABLE_VIDEO = validateBoolean("ENABLE_VIDEO", true);
 const ENABLE_VIDEO_TRANSCODING = validateBoolean("ENABLE_VIDEO_TRANSCODING", false);
-const VIDEO_REQUIRE_APP_CHECK = validateBoolean("VIDEO_REQUIRE_APP_CHECK", false);
+const VIDEO_APP_CHECK_REQUESTED = validateBoolean(
+  "VIDEO_REQUIRE_APP_CHECK",
+  FIREBASE_APP_CHECK_REQUIRED,
+);
+const VIDEO_REQUIRE_APP_CHECK = VIDEO_APP_CHECK_REQUESTED && FIREBASE_APP_CHECK_CONFIGURED;
 const VIDEO_INPUT_BUCKET = validateOptional("VIDEO_INPUT_BUCKET", FIREBASE_STORAGE_BUCKET);
 const VIDEO_OUTPUT_BUCKET = validateOptional("VIDEO_OUTPUT_BUCKET", "");
 const VIDEO_ARCHIVE_BUCKET = validateOptional("VIDEO_ARCHIVE_BUCKET", "");
@@ -139,12 +151,6 @@ if (NODE_ENV === "production") {
   if (ALLOWED_ORIGINS.some((origin) => /localhost|127\.0\.0\.1/i.test(origin))) {
     errors.push("Localhost origins are not permitted in production ALLOWED_ORIGINS.");
   }
-  if (!FIREBASE_APP_CHECK_REQUIRED) {
-    errors.push("FIREBASE_APP_CHECK_REQUIRED must be true in production.");
-  }
-  if (!VIDEO_REQUIRE_APP_CHECK) {
-    errors.push("VIDEO_REQUIRE_APP_CHECK must be true in production.");
-  }
   if (DEV_BYPASS_AUTH) {
     errors.push("Development authentication bypass (DEV_BYPASS_AUTH) is not allowed in production.");
   }
@@ -157,6 +163,18 @@ if (NODE_ENV === "production") {
   if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
     errors.push("GOOGLE_APPLICATION_CREDENTIALS file mode is not allowed in production. Use Workload Identity / ADC.");
   }
+}
+
+
+if (NODE_ENV === "production" && FIREBASE_APP_CHECK_REQUESTED && !FIREBASE_APP_CHECK_CONFIGURED) {
+  console.warn(
+    "[CONFIG] App Check was requested without VITE_FIREBASE_APP_CHECK_SITE_KEY; continuing with Firebase Auth and server authorization.",
+  );
+}
+if (NODE_ENV === "production" && VIDEO_APP_CHECK_REQUESTED && !FIREBASE_APP_CHECK_CONFIGURED) {
+  console.warn(
+    "[CONFIG] Video App Check was requested without a client site key; authenticated playback access checks remain enabled.",
+  );
 }
 
 if (ENABLE_VIDEO_TRANSCODING && !VIDEO_OUTPUT_BUCKET) {
@@ -219,6 +237,7 @@ export function logEnvConfig() {
     ocrEnabled: env.OCR_ENABLED,
     videoEnabled: env.ENABLE_VIDEO,
     videoTranscodingEnabled: env.ENABLE_VIDEO_TRANSCODING,
+    appCheckConfigured: FIREBASE_APP_CHECK_CONFIGURED,
     appCheckRequired: env.FIREBASE_APP_CHECK_REQUIRED,
     videoAppCheckRequired: env.VIDEO_REQUIRE_APP_CHECK,
   });

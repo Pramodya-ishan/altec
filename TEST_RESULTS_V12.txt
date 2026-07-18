@@ -1,0 +1,43 @@
+CLORA X V12 FINAL VERIFICATION
+==============================
+
+PASS  npm run typecheck
+PASS  npm test
+  PASS source registry and schema tests
+  PASS Z-score regression tests
+  PASS Markdown/Sinhala normalization tests
+  PASS source authorization tests
+  PASS Google authentication strategy tests
+  PASS PDF extraction and preview tests
+  PASS AI response hygiene and visual-aid tests
+  PASS image-intent tests
+  PASS Direct PDF formatting and source-lock tests
+  PASS upload MIME/magic-byte tests
+  PASS unlimited request middleware test (no application 429)
+  PASS lesson resolver and paper routing tests
+  PASS capability and content permission tests
+  PASS Google credential validation tests
+  PASS App Check deployment fallback regression test
+  PASS secure video tests
+
+PASS  npm run verify:repair
+PASS  npm lockfile public-registry validation
+PASS  Vercel validation simulation without App Check site key
+  Result: warnings only; exit code 0
+  Effective FIREBASE_APP_CHECK_REQUIRED=false
+  Effective VIDEO_REQUIRE_APP_CHECK=false
+  Firebase Auth and route authorization retained
+
+PASS  vite build
+PASS  npm run bundle:vercel
+PASS  vercel-runtime/server.mjs generated
+PASS  vercel-runtime/pdf.worker.mjs generated
+PASS  vercel-runtime/google-gax-protos present
+PASS  native PDF preview assets present
+PASS  isolated pure-ESM Vercel runtime smoke test
+
+NON-BLOCKING WARNINGS
+---------------------
+- Several npm deprecation notices are from transitive dependencies.
+- Vite reports large chunks and one mixed static/dynamic import.
+- These warnings do not fail installation or deployment.

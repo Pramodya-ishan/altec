@@ -9,14 +9,21 @@ function required(name: string) {
   return value;
 }
 
-function requireOneOf(...names: string[]) {
-  if (!names.some((name) => process.env[name]?.trim())) {
-    throw new Error(`Configure one of: ${names.join(", ")}.`);
-  }
+function hasOneOf(...names: string[]) {
+  return names.some((name) => process.env[name]?.trim());
+}
+
+function parseOptionalBoolean(name: string): boolean | undefined {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return undefined;
+  if (["true", "1", "yes", "y", "t"].includes(raw)) return true;
+  if (["false", "0", "no", "n", "f"].includes(raw)) return false;
+  throw new Error(`${name} must be true or false.`);
 }
 
 export function validateVercelEnvironment() {
   const isVercel = process.env.VERCEL === "1";
+  const warnings: string[] = [];
   const credential = getGoogleServiceAccountFromEnvironment();
 
   if (!isVercel) {
@@ -62,22 +69,53 @@ export function validateVercelEnvironment() {
     if (origins.includes("*") || origins.some((origin) => /localhost|127\.0\.0\.1/i.test(origin))) {
       throw new Error("ALLOWED_ORIGINS must contain only explicit production/preview HTTPS origins.");
     }
-    if (process.env.FIREBASE_APP_CHECK_REQUIRED?.trim().toLowerCase() !== "true") {
-      throw new Error("FIREBASE_APP_CHECK_REQUIRED=true is required in Vercel.");
-    }
-    if (process.env.VIDEO_REQUIRE_APP_CHECK?.trim().toLowerCase() !== "true") {
-      throw new Error("VIDEO_REQUIRE_APP_CHECK=true is required in Vercel.");
-    }
-    required("VITE_FIREBASE_APP_CHECK_SITE_KEY");
-    required("ADMIN_EMAILS");
+    const appCheckSiteKey = process.env.VITE_FIREBASE_APP_CHECK_SITE_KEY?.trim() || "";
+    const appCheckRequested = parseOptionalBoolean("FIREBASE_APP_CHECK_REQUIRED");
+    const videoAppCheckRequested = parseOptionalBoolean("VIDEO_REQUIRE_APP_CHECK");
 
-    requireOneOf("SFT_SYLLABUS_STORAGE_PATH", "SFT_SYLLABUS_URL");
-    requireOneOf("ET_SYLLABUS_STORAGE_PATH", "ET_SYLLABUS_URL");
-    requireOneOf("ICT_SYLLABUS_STORAGE_PATH", "ICT_SYLLABUS_URL");
+    // App Check is an optional hardening layer. A missing reCAPTCHA site key must
+    // never make a deployment impossible or leave the frontend unable to call the
+    // authenticated API. The runtime enables enforcement automatically whenever a
+    // valid client site key is configured.
+    if (!appCheckSiteKey) {
+      warnings.push(
+        "VITE_FIREBASE_APP_CHECK_SITE_KEY is not configured; Firebase Auth and server authorization remain active, while App Check enforcement is disabled.",
+      );
+    }
+    if (appCheckRequested === true && !appCheckSiteKey) {
+      warnings.push(
+        "FIREBASE_APP_CHECK_REQUIRED=true was requested without a client site key; the runtime will safely fall back to authenticated requests instead of blocking every API call.",
+      );
+    }
+    if (videoAppCheckRequested === true && !appCheckSiteKey) {
+      warnings.push(
+        "VIDEO_REQUIRE_APP_CHECK=true was requested without a client site key; video routes will retain authentication and access checks but skip App Check until the key is configured.",
+      );
+    }
+    if (!process.env.ADMIN_EMAILS?.trim()) {
+      warnings.push("ADMIN_EMAILS is not configured; use Firebase custom claims for administrator/content-manager access.");
+    }
+
+    for (const [subject, names] of [
+      ["SFT", ["SFT_SYLLABUS_STORAGE_PATH", "SFT_SYLLABUS_URL"]],
+      ["ET", ["ET_SYLLABUS_STORAGE_PATH", "ET_SYLLABUS_URL"]],
+      ["ICT", ["ICT_SYLLABUS_STORAGE_PATH", "ICT_SYLLABUS_URL"]],
+    ] as const) {
+      if (!hasOneOf(...names)) {
+        warnings.push(`${subject} syllabus environment source is not configured; bundled/indexed fallbacks will be used when available.`);
+      }
+    }
   }
 
-  console.log(`Validated secure Vercel configuration for project ${credential.project_id}.`);
+  if (warnings.length > 0) {
+    console.warn("\n[VERCEL_ENV] Deployment configuration warnings:");
+    warnings.forEach((warning) => console.warn(`  - ${warning}`));
+    console.warn("");
+  }
+
+  console.log(`Validated Vercel configuration for project ${credential.project_id}.`);
 }
+
 
 try {
   validateVercelEnvironment();
