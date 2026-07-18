@@ -5,6 +5,7 @@ import { rm, stat } from "node:fs/promises";
 // older checkout cannot leave stale, insecure TypeScript files behind.
 const obsoletePaths = [
   "server/app.ts",
+  "server/dev.ts",
   "server/data/userRepository.ts",
   "data_users",
 ];

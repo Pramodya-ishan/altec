@@ -182,6 +182,7 @@ const appContextV11 = await read("src/context/AppContext.tsx");
 const browserE2EV11 = await read("scripts/run-browser-e2e.mjs");
 const tsconfigScriptsV11 = await read("tsconfig.scripts.json");
 const obsoleteCleanupV13 = await read("scripts/remove-obsolete-files.mjs");
+const tsconfigAppV14 = JSON.parse(await read("tsconfig.json"));
 
 assert(
   firestoreRulesV11.includes("function isAdmin()")
@@ -235,8 +236,18 @@ assert(
   "V11 mobile overflow/auth warning browser checks are incomplete",
 );
 assert(tsconfigScriptsV11.includes('"scripts/**/*.ts"'), "V11 operational scripts are excluded from typechecking");
-assert(obsoleteCleanupV13.includes("server/app.ts") && obsoleteCleanupV13.includes("server/data/userRepository.ts") && obsoleteCleanupV13.includes("data_users"), "V13 obsolete legacy-path cleanup is incomplete");
-assert(packageJson.scripts?.["pretypecheck"]?.includes("cleanup:obsolete") && packageJson.scripts?.["prebuild:vercel"]?.includes("cleanup:obsolete"), "V13 cleanup is not wired before typecheck/Vercel build");
+assert(
+  obsoleteCleanupV13.includes("server/app.ts")
+    && obsoleteCleanupV13.includes("server/dev.ts")
+    && obsoleteCleanupV13.includes("server/data/userRepository.ts")
+    && obsoleteCleanupV13.includes("data_users"),
+  "V14 obsolete legacy-path cleanup is incomplete",
+);
+assert(packageJson.scripts?.["pretypecheck"]?.includes("cleanup:obsolete") && packageJson.scripts?.["prebuild:vercel"]?.includes("cleanup:obsolete"), "V14 cleanup is not wired before typecheck/Vercel build");
+assert(
+  ["server/app.ts", "server/dev.ts", "server/data/userRepository.ts", "data_users"].every((path) => tsconfigAppV14.exclude?.includes(path)),
+  "V14 TypeScript defense-in-depth exclusions for obsolete legacy paths are incomplete",
+);
 
 const productionFilesV11 = (await readdir("src", { recursive: true }))
   .filter((entry) => /\.(ts|tsx|js|jsx)$/.test(String(entry)))
@@ -254,6 +265,14 @@ try {
   legacyServerAppMissing = true;
 }
 assert(legacyServerAppMissing, "V11 insecure legacy server/app.ts still exists");
+
+let legacyServerDevMissing = false;
+try {
+  await access("server/dev.ts");
+} catch {
+  legacyServerDevMissing = true;
+}
+assert(legacyServerDevMissing, "V14 obsolete server/dev.ts still exists");
 
 let legacyUserRepositoryMissing = false;
 try {

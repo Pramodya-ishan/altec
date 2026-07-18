@@ -1,0 +1,20 @@
+Clora X V14 validation results
+Date: 2026-07-18
+
+PASS  npm lockfile uses public registry URLs
+PASS  cleanup simulation removed server/app.ts
+PASS  cleanup simulation removed server/dev.ts
+PASS  cleanup simulation removed server/data/userRepository.ts
+PASS  cleanup simulation removed data_users
+PASS  pretypecheck invokes cleanup:obsolete
+PASS  prebuild:vercel invokes cleanup:obsolete
+PASS  tsconfig excludes server/app.ts
+PASS  tsconfig excludes server/dev.ts
+PASS  tsconfig excludes server/data/userRepository.ts
+PASS  tsconfig excludes data_users
+PASS  scripts/verify-production-repair.mjs
+PASS  existing V13 dist and isolated Vercel runtime retained
+PASS  application request-count rate limiting remains disabled
+
+ENVIRONMENT LIMITATION
+A fresh npm ci attempt in this sandbox failed during package retrieval with DNS EAI_AGAIN and npm's "Exit handler never called" error. This was not a source-code or lockfile validation failure. The user's Vercel build installed all 922 packages successfully before encountering the now-fixed stale server/dev.ts TypeScript error.
