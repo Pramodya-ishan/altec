@@ -33,6 +33,7 @@ function resultFromCache(cache: any) {
       lesson: cache.lesson || null,
     },
     confidence: Number(cache.confidence || 1),
+    completed: cache.completed !== false && cache.solvedAnswer?.complete !== false,
     extractionMethod: cache.extractionMethod || "indexed-cache",
   };
 }
@@ -128,6 +129,7 @@ ${allowOfficialAnswer ? "Copy officialAnswer only when it is explicitly printed 
     options,
     officialAnswer: allowOfficialAnswer ? extracted.officialAnswer || null : null,
     solvedAnswer,
+    completed: solvedAnswer?.complete !== false,
     explanationSinhala: extracted.explanationSinhala || solvedAnswer?.explanationSinhala || null,
     confidence: Number(extracted.confidence || 0.8),
     extractionMethod: "indexed_pdf_text",

@@ -94,44 +94,74 @@ type SyllabusContext = {
 async function collectSyllabusContext(params: SolveMcqParams): Promise<SyllabusContext> {
   if (!params.uid) return { text: "", pdfPart: null, referenceParts: [], referenceSources: [] };
 
-  const retrieval = await retrieveRelevantKnowledge({
-    uid: params.uid,
-    query: `${params.questionText}\n${params.options.join("\n")}`,
-    subject: params.subject,
-    limit: 12,
-  }).catch(() => ({ chunks: [] } as any));
+  const query = `${params.questionText}\n${params.options.join("\n")}`;
+  const [lessonRetrieval, generalRetrieval] = await Promise.all([
+    retrieveRelevantKnowledge({
+      uid: params.uid,
+      query,
+      subject: params.subject,
+      limit: 16,
+      strictLesson: true,
+    }).catch(() => ({ chunks: [], sources: [] } as any)),
+    retrieveRelevantKnowledge({
+      uid: params.uid,
+      query,
+      subject: params.subject,
+      limit: 12,
+    }).catch(() => ({ chunks: [], sources: [] } as any)),
+  ]);
 
-  const chunks = Array.isArray((retrieval as any)?.chunks) ? (retrieval as any).chunks : [];
-  const syllabusChunks = chunks
+  const lessonChunks = Array.isArray((lessonRetrieval as any)?.chunks) ? (lessonRetrieval as any).chunks : [];
+  const generalChunks = Array.isArray((generalRetrieval as any)?.chunks) ? (generalRetrieval as any).chunks : [];
+  const approvedIdentity = /lesson|syllabus|resource|reference|textbook|book|owner_syllabus|syllabus_resources/i;
+  const rejectedIdentity = /past[ -]?paper|model[ -]?paper|guess(?:ing)?|marking[ -]?scheme|question[ -]?paper/i;
+  const seen = new Set<string>();
+  const approvedChunks = [...lessonChunks, ...generalChunks]
     .filter((chunk: any) => {
-      const identity = `${chunk?.sourceType || ""} ${chunk?.title || ""}`;
+      const identity = `${chunk?.sourceType || ""} ${chunk?.title || ""} ${chunk?.sourceScope || ""}`;
       const sameQuestionSource = params.sourceId && String(chunk?.sourceId || "") === String(params.sourceId);
-      return !sameQuestionSource && !/past[ -]?paper|marking[ -]?scheme|question paper/i.test(identity);
+      if (sameQuestionSource || rejectedIdentity.test(identity)) return false;
+      return lessonChunks.includes(chunk) || approvedIdentity.test(identity);
     })
-    .slice(0, 8)
-    .map((chunk: any, index: number) => `[Syllabus evidence ${index + 1}]\n${String(chunk?.text || "").slice(0, 4_000)}`)
+    .filter((chunk: any) => {
+      const key = `${chunk?.sourceId || ""}:${chunk?.id || ""}:${String(chunk?.text || "").slice(0, 120)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return Boolean(String(chunk?.text || "").trim());
+    })
+    .slice(0, 12);
+
+  const syllabusChunks = approvedChunks
+    .map((chunk: any, index: number) => {
+      const priority = lessonChunks.includes(chunk) ? "Lesson resource" : "Approved syllabus resource";
+      const label = [chunk?.title, chunk?.lesson].filter(Boolean).join(" · ");
+      return `[${priority} ${index + 1}${label ? `: ${label}` : ""}]\n${String(chunk?.text || "").slice(0, 4_000)}`;
+    })
     .join("\n\n")
-    .slice(0, 24_000);
+    .slice(0, 32_000);
 
   const syllabusPdf = await getSubjectSyllabusGroundingPdf(params.uid, params.subject).catch(() => null);
   let pdfPart: any = null;
   if (syllabusPdf?.gcsUri) {
     pdfPart = { fileData: { fileUri: syllabusPdf.gcsUri, mimeType: "application/pdf" } };
   } else if (syllabusPdf?.buffer?.length) {
-    pdfPart = {
-      inlineData: {
-        mimeType: "application/pdf",
-        data: syllabusPdf.buffer.toString("base64"),
-      },
-    };
+    pdfPart = { inlineData: { mimeType: "application/pdf", data: syllabusPdf.buffer.toString("base64") } };
   }
 
   const reference = String(params.subject || "").toUpperCase() === "SFT"
-    ? await getSftReferenceGroundingParts(`${params.questionText}\n${params.options.join("\n")}`)
-      .catch(() => ({ parts: [], sources: [], domains: [] }))
+    ? await getSftReferenceGroundingParts(query).catch(() => ({ parts: [], sources: [], domains: [] }))
     : { parts: [], sources: [], domains: [] };
 
-  return { text: syllabusChunks, pdfPart, referenceParts: reference.parts, referenceSources: reference.sources };
+  return {
+    text: syllabusChunks,
+    pdfPart,
+    referenceParts: reference.parts,
+    referenceSources: [
+      ...((lessonRetrieval as any)?.sources || []),
+      ...((generalRetrieval as any)?.sources || []),
+      ...(reference.sources || []),
+    ],
+  };
 }
 
 
@@ -176,6 +206,9 @@ RULES:
 - Never call an AI-solved answer an official answer.
 - Use the syllabus only to solve the verified question. Never rewrite the question.
 - For SFT, do not import material from the separate A/L Biology/Chemistry/Physics/Mathematics syllabuses unless the supplied SFT syllabus or SFT resource evidence contains it.
+- Evidence priority is: matching Lesson Resources first, official subject syllabus second, approved subject reference books third.
+- The selected paper is authoritative only for the exact question wording, not for adding answer theory.
+- Do not introduce කෝක් කැම්බියම, කෝක් සෛල, පරිචර්මය, phellogen, phellem, phelloderm, or periderm unless that exact term appears in the verified question or supplied approved SFT evidence.
 - When generic knowledge conflicts with the supplied syllabus, follow the supplied syllabus.
 - Add a small visualAid only when a comparison or process diagram materially clarifies the answer.
 - visualAid must contain factual values derived from the verified question and your calculation; otherwise use type:"none".
@@ -261,9 +294,32 @@ export interface SolvedEssayResult {
   answerStatus: "ai_solved_from_verified_question_and_syllabus" | "unknown";
   scopeStatus: "in_syllabus" | "out_of_syllabus" | "unverified";
   syllabusBasis?: string | null;
+  complete: boolean;
+  answeredSubparts: string[];
+  missingSubparts: string[];
 }
 
-function normalizeEssayResult(value: any): SolvedEssayResult | null {
+export function extractQuestionSubparts(questionText: string): string[] {
+  const labels: string[] = [];
+  let section = "";
+  for (const rawLine of String(questionText || "").split(/\r?\n/gu)) {
+    const line = rawLine.trim();
+    const sectionMatch = line.match(/(?:^|\s)\(([A-Z])\)/u);
+    if (sectionMatch) section = sectionMatch[1];
+    const matches = line.matchAll(/\((i{1,3}|iv|v|vi{0,3}|ix|x|[a-h])\)/gu);
+    for (const match of matches) {
+      const key = section ? `${section}.${match[1]}` : match[1];
+      if (!labels.includes(key)) labels.push(key);
+    }
+  }
+  return labels;
+}
+
+function normalizeSubpartLabel(value: unknown): string {
+  return String(value || "").trim().replace(/[()\s]/gu, "").replace(/:/gu, ".");
+}
+
+function normalizeEssayResult(value: any, expectedSubparts: string[]): SolvedEssayResult | null {
   const scopeStatus = value?.inSyllabus === true
     ? "in_syllabus"
     : value?.inSyllabus === false
@@ -284,12 +340,26 @@ function normalizeEssayResult(value: any): SolvedEssayResult | null {
       answerStatus: "unknown",
       scopeStatus,
       syllabusBasis,
+      complete: true,
+      answeredSubparts: [],
+      missingSubparts: [],
     };
   }
   if (answerMarkdownSinhala.length < 40) return null;
   const keyPoints = Array.isArray(value?.keyPoints)
     ? value.keyPoints.map((item: unknown) => normalizeSinhalaUnicode(item).trim()).filter(Boolean).slice(0, 12)
     : [];
+  const declared = Array.isArray(value?.answeredSubparts)
+    ? value.answeredSubparts.map(normalizeSubpartLabel).filter(Boolean)
+    : [];
+  const inferred = extractQuestionSubparts(answerMarkdownSinhala).map(normalizeSubpartLabel);
+  const answeredSubparts = Array.from(new Set([...declared, ...inferred]));
+  const missingSubparts = expectedSubparts
+    .map(normalizeSubpartLabel)
+    .filter((label) => !answeredSubparts.includes(label));
+  const complete = expectedSubparts.length === 0
+    ? value?.complete !== false
+    : missingSubparts.length === 0;
   return {
     answerMarkdownSinhala,
     keyPoints,
@@ -297,18 +367,24 @@ function normalizeEssayResult(value: any): SolvedEssayResult | null {
     answerStatus: "ai_solved_from_verified_question_and_syllabus",
     scopeStatus,
     syllabusBasis,
+    complete,
+    answeredSubparts,
+    missingSubparts,
   };
 }
 
 export async function solveExtractedEssayQuestion(params: SolveEssayParams): Promise<SolvedEssayResult | null> {
   if (!params.questionText || params.questionText.trim().length < 20) return null;
   const syllabusContext = await collectSyllabusContext({ ...params, options: [] });
+  const expectedSubparts = extractQuestionSubparts(params.questionText);
   const parts: any[] = [];
   if (syllabusContext.pdfPart) parts.push(syllabusContext.pdfPart);
   if (Array.isArray(syllabusContext.referenceParts)) parts.push(...syllabusContext.referenceParts);
   parts.push({
     text: `VERIFIED QUESTION FROM THE SELECTED PDF:
 ${params.questionText}
+
+EXPECTED SUBPARTS: ${expectedSubparts.length > 0 ? expectedSubparts.join(", ") : "No explicit subpart labels detected"}
 
 ` +
       `INDEXED APPROVED SFT EVIDENCE:
@@ -330,28 +406,45 @@ NON-NEGOTIABLE RULES:
 - Write natural Sri Lankan classroom Sinhala in correct Unicode. Use ප්‍ර, ශ්‍ර, ක්‍ර, ද්‍ර, ත්‍ර and other conjuncts correctly.
 - Do not output duplicate arrows such as → →.
 - Use concise exam-answer wording, with the original i), ii), a), b) labels where present.
-- Return JSON only with: inSyllabus, syllabusBasis, answerMarkdownSinhala, keyPoints, confidence.
+- Return JSON only with: inSyllabus, syllabusBasis, answerMarkdownSinhala, keyPoints, answeredSubparts, missingSubparts, complete, confidence.
+- answeredSubparts must use section-qualified labels exactly, for example A.i, A.ii, B.i.
+- complete may be true only when every readable label in EXPECTED SUBPARTS is answered.
+- For SFT, do not introduce කෝක් කැම්බියම, කෝක් සෛල, පරිචර්මය, phellogen, phellem, phelloderm, or periderm unless that exact term appears in the verified question or supplied approved SFT evidence.
 `;
 
+  let incompleteResult: SolvedEssayResult | null = null;
   for (const task of ["direct_pdf_solve", "final_answer"] as const) {
     try {
+      const retryInstruction = incompleteResult
+        ? `\n\nPREVIOUS ANSWER WAS INCOMPLETE. Missing labels: ${incompleteResult.missingSubparts.join(", ")}. Return one complete replacement answer, not a continuation fragment. Previous answer:\n${incompleteResult.answerMarkdownSinhala}`
+        : "";
+      const requestParts = retryInstruction ? [...parts, { text: retryInstruction }] : parts;
       const { result } = await callGeminiWithFallback(task, {
         model: "ignored",
-        contents: [{ role: "user", parts }],
+        contents: [{ role: "user", parts: requestParts }],
         config: {
           systemInstruction,
           temperature: 0,
           responseMimeType: "application/json",
-          maxOutputTokens: 5_000,
+          maxOutputTokens: 8_192,
         },
       } as any);
       if (!result.text) continue;
       const parsed = parseJsonResponse(result.text);
-      const normalized = normalizeEssayResult(parsed);
-      if (normalized) return normalized;
+      const normalized = normalizeEssayResult(parsed, expectedSubparts);
+      if (!normalized) continue;
+      if (normalized.scopeStatus !== "in_syllabus" || normalized.complete) return normalized;
+      incompleteResult = normalized;
     } catch (error) {
       console.error(`[AI_CORE] Essay solver ${task} failed:`, error);
     }
+  }
+  if (incompleteResult) {
+    return {
+      ...incompleteResult,
+      answerMarkdownSinhala: `${incompleteResult.answerMarkdownSinhala}\n\n> නොසම්පූර්ණව කියවුණු කොටස්: ${incompleteResult.missingSubparts.join(", ")}. මෙම කොටස් අනුමාන කර පුරවා නැහැ.`,
+      complete: false,
+    };
   }
   return null;
 }

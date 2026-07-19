@@ -212,6 +212,7 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
         if (solved) {
           await trackAIUsage(uid, AI_MODELS.pdf, 500, 500, "solverCalls");
           result.answer = { ...result.answer, solvedAnswer: solved };
+          result.completed = !("complete" in solved) || solved.complete !== false;
           if (!result.answer.explanationSinhala && "explanationSinhala" in solved && solved.explanationSinhala) {
             result.answer.explanationSinhala = solved.explanationSinhala;
           }
@@ -405,6 +406,7 @@ export async function askGeminiExtractedTextStructured(params: {
           ? solved.explanationSinhala || parsed.answer?.explanationSinhala || null
           : parsed.answer?.explanationSinhala || null,
       };
+      parsed.completed = !("complete" in solved) || solved.complete !== false;
     }
   }
 

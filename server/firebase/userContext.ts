@@ -1,6 +1,8 @@
 import { getAdminDb } from "./admin";
 import { buildExamScorePrediction } from "../../src/lib/scoreUtils";
 import { readProgressData } from "./progressStore";
+import { loadMistakeRecords } from "./mistakeStore";
+import { mergeZScoreHistory, pickLatestZScoreEntry } from "./zScoreContext";
 
 const contextCache = new Map<string, { data: any; timestamp: number }>();
 const CACHE_TTL = 10000; // 10 seconds cache to be responsive to changes
@@ -64,12 +66,11 @@ export async function loadUserAIContext(uid: string, email?: string) {
       userEmailRef ? userEmailRef.collection("chat_history").orderBy("createdAt", "desc").limit(15).get().catch(() => ({ docs: [] })) : { docs: [] }
     ]);
 
-    const [mistakeSnapshot, weakPointSnapshot, commonSignalSnapshot] = await Promise.all([
-      userUidRef.collection("mistake_notebook").orderBy("updatedAt", "desc").limit(30).get().catch(() => ({ docs: [] } as any)),
+    const [recentMistakes, weakPointSnapshot, commonSignalSnapshot] = await Promise.all([
+      loadMistakeRecords(uid, email, 30).catch(() => []),
       userUidRef.collection("weak_points").orderBy("updatedAt", "desc").limit(30).get().catch(() => ({ docs: [] } as any)),
       db.collection("learning_signal_aggregates").orderBy("count", "desc").limit(12).get().catch(() => ({ docs: [] } as any)),
     ]);
-    const recentMistakes = (mistakeSnapshot as any).docs.map((document: any) => ({ id: document.id, ...document.data() }));
     const learnedWeakPoints = (weakPointSnapshot as any).docs.map((document: any) => ({ id: document.id, ...document.data() }));
     const commonLearningSignals = (commonSignalSnapshot as any).docs.map((document: any) => ({ id: document.id, ...document.data() }));
 
@@ -284,24 +285,39 @@ export async function loadUserAIContext(uid: string, email?: string) {
     zScoreContext.message = "Derived from the Exam Score Predictor syllabus-completion model.";
     zScoreContext.projectedMarks = predictor.projectedMarks;
     zScoreContext.rawPaperAverages = predictor.projectedMarks;
-    zScoreContext.subjectZScores = predictor.subjectZScores;
-    zScoreContext.zScoreHistory = predictorHistory;
-    zScoreContext.latestOverallZScore = predictor.zScore;
+    const existingHistory = Array.isArray(zScoreContext.zScoreHistory) ? zScoreContext.zScoreHistory : [];
+    const mergedHistory = mergeZScoreHistory(existingHistory, predictorHistory);
+    const preferredLatest = pickLatestZScoreEntry(mergedHistory);
+    zScoreContext.zScoreHistory = mergedHistory;
+    if (preferredLatest) {
+      zScoreContext.calculationBasis = preferredLatest.source;
+      zScoreContext.message = /actual_saved_paper_marks|saved[_ -]?paper/i.test(preferredLatest.source)
+        ? "Derived from the student's real saved paper marks."
+        : "Derived from the Exam Score Predictor syllabus-completion model.";
+      zScoreContext.reliability = /actual_saved_paper_marks|saved[_ -]?paper/i.test(preferredLatest.source)
+        ? "saved_paper_estimate"
+        : "planning_estimate";
+      if ((preferredLatest as any).rawPaperAverages) zScoreContext.rawPaperAverages = (preferredLatest as any).rawPaperAverages;
+    }
+    zScoreContext.subjectZScores = preferredLatest && [preferredLatest.sft, preferredLatest.et, preferredLatest.ict].some((value) => value !== undefined)
+      ? { sft: preferredLatest.sft, et: preferredLatest.et, ict: preferredLatest.ict }
+      : predictor.subjectZScores;
+    zScoreContext.latestOverallZScore = preferredLatest?.overall ?? predictor.zScore;
     zScoreContext.rankEstimate = {
-      districtRank: predictor.estimatedDistrictRank,
-      islandRank: predictor.estimatedIslandRank,
+      ...(zScoreContext.rankEstimate || {}),
+      districtRank: zScoreContext.rankEstimate?.districtRank ?? predictor.estimatedDistrictRank,
+      islandRank: zScoreContext.rankEstimate?.islandRank ?? predictor.estimatedIslandRank,
       district: flatRanks.district,
-      estimated: true,
+      estimated: !zScoreContext.rankEstimate?.districtRank && !zScoreContext.rankEstimate?.islandRank,
     };
-    const rawLatestPredictorDate = predictorHistory[predictorHistory.length - 1]?.date;
-    const parsedLatestPredictorDate = new Date(String(rawLatestPredictorDate || ""));
-    zScoreContext.latestUpdatedAt = Number.isFinite(parsedLatestPredictorDate.getTime())
-      && parsedLatestPredictorDate.getFullYear() >= 2024
-      && parsedLatestPredictorDate.getFullYear() <= new Date().getFullYear() + 1
-      ? parsedLatestPredictorDate.toISOString()
+    const parsedLatestDate = new Date(String(preferredLatest?.date || ""));
+    zScoreContext.latestUpdatedAt = Number.isFinite(parsedLatestDate.getTime())
+      && parsedLatestDate.getFullYear() >= 2024
+      && parsedLatestDate.getFullYear() <= new Date().getFullYear() + 1
+      ? parsedLatestDate.toISOString()
       : new Date().toISOString();
     zScoreContext.gapToTarget = zScoreContext.targetZScore !== undefined
-      ? Number((zScoreContext.targetZScore - predictor.zScore).toFixed(4))
+      ? Number((zScoreContext.targetZScore - zScoreContext.latestOverallZScore).toFixed(4))
       : undefined;
     // ----------------------------------------------------------------------
     const contextData = {

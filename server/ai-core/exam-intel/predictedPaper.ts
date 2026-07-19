@@ -93,7 +93,7 @@ Rules:
     model: "ignored",
     contents: [{ role: "user", parts }],
     config: {
-      systemInstruction: "You are Clora X, created by Pramodya Ishan. Build evidence-based Sri Lankan A/L Technology revision forecasts. Stay inside the official syllabus. Output JSON only and never claim certainty about the real 2026 paper.",
+      systemInstruction: "You are the project's evidence-based study assistant, created by Pramodya Ishan. Build evidence-based Sri Lankan A/L Technology revision forecasts. Stay inside the official syllabus. Output JSON only and never claim certainty about the real 2026 paper.",
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,

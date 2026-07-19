@@ -1,0 +1,29 @@
+V18 FINAL VALIDATION
+====================
+
+PASS  npm run check:npm-registry
+PASS  npm run typecheck
+PASS  Registered source tests (executed; remaining tests also verified individually after a sandbox command-duration interruption)
+PASS  npm run test:knowledge
+PASS  npm run test:security
+PASS  npm run test:video
+PASS  npm run test:integration
+PASS  npm run verify:repair
+PASS  Legacy Sinhala regression tests
+PASS  Error Log dual-path merge tests
+PASS  Z-score history merge tests
+PASS  Essay completeness tests
+PASS  Source selection and indexed-question tests
+PASS  Frontend Vite production build
+PASS  npm run bundle:vercel
+PASS  49 Vercel runtime import checks
+PASS  Isolated pure-ESM Vercel runtime boot
+PASS  Public npm lockfile registry validation
+
+Expected non-failure warning:
+- Frontend has several chunks above 500 kB. This is a performance warning, not a build failure.
+
+Not executed against live services:
+- Production Firebase data migration/read/write
+- Production Gemini/OCR/document-vision request
+- Production Vercel deployment

@@ -697,7 +697,9 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
             return { ok: true, ...visualResult, extractionMethod: "gemini_pdf_visual" };
           }
         }
-        if (localExtraction.text.trim().length >= 80 && localExtraction.textEncoding !== "legacy_fm_abhaya") {
+        const hasTrustedLegacyText = localExtraction.textEncoding === "legacy_fm_abhaya"
+          && localExtraction.pages.some((page: any) => page.pageQuality === "legacy_convertible" && Number(page.conversionConfidence || 0) >= 0.62);
+        if (localExtraction.text.trim().length >= 80 && (localExtraction.textEncoding !== "legacy_fm_abhaya" || hasTrustedLegacyText)) {
           const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
           const matchingPages = localExtraction.pages.filter((page: any) => hasExactQuestionMarker(page.text || page.rawText || "", targetNo));
           const candidateText = matchingPages

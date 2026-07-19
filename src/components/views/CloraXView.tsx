@@ -41,7 +41,8 @@ import {
   Volume2,
   VolumeX,
   Image as ImageIcon,
-  Lock
+  Lock,
+  History
 } from 'lucide-react';
 import { SourceCard } from '../ui/SourceCard';
 import { MessageRenderer } from '../ui/MessageRenderer';
@@ -71,6 +72,47 @@ type ChatUpload = {
   attachmentType?: "pdf" | "image" | "text" | "archive";
   textContent?: string;
 };
+
+
+type SavedChatHistoryItem = {
+  id?: string;
+  requestId?: string;
+  userPrompt?: string;
+  assistantAnswer?: string;
+  role?: "user" | "assistant";
+  text?: string;
+  content?: string;
+  createdAt?: string;
+  sources?: any[];
+  summary?: string[];
+};
+
+function flattenSavedHistory(history: SavedChatHistoryItem[]) {
+  const flattened: any[] = [];
+  history.forEach((item) => {
+    const baseId = item.id || item.requestId || generateUUID();
+    if (item.userPrompt) {
+      flattened.push({ role: 'user', content: item.userPrompt, id: `${baseId}_user`, createdAt: item.createdAt || new Date().toISOString() });
+    } else if (item.role === 'user') {
+      flattened.push({ role: 'user', content: item.text || item.content || '', id: baseId, createdAt: item.createdAt || new Date().toISOString() });
+    }
+    const answer = item.assistantAnswer || (item.role === 'assistant' ? item.text || item.content || '' : '');
+    if (answer) {
+      const extracted = extractVisualBlocks(answer);
+      flattened.push({
+        role: 'assistant',
+        content: extracted.cleanText,
+        id: item.userPrompt ? `${baseId}_assistant` : baseId,
+        sources: item.sources || [],
+        summary: item.summary || [],
+        createdAt: item.createdAt || new Date().toISOString(),
+        status: 'done',
+        visualBlocks: extracted.blocks,
+      });
+    }
+  });
+  return flattened;
+}
 
 function generateUUID() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -159,6 +201,9 @@ const [messages, setMessages] = useState<{
   const [indexingFailed, setIndexingFailed] = useState(false);
   const [pendingIngestData, setPendingIngestData] = useState<any[]>([]);
   const [isClearingChat, setIsClearingChat] = useState(false);
+  const [showChatHistory, setShowChatHistory] = useState(false);
+  const [savedChatHistory, setSavedChatHistory] = useState<SavedChatHistoryItem[]>([]);
+  const [isLoadingChatHistory, setIsLoadingChatHistory] = useState(false);
 
   // Voice Tutor States
   const [isListening, setIsListening] = useState(false);
@@ -416,69 +461,29 @@ const [messages, setMessages] = useState<{
     return () => window.removeEventListener('clora-send', handleSend);
   }, []);
 
-  // Load chat history from /api/ai/chat-history
-  useEffect(() => {
-    const loadHistory = async () => {
-      try {
-        const res = await apiFetch("/api/ai/chat-history");
-        const data = await res.json().catch(() => null);
-        if (res.ok && data?.chatHistory && data.chatHistory.length > 0) {
-            const flattened: any[] = [];
-            data.chatHistory.forEach((m: any) => {
-              const baseId = m.id || m.requestId || generateUUID();
-              if (m.userPrompt) {
-                flattened.push({
-                  role: 'user',
-                  content: m.userPrompt,
-                  id: baseId + '_user',
-                  createdAt: m.createdAt || new Date().toISOString()
-                });
-              } else if (m.role === 'user') {
-                flattened.push({
-                  role: 'user',
-                  content: m.text || m.content,
-                  id: baseId,
-                  createdAt: m.createdAt || new Date().toISOString()
-                });
-              }
+  const loadChatHistory = React.useCallback(async (mergeIntoCurrent = true) => {
+    setIsLoadingChatHistory(true);
+    try {
+      const response = await apiFetch("/api/ai/chat-history");
+      const data = await response.json().catch(() => null);
+      const history = response.ok && Array.isArray(data?.chatHistory) ? data.chatHistory as SavedChatHistoryItem[] : [];
+      setSavedChatHistory(history);
+      if (mergeIntoCurrent && history.length > 0) {
+        const flattened = flattenSavedHistory(history);
+        setMessages((previous) => isStreamingRef.current ? previous : mergeMessages(previous, flattened));
+      }
+      return history;
+    } catch (error) {
+      console.warn("Failed to load history", error);
+      return [];
+    } finally {
+      setIsLoadingChatHistory(false);
+    }
+  }, []);
 
-              if (m.assistantAnswer) {
-                const extracted = extractVisualBlocks(m.assistantAnswer);
-                flattened.push({
-                  role: 'assistant',
-                  content: extracted.cleanText,
-                  id: baseId,
-                  sources: m.sources || [],
-                  summary: m.summary || [],
-                  createdAt: m.createdAt || new Date().toISOString(),
-                  status: 'done',
-                  visualBlocks: extracted.blocks
-                });
-              } else if (m.role === 'assistant') {
-                const extracted = extractVisualBlocks(m.text || m.content || "");
-                flattened.push({
-                  role: 'assistant',
-                  content: extracted.cleanText,
-                  id: baseId,
-                  sources: m.sources || [],
-                  summary: m.summary || [],
-                  createdAt: m.createdAt || new Date().toISOString(),
-                  status: 'done',
-                  visualBlocks: extracted.blocks
-                });
-              }
-            });
-            setMessages(prev => {
-              if (isStreamingRef.current) return prev;
-              return mergeMessages(prev, flattened);
-            });
-          }
-        } catch (e) {
-          console.warn("Failed to load history", e);
-        }
-      };
-      loadHistory();
-    }, []);
+  useEffect(() => {
+    void loadChatHistory(true);
+  }, [loadChatHistory]);
 
   const handleRetryIndexing = async () => {
     if (pendingIngestData.length === 0) return;
@@ -1437,6 +1442,8 @@ const [messages, setMessages] = useState<{
       const response = await apiFetch("/api/ai/chat-history/clear", { method: "POST" });
       const data = await response.json().catch(() => null);
       if (!response.ok || !data?.ok) throw new Error(data?.error || "Chat history could not be cleared.");
+      setSavedChatHistory([]);
+      setShowChatHistory(false);
       handleNewChat();
       showNotification("Chat cleared.", "success");
     } catch (error: any) {
@@ -1448,9 +1455,20 @@ const [messages, setMessages] = useState<{
 
   useEffect(() => {
     const startNewChat = () => handleNewChat();
+    const clearChat = () => void handleClearChat();
+    const openHistory = () => {
+      setShowChatHistory(true);
+      void loadChatHistory(false);
+    };
     window.addEventListener('clora:new-chat', startNewChat);
-    return () => window.removeEventListener('clora:new-chat', startNewChat);
-  }, [handleNewChat]);
+    window.addEventListener('clora:clear-chat', clearChat);
+    window.addEventListener('clora:history', openHistory);
+    return () => {
+      window.removeEventListener('clora:new-chat', startNewChat);
+      window.removeEventListener('clora:clear-chat', clearChat);
+      window.removeEventListener('clora:history', openHistory);
+    };
+  }, [handleClearChat, handleNewChat, loadChatHistory]);
 
   const isEmptyChat = messages.length <= 1 && !isStreaming;
 
@@ -1515,21 +1533,59 @@ const [messages, setMessages] = useState<{
             recentAttachmentIds={uploadedFiles.map((file) => file.storagePath).filter(Boolean) as string[]}
           />
 
-          {!isEmptyChat && (
-            <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-100 bg-white px-4 sm:px-6">
-              <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Clora X</span>
-              <button
-                type="button"
-                onClick={handleClearChat}
-                disabled={isClearingChat}
-                className="inline-flex h-9 items-center gap-2 rounded-full px-3 text-xs font-semibold text-slate-500 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50"
-                aria-label="Clear chat history"
+          <AnimatePresence>
+            {showChatHistory && (
+              <motion.div
+                className="fixed inset-0 z-[120] flex items-stretch justify-end bg-slate-950/30 backdrop-blur-[2px]"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onMouseDown={(event) => { if (event.target === event.currentTarget) setShowChatHistory(false); }}
               >
-                {isClearingChat ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                <span>Clear chat</span>
-              </button>
-            </div>
-          )}
+                <motion.aside
+                  initial={{ x: 36, opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  exit={{ x: 36, opacity: 0 }}
+                  className="flex h-full w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl"
+                  aria-label="Chat history"
+                >
+                  <div className="flex h-16 items-center justify-between border-b border-slate-200 px-5">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                      <History className="h-4 w-4" />
+                      Chat history
+                    </div>
+                    <button type="button" onClick={() => setShowChatHistory(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100" aria-label="Close chat history"><X className="h-4 w-4" /></button>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                    {isLoadingChatHistory ? (
+                      <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading history…</div>
+                    ) : savedChatHistory.length === 0 ? (
+                      <div className="py-12 text-center text-sm text-slate-500">No saved conversations yet.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {savedChatHistory.map((item, index) => (
+                          <button
+                            type="button"
+                            key={item.id || item.requestId || index}
+                            onClick={() => {
+                              const restored = flattenSavedHistory(savedChatHistory.slice(0, index + 1));
+                              setMessages([{ role: 'assistant', content: 'Ask about a lesson, paper, question, or result.', id: 'welcome' }, ...restored]);
+                              setShowChatHistory(false);
+                            }}
+                            className="w-full rounded-xl border border-slate-200 p-3 text-left transition hover:border-slate-300 hover:bg-slate-50"
+                          >
+                            <div className="line-clamp-2 text-sm font-semibold text-slate-800">{item.userPrompt || item.text || item.content || 'Saved conversation'}</div>
+                            <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{item.assistantAnswer || (item.role === 'assistant' ? item.text || item.content : '') || 'Open conversation'}</div>
+                            <div className="mt-2 text-[11px] text-slate-400">{item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Saved chat'}</div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </motion.aside>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <div className="clora-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-white" ref={scrollRef}>
             {isEmptyChat ? (

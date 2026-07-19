@@ -195,7 +195,14 @@ export function formatDirectPdfAnswer(input: DirectPdfAnswerFormatterInput) {
     sections.push(options.map((option: string) => `**${option.match(/^\([1-5]\)/)?.[0] || ""}**${option.replace(/^\([1-5]\)/, "")}`).join("\n\n"));
   }
   if (finalAnswerText) {
-    sections.push(`### පිළිතුර\n\n**${finalAnswerText}**`);
+    const isEssay = Boolean(essayAnswer) || /ESSAY|STRUCTURED/i.test(String(questionType || ""));
+    sections.push(`### පිළිතුර\n\n${isEssay ? finalAnswerText : `**${finalAnswerText}**`}`);
+  }
+  if (solvedAnswer?.complete === false) {
+    const missing = Array.isArray(solvedAnswer?.missingSubparts)
+      ? solvedAnswer.missingSubparts.map(clean).filter(Boolean).join(", ")
+      : "";
+    sections.push(`> පිළිතුර සම්පූර්ණ නොවීය${missing ? `: කියවීමට නොහැකි කොටස් ${missing}` : ""}. නොපෙනෙන කොටස් අනුමාන කර නැහැ.`);
   }
   if (explanation) {
     sections.push(`### පැහැදිලි කිරීම\n\n${explanation}`);

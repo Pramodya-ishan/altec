@@ -808,7 +808,7 @@ if exist "%OUT_FILE%" (
                   <option value="brave">Brave Browser (Authed session)</option>
                   <option value="none">No Cookies (Anonymous Fetch)</option>
                 </select>
-                <p className="text-[11px] text-slate-400">The generated script reads the selected browser session locally on your computer. No account cookies are uploaded to Clora X.</p>
+                <p className="text-[11px] text-slate-400">The generated script reads the selected browser session locally on your computer. No account cookies are uploaded to the website.</p>
               </div>
 
               {/* FFmpeg Combine Toggle */}

@@ -26,6 +26,8 @@ import { deriveEducationalVisualBlocks } from "./visualAidBuilder";
 import { buildImageReferenceText, isImageGenerationIntent } from "./imageIntent";
 import { getSubjectSyllabusGroundingPdf } from "../pdf/syllabusGrounding";
 import { extractQuestionNumberFromPrompt, inferQuestionTypeFromText, parseSourceChoiceIndex, rankNamedSources, selectNamedSource, toPendingSourceChoice } from "./sourceSelection";
+import { isMistakeReviewIntent } from "../firebase/mistakeStore";
+import { detectSinhalaTextEncoding, normalizeSinhalaExtractedText } from "../pdf/legacySinhala";
 
 interface StreamTrace {
   requestId: string;
@@ -200,8 +202,24 @@ export async function aiRespondStream(req: any, res: any) {
   });
 
   try {
-    const { prompt, activeSubject, mode: requestedMode = "auto", history = [], image, attachments } = req.body;
+    const { prompt: submittedPrompt, activeSubject, mode: requestedMode = "auto", history = [], image, attachments } = req.body;
     const user = req.user;
+    const originalPrompt = String(submittedPrompt || "");
+    let prompt = originalPrompt;
+    const promptEncoding = detectSinhalaTextEncoding(originalPrompt);
+    if (promptEncoding.encoding === "legacy_fm_abhaya" || promptEncoding.encoding === "legacy_unknown") {
+      const convertedPrompt = normalizeSinhalaExtractedText(originalPrompt);
+      if (convertedPrompt.normalizedText) {
+        prompt = convertedPrompt.normalizedText;
+        emitSse(res, "status", { step: "legacy_sinhala", status: "converted", message: "Converted legacy Sinhala text to Unicode." });
+      } else {
+        prompt = `[UNREADABLE LEGACY SINHALA TEXT]
+The following pasted legacy-font text could not be converted reliably. Do not infer, reconstruct, or answer missing words from general memory. Ask for the original PDF/page image or use the selected saved PDF with document vision.
+
+${originalPrompt}`;
+        emitSse(res, "status", { step: "legacy_sinhala", status: "ocr_required", message: "Legacy Sinhala needs the original PDF or page image." });
+      }
+    }
 
     // Check Daily Safety Limit Guardrails (REMOVED)
     const { trackAIUsage } = await import("../cost/usageTracker");
@@ -640,7 +658,17 @@ export async function aiRespondStream(req: any, res: any) {
             const name = String(source.fileName || source.title || "").toLowerCase();
             return kind === "pdf" || name.endsWith(".pdf");
           })
-          .sort((a: any, b: any) => scoreSource(b, prompt) - scoreSource(a, prompt))
+          .sort((a: any, b: any) => {
+            const sourceRequest = {
+              subject: route.entities.subject || activeSubject || undefined,
+              year: route.entities.year || undefined,
+              resourceType: route.entities.resourceType || undefined,
+              paperType: route.entities.questionType || route.entities.paperType || undefined,
+              keywords: prompt.split(/\s+/).filter(Boolean),
+              ownerUid: user.uid,
+            };
+            return scoreSource(b, sourceRequest) - scoreSource(a, sourceRequest);
+          })
           .slice(0, 10)
           .map((source: any) => {
             const id = source.sourceId || source.id;
@@ -735,7 +763,12 @@ export async function aiRespondStream(req: any, res: any) {
           emitSse(res, "status", { step: "zscore_db", status: "reading" });
           const formatMetric = (value: unknown, digits = 4) =>
             typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "N/A";
-          let fastAns = `### Exam Score Predictor Z estimate\n\nඔයාගේ syllabus progress එකෙන් Exam Score Predictor ගණනය කළ planning estimate එක: **${formatMetric(zctx.latestOverallZScore)}**.\n`;
+          const usesSavedPaperHistory = /actual_saved_paper_marks|saved[_ -]?paper/i.test(String(zctx.calculationBasis || ""));
+          const estimateLabel = usesSavedPaperHistory ? "Saved-paper Z estimate" : "Exam Score Predictor Z estimate";
+          const estimateIntro = usesSavedPaperHistory
+            ? "ඔයා සුරැකි SFT, ET සහ ICT paper marks වලින් ගණනය කළ practice estimate එක"
+            : "ඔයාගේ syllabus progress එකෙන් Exam Score Predictor ගණනය කළ planning estimate එක";
+          let fastAns = `### ${estimateLabel}\n\n${estimateIntro}: **${formatMetric(zctx.latestOverallZScore)}**.\n`;
           fastAns += zctx.targetZScore !== undefined
             ? `Target Z-score එක: **${zctx.targetZScore}**.\n`
             : `Target Z-score එක තවම Profile එකේ set කරලා නැහැ.\n`;
@@ -753,7 +786,9 @@ export async function aiRespondStream(req: any, res: any) {
           fastAns += `\n`;
 
           if (zctx.latestUpdatedAt) fastAns += `*Last updated: ${new Date(zctx.latestUpdatedAt).toLocaleString("en-LK", { timeZone: "Asia/Colombo" })}*\n\n`;
-          fastAns += `> මේවා Exam Score Predictor planning estimates. Official exam Z-score හෝ official district/island rank නොවේ.`;
+          fastAns += usesSavedPaperHistory
+            ? `> මෙය සුරැකි paper marks මත ගණනය කළ practice estimate එකක්. Official exam Z-score හෝ official rank එකක් නොවේ.`
+            : `> මේවා Exam Score Predictor planning estimates. Official exam Z-score හෝ official district/island rank නොවේ.`;
 
           emitSse(res, "token", { text: fastAns });
           trace.lastEvent = "token";
@@ -769,6 +804,57 @@ export async function aiRespondStream(req: any, res: any) {
           trace.doneSent = true;
           trace.lastEvent = "done";
           return;
+    }
+
+    // A2. DETERMINISTIC SAVED ERROR LOG INTENT
+    // Do not ask the model to decide whether the notebook is empty. The server
+    // has already merged current UID records with legacy email-keyed records.
+    const isMistakeWriteRequest = /(?:save|add|log|record|store|සේව්|සුරකි|එකතු)\s+(?:this|it|මේ|මෙය|mistake|error)/iu.test(String(prompt || ""));
+    if (isMistakeReviewIntent(prompt) && !isMistakeWriteRequest) {
+      emitSse(res, "status", { step: "mistake_notebook", status: "reading", message: "Reading your saved Error Log…" });
+      const records = Array.isArray(userContext?.recentMistakes) ? userContext.recentMistakes.slice(0, 12) : [];
+      let answerText = `### Error Log\n\n`;
+      if (records.length === 0) {
+        answerText += "ඔයාගේ current account UID path එකත් පැරණි email-based path එකත් දෙකම පරීක්ෂා කළා. මේ account එකට සුරැකි Error Log record එකක් හමු වුණේ නැහැ.";
+      } else {
+        answerText += `ඔයාගේ Error Log එකේ සුරැකි record **${records.length}ක්** හමු වුණා.\n\n`;
+        answerText += records.map((record: any, index: number) => {
+          const subject = String(record.subject || "Subject").toUpperCase();
+          const lesson = String(record.lesson || "පාඩම සඳහන් කර නැහැ").trim();
+          const detail = String(record.errorText || record.questionText || "Image-only saved mistake").trim().replace(/\s+/g, " ").slice(0, 320);
+          const imageNote = record.imageStoragePath ? " · saved image ඇත" : "";
+          const repeatNote = Number(record.repeatCount || 0) > 1 ? ` · වර ${Number(record.repeatCount)}ක් වැරදී ඇත` : "";
+          return `**${index + 1}. ${subject} — ${lesson}**${imageNote}${repeatNote}\n\n${detail}`;
+        }).join("\n\n");
+        answerText += "\n\nසාකච්ඡා කරන්න ඕන record අංකය දෙන්න. මම ඒ saved record එකේ ප්‍රශ්නය, වැරදුණු හේතුව, නිවැරදි ක්‍රමය සහ නැවත පුහුණු ප්‍රශ්නය දෙන්නම්.";
+      }
+      emitSse(res, "token", { text: answerText });
+      trace.lastEvent = "token";
+      const chatRes = await saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: answerText,
+        mode: "mistake_notebook",
+        subject: activeSubject,
+      });
+      if (chatRes?.chatSaved) {
+        trace.chatSaved = true;
+        trace.messageId = chatRes.messageId;
+      }
+      trace.completed = true;
+      emitSse(res, "done", {
+        ok: true,
+        completed: true,
+        requestId,
+        messageId: chatRes?.messageId || null,
+        chatSaved: trace.chatSaved,
+        sources: [],
+        finishReason: records.length > 0 ? "mistake_log_loaded" : "mistake_log_empty",
+      });
+      trace.doneSent = true;
+      trace.lastEvent = "done";
+      return;
     }
 
     // B. LESSON MARKS & WEIGHTING INTENT
@@ -866,7 +952,17 @@ export async function aiRespondStream(req: any, res: any) {
         ? (answerableSources.length > 0 ? answerableSources : pdfSources)
         : pdfSources;
       const displayedSources = [...inventoryBase]
-        .sort((a: any, b: any) => scoreSource(b, prompt) - scoreSource(a, prompt))
+        .sort((a: any, b: any) => {
+            const sourceRequest = {
+              subject: route.entities.subject || activeSubject || undefined,
+              year: route.entities.year || undefined,
+              resourceType: route.entities.resourceType || undefined,
+              paperType: route.entities.questionType || route.entities.paperType || undefined,
+              keywords: prompt.split(/\s+/).filter(Boolean),
+              ownerUid: user.uid,
+            };
+            return scoreSource(b, sourceRequest) - scoreSource(a, sourceRequest);
+          })
         .slice(0, 12);
 
       const sseSources = displayedSources.map((source: any) => {
@@ -1623,7 +1719,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       }
     }
 
-    const asksAboutMistakes = /mistake|error log|wrong answer|වැරදි|වරද|quiz me on my recent/i.test(prompt);
+    const asksAboutMistakes = isMistakeReviewIntent(prompt);
     if (asksAboutMistakes && Array.isArray(modifiedUserContext.recentMistakes)) {
       const recentMistakes = modifiedUserContext.recentMistakes.slice(0, 8);
       contentsParts[0].text += `\n\nRecent Mistake Notebook records (real saved data):\n${JSON.stringify(recentMistakes.map((mistake: any) => ({
@@ -1632,7 +1728,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         errorText: mistake.errorText || mistake.questionText,
         createdAt: mistake.createdAt,
         hasImage: Boolean(mistake.imageStoragePath),
-      })))}\nUse these records for diagnosis, revision, or a grounded quiz. If a saved image is attached below, inspect that actual image. Do not ask the user to upload it again. Never replace unreadable or missing details with generic likely mistakes; say exactly what cannot be read.`;
+      })))}\nThese are the user's real saved Error Log records. Start by acknowledging the exact number of saved records and summarize the most recent records by subject and lesson. Use them for diagnosis, revision, or a grounded quiz. Never say the Error Log is empty when this list contains records. If a saved image is attached below, inspect that actual image. Do not ask the user to upload it again. Never replace unreadable or missing details with generic likely mistakes; say exactly what cannot be read.`;
       const bucket = getAdminBucket();
       const bucketName = bucket.name;
       for (const mistake of recentMistakes.slice(0, 3)) {

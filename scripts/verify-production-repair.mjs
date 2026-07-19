@@ -116,7 +116,7 @@ assert(!hero.includes("Study with A/L subjects") && !hero.includes("2023 SFT") &
 assert(chat.includes("activeSubject: undefined") && chat.includes("replyingTo") && chat.includes("revealBufferedAnswer"), "All-subject context, message replies, or buffered typing is missing");
 assert(composer.includes("clora:composer-focus") && sidebar.includes("clora:composer-focus"), "Mobile bottom navigation does not react to the Assistant keyboard/composer");
 assert(memoryExtractor.includes('"weak_points"') && memoryExtractor.includes('"mistake_notebook"') && memoryExtractor.includes('"learning_signal_aggregates"'), "Separate learning memory collections are missing");
-assert(userContext.includes("weak_points") && userContext.includes("mistake_notebook") && userContext.includes("learning_signal_aggregates"), "Saved learning signals are not loaded into AI context");
+assert(userContext.includes("weak_points") && userContext.includes("loadMistakeRecords") && userContext.includes("learning_signal_aggregates"), "Saved learning signals are not loaded into AI context");
 assert(notesModal.includes("lesson-resources:changed") && notesModal.includes("lessonTitle"), "Lesson resources do not refresh or use stable lesson matching");
 assert(admissionView.includes("max-w-[170px]") && admissionView.includes("allowEscapeViewBox"), "Z-score tooltip still obscures the chart");
 
@@ -145,7 +145,7 @@ assert(syllabusGrounding.includes("DEFAULT_SFT_SYLLABUS_STORAGE_PATH") && syllab
 assert(!directFormatterV10.includes('type: "source_evidence"'), "V10 still adds the visible Verified PDF evidence container");
 assert(lessonRoutesV10.includes('collection("rag_sources")') && lessonRoutesV10.includes("isStudentVisibleSource") && lessonRoutesV10.includes("subjectVariants"), "V10 lesson resource legacy merge or historical subject normalization is missing");
 assert(predictionV10.includes("exam_question_index") && predictionV10.includes("getSubjectSyllabusGroundingPdf"), "V10 prediction engine is not grounded in indexed papers and syllabus");
-assert(cloraHeroV10.includes("Clora X · Made by Pramodya Ishan"), "V10 Clora X creator branding is missing");
+assert(cloraHeroV10.includes("Made by Pramodya Ishan") && !cloraHeroV10.includes("Clora X"), "V18 creator attribution or removed product label is incorrect");
 
 const sourceSelectionV10 = await readFile("server/ai/sourceSelection.ts", "utf8");
 const conversationStateV10 = await readFile("server/knowledge/conversationState.ts", "utf8");
@@ -371,7 +371,7 @@ const mathRendererV17 = await read("src/components/chat/MathMarkdown.tsx");
 const inventoryV17 = await read("server/sources/sourceInventoryService.ts");
 const aiRoutesV17 = await read("server/ai/routes.ts");
 
-assert(cloraV17.includes("Clear chat") && cloraV17.includes("/api/ai/chat-history/clear") && cloraV17.includes("bufferedAnswerRef.current.clear()"), "V17 clear-chat action or stream cleanup is incomplete");
+assert(topNav.includes("Clear chat") && cloraV17.includes("/api/ai/chat-history/clear") && cloraV17.includes("bufferedAnswerRef.current.clear()"), "V18 clear-chat action or stream cleanup is incomplete");
 assert(aiRoutesV17.includes('chat-history/clear') && aiRoutesV17.includes('collection("chat_context")') && aiRoutesV17.includes('collection("state")'), "V17 server chat-history cleanup is incomplete");
 assert(composerV17.includes("Upload project files") && projectUploadV17.includes("readProjectArchive") && projectUploadV17.includes("node_modules") && projectUploadV17.includes("safeArchivePath") && projectUploadV17.includes('part === ".."'), "V17 project ZIP upload protection is incomplete");
 assert(pdfSourcesV17.includes("Repair all") && pdfSourcesV17.includes("Re-index all") && pdfSourcesV17.includes("OCR required") && pdfSourcesV17.includes("OCR all"), "V17 bulk PDF maintenance controls are incomplete");
@@ -384,3 +384,70 @@ const directRouteEndV17 = pdfRoutesV17.indexOf('pdfRoutes.post("/question-previe
 const directRouteV17 = pdfRoutesV17.slice(directRouteStartV17, directRouteEndV17);
 assert(directRouteStartV17 >= 0 && directRouteEndV17 > directRouteStartV17 && !directRouteV17.includes("res.status(503)"), "V17 Direct PDF endpoint can still surface expected provider unavailability as HTTP 503");
 console.log("V17 chat, project upload, PDF maintenance, KaTeX, and Direct PDF checks passed.");
+
+
+// V18 Error Log persistence, chat history controls, legacy Sinhala, strict syllabus,
+// essay completeness, and Z-score context checks.
+const mistakeStoreV18 = await read("server/firebase/mistakeStore.ts");
+const zScoreContextV18 = await read("server/firebase/zScoreContext.ts");
+const legacySinhalaV18 = await read("server/pdf/legacySinhala.ts");
+const processingPipelineV18 = await read("server/pdf/processingPipeline.ts");
+const essaySolverV18 = await read("server/ai-core/pdf/solveExtractedQuestion.ts");
+const directPdfQaV18 = await read("server/ai-core/pdf/directPdfQa.ts");
+const indexedDirectPdfQaV18 = await read("server/ai-core/pdf/indexedDirectPdfQa.ts");
+const directFormatterV18 = await read("src/lib/ai/directPdfAnswerFormatter.ts");
+const predictedPaperV18 = await read("server/ai-core/exam-intel/predictedPaper.ts");
+
+assert(
+  mistakeStoreV18.includes('collection("mistake_notebook").limit')
+    && mistakeStoreV18.includes('"legacy_email"')
+    && mistakeStoreV18.includes("updatedAt")
+    && mistakeStoreV18.includes("lastAttemptAt")
+    && !mistakeStoreV18.includes('orderBy("updatedAt")'),
+  "V18 Error Log does not merge current and legacy records safely",
+);
+assert(
+  respondStream.includes("DETERMINISTIC SAVED ERROR LOG INTENT")
+    && respondStream.includes("mistake_log_loaded")
+    && respondStream.includes("record **${records.length}ක්**"),
+  "V18 Error Log answer can still falsely report an empty notebook",
+);
+assert(
+  topNav.includes("clora:new-chat")
+    && topNav.includes("clora:clear-chat")
+    && topNav.includes("clora:history")
+    && chat.includes("showChatHistory")
+    && chat.includes("/api/ai/chat-history"),
+  "V18 New chat, Clear chat, and Chat history controls are incomplete",
+);
+assert(!hero.includes("Clora X") && !chat.includes("Clora X") && !predictedPaperV18.includes("Clora X"), "V18 still exposes the removed Clora X label");
+assert(
+  legacySinhalaV18.includes("conversionQuality")
+    && legacySinhalaV18.includes('normalizedText: trusted ? converted : ""')
+    && processingPipelineV18.includes("legacy_text_untrusted")
+    && processingPipelineV18.includes("untrustedLegacyPages.length === 0")
+    && processingPipelineV18.includes("Falling back to OCR/document vision"),
+  "V18 low-confidence legacy Sinhala can still enter RAG without OCR/document vision",
+);
+assert(
+  essaySolverV18.includes("strictLesson: true")
+    && essaySolverV18.includes("matching Lesson Resources first")
+    && essaySolverV18.includes("කෝක් කැම්බියම")
+    && essaySolverV18.includes("expectedSubparts")
+    && essaySolverV18.includes("missingSubparts")
+    && essaySolverV18.includes("maxOutputTokens: 8_192"),
+  "V18 strict lesson/syllabus grounding or complete essay retry is incomplete",
+);
+assert(
+  directPdfQaV18.includes("result.completed")
+    && indexedDirectPdfQaV18.includes("solvedAnswer?.complete !== false")
+    && directFormatterV18.includes("පිළිතුර සම්පූර්ණ නොවීය"),
+  "V18 incomplete Direct PDF answers are not propagated to the UI",
+);
+assert(
+  zScoreContextV18.includes("mergeZScoreHistory")
+    && zScoreContextV18.includes("pickLatestZScoreEntry")
+    && userContext.includes("preferredLatest"),
+  "V18 Z-score history merge or preferred saved-paper estimate is incomplete",
+);
+console.log("V18 Error Log, chat history, legacy Sinhala, syllabus grounding, essay completeness, and Z-score checks passed.");

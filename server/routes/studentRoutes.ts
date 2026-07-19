@@ -2,6 +2,8 @@ import { Router } from "express";
 import { requireUser, getAdminBucket, getAdminDb } from "../firebase/admin";
 import { diagnoseStudent } from "../ai-core/student/studentDiagnosis";
 import { generateWarPlan } from "../ai-core/study/warPlan";
+import { loadMistakeRecords } from "../firebase/mistakeStore";
+import { invalidateUserAIContext } from "../firebase/userContext";
 
 const router = Router();
 
@@ -81,25 +83,21 @@ router.post("/mock-result", async (req, res) => {
 router.get("/mistakes", async (req, res) => {
   try {
     const user = await requireUser(req);
-    const snapshot = await getAdminDb().collection("users").doc(user.uid).collection("mistake_notebook")
-      .orderBy("createdAt", "desc")
-      .limit(100)
-      .get();
+    const records = await loadMistakeRecords(user.uid, user.email, 100);
     const bucket = getAdminBucket();
-    const mistakes = await Promise.all(snapshot.docs.map(async (document: any) => {
-      const data = document.data();
+    const mistakes = await Promise.all(records.map(async (record) => {
       let imageUrl: string | null = null;
-      if (data.imageStoragePath) {
+      if (record.imageStoragePath) {
         try {
-          [imageUrl] = await bucket.file(data.imageStoragePath).getSignedUrl({
+          [imageUrl] = await bucket.file(String(record.imageStoragePath)).getSignedUrl({
             action: "read",
             expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
           });
         } catch (error) {
-          console.warn("[mistakes] Could not sign image", { id: document.id, error: String(error) });
+          console.warn("[mistakes] Could not sign image", { id: record.id, error: String(error) });
         }
       }
-      return { id: document.id, ...data, imageUrl };
+      return { ...record, imageUrl };
     }));
     res.json({ ok: true, mistakes });
   } catch (err: any) {
@@ -141,9 +139,10 @@ router.post("/mistake", async (req, res) => {
       retryDate: new Date().toISOString(),
       repeatCount: 0,
       mastered: false,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     });
-    
+    invalidateUserAIContext(user.uid);
     res.json({ ok: true, id: document.id });
   } catch (err: any) {
     res.status(500).json({ error: "Internal operation failed." });

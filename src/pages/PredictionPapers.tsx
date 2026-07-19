@@ -128,7 +128,7 @@ export default function PredictionPapers() {
               </div>
               <h3 className="text-xl font-bold text-indigo-900">How these papers are built</h3>
               <p className="text-indigo-700 text-sm leading-relaxed">
-                Clora X analyzes available indexed past papers, model/guessing papers, syllabus weight, recency, rotation, and your weak areas. The result is revision guidance, not a guarantee about the real examination.
+                The assistant analyzes available indexed past papers, model/guessing papers, syllabus weight, recency, rotation, and your weak areas. The result is revision guidance, not a guarantee about the real examination.
               </p>
               <ul className="space-y-2 pt-2">
                 {[
@@ -165,7 +165,7 @@ export default function PredictionPapers() {
             <div className="text-center space-y-2 border-b border-gray-100 pb-8">
               <h2 className="text-2xl font-bold text-gray-900 uppercase">Predicted Revision Paper - {subject}</h2>
               <p className="text-sm text-indigo-600 font-bold uppercase tracking-widest">{mode} Simulation Mode</p>
-              <p className="text-xs text-gray-400">Clora X · Made by Pramodya Ishan · Revision forecast, not an official paper</p>
+              <p className="text-xs text-gray-400">Made by Pramodya Ishan · Revision forecast, not an official paper</p>
             </div>
 
             <div className="space-y-12">

@@ -129,17 +129,52 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
     // --- STEP C & D: Legacy Font Conversion & OCR Fallback ---
     let triggerOcr = forceOcr || isScanned || hasHighReplacement;
 
-    if (textEncoding.startsWith("legacy_") || legacyPatternScore > 5) {
+    const legacyDetected = textEncoding.startsWith("legacy_") || legacyPatternScore > 5;
+    const legacyCandidatePages = pages.filter((page: any) =>
+      String(page?.textEncoding || "").startsWith("legacy_")
+      && String(page?.rawText || page?.text || "").trim().length >= 40,
+    );
+    const trustedLegacyPages = legacyCandidatePages.filter((page: any) =>
+      page?.pageQuality === "legacy_convertible"
+      && Number(page?.conversionConfidence || 0) >= 0.62
+      && String(page?.text || "").trim().length >= 20,
+    );
+    const untrustedLegacyPages = legacyCandidatePages.filter((page: any) =>
+      page?.pageQuality !== "legacy_convertible"
+      || Number(page?.conversionConfidence || 0) < 0.62
+      || String(page?.text || "").trim().length < 20,
+    );
+    const trustedLegacyTextLength = trustedLegacyPages.reduce(
+      (total: number, page: any) => total + String(page?.text || "").trim().length,
+      0,
+    );
+
+    if (
+      legacyDetected
+      && trustedLegacyPages.length > 0
+      && untrustedLegacyPages.length === 0
+      && trustedLegacyTextLength >= 40
+      && fullText.trim().length >= 40
+    ) {
       extractionMethod = "legacy_text_layer";
       textEncoding = "legacy_converted_sinhala";
       needsOcr = false;
       needsLegacyConversion = false;
-      // Legacy Sinhala fonts frequently expose a complete, selectable text
-      // layer whose glyph codes are not Unicode. That document is not a scan
-      // and must not be labelled as needing OCR. Keep the extracted pages for
-      // direct-PDF QA; OCR remains an explicit admin action through forceOcr.
+      // Only trusted Unicode conversion may enter RAG directly. A selectable
+      // legacy text layer is not enough by itself: low-confidence conversion
+      // would otherwise index unreadable FM-Abhaya glyph codes as facts.
       triggerOcr = Boolean(forceOcr);
-      console.log(`Legacy Sinhala text layer detected. Keeping ${textLength} extracted characters without OCR.`);
+      console.log(
+        `Trusted legacy Sinhala conversion detected. Keeping ${trustedLegacyTextLength} converted characters without OCR.`,
+      );
+    } else if (legacyDetected) {
+      extractionMethod = "legacy_text_untrusted";
+      needsOcr = true;
+      needsLegacyConversion = true;
+      triggerOcr = true;
+      console.warn(
+        `Legacy Sinhala text was detected, but conversion confidence was too low (${trustedLegacyPages.length} trusted, ${untrustedLegacyPages.length} untrusted pages). Falling back to OCR/document vision.`,
+      );
     }
 
     if (triggerOcr) {

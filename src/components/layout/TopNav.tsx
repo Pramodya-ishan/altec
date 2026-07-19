@@ -1,4 +1,4 @@
-import { Menu, Search, Bell, X, LogOut, User, ChevronRight, XCircle, Book, Clock, Cloud, RefreshCw, HardDrive, Plus } from "lucide-react";
+import { Menu, Search, Bell, X, LogOut, User, ChevronRight, XCircle, Book, Clock, Cloud, RefreshCw, HardDrive, Plus, History, Trash2 } from "lucide-react";
 import { setPendingTopicHighlight } from "../../lib/navigationIntent";
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -289,15 +289,38 @@ export function TopNav() {
           )}
 
           {currentView === 'clora-x' ? (
-            <button
-              type="button"
-              onClick={() => window.dispatchEvent(new CustomEvent('clora:new-chat'))}
-              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
-              aria-label="New chat"
-              title="New chat"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1.5" aria-label="Chat actions">
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('clora:new-chat'))}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+                aria-label="New chat"
+                title="New chat"
+              >
+                <Plus className="h-4 w-4" />
+                <span className="hidden sm:inline">New chat</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('clora:clear-chat'))}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+                aria-label="Clear chat"
+                title="Clear chat"
+              >
+                <Trash2 className="h-4 w-4" />
+                <span className="hidden sm:inline">Clear</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('clora:history'))}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+                aria-label="Chat history"
+                title="Chat history"
+              >
+                <History className="h-4 w-4" />
+                <span className="hidden sm:inline">History</span>
+              </button>
+            </div>
           ) : (
           <div className="flex items-center gap-3">
             
