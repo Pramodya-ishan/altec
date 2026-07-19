@@ -2,6 +2,9 @@ export type LearningMistakeType =
   | "concept_misconception"
   | "formula_misuse"
   | "unit_conversion"
+  | "sign_direction"
+  | "diagram_interpretation"
+  | "reading_error"
   | "calculation_step"
   | "significant_figures"
   | "answer_structure"
@@ -143,6 +146,16 @@ export function analyseLearningAttempt(input: LearningAttemptInput): LearningAtt
     if (input.expectedUnit && normalizeComparableText(input.expectedUnit) !== normalizeComparableText(input.submittedUnit)) {
       mistakeTypes.push("unit_conversion");
       recommendations.push("ඒකකය වෙනම පරීක්ෂා කර අවසන් පිළිතුරට නිවැරදි SI ඒකකය ලියන්න.");
+    }
+    if (/(?:wrong\s*sign|direction|negative|positive|දිශාව|ලකුණ|ඍණ|ධන)/iu.test(working)) {
+      mistakeTypes.push("sign_direction");
+      recommendations.push("අගයේ ලකුණ සහ තෝරාගත් ධන දිශාව අවසාන පියවරේදී නැවත පරීක්ෂා කරන්න.");
+    }
+    if (String(input.questionType).toLowerCase().includes("diagram") || /(?:diagram|figure|graph|රූප|සටහන|ප්‍රස්තාර)/iu.test(working)) {
+      mistakeTypes.push("diagram_interpretation");
+    }
+    if (/(?:misread|read\s*wrong|ocr|නොකියව|වැරදිව\s*කියව)/iu.test(working)) {
+      mistakeTypes.push("reading_error");
     }
     if (
       input.expectedSignificantFigures != null &&

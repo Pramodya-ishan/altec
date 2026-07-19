@@ -45,10 +45,10 @@ router.get("/report", async (req, res) => {
 router.get("/probability", async (req, res) => {
   try {
     await requireUser(req);
-    const { subject } = req.query;
+    const { subject, targetYear } = req.query;
     if (!subject) return res.status(400).json({ error: "Subject is required" });
     
-    const rankings = await rankTopicProbability(subject as string);
+    const rankings = await rankTopicProbability(subject as string, Number(targetYear || 2026));
     res.json(rankings);
   } catch (err: any) {
     res.status(500).json({ error: "Internal operation failed." });

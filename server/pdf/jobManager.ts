@@ -9,6 +9,7 @@ export type PdfJobStage =
   | "ocr_running"
   | "indexing"
   | "building_visuals"
+  | "paused"
   | "ready"
   | "failed";
 
@@ -16,7 +17,7 @@ export type PdfProcessingJob = {
   sourceId: string;
   uid: string;
   stage: PdfJobStage;
-  status: "queued" | "running" | "ready" | "failed";
+  status: "queued" | "running" | "paused" | "ready" | "failed";
   progress: number;
   attempt: number;
   maxAttempts: number;
@@ -28,6 +29,9 @@ export type PdfProcessingJob = {
   errorCode?: string | null;
   errorMessage?: string | null;
   retryable: boolean;
+  pauseRequested?: boolean;
+  pausedAt?: string | null;
+  resumeStage?: PdfJobStage | null;
   createdAt: string;
   updatedAt: string;
   completedAt?: string | null;
@@ -42,6 +46,7 @@ const STAGE_PROGRESS: Record<PdfJobStage, number> = {
   ocr_running: 60,
   indexing: 78,
   building_visuals: 90,
+  paused: 0,
   ready: 100,
   failed: 100,
 };
@@ -81,6 +86,9 @@ export async function startPdfProcessingJob(params: {
     attempt,
     maxAttempts: Math.max(1, Number(params.maxAttempts || 3)),
     retryable: true,
+    pauseRequested: false,
+    pausedAt: null,
+    resumeStage: null,
     createdAt: now,
     updatedAt: now,
     completedAt: null,
@@ -93,7 +101,8 @@ export async function startPdfProcessingJob(params: {
 }
 
 export async function updatePdfProcessingJob(sourceId: string, stage: PdfJobStage, details: Partial<PdfProcessingJob> = {}) {
-  const status = stage === "ready" ? "ready" : stage === "failed" ? "failed" : stage === "registered" || stage === "ocr_queued" ? "queued" : "running";
+  if (!["registered", "paused", "ready", "failed"].includes(stage)) await assertPdfJobRunnable(sourceId);
+  const status = stage === "ready" ? "ready" : stage === "failed" ? "failed" : stage === "paused" ? "paused" : stage === "registered" || stage === "ocr_queued" ? "queued" : "running";
   const payload: Partial<PdfProcessingJob> = {
     ...details,
     sourceId,
@@ -122,6 +131,44 @@ export async function getPdfProcessingJob(sourceId: string): Promise<PdfProcessi
   return snapshot.exists ? snapshot.data() as PdfProcessingJob : null;
 }
 
+export async function assertPdfJobRunnable(sourceId: string) {
+  const job = await getPdfProcessingJob(sourceId).catch(() => null);
+  if (job?.pauseRequested || job?.status === "paused") {
+    const error: any = new Error("PDF processing was paused by the user.");
+    error.code = "PDF_JOB_PAUSED";
+    throw error;
+  }
+}
+
+export async function pausePdfProcessingJob(sourceId: string) {
+  const job = await getPdfProcessingJob(sourceId);
+  if (!job) return null;
+  if (job.status === "ready" || job.status === "failed") return job;
+  const now = new Date().toISOString();
+  await bestEffortSet(sourceId, {
+    pauseRequested: true,
+    pausedAt: now,
+    resumeStage: job.stage,
+    stage: "paused",
+    status: "paused",
+    updatedAt: now,
+  });
+  return getPdfProcessingJob(sourceId);
+}
+
+export async function preparePdfJobResume(sourceId: string) {
+  const job = await getPdfProcessingJob(sourceId);
+  if (!job) return null;
+  await bestEffortSet(sourceId, {
+    pauseRequested: false,
+    pausedAt: null,
+    stage: "registered",
+    status: "queued",
+    updatedAt: new Date().toISOString(),
+  });
+  return getPdfProcessingJob(sourceId);
+}
+
 export function publicPdfJob(job: PdfProcessingJob | null) {
   if (!job) return null;
   return {
@@ -139,6 +186,9 @@ export function publicPdfJob(job: PdfProcessingJob | null) {
     errorCode: job.errorCode || null,
     errorMessage: job.errorMessage || null,
     retryable: job.retryable,
+    pauseRequested: Boolean(job.pauseRequested),
+    pausedAt: job.pausedAt || null,
+    resumeStage: job.resumeStage || null,
     updatedAt: job.updatedAt,
   };
 }

@@ -19,12 +19,20 @@ export default function PdfIntelAdmin() {
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<any[]>([]);
   const [metrics, setMetrics] = useState<any>(null);
+  const [dataQuality, setDataQuality] = useState<any>(null);
 
   const loadMetrics = useCallback(async () => {
     try {
-      const response = await apiFetch('/api/ai/quality-metrics');
-      const payload = await response.json().catch(() => null);
-      if (response.ok && payload?.ok) setMetrics(payload);
+      const [metricsResponse, qualityResponse] = await Promise.all([
+        apiFetch('/api/ai/quality-metrics'),
+        apiFetch('/api/ai/data-quality'),
+      ]);
+      const [metricsPayload, qualityPayload] = await Promise.all([
+        metricsResponse.json().catch(() => null),
+        qualityResponse.json().catch(() => null),
+      ]);
+      if (metricsResponse.ok && metricsPayload?.ok) setMetrics(metricsPayload);
+      if (qualityResponse.ok && qualityPayload?.ok) setDataQuality(qualityPayload);
     } catch {
       // Metrics are operational telemetry and must not block the admin page.
     }
@@ -177,6 +185,26 @@ export default function PdfIntelAdmin() {
         </div>
       </div>
 
+      {dataQuality && (
+        <section className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm" aria-labelledby="data-quality-title">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 id="data-quality-title" className="font-bold text-gray-900">PDF data quality</h2>
+              <p className="mt-1 text-xs text-gray-500">{dataQuality.healthySources} of {dataQuality.totalSources} sources pass current evidence checks.</p>
+            </div>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">{dataQuality.issues?.length || 0} need attention</span>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {['needs_ocr', 'low_confidence_text', 'missing_metadata', 'duplicate', 'visual_review', 'not_indexed'].map((issue) => (
+              <div key={issue} className="rounded-xl bg-slate-50 p-3">
+                <p className="text-xl font-black text-slate-900">{dataQuality.counts?.[issue] || 0}</p>
+                <p className="mt-1 break-words text-[10px] font-bold uppercase tracking-wide text-slate-500">{issue.replace(/_/g, ' ')}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {results.length > 0 && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           <div className="p-6 border-b border-gray-100">
@@ -212,7 +240,7 @@ export default function PdfIntelAdmin() {
       <div className="bg-gray-900 rounded-2xl p-8 text-white space-y-6">
         <h3 className="text-indigo-400 font-bold uppercase tracking-widest text-xs">System Logs</h3>
         <div className="font-mono text-xs space-y-1 opacity-80 max-h-48 overflow-y-auto custom-scrollbar">
-          <p>[SYSTEM] Exam Intelligence Engine v21 Initialized</p>
+          <p>[SYSTEM] Exam Intelligence Engine v23 Initialized</p>
           <p>[AUTH] Admin login verified: {user?.email || "Admin"}</p>
           <p>[STORAGE] Connected to al-ai-chat.firebasestorage.app</p>
           <p>[DB] Firestore ready. Collections: exam_question_index, syllabus_nodes</p>

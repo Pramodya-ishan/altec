@@ -7,6 +7,14 @@ import {
   type LearningAttemptInput,
   type RevisionItem,
 } from "../learning/learningEngine";
+import {
+  buildHintLadder,
+  buildStrictTwoSubjectPlan,
+  chooseExplanationStrategy,
+  rankAdaptivePractice,
+  updateStudentKnowledgeGraph,
+  type KnowledgeGraphNode,
+} from "../learning/studentKnowledgeGraph";
 
 const router = Router();
 
@@ -53,6 +61,12 @@ router.post("/attempts", async (req, res) => {
       createdAt: now,
       updatedAt: now,
     });
+    const knowledgeNode = await updateStudentKnowledgeGraph({
+      uid: user.uid,
+      attempt: input,
+      analysis,
+      concept: safeString(body.concept || body.subtopic || body.questionId || input.lesson, 180),
+    });
 
     if (!input.correct) {
       const mistakeKey = `${input.subject}:${input.questionId || input.lesson}`.replace(/[^A-Za-z0-9:_-]/g, "_").slice(0, 300);
@@ -81,9 +95,119 @@ router.post("/attempts", async (req, res) => {
       }, { merge: true });
     }
 
-    return res.json({ ok: true, attemptId: attemptRef.id, analysis });
+    return res.json({ ok: true, attemptId: attemptRef.id, analysis, knowledgeNode });
   } catch (error: any) {
     return res.status(500).json({ ok: false, code: "ATTEMPT_SAVE_FAILED", message: "The operation failed. Please try again." });
+  }
+});
+
+router.get("/knowledge-graph", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const subject = safeString(req.query.subject, 20).toUpperCase();
+    const snapshot = await getAdminDb().collection("users").doc(user.uid).collection("knowledge_graph").limit(500).get();
+    const nodes = snapshot.docs
+      .map((document: any) => ({ id: document.id, ...document.data() }))
+      .filter((node: any) => !subject || String(node.subject || "").toUpperCase() === subject)
+      .sort((left: any, right: any) => Number(left.mastery || 0) - Number(right.mastery || 0));
+    const bySubject = ["SFT", "ET", "ICT"].map((item) => {
+      const subjectNodes = nodes.filter((node: any) => node.subject === item);
+      return {
+        subject: item,
+        concepts: subjectNodes.length,
+        mastery: subjectNodes.length ? Math.round(subjectNodes.reduce((sum: number, node: any) => sum + Number(node.mastery || 0), 0) / subjectNodes.length) : 0,
+        due: subjectNodes.filter((node: any) => Date.parse(String(node.dueAt || "")) <= Date.now()).length,
+      };
+    });
+    return res.json({ ok: true, nodes, summary: bySubject });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "KNOWLEDGE_GRAPH_FAILED", message: "Knowledge graph could not be loaded." });
+  }
+});
+
+router.get("/adaptive-practice", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const subject = safeString(req.query.subject || "SFT", 20).toUpperCase();
+    const limit = Math.max(1, Math.min(30, Number(req.query.limit || 10)));
+    const db = getAdminDb();
+    const [nodeSnapshot, questionSnapshot] = await Promise.all([
+      db.collection("users").doc(user.uid).collection("knowledge_graph").where("subject", "==", subject).limit(300).get(),
+      db.collection("exam_question_index").where("subject", "==", subject).limit(200).get(),
+    ]);
+    const nodes = nodeSnapshot.docs.map((document: any) => ({ id: document.id, ...document.data() })) as KnowledgeGraphNode[];
+    const questions = questionSnapshot.docs.map((document: any) => {
+      const data = document.data();
+      return {
+        id: document.id,
+        subject,
+        lesson: data.lesson || data.topic || "Unknown lesson",
+        concept: data.concept || data.subtopic || null,
+        questionNo: data.questionNo || null,
+        questionText: data.questionText || null,
+        options: data.options || [],
+        questionType: data.questionType || "MCQ",
+        sourceId: data.sourceId || null,
+        pageNumber: data.pageNumber || null,
+        verified: data.verified === true || Boolean(data.sourceId),
+      };
+    });
+    return res.json({ ok: true, subject, queue: rankAdaptivePractice({ nodes, questions, limit }) });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "ADAPTIVE_PRACTICE_FAILED", message: "Adaptive practice could not be prepared." });
+  }
+});
+
+router.post("/hint", async (req, res) => {
+  try {
+    await requireUser(req);
+    const ladder = buildHintLadder({
+      question: safeString(req.body?.question, 10_000),
+      lesson: safeString(req.body?.lesson, 180),
+      formula: safeString(req.body?.formula, 500),
+      markingPoints: Array.isArray(req.body?.markingPoints) ? req.body.markingPoints.slice(0, 30) : [],
+      solution: safeString(req.body?.solution, 20_000),
+    });
+    const requestedLevel = Math.max(1, Math.min(4, Number(req.body?.level || 1)));
+    return res.json({ ok: true, hint: ladder[requestedLevel - 1], nextLevel: requestedLevel < 4 ? requestedLevel + 1 : null, hasMore: requestedLevel < 4 });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "HINT_FAILED", message: "Hint could not be prepared." });
+  }
+});
+
+router.post("/explanation-strategy", async (req, res) => {
+  try {
+    await requireUser(req);
+    const strategy = chooseExplanationStrategy({
+      mistakeTypes: Array.isArray(req.body?.mistakeTypes) ? req.body.mistakeTypes : [],
+      repeatCount: Number(req.body?.repeatCount || 0),
+      questionType: req.body?.questionType,
+      previousStrategies: Array.isArray(req.body?.previousStrategies) ? req.body.previousStrategies : [],
+    });
+    return res.json({ ok: true, strategy });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "EXPLANATION_STRATEGY_FAILED", message: "Explanation strategy could not be selected." });
+  }
+});
+
+router.post("/two-subject-plan", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const snapshot = await getAdminDb().collection("users").doc(user.uid).collection("knowledge_graph").limit(500).get();
+    const nodes = snapshot.docs.map((document: any) => ({ id: document.id, ...document.data() })) as KnowledgeGraphNode[];
+    const plan = buildStrictTwoSubjectPlan({
+      nodes,
+      days: Number(req.body?.days || 7),
+      dailyMinutes: Number(req.body?.dailyMinutes || 600),
+      subjects: Array.isArray(req.body?.subjects) ? req.body.subjects : ["SFT", "ET", "ICT"],
+      examDates: req.body?.examDates && typeof req.body.examDates === "object" ? req.body.examDates : {},
+      startDate: req.body?.startDate ? new Date(req.body.startDate) : new Date(),
+    });
+    const ref = getAdminDb().collection("users").doc(user.uid).collection("revision_plans").doc();
+    await ref.set({ id: ref.id, kind: "strict_two_subject", plan, createdAt: new Date().toISOString() });
+    return res.json({ ok: true, planId: ref.id, rule: "exactly_two_subjects_per_day", plan });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "TWO_SUBJECT_PLAN_FAILED", message: "Two-subject plan could not be created." });
   }
 });
 

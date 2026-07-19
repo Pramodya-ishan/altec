@@ -185,7 +185,10 @@ const [messages, setMessages] = useState<{
     generatedImage?: { url: string; alt?: string; storagePath?: string; model?: string },
     imageError?: string,
     imagePrompt?: string,
-    qualityReport?: any
+    qualityReport?: any,
+    answerStatus?: 'official' | 'ai_solved' | 'predicted' | 'model_question' | 'general',
+    sourceMode?: 'locked_pdf' | 'general_ai',
+    evidenceContradictions?: any[]
   }[]>([
     {
       role: 'assistant',
@@ -210,6 +213,30 @@ const [messages, setMessages] = useState<{
   const [showChatHistory, setShowChatHistory] = useState(false);
   const [savedChatHistory, setSavedChatHistory] = useState<SavedChatHistoryItem[]>([]);
   const [isLoadingChatHistory, setIsLoadingChatHistory] = useState(false);
+  const [sourceMode, setSourceMode] = useState<{ mode: 'locked_pdf' | 'general_ai'; title: string | null }>({ mode: 'general_ai', title: null });
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const controller = new AbortController();
+    apiFetch('/api/ai/conversation/source-mode', { signal: controller.signal })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        if (payload?.ok) setSourceMode({ mode: payload.mode === 'locked_pdf' ? 'locked_pdf' : 'general_ai', title: payload.title || null });
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [user?.uid]);
+
+  const unlockPdfSource = async () => {
+    try {
+      const response = await apiFetch('/api/ai/conversation/source-unlock', { method: 'POST' });
+      if (!response.ok) throw new Error('Source unlock failed');
+      setSourceMode({ mode: 'general_ai', title: null });
+      showNotification('PDF source unlocked. General AI mode is active.', 'success');
+    } catch {
+      showNotification('The PDF source could not be unlocked.', 'error');
+    }
+  };
 
   // Voice Tutor States
   const [isListening, setIsListening] = useState(false);
@@ -907,6 +934,11 @@ const [messages, setMessages] = useState<{
           if (activeStreamIdRef.current !== streamId) return;
           setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, qualityReport } : m));
         },
+        onAnswerStatus: (provenance) => {
+          if (activeStreamIdRef.current !== streamId) return;
+          setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, answerStatus: provenance.answerStatus as any, sourceMode: provenance.sourceMode as any, evidenceContradictions: provenance.contradictions || [] } : m));
+          setSourceMode(current => ({ mode: provenance.sourceMode === 'locked_pdf' || provenance.lockedSourceActive ? 'locked_pdf' : 'general_ai', title: provenance.sourceMode === 'locked_pdf' || provenance.lockedSourceActive ? (provenance.sourceTitle || current.title) : null }));
+        },
         onSources: (newSources) => {
           if (activeStreamIdRef.current !== streamId) return;
           setMessages(prev =>
@@ -976,6 +1008,9 @@ const [messages, setMessages] = useState<{
               qualityReport: data?.qualityReport || m.qualityReport,
               paperInfo: data?.paperInfo || m.paperInfo,
               errorCode: data?.errorCode,
+              answerStatus: data?.answerStatus || m.answerStatus,
+              sourceMode: data?.sourceMode || m.sourceMode,
+              evidenceContradictions: data?.evidenceContradictions || m.evidenceContradictions,
               visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
               sources: Array.isArray(data?.sources) && data.sources.length > 0
                 ? Array.from(new Map([...(m.sources || []), ...data.sources].map((source: any) => [source.id || source.sourceId || source.title, source])).values())
@@ -1046,6 +1081,11 @@ const [messages, setMessages] = useState<{
        onQualityReport: (qualityReport) => {
          if (activeStreamIdRef.current !== streamId) return;
          setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, qualityReport } : m));
+       },
+       onAnswerStatus: (provenance) => {
+         if (activeStreamIdRef.current !== streamId) return;
+         setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, answerStatus: provenance.answerStatus as any, sourceMode: provenance.sourceMode as any, evidenceContradictions: provenance.contradictions || [] } : m));
+         setSourceMode(current => ({ mode: provenance.sourceMode === 'locked_pdf' || provenance.lockedSourceActive ? 'locked_pdf' : 'general_ai', title: provenance.sourceMode === 'locked_pdf' || provenance.lockedSourceActive ? (provenance.sourceTitle || current.title) : null }));
        },
        onSources: (newSources) => {
          if (activeStreamIdRef.current !== streamId) return;
@@ -1272,9 +1312,14 @@ const [messages, setMessages] = useState<{
             throw new Error("IMAGE_URL_MISSING");
           }
           const isVisualExplanation = isClientVisualExplanationIntent(userMsg);
+          const visualExplanation = isVisualExplanation && referenceText
+            ? `මෙන්න එය සැබෑ රූපයක් සමඟ පැහැදිලි කළ ආකාරය.\n\nරූපයේ සංකේත සහ ඊතල කියවීමට අදාළ සාරාංශය:\n${String(referenceText).slice(0, 1_200)}`
+            : isVisualExplanation
+              ? "මෙන්න එය සැබෑ රූපයක් සමඟ පැහැදිලි කළ ආකාරය. Sinhala විස්තරය රූපයෙන් පිටත දක්වා ඇති නිසා අකුරු පැහැදිලිව පෙනේ."
+              : "මෙන්න ඉල්ලූ අධ්‍යාපනික රූපය.";
           setMessages(prev => prev.map(m => m.id === assistantMsgId ? {
             ...m,
-            content: isVisualExplanation ? "මෙන්න එය සැබෑ රූපයක් සමඟ පැහැදිලි කළ ආකාරය." : "මෙන්න ඉල්ලූ අධ්‍යාපනික රූපය.",
+            content: visualExplanation,
             generatedImage: {
               url: imageUrl,
               alt: userMsg || "Generated educational image",
@@ -1367,6 +1412,11 @@ const [messages, setMessages] = useState<{
         onQualityReport: (qualityReport) => {
           if (activeStreamIdRef.current !== streamId) return;
           setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, qualityReport } : m));
+        },
+        onAnswerStatus: (provenance) => {
+          if (activeStreamIdRef.current !== streamId) return;
+          setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, answerStatus: provenance.answerStatus as any, sourceMode: provenance.sourceMode as any, evidenceContradictions: provenance.contradictions || [] } : m));
+          setSourceMode(current => ({ mode: provenance.sourceMode === 'locked_pdf' || provenance.lockedSourceActive ? 'locked_pdf' : 'general_ai', title: provenance.sourceMode === 'locked_pdf' || provenance.lockedSourceActive ? (provenance.sourceTitle || current.title) : null }));
         },
         onSources: (newSources) => {
           if (activeStreamIdRef.current !== streamId) return;
@@ -1711,6 +1761,17 @@ const [messages, setMessages] = useState<{
           </AnimatePresence>
 
           <div className="relative shrink-0 bg-white/95 pt-2 backdrop-blur">
+            <div className="mx-auto mb-2 flex w-full max-w-3xl items-center justify-between gap-3 px-4 sm:px-6" aria-live="polite">
+              <div className={`inline-flex min-w-0 items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ${sourceMode.mode === 'locked_pdf' ? 'bg-indigo-50 text-indigo-700 ring-indigo-200' : 'bg-slate-50 text-slate-600 ring-slate-200'}`}>
+                {sourceMode.mode === 'locked_pdf' ? <Lock className="h-3.5 w-3.5 shrink-0" /> : <Globe className="h-3.5 w-3.5 shrink-0" />}
+                <span className="truncate">{sourceMode.mode === 'locked_pdf' ? `Source locked${sourceMode.title ? ` · ${sourceMode.title}` : ''}` : 'General AI mode'}</span>
+              </div>
+              {sourceMode.mode === 'locked_pdf' && (
+                <button type="button" onClick={() => void unlockPdfSource()} className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-900">
+                  Unlock PDF
+                </button>
+              )}
+            </div>
             <CloraComposer
               input={input}
               setInput={setInput}

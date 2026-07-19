@@ -13,7 +13,7 @@ import { getSourceInventory, invalidateInventoryCache } from "../sources/sourceI
 import { createPdfQuestionPreview, createPdfQuestionPreviewFallback } from "./questionPreview";
 import { hasExactQuestionMarker } from "../ai-core/pdf/indexedQuestionSelection";
 import { questionRequiresVisualEvidence } from "./visualEvidence";
-import { getPdfProcessingJob, publicPdfJob } from "./jobManager";
+import { getPdfProcessingJob, pausePdfProcessingJob, preparePdfJobResume, publicPdfJob } from "./jobManager";
 import { selectOcrEnsemble } from "./ocrEnsemble";
 import { recordAiTelemetry } from "../observability/aiTelemetry";
 
@@ -450,6 +450,48 @@ pdfRoutes.get("/jobs/:sourceId", requireFirebaseUser, async (req: any, res) => {
     });
   } catch (error: any) {
     return res.status(500).json({ ok: false, code: "PDF_JOB_STATUS_FAILED", message: "PDF processing status could not be loaded." });
+  }
+});
+
+pdfRoutes.post("/jobs/:sourceId/pause", requireFirebaseUser, async (req: any, res) => {
+  try {
+    const sourceId = String(req.params.sourceId || "");
+    const sourceSnapshot = await getAdminDb().collection("rag_sources").doc(sourceId).get();
+    if (!sourceSnapshot.exists) return res.status(404).json({ ok: false, code: "SOURCE_NOT_FOUND", message: "Source not found." });
+    const source = sourceSnapshot.data()!;
+    if (source.ownerUid !== req.user.uid && !isContentManager(req.user)) return res.status(403).json({ ok: false, code: "PDF_JOB_CONTROL_FORBIDDEN", message: "You cannot pause this PDF job." });
+    const job = await pausePdfProcessingJob(sourceId);
+    return res.json({ ok: true, sourceId, job: publicPdfJob(job) });
+  } catch {
+    return res.status(500).json({ ok: false, code: "PDF_JOB_PAUSE_FAILED", message: "PDF processing could not be paused." });
+  }
+});
+
+pdfRoutes.post("/jobs/:sourceId/resume", requireFirebaseUser, async (req: any, res) => {
+  try {
+    const sourceId = String(req.params.sourceId || "");
+    const sourceSnapshot = await getAdminDb().collection("rag_sources").doc(sourceId).get();
+    if (!sourceSnapshot.exists) return res.status(404).json({ ok: false, code: "SOURCE_NOT_FOUND", message: "Source not found." });
+    const source = sourceSnapshot.data()!;
+    if (source.ownerUid !== req.user.uid && !isContentManager(req.user)) return res.status(403).json({ ok: false, code: "PDF_JOB_CONTROL_FORBIDDEN", message: "You cannot resume this PDF job." });
+    await preparePdfJobResume(sourceId);
+    const result = await processUploadedPdf({
+      uid: source.ownerUid || req.user.uid,
+      sourceId,
+      storagePath: source.storagePath,
+      fileName: source.fileName || `${sourceId}.pdf`,
+      title: source.title || source.fileName || "PDF document",
+      subject: source.subject || "",
+      year: source.year || null,
+      resourceType: source.resourceType || "uploaded_pdf",
+      sourceType: source.sourceType || source.resourceType || "uploaded_pdf",
+      sourceScope: source.sourceScope || "personal",
+      lesson: source.lesson,
+      forceOcr: Boolean(source.needsOcr),
+    });
+    return res.status(result.status === "queued" || result.status === "paused" ? 202 : 200).json({ ...result, sourceId, job: publicPdfJob(await getPdfProcessingJob(sourceId).catch(() => null)) });
+  } catch {
+    return res.status(500).json({ ok: false, code: "PDF_JOB_RESUME_FAILED", message: "PDF processing could not be resumed." });
   }
 });
 
@@ -1325,8 +1367,13 @@ pdfRoutes.get("/sources", requireFirebaseUser, async (req: any, res) => {
         const rightTime = new Date(right.updatedAt || right.createdAt || 0).getTime();
         return rightTime - leftTime;
       });
+    const jobSnapshots = sources.length > 0
+      ? await db.getAll(...sources.slice(0, 500).map((source: any) => db.collection("pdf_processing_jobs").doc(source.id || source.sourceId)))
+      : [];
+    const jobs = new Map(jobSnapshots.filter((snapshot: any) => snapshot.exists).map((snapshot: any) => [snapshot.id, publicPdfJob(snapshot.data())]));
+    const sourcesWithJobs = sources.map((source: any) => ({ ...source, job: jobs.get(source.id || source.sourceId) || null }));
 
-    return res.json({ ok: true, total: sources.length, sources });
+    return res.json({ ok: true, total: sources.length, sources: sourcesWithJobs });
   } catch (err: any) {
     return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }

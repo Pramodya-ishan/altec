@@ -11,6 +11,7 @@ import { updateLessonResourceProcessing } from "../lessonResources/service";
 import { failPdfProcessingJob, startPdfProcessingJob, updatePdfProcessingJob } from "./jobManager";
 import { OcrCandidate, selectOcrEnsemble } from "./ocrEnsemble";
 import { calculateDocumentQuality, calculateTextOnlyQuality, classifyDocumentMetadata } from "../platform/documentIntelligence";
+import { extractDocumentVisualRegions, regionsForChunk } from "../platform/visualRegionDetector";
 
 export interface ProcessUploadedPdfParams {
   uid: string;
@@ -30,7 +31,7 @@ export interface ProcessUploadedPdfParams {
 
 export async function processUploadedPdf(params: ProcessUploadedPdfParams): Promise<{
   ok: boolean;
-  status: "ready" | "queued" | "failed" | "needs_ocr" | "needs_legacy_conversion" | "legacy_converted";
+  status: "ready" | "queued" | "paused" | "failed" | "needs_ocr" | "needs_legacy_conversion" | "legacy_converted";
   message: string;
   chunkCount: number;
   needsOcr: boolean;
@@ -419,6 +420,16 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
 
   } catch (err: any) {
     console.error(`Unhandled error in processUploadedPdf pipeline for ${sourceId}:`, err);
+    if (err?.code === "PDF_JOB_PAUSED") {
+      return {
+        ok: true,
+        status: "paused",
+        message: "PDF processing is paused and can be resumed without re-uploading.",
+        chunkCount: 0,
+        needsOcr: true,
+        extractionMethod: "paused",
+      };
+    }
     await finalizeFailedProcessing({
       sourceId,
       sourceScope,
@@ -528,6 +539,7 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
 
   let chunkCount = 0;
   const normalizedSubjectKey = normalizeSubject(subject || "");
+  const visualRegions = extractDocumentVisualRegions(pages);
 
   for (const p of pages) {
     const pageText = (p.text || "").trim();
@@ -538,6 +550,8 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
 
     for (let j = 0; j < subChunks.length; j++) {
       const chunkTextContent = subChunks[j];
+      const textStart = j * 850;
+      const textEnd = textStart + chunkTextContent.length;
       const questionNo = detectQuestionNo(chunkTextContent);
       const detectedLesson = lesson?.trim() || detectLessonForChunk(chunkTextContent, normalizedSubjectKey);
       const chunkId = `chunk_${sourceId}_${chunkCount}`;
@@ -562,6 +576,9 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
         extractionMethod,
         conversionApplied: p.conversionApplied || false,
         ocrConfidence,
+        textStart,
+        textEnd,
+        visualRegions: regionsForChunk(visualRegions, pageNum, textStart, textEnd),
         chunkIndex: chunkCount++,
         title,
         fileName,
@@ -651,6 +668,9 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
     duplicateOfSourceId,
     needsTextReview: documentQuality.needsHumanReview,
     lowConfidencePages: documentQuality.lowConfidencePages,
+    visualRegions,
+    visualRegionCount: visualRegions.length,
+    needsVisualReview: visualRegions.some((region) => region.needsVisualReview),
     processedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };

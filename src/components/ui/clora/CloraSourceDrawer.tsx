@@ -27,6 +27,7 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
         <button type="button"
           onClick={onClose}
           className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+          aria-label="Close sources"
         >
           <X className="w-4 h-4" />
         </button>
@@ -45,7 +46,7 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.2 }}
-              key={source.id || i}
+              key={source.id || source.sourceId || source.citationLabel || `${source.title || 'source'}-${i}`}
               className="group flex flex-col rounded-xl border border-slate-200 bg-white p-3 transition-all hover:bg-slate-50"
             >
               <div className="flex items-start justify-between gap-2 mb-1">
@@ -60,11 +61,16 @@ export function CloraSourceDrawer({ sources, onClose, onSourceClick }: CloraSour
                   "{source.snippet}"
                 </p>
               )}
+
+              {source.citationLabel && (
+                <p className="mt-1 text-[10px] font-semibold text-indigo-600">{source.citationLabel}</p>
+              )}
               
               <div className="flex items-center gap-2 mt-auto pt-2 text-[10px] text-slate-400 font-medium justify-between">
-                {source.pageNumber ? (
+                {(source.pageNumber || source.evidenceRegion?.pageNumber) ? (
                   <span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200 text-slate-500">
-                    Page {source.pageNumber}
+                    Page {source.pageNumber || source.evidenceRegion?.pageNumber}
+                    {source.evidenceRegion?.textStart != null && source.evidenceRegion?.textEnd != null ? ` · chars ${source.evidenceRegion.textStart}–${source.evidenceRegion.textEnd}` : ''}
                   </span>
                 ) : <span />}
                 {source.relevanceScore && (

@@ -2,6 +2,7 @@ import { getAIClient } from "./client";
 import { callGeminiWithFallback } from "./modelRouter";
 import { sanitizeAssistantText } from "./responseHygiene";
 import { assessAnswerCompleteness, extractRequestedSubparts } from "./answerCompleteness";
+import { verifyExamAnswer } from "./deterministicExamVerifier";
 
 export type AnswerQualityReport = {
   passed: boolean;
@@ -80,6 +81,7 @@ export function buildAnswerContractInstruction(params: {
 - For calculations: show the formula, substitution, units, direction/sign where relevant, and a checked final value.
 - For exam answers: match depth to marks when marks are visible and state marking points without inventing an official scheme.
 - For PDF/paper facts: use only supplied or retrieved evidence, identify unreadable/absent visual information, and never invent a diagram or hidden dimension.
+- Label the result truthfully as Official, AI-solved, Predicted/model, or General; never promote one status to another.
 - When the user asks for an image or visual explanation, never imitate one with ASCII art, monospace arrows, or a code block. Use the image-generation/visual-block result and keep supporting prose concise.
 - Use natural Unicode Sinhala. Never repeat legacy-font mojibake.
 - Finish all sentences, lists, tables, Markdown, and math delimiters.
@@ -93,6 +95,7 @@ export function deterministicQualityReport(params: {
   mode?: unknown;
   evidenceRequired?: boolean;
   sourceCount?: number;
+  sources?: any[];
 }): AnswerQualityReport {
   const prompt = String(params.prompt || "");
   const answer = String(params.answer || "").trim();
@@ -102,12 +105,23 @@ export function deterministicQualityReport(params: {
   const numericalChecks: string[] = [];
   const factualRisks: string[] = [];
   const citationRisks: string[] = [];
+  const examVerification = verifyExamAnswer({
+    prompt,
+    answer,
+    evidenceRequired: params.evidenceRequired,
+    sources: params.sources,
+  });
+  missingRequirements.push(...examVerification.missingRequirements);
+  numericalChecks.push(...examVerification.numericalIssues);
+  factualRisks.push(...examVerification.factualRisks);
 
-  const promptHasCalculation = /(?:calculate|find|compute|ගණනය|සොයන්න|කොපමණද|coefficient|සංගුණක|force|බලය|mass|ස්කන්ධ|velocity|වේග)/iu.test(prompt);
+  const promptHasCalculation = /(?:calculate|compute|numerical(?:ly)?|ගණනය|අගය\s*සොයන්න|කොපමණද)/iu.test(prompt);
   const answerHasNumber = /(?:^|\s)[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*(?:N|kg|m\/s|m\s*s|Pa|J|W|V|A|Ω|%|°C|m|s)?\b/iu.test(answer);
   const answerHasUnit = /\b(?:N|kg|m\s*s(?:\^?-?2|⁻²)|m\/s(?:\^?2|²)?|Pa|J|W|V|A|Ω|mol|°C)\b/u.test(answer);
   if (promptHasCalculation && !answerHasNumber) numericalChecks.push("No checked numerical result was detected.");
-  if (promptHasCalculation && answerHasNumber && !answerHasUnit) numericalChecks.push("A numerical result appears without a clear SI unit.");
+  const requiresPhysicalUnit = examVerification.expectedUnits.length === 0
+    || examVerification.expectedUnits.some((unit) => unit !== "dimensionless");
+  if (promptHasCalculation && requiresPhysicalUnit && answerHasNumber && !answerHasUnit) numericalChecks.push("A numerical result appears without a clear SI unit.");
 
   if (params.evidenceRequired && Number(params.sourceCount || 0) === 0) {
     citationRisks.push("The answer requires document evidence but no source was attached to the final response.");
@@ -131,7 +145,9 @@ export function deterministicQualityReport(params: {
     factualRisks: boundedList(factualRisks),
     numericalChecks: boundedList(numericalChecks),
     citationRisks: boundedList(citationRisks),
-    strengths: issueCount === 0 ? ["Deterministic completeness and formatting checks passed."] : [],
+    strengths: issueCount === 0
+      ? ["Deterministic completeness and formatting checks passed.", ...examVerification.strengths]
+      : examVerification.strengths,
     reviewer: "deterministic",
     repaired: false,
   };
@@ -173,6 +189,7 @@ export async function reviewAnswerQuality(params: {
     mode: params.mode,
     evidenceRequired: params.evidenceRequired,
     sourceCount: sources.length,
+    sources,
   });
 
   if (!isSubstantiveAnswerMode(params.mode) || process.env.AI_QUALITY_REVIEW_ENABLED === "false") {

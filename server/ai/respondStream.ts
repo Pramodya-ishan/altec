@@ -52,6 +52,14 @@ import {
 } from "./answerQuality";
 import { recordAiTelemetry } from "../observability/aiTelemetry";
 import { createAnswerPlan, plannerContext } from "./answerPlanner";
+import { secureEvidenceText, sourceSecurityInstruction } from "./sourceContentSecurity";
+import {
+  attachEvidenceContractToSources,
+  buildEvidenceContract,
+  classifyAnswerEvidenceStatus,
+  detectEvidenceContradictions,
+  evidenceContractInstruction,
+} from "./evidenceContract";
 
 interface StreamTrace {
   requestId: string;
@@ -1846,6 +1854,18 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       contextBlocksText += `\n[URL CONTEXT]:\n${uRes.answer}\n`;
     }
 
+    const securedEvidence = secureEvidenceText(contextBlocksText);
+    contextBlocksText = securedEvidence.text;
+    allSources = attachEvidenceContractToSources(allSources);
+    if (!securedEvidence.safe) {
+      emitSse(res, "status", {
+        step: "source_security",
+        status: "filtered",
+        message: "Ignored untrusted instructions embedded inside source content",
+        removedLineCount: securedEvidence.removedLineCount,
+      });
+    }
+
     if (allSources.length > 0) {
       emitSse(res, "sources", { sources: allSources });
       trace.lastEvent = "sources";
@@ -1902,6 +1922,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       mode: route.mode,
       evidenceRequired: policy.requireEvidence,
     });
+    finalSysInstruction += sourceSecurityInstruction(securedEvidence.threats.length);
 
     // Build the parts array for the contents object
     const mistakeImageSources: any[] = [];
@@ -2036,6 +2057,18 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       evidenceRequired: policy.requireEvidence,
     });
     requestTextPart.text += plannerContext(answerPlan);
+    const currentEvidenceContract = buildEvidenceContract(allSources);
+    const evidenceContradictions = detectEvidenceContradictions(currentEvidenceContract);
+    const answerEvidenceStatus = classifyAnswerEvidenceStatus({ prompt, mode: route.mode, sources: allSources });
+    finalSysInstruction += evidenceContractInstruction(currentEvidenceContract, evidenceContradictions);
+    finalSysInstruction += `\n\nANSWER STATUS LABEL: ${answerEvidenceStatus}. Use this exact epistemic status and never upgrade it.`;
+    emitSse(res, "answer_status", {
+      status: answerEvidenceStatus,
+      sourceMode: sourceContextApplies ? "locked_pdf" : "general_ai",
+      lockedSourceActive: Boolean(selectedSourceId),
+      sourceTitle: selectedSourceId ? (evidence.selectedSource?.title || activeConversationState.selectedSourceTitle || allSources[0]?.title || null) : null,
+      contradictions: evidenceContradictions,
+    });
 
     let stream: any = null;
     let modelUsed = "";
@@ -2349,7 +2382,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
     }
 
     // Background extraction
-    if (!isInterrupted && process.env.ENABLE_MEMORY_EXTRACTION !== "false") {
+    if (!isInterrupted && qualityReport?.passed === true && process.env.ENABLE_MEMORY_EXTRACTION !== "false") {
       safeCall("extractStableMemoryIfUseful", () => extractStableMemoryIfUseful({ uid: user.uid, email: user.email, prompt, answer: fullText, userContext: modifiedUserContext }), null, res).catch(() => null);
     }
 
@@ -2477,6 +2510,9 @@ Do not include any other text or markdown formatting.`;
       missingSubparts: completionAssessment.missingSubparts,
       incompleteReasons: completionAssessment.reasons,
       qualityReport,
+      answerStatus: answerEvidenceStatus,
+      sourceMode: sourceContextApplies ? "locked_pdf" : "general_ai",
+      evidenceContradictions,
       answerPlan: {
         requirementCount: answerPlan.requirements.length,
         visualNeed: answerPlan.visualNeed,

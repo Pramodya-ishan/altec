@@ -34,6 +34,7 @@ export type DirectPdfQaResult = {
   extractionMethod?: string;
   completed?: boolean;
   qualityReport?: any;
+  answerEvidenceStatus?: "official" | "ai_solved";
 };
 
 function asksForPdfVisual(value: unknown) {
@@ -192,6 +193,7 @@ export async function askDirectPdfQa(params: {
     // Transform the evidence-first JSON into clean Markdown plus structured
     // visual aids. The model never emits raw visual JSON into the answer text.
     if (result.ok && result.answer && typeof result.answer === "object") {
+      result.answerEvidenceStatus = result.answer.officialAnswer ? "official" : "ai_solved";
       const formatted = formatDirectPdfAnswer({
         source,
         year,

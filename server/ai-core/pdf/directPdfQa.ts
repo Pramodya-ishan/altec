@@ -337,7 +337,7 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
     result = finalizeDirectPdfResult(result, questionType);
 
     // Save to cache if found
-    if (result.found && result.sourceEvidence?.questionText) {
+    if (result.found && result.completed !== false && result.confidence >= 0.8 && result.sourceEvidence?.questionText) {
        const db = getAdminDb();
        const cacheId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
        
@@ -352,6 +352,8 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
          confidence: result.confidence,
          extractionMethod: "gemini_direct_pdf_qa",
          validationStatus: result.confidence > 0.8 ? "valid" : "needs_review",
+         verifiedEvidence: true,
+         answerComplete: true,
          evidenceVersion: 3,
          updatedAt: new Date().toISOString()
        };
@@ -359,7 +361,7 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
        try {
          const { removeUndefinedDeep } = await import("../memory/chatSanitizer");
          await db.collection("pdf_question_cache").doc(cacheId).set(removeUndefinedDeep(cacheData), { merge: true });
-         console.log(`[AI_CORE] Saved structured cache for ${cacheId}`);
+         console.log(`[AI_CORE] Saved verified, complete structured cache for ${cacheId}`);
        } catch (cacheErr) {
          console.error("[AI_CORE] Failed to save PDF question cache:", cacheErr);
        }

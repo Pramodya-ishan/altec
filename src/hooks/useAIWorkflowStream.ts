@@ -59,6 +59,7 @@ export function useAIWorkflowStream() {
     onVisualBlocks?: (blocks: any[]) => void;
     onSuggestions?: (suggestions: string[]) => void;
     onQualityReport?: (report: any) => void;
+    onAnswerStatus?: (status: { answerStatus?: string; sourceMode?: string; lockedSourceActive?: boolean; sourceTitle?: string | null; contradictions?: any[] }) => void;
   }) {
     const {
       prompt,
@@ -88,7 +89,8 @@ export function useAIWorkflowStream() {
       onDone,
       onVisualBlocks,
       onSuggestions,
-      onQualityReport
+      onQualityReport,
+      onAnswerStatus,
     } = params;
 
     if (activeStreamRef.current) {
@@ -439,6 +441,7 @@ export function useAIWorkflowStream() {
                   };
                   setQualityReport(directQualityReport);
                   onQualityReport?.(directQualityReport);
+                  onAnswerStatus?.({ answerStatus: result.answerEvidenceStatus || "ai_solved", sourceMode: "locked_pdf", sourceTitle: title || null, contradictions: [] });
                   onDone?.({
                     ok: true,
                     completed: answerCompleted,
@@ -446,6 +449,8 @@ export function useAIWorkflowStream() {
                     evidenceComplete: answerCompleted,
                     answer: result.answer,
                     qualityReport: directQualityReport,
+                    answerStatus: result.answerEvidenceStatus || "ai_solved",
+                    sourceMode: "locked_pdf",
                     sources: [{ id: sourceId, title, storagePath }],
                     paperInfo: {
                       sourceId,
@@ -526,6 +531,15 @@ export function useAIWorkflowStream() {
           if (eventName === "suggestions") {
             const suggestions = data.suggestions || [];
             onSuggestions?.(suggestions);
+          }
+          if (eventName === "answer_status") {
+            onAnswerStatus?.({
+              answerStatus: data.answerStatus || data.status,
+              sourceMode: data.sourceMode,
+              lockedSourceActive: data.lockedSourceActive === true,
+              sourceTitle: data.sourceTitle || null,
+              contradictions: data.contradictions || [],
+            });
           }
           if (eventName === "error") {
             const errObj = { error: data.error || data.message || "AI error", recoverable: data.recoverable, code: data.code };

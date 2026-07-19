@@ -11,6 +11,8 @@ import {
   FileSearch,
   FileText,
   Loader2,
+  Pause,
+  Play,
   RefreshCw,
   ScanText,
   Search,
@@ -37,9 +39,10 @@ interface Source {
   createdAt: string;
   updatedAt: string;
   storagePath: string;
+  job?: { status?: string; stage?: string; progress?: number; pauseRequested?: boolean } | null;
 }
 
-type SourceAction = 'reindex' | 'ocr' | 'delete';
+type SourceAction = 'reindex' | 'ocr' | 'pause' | 'resume' | 'delete';
 type BulkAction = 'repair' | 'reindex' | 'ocr';
 
 type BulkState = {
@@ -79,11 +82,16 @@ export default function PdfSourcesPage() {
 
   const performSourceAction = useCallback(async (source: Source, action: SourceAction) => {
     const deleting = action === 'delete';
-    const endpoint = deleting ? `/api/rag/sources/${source.id}` : '/api/rag/reindex-uploaded';
+    const controllingJob = action === 'pause' || action === 'resume';
+    const endpoint = deleting
+      ? `/api/rag/sources/${source.id}`
+      : controllingJob
+        ? `/api/pdf/jobs/${encodeURIComponent(source.id)}/${action}`
+        : '/api/rag/reindex-uploaded';
     const response = await apiFetch(endpoint, {
       method: deleting ? 'DELETE' : 'POST',
-      headers: deleting ? undefined : { 'Content-Type': 'application/json' },
-      body: deleting ? undefined : JSON.stringify({ sourceId: source.id, mode: action === 'ocr' ? 'ocr' : 'auto' }),
+      headers: deleting || controllingJob ? undefined : { 'Content-Type': 'application/json' },
+      body: deleting || controllingJob ? undefined : JSON.stringify({ sourceId: source.id, mode: action === 'ocr' ? 'ocr' : 'auto' }),
     });
     const data = await response.json().catch(() => null);
     if (!response.ok || !data?.ok) {
@@ -101,7 +109,7 @@ export default function PdfSourcesPage() {
     setActionLoading((current) => new Set(current).add(actionKey));
     try {
       const data = await performSourceAction(source, action);
-      showNotification(data?.message || `${action === 'ocr' ? 'OCR' : action === 'reindex' ? 'Re-index' : 'Delete'} completed.`, 'success');
+      showNotification(data?.message || `${action === 'ocr' ? 'OCR' : action === 'reindex' ? 'Re-index' : action === 'pause' ? 'Pause' : action === 'resume' ? 'Resume' : 'Delete'} completed.`, 'success');
       await fetchSources();
     } catch (error: any) {
       showNotification(error?.message || 'Action failed.', 'error');
@@ -249,7 +257,7 @@ export default function PdfSourcesPage() {
 
                   <div className="grid grid-cols-2 gap-4 text-xs font-medium text-slate-500">
                     <div className="flex items-center gap-2"><Database className="h-3.5 w-3.5 text-slate-400" /><span>{source.chunkCount || 0} chunks</span></div>
-                    <div className="flex items-center gap-2"><RefreshCw className={cn('h-3.5 w-3.5 text-slate-400', ['processing', 'queued', 'running'].includes(source.indexStatus) && 'animate-spin')} /><span className="truncate">{source.indexStatus || 'not indexed'}</span></div>
+                    <div className="flex items-center gap-2"><RefreshCw className={cn('h-3.5 w-3.5 text-slate-400', ['processing', 'queued', 'running'].includes(source.job?.status || source.indexStatus) && 'animate-spin')} /><span className="truncate">{source.job?.status === 'paused' ? `paused · ${source.job.progress || 0}%` : source.job?.status || source.indexStatus || 'not indexed'}</span></div>
                   </div>
 
                   {source.needsOcr ? (
@@ -268,6 +276,15 @@ export default function PdfSourcesPage() {
                     <button type="button" onClick={() => void handleAction(source, 'ocr')} disabled={isBusy || Boolean(bulkState)} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-amber-50 text-xs font-bold text-amber-700 transition hover:bg-amber-100 disabled:opacity-40">
                       {actionLoading.has(`${source.id}_ocr`) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScanText className="h-3.5 w-3.5" />} OCR
                     </button>
+                    {source.job?.status === 'paused' ? (
+                      <button type="button" onClick={() => void handleAction(source, 'resume')} disabled={isBusy || Boolean(bulkState)} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-emerald-50 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-40">
+                        {actionLoading.has(`${source.id}_resume`) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Resume
+                      </button>
+                    ) : ['queued', 'running'].includes(source.job?.status || '') ? (
+                      <button type="button" onClick={() => void handleAction(source, 'pause')} disabled={isBusy || Boolean(bulkState)} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-blue-50 text-xs font-bold text-blue-700 transition hover:bg-blue-100 disabled:opacity-40">
+                        {actionLoading.has(`${source.id}_pause`) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pause className="h-3.5 w-3.5" />} Pause
+                      </button>
+                    ) : null}
                     <button type="button" onClick={() => void handleAction(source, 'delete')} disabled={isBusy || Boolean(bulkState)} className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-red-50 text-xs font-bold text-red-600 transition hover:bg-red-100 disabled:opacity-40">
                       {actionLoading.has(`${source.id}_delete`) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />} Delete
                     </button>

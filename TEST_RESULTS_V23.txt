@@ -1,0 +1,24 @@
+ALTEC Production Repair v23 — Verification Results
+Date: 2026-07-20
+
+PASS  npm run typecheck:app
+PASS  npm run typecheck:scripts
+PASS  npm test
+PASS  npm run test:ai-evals — 600/600
+PASS  npm run build
+PASS  npm run build:vercel
+PASS  Vercel self-contained runtime verification (49 imports)
+PASS  Vercel isolated pure-ESM boot and JSON API smoke test
+
+Golden evaluation categories:
+- arithmetic/scientific calculations: 100/100
+- source prompt-injection defense: 100/100
+- strict source/OCR readiness: 100/100
+- document visual-region detection: 100/100
+- calibrated exam forecasting: 100/100
+- exact two-subject study planning: 100/100
+
+Build warnings only:
+- Vite reports existing large chunks and one sourceActions static/dynamic import overlap.
+- Generic CJS server build warns about import.meta in optional local authoritative-document fallback paths.
+- The production Vercel pure-ESM runtime build and isolated smoke test pass.

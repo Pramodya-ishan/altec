@@ -17,6 +17,20 @@ export interface EvidenceResult {
   allowModelQuestionGeneration: boolean;
 }
 
+export function sourceEvidenceReadiness(source: any): { ready: boolean; status: EvidenceResult["evidenceStatus"]; reason: string | null } {
+  const hasIndex = source?.textIndexed === true || Number(source?.chunkCount || 0) > 0;
+  if (!hasIndex) return { ready: false, status: source?.needsOcr ? "ocr_required" : "index_required", reason: "No searchable text index is ready." };
+  if (source?.needsOcr === true || source?.indexStatus === "needs_ocr") {
+    return { ready: false, status: "ocr_required", reason: "OCR is required before source-locked answering." };
+  }
+  const confidence = Number(source?.ocrConfidence);
+  const lowConfidencePages = Array.isArray(source?.lowConfidencePages) ? source.lowConfidencePages : [];
+  if ((Number.isFinite(confidence) && confidence < 0.65) || lowConfidencePages.length > 0 || source?.needsTextReview === true) {
+    return { ready: false, status: "source_found_text_missing", reason: "Indexed text is below the strict evidence confidence threshold." };
+  }
+  return { ready: true, status: "verified", reason: null };
+}
+
 export async function retrieveEvidence(
   uid: string,
   prompt: string,
@@ -46,7 +60,7 @@ export async function retrieveEvidence(
       const lessonMatch = findLessonSources(allAvailableSources, prompt, route.entities?.lesson || activeConversationState?.activeLessonIds?.[0]);
       lessonIds = lessonMatch.reference ? [lessonMatch.reference.label] : [];
       candidates = lessonMatch.sources;
-      const indexedMatches = lessonMatch.sources.filter((source: any) => source.textIndexed || Number(source.chunkCount || 0) > 0);
+      const indexedMatches = lessonMatch.sources.filter((source: any) => sourceEvidenceReadiness(source).ready);
       if (indexedMatches.length > 0) {
         selectedSource = indexedMatches[0];
         allowedSourceIds = indexedMatches.map((source: any) => source.sourceId || source.id).filter(Boolean);
@@ -75,19 +89,18 @@ export async function retrieveEvidence(
     if (["continue_grounded_discussion", "official_paper_question"].includes(intent) && activeSourceId) {
       selectedSource = allAvailableSources.find(s => s.id === activeSourceId || s.sourceId === activeSourceId);
       if (selectedSource) {
-        const hasIndex = selectedSource.textIndexed === true || Number(selectedSource.chunkCount || 0) > 0;
-        evidenceStatus = hasIndex
-          ? "verified"
-          : (selectedSource.needsOcr ? "ocr_required" : "index_required");
+        const readiness = sourceEvidenceReadiness(selectedSource);
+        evidenceStatus = readiness.status;
         allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
-        allowAnswerGeneration = hasIndex;
+        allowAnswerGeneration = readiness.ready;
       }
     }
     if (strictRes.selectedSource) {
       selectedSource = strictRes.selectedSource;
-      evidenceStatus = "verified";
+      const readiness = sourceEvidenceReadiness(selectedSource);
+      evidenceStatus = readiness.status;
       allowedSourceIds = [selectedSource.id || selectedSource.sourceId];
-      allowAnswerGeneration = true;
+      allowAnswerGeneration = readiness.ready;
     } else if (!isLessonEvidenceMode(intent)) {
       // Evidence-required requests must never fall back to the first PDF in an
       // inventory. A source is usable only when it is explicitly selected or

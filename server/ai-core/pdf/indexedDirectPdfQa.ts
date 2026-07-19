@@ -56,7 +56,9 @@ export async function answerStructuredFromIndexedPdf(params: {
   const cachedData = cached.exists ? cached.data() : null;
   if (cachedData
     && cachedData.rejected !== true
-    && String(cachedData.validationStatus || "").toLowerCase() !== "rejected"
+    && String(cachedData.validationStatus || "").toLowerCase() === "valid"
+    && cachedData.verifiedEvidence === true
+    && cachedData.completed !== false
     && Number(cachedData.evidenceVersion || 0) >= 3) {
     const result = resultFromCache(cachedData);
     if (result) return result;
@@ -134,10 +136,13 @@ ${allowOfficialAnswer ? "Copy officialAnswer only when it is explicitly printed 
     confidence: Number(extracted.confidence || 0.8),
     extractionMethod: "indexed_pdf_text",
     validationStatus: "valid",
+    verifiedEvidence: true,
     evidenceVersion: 3,
     updatedAt: new Date().toISOString(),
   });
-  await db.collection("pdf_question_cache").doc(cacheId).set(cacheData, { merge: true });
+  if (cacheData.completed !== false && Number(cacheData.confidence || 0) >= 0.75) {
+    await db.collection("pdf_question_cache").doc(cacheId).set(cacheData, { merge: true });
+  }
 
   return resultFromCache(cacheData);
 }

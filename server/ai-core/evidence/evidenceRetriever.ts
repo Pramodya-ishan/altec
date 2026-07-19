@@ -40,6 +40,9 @@ export async function retrieveEvidenceForPaperQuestion(params: {
     if (Number(data?.evidenceVersion || 0) < 3) {
       return { ok: false, reason: "STALE_UNVERIFIED_CACHE" };
     }
+    if (data?.verifiedEvidence !== true || String(data?.validationStatus || "").toLowerCase() !== "valid" || data?.completed === false) {
+      return { ok: false, reason: "UNVERIFIED_OR_INCOMPLETE_CACHE" };
+    }
     const gate = validateQuestionEvidence(data, { year, subject, questionNo, questionType });
     if (gate.ok) {
       return { ok: true, evidence: data as QuestionEvidence };

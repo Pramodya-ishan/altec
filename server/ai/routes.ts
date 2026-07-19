@@ -11,6 +11,8 @@ import { lastOk, lastError, setLastOk } from "./modelRouter";
 import { requireRole } from "../utils/authGuards";
 import { readResponseWithLimit, validateRemotePdfUrl } from "../utils/safeRemotePdf";
 import { getAiTelemetrySnapshot } from "../observability/aiTelemetry";
+import { getConversationState, updateConversationState } from "../knowledge/conversationState";
+import { evaluateArithmeticExpression, verifyExamAnswer } from "./deterministicExamVerifier";
 
 import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
 
@@ -124,6 +126,89 @@ aiRoutes.get("/model-health", (_req, res) => {
       },
     },
   });
+});
+
+aiRoutes.get("/conversation/source-mode", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const state = await getConversationState(user.uid);
+    res.json({
+      ok: true,
+      mode: state.selectedSourceId ? "locked_pdf" : "general_ai",
+      sourceId: state.selectedSourceId,
+      title: state.selectedSourceTitle || null,
+      evidenceMode: state.evidenceMode,
+    });
+  } catch {
+    res.status(500).json({ ok: false, code: "SOURCE_MODE_LOAD_FAILED", message: "Source mode could not be loaded." });
+  }
+});
+
+aiRoutes.post("/conversation/source-mode", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const requested = String(req.body?.mode || "");
+    const current = await getConversationState(user.uid);
+    if (requested === "locked_pdf") {
+      if (!current.selectedSourceId) return res.status(409).json({ ok: false, code: "NO_LOCKED_SOURCE", message: "Select a PDF before enabling source-locked mode." });
+      const state = await updateConversationState(user.uid, { evidenceMode: "strict", allowGeneratedContent: false });
+      return res.json({ ok: true, mode: "locked_pdf", sourceId: state.selectedSourceId, title: state.selectedSourceTitle || null });
+    }
+    if (requested !== "general_ai") return res.status(400).json({ ok: false, code: "INVALID_SOURCE_MODE", message: "Mode must be locked_pdf or general_ai." });
+    const state = await updateConversationState(user.uid, {
+      selectedSourceId: null,
+      selectedSourceTitle: null,
+      selectedSourceSubject: null,
+      selectedSourceYear: null,
+      selectedQuestionType: null,
+      activeSourceIds: [],
+      selectedQuestionId: null,
+      evidenceMode: "none",
+      allowGeneratedContent: true,
+    });
+    return res.json({ ok: true, mode: "general_ai", sourceId: state.selectedSourceId, title: null });
+  } catch {
+    return res.status(500).json({ ok: false, code: "SOURCE_MODE_UPDATE_FAILED", message: "Source mode could not be changed." });
+  }
+});
+
+aiRoutes.post("/conversation/source-unlock", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    await updateConversationState(user.uid, {
+      selectedSourceId: null,
+      selectedSourceTitle: null,
+      selectedSourceSubject: null,
+      selectedSourceYear: null,
+      selectedQuestionType: null,
+      activeSourceIds: [],
+      selectedQuestionId: null,
+      evidenceMode: "none",
+      allowGeneratedContent: true,
+    });
+    return res.json({ ok: true, mode: "general_ai" });
+  } catch {
+    return res.status(500).json({ ok: false, code: "SOURCE_UNLOCK_FAILED", message: "The PDF source could not be unlocked." });
+  }
+});
+
+aiRoutes.post("/verify-calculation", async (req, res) => {
+  try {
+    await requireUser(req);
+    if (req.body?.expression != null) {
+      const value = evaluateArithmeticExpression(req.body.expression);
+      return res.json({ ok: true, expression: String(req.body.expression), value, verified: true });
+    }
+    const verification = verifyExamAnswer({
+      prompt: req.body?.question,
+      answer: req.body?.answer,
+      sources: req.body?.sources,
+      evidenceRequired: Boolean(req.body?.evidenceRequired),
+    });
+    return res.json({ ok: true, verification });
+  } catch (error: any) {
+    return res.status(400).json({ ok: false, code: "CALCULATION_VERIFICATION_FAILED", message: String(error?.message || "Calculation could not be verified.") });
+  }
 });
 
 aiRoutes.get(["/health", "/model-healt", "/api/health"], requireRole("admin", "ops"), async (req, res) => {
@@ -559,6 +644,31 @@ aiRoutes.get("/stream-debug-last", requireRole("admin", "ops"), async (req, res)
 
 aiRoutes.get("/quality-metrics", requireRole("admin", "ops"), async (_req, res) => {
   res.json({ ok: true, ...getAiTelemetrySnapshot(300), streamTraces: lastStreamTraces.slice(0, 20) });
+});
+
+aiRoutes.get("/data-quality", requireRole("admin", "ops"), async (_req, res) => {
+  try {
+    const snapshot = await getAdminDb().collection("rag_sources").limit(1000).get();
+    const sources = snapshot.docs.map((document: any) => ({ id: document.id, ...document.data() }));
+    const issues = sources.flatMap((source: any) => {
+      const sourceIssues: string[] = [];
+      if (source.needsOcr || source.indexStatus === "needs_ocr") sourceIssues.push("needs_ocr");
+      if (source.needsTextReview || (Array.isArray(source.lowConfidencePages) && source.lowConfidencePages.length > 0)) sourceIssues.push("low_confidence_text");
+      if (!source.detectedMetadata?.subject || !source.detectedMetadata?.year) sourceIssues.push("missing_metadata");
+      if (source.duplicateOfSourceId) sourceIssues.push("duplicate");
+      if (source.needsVisualReview) sourceIssues.push("visual_review");
+      if (!source.textIndexed && Number(source.chunkCount || 0) === 0) sourceIssues.push("not_indexed");
+      return sourceIssues.length > 0 ? [{ sourceId: source.id, title: source.title || source.fileName || source.id, issues: sourceIssues }] : [];
+    });
+    const issueNames: string[] = issues.flatMap((item: any) => item.issues as string[]);
+    const counts = issueNames.reduce((result: Record<string, number>, issue: string) => {
+      result[issue] = (result[issue] || 0) + 1;
+      return result;
+    }, {} as Record<string, number>);
+    return res.json({ ok: true, totalSources: sources.length, healthySources: sources.length - issues.length, counts, issues: issues.slice(0, 250) });
+  } catch {
+    return res.status(500).json({ ok: false, code: "DATA_QUALITY_LOAD_FAILED", message: "Data-quality metrics could not be loaded." });
+  }
 });
 
 // Main Respond endpoint

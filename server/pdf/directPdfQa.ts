@@ -132,7 +132,10 @@ Instructions:
     const answer = response.text || "සමාවන්න, එම ප්‍රශ්නයට පිළිතුරු දීමට මට නොහැකි විය.";
 
     // 3. Save to Cache if questionId is provided
-    if (questionId && answer) {
+    // This legacy free-form path has no independent answer verifier. Keep it
+    // out of the trusted cache unless an operator explicitly enables the old
+    // diagnostic behaviour; production cache reads remain verified-only.
+    if (questionId && answer && process.env.ENABLE_UNVERIFIED_LEGACY_PDF_CACHE === "true") {
       await db.collection("pdf_question_cache").add({
         sourceId,
         questionId,
@@ -140,6 +143,8 @@ Instructions:
         subject: subject || null,
         year: year || null,
         timestamp: new Date().toISOString(),
+        validationStatus: "needs_review",
+        verifiedEvidence: false,
       });
     }
 
