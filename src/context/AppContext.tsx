@@ -167,6 +167,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const loadInFlightRef = useRef(false);
   const saveRetryAttemptRef = useRef(0);
   const loadRetryAttemptRef = useRef(0);
+  const lastSuccessfulLoadAtRef = useRef(0);
   const progressRevisionRef = useRef<string | null>(null);
   const flushPendingSaveRef = useRef<() => void>(() => undefined);
   const loadOwnDataRef = useRef<() => void>(() => undefined);
@@ -233,13 +234,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
             updatedAt?: string | null;
           }>(response);
           if (!response.ok) {
-            throw new Error(`Progress request failed (${response.status}).`);
+            const requestError = new Error(`Progress request failed (${response.status}).`);
+            (requestError as any).status = response.status;
+            (requestError as any).code = (payload as any)?.code;
+            throw requestError;
           }
 
           progressRevisionRef.current = payload?.revision || null;
           const serverData = sanitizeAppData(payload?.data);
           setData(pendingSaveRef.current || serverData);
           setHasHydratedUserData(true);
+          lastSuccessfulLoadAtRef.current = Date.now();
           loadRetryAttemptRef.current = 0;
           if (loadRetryTimerRef.current) {
             clearTimeout(loadRetryTimerRef.current);
@@ -248,6 +253,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return;
         } catch (error) {
           lastError = error;
+          const status = Number((error as any)?.status || 0);
+          // apiFetch already performs a forced token refresh. Repeating an
+          // authorization failure immediately only floods the console and the
+          // server with identical 401 requests.
+          if (status === 401 || status === 403) break;
           if (attempt < 2) {
             await new Promise((resolve) => window.setTimeout(resolve, 500 * (attempt + 1)));
           }
@@ -257,7 +267,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // Keep the current in-memory state. Never replace a student's progress
       // with empty defaults because a temporary request failed.
       loadRetryAttemptRef.current += 1;
-      const delay = Math.min(30_000, 2_000 * 2 ** Math.min(loadRetryAttemptRef.current - 1, 4));
+      const authFailure = [401, 403].includes(Number((lastError as any)?.status || 0));
+      const delay = authFailure
+        ? 60_000
+        : Math.min(30_000, 2_000 * 2 ** Math.min(loadRetryAttemptRef.current - 1, 4));
       if (loadRetryTimerRef.current) clearTimeout(loadRetryTimerRef.current);
       loadRetryTimerRef.current = window.setTimeout(() => loadOwnDataRef.current(), delay);
       if (import.meta.env.DEV) console.warn("Progress load will retry in the background", lastError);
@@ -280,22 +293,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
       };
       setUser(nextUser);
 
-      if (sessionUidRef.current !== firebaseUser.uid) {
-        try {
-          const idToken = await firebaseUser.getIdToken();
-          const response = await apiFetch("/api/auth/session", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ idToken }),
-          });
-          if (response.ok) sessionUidRef.current = firebaseUser.uid;
-        } catch {
-          // Firebase remains the source of truth. A temporary server-session failure
-          // must not sign out a valid Firebase user.
-        }
-      }
+      const sessionBootstrap = sessionUidRef.current === firebaseUser.uid
+        ? Promise.resolve()
+        : (async () => {
+            try {
+              const idToken = await firebaseUser.getIdToken();
+              const response = await apiFetch("/api/auth/session", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ idToken }),
+              });
+              // The endpoint returns 200 even when an HttpOnly cookie cannot be
+              // signed because bearer authentication remains fully active.
+              if (response.ok) sessionUidRef.current = firebaseUser.uid;
+            } catch {
+              // Session-cookie bootstrap is optional and must never block the
+              // authenticated progress/profile requests below.
+            }
+          })();
 
-      const results = await Promise.allSettled([loadOwnData(), loadProfile(), loadNotifications()]);
+      const results = await Promise.allSettled([
+        loadOwnData(),
+        loadProfile(),
+        loadNotifications(),
+        sessionBootstrap,
+      ]);
       if (results[1].status === "rejected") {
         setProfile({
           email: nextUser.email,
@@ -474,8 +496,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       saveRetryAttemptRef.current += 1;
       const online = typeof navigator === "undefined" || navigator.onLine !== false;
+      const status = Number((error as any)?.status || 0);
       const baseDelay = online ? 1_000 : 5_000;
-      const delay = Math.min(30_000, baseDelay * 2 ** Math.min(saveRetryAttemptRef.current - 1, 5));
+      const delay = [401, 403].includes(status)
+        ? 60_000
+        : Math.min(30_000, baseDelay * 2 ** Math.min(saveRetryAttemptRef.current - 1, 5));
       scheduleSaveFlush(delay);
       if (import.meta.env.DEV) console.warn("Progress save will retry in the background", error);
     } finally {
@@ -496,7 +521,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const retryPending = () => {
       if (pendingSaveRef.current) scheduleSaveFlush(0);
-      if (!pendingSaveRef.current && user) loadOwnDataRef.current();
+      const stale = Date.now() - lastSuccessfulLoadAtRef.current > 120_000;
+      if (!pendingSaveRef.current && user && (!hasHydratedUserData || stale)) {
+        loadOwnDataRef.current();
+      }
     };
     const onVisibility = () => {
       if (document.visibilityState === "visible") retryPending();
@@ -509,7 +537,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("focus", retryPending);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [scheduleSaveFlush, user]);
+  }, [hasHydratedUserData, scheduleSaveFlush, user]);
 
   useEffect(() => () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);

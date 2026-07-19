@@ -1,0 +1,53 @@
+CLORA X V16 FINAL VALIDATION
+============================
+
+PASS  npm ci --include=dev
+      922 packages installed
+
+PASS  npm run typecheck
+      tsc --noEmit
+      tsc -p tsconfig.scripts.json --noEmit
+
+PASS  npm test
+      Source registry tests
+      Z-score regression tests
+      Progress data regression tests
+      Markdown/Sinhala tests
+      PDF extraction and preview tests
+      Direct PDF answer tests
+      Source selection and exact question tests
+      Upload signature tests
+      Unlimited-request tests
+      Security and capability tests
+      App Check deployment fallback tests
+      Secure video tests
+      Firebase auth recovery regression tests
+
+PASS  npm run test:integration
+      Knowledge routing
+      Security
+      Source selection
+      Exact indexed question selection
+
+PASS  npm run verify:repair
+      V10 grounding/UI checks
+      V15 progress/Z-score checks
+      V16 Firebase session/bearer/401-storm checks
+
+PASS  vite build
+      3292 modules transformed
+      Production frontend bundles generated
+
+PASS  npm run bundle:vercel
+      Self-contained Vercel runtime generated
+      49 runtime imports verified
+      Google protobuf assets included
+      PDF.js worker included
+      Native PDF renderer included
+      Isolated pure-ESM boot passed
+
+KNOWN NON-BLOCKING WARNINGS
+---------------------------
+- Existing large frontend chunk warnings.
+- sourceActions is both statically and dynamically imported.
+- npm transitive dependency deprecation notices.

@@ -91,59 +91,111 @@ authRoutes.post("/force-reset-password", requireRole("admin"), express.json({ li
   }
 });
 
-authRoutes.post("/session", express.json({ limit: "32kb" }), async (req, res, next) => {
+authRoutes.post("/session", express.json({ limit: "32kb" }), async (req, res) => {
+  const requestId = String((req as any).requestId || "unknown");
+  const { idToken, profileData } = req.body || {};
+  if (typeof idToken !== "string" || idToken.split(".").length !== 3) {
+    return res.status(400).json({ ok: false, code: "INVALID_ID_TOKEN", message: "A valid Firebase ID token is required." });
+  }
+
+  let decoded: any;
   try {
-    const { idToken, profileData } = req.body || {};
-    if (typeof idToken !== "string" || idToken.split(".").length !== 3) {
-      return res.status(400).json({ ok: false, code: "INVALID_ID_TOKEN", message: "A valid Firebase ID token is required." });
-    }
+    // Do not request revocation metadata here. The additional privileged Auth
+    // API lookup caused valid browser tokens to fail when the deployment
+    // service account could verify tokens but did not have revocation-check
+    // permission. Standard JWT verification is sufficient for API bootstrap.
+    decoded = await getAdminAuth().verifyIdToken(idToken, false);
+  } catch (error: any) {
+    console.warn("[AUTH_SESSION] ID token verification failed", {
+      requestId,
+      code: String(error?.code || "AUTH_TOKEN_INVALID"),
+    });
+    return res.status(401).json({
+      ok: false,
+      code: "INVALID_ID_TOKEN",
+      message: "The Firebase login token is invalid or expired.",
+    });
+  }
 
-    const auth = getAdminAuth();
-    const decoded = await auth.verifyIdToken(idToken, true);
-    if (!decoded.email || decoded.firebase?.sign_in_provider === "anonymous") {
-      return res.status(401).json({ ok: false, code: "AUTHENTICATED_USER_REQUIRED", message: "A verified account is required." });
-    }
+  if (!decoded.email || decoded.firebase?.sign_in_provider === "anonymous") {
+    return res.status(401).json({ ok: false, code: "AUTHENTICATED_USER_REQUIRED", message: "A verified account is required." });
+  }
 
-    const sessionCookie = await auth.createSessionCookie(idToken, { expiresIn: SESSION_DURATION_MS });
+  res.setHeader("Cache-Control", "no-store");
+
+  // The bearer token remains the primary API credential. Session-cookie
+  // creation is an optional same-origin fallback and must never turn a valid
+  // Firebase login into a server 500 when signing credentials are unavailable.
+  let sessionCreated = false;
+  try {
+    const sessionCookie = await getAdminAuth().createSessionCookie(idToken, { expiresIn: SESSION_DURATION_MS });
     res.cookie(SESSION_COOKIE_NAME, sessionCookie, sessionCookieOptions());
+    sessionCreated = true;
+  } catch (error: any) {
+    console.warn("[AUTH_SESSION] Cookie creation skipped; bearer authentication remains active", {
+      requestId,
+      code: String(error?.code || "SESSION_COOKIE_UNAVAILABLE"),
+    });
+  }
 
+  const fallbackProfile = {
+    email: decoded.email.toLowerCase(),
+    username: profileData?.username || decoded.name || decoded.email.split("@")[0],
+    picture: decoded.picture || "",
+    bio: "",
+    nic: profileData?.nic || "",
+    mobileNumber: profileData?.mobileNumber || "",
+    bday: profileData?.bday || "",
+    gender: profileData?.gender || "",
+    isVerified: decoded.email_verified === true,
+    updatedAt: new Date().toISOString(),
+  };
+
+  let profile = fallbackProfile;
+  let profileSynced = false;
+  try {
     const db = getAdminDb();
     const profileRef = db.collection("users").doc(decoded.uid).collection("profile").doc("main");
     const profileSnap = await profileRef.get();
     const existing = profileSnap.exists ? profileSnap.data() || {} : {};
-    const profile = {
-      email: decoded.email.toLowerCase(),
-      username: existing.username || profileData?.username || decoded.name || decoded.email.split("@")[0],
-      picture: existing.picture || decoded.picture || "",
+    profile = {
+      ...fallbackProfile,
+      username: existing.username || fallbackProfile.username,
+      picture: existing.picture || fallbackProfile.picture,
       bio: existing.bio || "",
-      nic: existing.nic || profileData?.nic || "",
-      mobileNumber: existing.mobileNumber || profileData?.mobileNumber || "",
-      bday: existing.bday || profileData?.bday || "",
-      gender: existing.gender || profileData?.gender || "",
-      isVerified: decoded.email_verified === true,
-      updatedAt: new Date().toISOString(),
+      nic: existing.nic || fallbackProfile.nic,
+      mobileNumber: existing.mobileNumber || fallbackProfile.mobileNumber,
+      bday: existing.bday || fallbackProfile.bday,
+      gender: existing.gender || fallbackProfile.gender,
     };
     await profileRef.set(profile, { merge: true });
     await db.collection("users").doc(decoded.uid).set({
       email: decoded.email.toLowerCase(),
       updatedAt: new Date().toISOString(),
     }, { merge: true });
-
-    res.json({
-      ok: true,
-      success: true,
-      user: {
-        uid: decoded.uid,
-        email: decoded.email.toLowerCase(),
-        name: profile.username,
-        picture: profile.picture,
-        emailVerified: decoded.email_verified === true,
-      },
-      profile,
+    profileSynced = true;
+  } catch (error: any) {
+    console.warn("[AUTH_SESSION] Profile bootstrap deferred", {
+      requestId,
+      code: String(error?.code || "PROFILE_SYNC_UNAVAILABLE"),
     });
-  } catch (error) {
-    next(error);
   }
+
+  return res.json({
+    ok: true,
+    success: true,
+    sessionCreated,
+    profileSynced,
+    authMode: sessionCreated ? "bearer_and_cookie" : "bearer",
+    user: {
+      uid: decoded.uid,
+      email: decoded.email.toLowerCase(),
+      name: profile.username,
+      picture: profile.picture,
+      emailVerified: decoded.email_verified === true,
+    },
+    profile,
+  });
 });
 
 authRoutes.post("/logout", (_req, res) => {

@@ -79,10 +79,10 @@ if (activeConfig && activeConfig.apiKey && activeConfig.apiKey.trim() !== "") {
   console.info("Firebase API Key is missing. Operating in client-server DB file synchronization mode.");
 }
 
-export async function getFirebaseAppCheckToken(): Promise<string | null> {
+export async function getFirebaseAppCheckToken(forceRefresh = false): Promise<string | null> {
   if (!appCheck) return null;
   try {
-    const result = await getToken(appCheck, false);
+    const result = await getToken(appCheck, forceRefresh);
     return result.token || null;
   } catch (error) {
     console.warn('Failed to obtain Firebase App Check token', error);

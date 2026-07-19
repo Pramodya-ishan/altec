@@ -326,3 +326,34 @@ assert(
 );
 
 console.log("V15 security, progress synchronization, Z-score history, and deployment checks passed.");
+
+const apiClientV16 = await read("src/lib/api.ts");
+const authMiddlewareV16 = await read("server/firebase/authMiddleware.ts");
+assert(
+  apiClientV16.includes("authRecoveryPromise")
+    && apiClientV16.includes("getAuthToken(true)")
+    && apiClientV16.includes("credentials: options.credentials || 'include'"),
+  "V16 client auth recovery or cookie transport is incomplete",
+);
+assert(
+  authMiddlewareV16.includes("verifyIdToken(token, false)")
+    && authMiddlewareV16.includes("verifySessionCookie(sessionCookie, false)")
+    && !authMiddlewareV16.includes("verifyIdToken(token, true)"),
+  "V16 normal API auth still depends on privileged revocation checks",
+);
+assert(
+  authRoutesV11.includes("verifyIdToken(idToken, false)")
+    && authRoutesV11.includes("Cookie creation skipped; bearer authentication remains active")
+    && authRoutesV11.includes("sessionCreated")
+    && authRoutesV11.includes("profileSynced"),
+  "V16 session bootstrap can still fail a valid Firebase login",
+);
+assert(
+  appContextV11.includes("sessionBootstrap")
+    && appContextV11.includes("lastSuccessfulLoadAtRef")
+    && appContextV11.includes("status === 401 || status === 403"),
+  "V16 authenticated bootstrap or 401 storm protection is incomplete",
+);
+
+console.log("V16 Firebase session, bearer recovery, and 401-storm checks passed.");
+
