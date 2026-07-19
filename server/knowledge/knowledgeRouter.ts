@@ -3,6 +3,7 @@ import { checkAiBillingCircuit, handleAiError } from "../ai/aiCircuitBreaker";
 import { classifyAiError } from "../ai/aiErrorClassifier";
 import { GoogleGenAI } from "@google/genai";
 import { resolveLessonReference } from "./lessonResolver";
+import { isPaperForecastPrompt } from "../ai/sourceSelection";
 
 export type KnowledgeRouterResult = {
   mode:
@@ -259,11 +260,7 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
       entities: { subject }
     };
   }
-  const asksPaperAnalysis = Boolean(year)
-    && (lower.includes("paper") || lower.includes("past paper"))
-    && (lower.includes("guess") || lower.includes("prediction") || lower.includes("predict")
-      || lower.includes("frequency") || lower.includes("trend") || lower.includes("repeated")
-      || lower.includes("probability"));
+  const asksPaperAnalysis = isPaperForecastPrompt(prompt);
   if (asksPaperAnalysis) {
     return {
       mode: "past_paper_analysis",

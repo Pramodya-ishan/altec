@@ -56,7 +56,7 @@ import { TtsComposerModal } from '../chat/TtsComposerModal';
 import { RealtimeLiveCallPanel } from '../ui/clora/RealtimeLiveCallPanel';
 import { VoiceAudioCard } from '../chat/VoiceAudioCard';
 import { parseChatCommand } from '../../lib/chatCommandParser';
-import { isClientImageGenerationIntent } from '../../lib/ai/imageIntent';
+import { isClientImageGenerationIntent, isClientVisualExplanationIntent } from '../../lib/ai/imageIntent';
 import { buildProjectFileContext, isProjectArchiveFile, isProjectTextFile, MAX_CHAT_UPLOAD_FILES, readProjectArchive, readProjectTextFile } from '../../lib/projectFileUpload';
 
 
@@ -1268,10 +1268,19 @@ const [messages, setMessages] = useState<{
         if (imageRes.ok) {
           const data = await imageRes.json();
           const imageUrl = data.imageUrl || data.image;
+          if (!imageUrl) {
+            throw new Error("IMAGE_URL_MISSING");
+          }
+          const isVisualExplanation = isClientVisualExplanationIntent(userMsg);
           setMessages(prev => prev.map(m => m.id === assistantMsgId ? {
             ...m,
-            content: "",
-            generatedImage: imageUrl ? { url: imageUrl, alt: "Generated educational image" } : undefined,
+            content: isVisualExplanation ? "මෙන්න එය සැබෑ රූපයක් සමඟ පැහැදිලි කළ ආකාරය." : "මෙන්න ඉල්ලූ අධ්‍යාපනික රූපය.",
+            generatedImage: {
+              url: imageUrl,
+              alt: userMsg || "Generated educational image",
+              storagePath: data.storagePath,
+              model: data.model,
+            },
             imagePrompt: userMsg,
             status: "done",
           } : m));
@@ -1280,7 +1289,10 @@ const [messages, setMessages] = useState<{
           setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: data?.error || "රූපය නිර්මාණය කිරීමට මේ මොහොතේ නොහැකි වුණා. නැවත උත්සාහ කරන්න.", status: "error" } : m));
         }
       } catch (err: any) {
-        setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: "", imageError: "රූප නිර්මාණ සේවාවට සම්බන්ධ වීමට නොහැකි වුණා. නැවත උත්සාහ කරන්න.", imagePrompt: userMsg, status: "error" } : m));
+        const imageError = err?.message === "IMAGE_URL_MISSING"
+          ? "රූප නිර්මාණය අවසන් වුණත් preview URL එක ලැබුණේ නැහැ. නැවත උත්සාහ කරන්න."
+          : "රූප නිර්මාණ සේවාවට සම්බන්ධ වීමට නොහැකි වුණා. නැවත උත්සාහ කරන්න.";
+        setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: imageError, imageError, imagePrompt: userMsg, status: "error" } : m));
       }
       if (activeStreamIdRef.current === streamId) {
         activeStreamIdRef.current = null;

@@ -23,6 +23,13 @@ assert.equal(prediction.mode, "past_paper_analysis");
 assert.equal(prediction.entities.subject, "SFT");
 assert.equal(prediction.entities.year, "2026");
 
+const sinhalaPrediction = await routeKnowledgeRequest({
+  prompt: "2026 al paper ekt enna puuluwn sankayanaya ganak denna guessing krl deep thinking ekk use krnn",
+  activeSubject: "SFT",
+});
+assert.equal(sinhalaPrediction.mode, "past_paper_analysis");
+assert.equal(sinhalaPrediction.entities.year, "2026");
+
 const inventory = await routeKnowledgeRequest({ prompt: "give all pdfs", activeSubject: "SFT" });
 assert.equal(inventory.mode, "pdf_inventory_request");
 assert.equal(inventory.entities.subject, undefined);

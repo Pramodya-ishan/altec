@@ -25,7 +25,17 @@ import { createAssistantStreamSanitizer, isSimpleGreeting, sanitizeAssistantText
 import { deriveEducationalVisualBlocks } from "./visualAidBuilder";
 import { buildImageReferenceText, isImageGenerationIntent } from "./imageIntent";
 import { getSubjectSyllabusGroundingPdf } from "../pdf/syllabusGrounding";
-import { extractQuestionNumberFromPrompt, inferQuestionTypeFromText, parseSourceChoiceIndex, rankNamedSources, selectNamedSource, toPendingSourceChoice } from "./sourceSelection";
+import {
+  extractQuestionNumberFromPrompt,
+  inferQuestionTypeFromText,
+  isExplicitNamedSourceRequest,
+  isPaperForecastPrompt,
+  parseSourceChoiceIndex,
+  rankNamedSources,
+  selectNamedSource,
+  shouldUseLockedSourceForTurn,
+  toPendingSourceChoice,
+} from "./sourceSelection";
 import { isMistakeReviewIntent } from "../firebase/mistakeStore";
 import { detectSinhalaTextEncoding, normalizeSinhalaExtractedText } from "../pdf/legacySinhala";
 import {
@@ -364,9 +374,10 @@ ${originalPrompt}`;
     // 1. Route Request
     const { detectOfficialPaperCandidate } = await import("../ai-core/intent/paperQuestionParser");
     const paperIntent = detectOfficialPaperCandidate(prompt, activeSubject);
+    const paperForecastPrompt = isPaperForecastPrompt(prompt);
 
     // Check if it's an official paper candidate but subject is missing
-    if (paperIntent.isOfficialPaperCandidate && paperIntent.needsSubjectClarification) {
+    if (paperIntent.isOfficialPaperCandidate && !paperForecastPrompt && paperIntent.needsSubjectClarification) {
       const msg = `මේ ${paperIntent.year} paper එකේ subject එක මොකක්ද? (SFT / ET / ICT)`;
       emitSse(res, "token", { text: msg });
       trace.lastEvent = "token";
@@ -390,7 +401,7 @@ ${originalPrompt}`;
       activeSubject: paperIntent.subject || activeSubject,
       conversationHistory: history,
     }), {
-      mode: paperIntent.isOfficialPaperCandidate ? "paper_question_qa" : "normal_chat",
+      mode: paperForecastPrompt ? "past_paper_analysis" : (paperIntent.isOfficialPaperCandidate ? "paper_question_qa" : "normal_chat"),
       answerHints: { mustUseRag: true, mustUseGoogleSearch: false, mustUseUrlContext: false, mustAskClarification: false },
       entities: {
         year: paperIntent.year,
@@ -401,7 +412,7 @@ ${originalPrompt}`;
     } as any, res);
 
     // [FIX 1] Force paper intent over LLM router if it looks like a paper question
-    if (paperIntent.isOfficialPaperCandidate) {
+    if (paperIntent.isOfficialPaperCandidate && !paperForecastPrompt) {
       console.log(`[OFFICIAL_PAPER_GATE] year=${paperIntent.year} subject=${paperIntent.subject} questionNo=${paperIntent.questionNo} type=${paperIntent.questionType}`);
       console.log(`[AI_RESPOND_STREAM] Forcing paper_question_qa mode`);
       route.mode = "paper_question_qa";
@@ -413,7 +424,7 @@ ${originalPrompt}`;
     }
 
     // [FIX 3] Add hard invariant: official question cannot enter normal_chat
-    if (paperIntent.isOfficialPaperCandidate && route.mode === "normal_chat") {
+    if (paperIntent.isOfficialPaperCandidate && !paperForecastPrompt && route.mode === "normal_chat") {
       console.log(`[OFFICIAL_PAPER_GATE] Converted normal_chat -> paper_question_qa`);
       route.mode = "paper_question_qa";
     }
@@ -496,8 +507,7 @@ ${originalPrompt}`;
     // Resolve named model/guessing/syllabus resources directly. A request such
     // as "guessing 1 essay q1" must lock Guessing 01 Essay before any model is
     // allowed to answer.
-    const hasNamedPdfDescriptor = /(?:guess(?:ing)?|guess\s*paper|model\s*paper|syllabus|විෂය\s*නිර්දේශ)/iu.test(prompt)
-      && /(?:pdf|paper|essay|mcq|structured|q\s*\d+|ප්‍රශ්න|ප්රශ්න|රචනා|බහුවරණ)/iu.test(prompt);
+    const hasNamedPdfDescriptor = isExplicitNamedSourceRequest(prompt);
     if (hasNamedPdfDescriptor) {
       const { getSourceInventory } = await import("../sources/sourceInventoryService");
       const explicitSubject = route.entities?.subject || (/\bsft\b|science for technology|තාක්ෂණවේදය සඳහා විද්‍යාව/iu.test(prompt) ? "SFT" : undefined);
@@ -564,6 +574,27 @@ ${originalPrompt}`;
         return;
       }
     }
+
+    // A source/mistake chooser is valid for the immediately expected numeric
+    // reply only. A substantive new request cancels the stale chooser so a
+    // later number cannot unexpectedly reopen an old PDF or Error Log record.
+    const staleChoiceReset: Record<string, any> = {};
+    if (activeConversationState.awaitingSourceSelection
+      && !isExplicitNamedSourceRequest(prompt)
+      && !shouldUseLockedSourceForTurn(prompt, route.mode)) {
+      staleChoiceReset.pendingSourceChoices = [];
+      staleChoiceReset.awaitingSourceSelection = false;
+    }
+    if (activeConversationState.awaitingMistakeSelection
+      && !mistakeChoiceMatch
+      && !isMistakeReviewIntent(prompt)) {
+      staleChoiceReset.pendingMistakeChoices = [];
+      staleChoiceReset.awaitingMistakeSelection = false;
+    }
+    if (Object.keys(staleChoiceReset).length > 0) {
+      await updateConversationState(user.uid, staleChoiceReset);
+    }
+
     const selectedSourceId = activeConversationState.selectedSourceId || activeConversationState.activeSourceIds?.[0] || null;
 
     // “full paper lesson name + point name” is a document-wide operation, not
@@ -654,7 +685,7 @@ ${originalPrompt}`;
       ? normalizedFollowUp.match(/^(\d{1,3})[?.!]*$/)
       : null;
     const questionFollowUp = explicitQuestionFollowUp || bareQuestionFollowUp;
-    const resourceFollowUp = /^(?:1|eka|ek|එක|ඒක|මේක|ek\s+krmu|eka\s+karamu|එක\s+කරමු|ඒක\s+කරමු|e\s*pdf\s*eke.*|මේ\s*pdf.*)$/i.test(normalizedFollowUp);
+    const resourceFollowUp = /^(?:ek\s+krmu|eka\s+karamu|එක\s+කරමු|ඒක\s+කරමු|e\s*pdf\s*eke.*|මේ\s*pdf.*)$/i.test(normalizedFollowUp);
 
     // A short follow-up such as "1", "q1" or "එක කරමු" refers to the
     // source selected in the previous turn. Persisting and resolving this on
@@ -677,8 +708,35 @@ ${originalPrompt}`;
       };
     }
 
+    const sourceContextApplies = Boolean(selectedSourceId) && shouldUseLockedSourceForTurn(prompt, route.mode);
+    if (!sourceContextApplies) {
+      route.entities = route.entities || {};
+      if (route.entities.activeSourceId === selectedSourceId) route.entities.activeSourceId = undefined;
+      // An LLM router can over-weight old conversation history and label a new
+      // standalone topic as a continuation. Only explicit source language is
+      // allowed to keep that mode while a PDF is locked.
+      if (["continue_grounded_discussion", "selected_resource_discussion"].includes(route.mode)) {
+        route.mode = paperForecastPrompt ? "past_paper_analysis" : "normal_chat";
+        route.answerHints = {
+          ...(route.answerHints || {}),
+          mustUseRag: paperForecastPrompt,
+          mustAskClarification: false,
+        };
+      }
+    }
+
+    const evidenceConversationState = sourceContextApplies
+      ? activeConversationState
+      : {
+          ...activeConversationState,
+          activeSourceIds: [],
+          selectedSourceId: null,
+          selectedSourceTitle: null,
+          selectedSourceSubject: null,
+          selectedSourceYear: null,
+        };
     const policy = resolveAnswerPolicy(prompt, route, activeSubject, attachments);
-    const evidence = await retrieveEvidence(user.uid, prompt, route, policy, activeConversationState);
+    const evidence = await retrieveEvidence(user.uid, prompt, route, policy, evidenceConversationState);
     // REMOVED: Early evidence apology block (Finding 026)
     if (evidence.selectedSource) {
        route.entities.activeSourceId = evidence.selectedSource.id || evidence.selectedSource.sourceId;

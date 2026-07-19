@@ -530,3 +530,33 @@ assert(
   "V21 production AI/OCR switches are incomplete",
 );
 console.log("V21 planner, answer verification, Direct PDF, OCR jobs, adaptive learning, and observability checks passed.");
+
+
+// V22 source-context isolation, forecast routing, and real visual-explanation checks.
+const sourceSelectionV22 = await read("server/ai/sourceSelection.ts");
+const serverImageIntentV22 = await read("server/ai/imageIntent.ts");
+const clientImageIntentV22 = await read("src/lib/ai/imageIntent.ts");
+const cloraV22 = await read("src/components/views/CloraXView.tsx");
+assert(
+  sourceSelectionV22.includes("isPaperForecastPrompt")
+    && sourceSelectionV22.includes("isExplicitNamedSourceRequest")
+    && sourceSelectionV22.includes("shouldUseLockedSourceForTurn")
+    && respondStream.includes("evidenceConversationState")
+    && respondStream.includes("sourceContextApplies"),
+  "V22 selected-PDF isolation or explicit named-source routing is incomplete",
+);
+assert(
+  knowledgeRouter.includes("isPaperForecastPrompt(prompt)")
+    && respondStream.includes("paperForecastPrompt")
+    && respondStream.includes("isExplicitNamedSourceRequest(prompt)"),
+  "V22 future-paper analysis can still be hijacked by an official/named PDF route",
+);
+assert(
+  serverImageIntentV22.includes("isVisualExplanationIntent")
+    && clientImageIntentV22.includes("isClientVisualExplanationIntent")
+    && cloraV22.includes("IMAGE_URL_MISSING")
+    && cloraV22.includes("generatedImage: {")
+    && answerQualityV21.includes("never imitate one with ASCII art"),
+  "V22 visual-explanation generation or missing-preview handling is incomplete",
+);
+console.log("V22 source isolation, forecast routing, and real-image explanation checks passed.");

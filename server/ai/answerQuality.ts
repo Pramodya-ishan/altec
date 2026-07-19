@@ -80,6 +80,7 @@ export function buildAnswerContractInstruction(params: {
 - For calculations: show the formula, substitution, units, direction/sign where relevant, and a checked final value.
 - For exam answers: match depth to marks when marks are visible and state marking points without inventing an official scheme.
 - For PDF/paper facts: use only supplied or retrieved evidence, identify unreadable/absent visual information, and never invent a diagram or hidden dimension.
+- When the user asks for an image or visual explanation, never imitate one with ASCII art, monospace arrows, or a code block. Use the image-generation/visual-block result and keep supporting prose concise.
 - Use natural Unicode Sinhala. Never repeat legacy-font mojibake.
 - Finish all sentences, lists, tables, Markdown, and math delimiters.
 - Silently self-check factual consistency, subpart coverage, numerical work, and source support before the final sentence.

@@ -1,4 +1,4 @@
-# Clora X v21 - Sinhala A/L Technology AI Tutor
+# Clora X v22 - Sinhala A/L Technology AI Tutor
 
 A specialized, personalized AI tutor for Sri Lankan G.C.E. A/L Technology stream (SFT, ET, ICT).
 
@@ -20,6 +20,7 @@ A specialized, personalized AI tutor for Sri Lankan G.C.E. A/L Technology stream
 6. **Vertex AI ADC Auth:** Controls authentication through `GEMINI_USE_VERTEX=true` and `GOOGLE_APPLICATION_CREDENTIALS_JSON`.
 7. **Educational visuals:** Native SVG diagrams/formula cards plus optional generated images; Sinhala explanatory text stays in the app UI to avoid raster glyph corruption.
 8. **Operational visibility:** Durable PDF job progress and an admin quality dashboard for completion, repairs, preview fallbacks, and latency.
+9. **Intent-isolated source context:** A selected PDF is used only for explicit PDF/question follow-ups; new topics and future-paper predictions return to normal AI reasoning automatically.
 
 ## Setup Instructions
 

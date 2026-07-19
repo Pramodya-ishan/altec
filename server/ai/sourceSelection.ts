@@ -64,6 +64,64 @@ export function extractQuestionNumberFromPrompt(value: unknown): string | null {
   return direct?.[1] || null;
 }
 
+/**
+ * A forecast request is about analysing papers and generating a likely future
+ * question.  It is not a request to open a saved file whose title happens to
+ * contain "Guessing".  Keep this detector deterministic because both the
+ * paper gate and named-source resolver depend on the distinction.
+ */
+export function isPaperForecastPrompt(value: unknown): boolean {
+  const text = normalizeSourceSearchText(value);
+  const hasYear = /\b20\d{2}\b/u.test(text);
+  const hasPaperContext = /\b(?:paper|exam|a\s*l|al)\b|විභාග|ප්‍රශ්න\s*පත්‍ර/u.test(text);
+  const hasForecastLanguage = /\b(?:guess|prediction|predict|forecast|probability|frequency|trend|repeated|likely)\b|අනුමාන|සම්භාවිත|එන්න\s*පුළුවන්|එන්න\s*පුලුවන්/u.test(text);
+  return hasYear && hasPaperContext && hasForecastLanguage;
+}
+
+/**
+ * Returns true only when the student identifies a saved resource, rather than
+ * merely using words such as "guessing" while asking for an AI prediction.
+ */
+export function isExplicitNamedSourceRequest(value: unknown): boolean {
+  const text = normalizeSourceSearchText(value);
+  const hasNamedFamily = /\b(?:guess|model|syllabus)\b|විෂය\s*නිර්දේශ/u.test(text);
+  if (!hasNamedFamily) return false;
+
+  const hasNamedNumber = /\b(?:guess|model)\s*\d{1,3}\b/u.test(text);
+  const hasQuestionType = /\b(?:essay|mcq|structured)\b|රචනා|බහුවරණ|ව්‍යුහගත|වුහගත/u.test(text);
+  const hasQuestionSelector = extractQuestionNumberFromPrompt(text) !== null;
+  const hasFileReference = /\b(?:pdf|file|source|document|saved|uploaded|open|select|choose)\b|ලේඛන|මූලාශ්‍ර|පීඩීඑෆ්/u.test(text);
+  const isExactNamedResource = hasNamedNumber && (hasQuestionType || hasQuestionSelector || hasFileReference);
+
+  if (isPaperForecastPrompt(text) && !isExactNamedResource) return false;
+  if (isExactNamedResource) return true;
+  if (/\bsyllabus\b|විෂය\s*නිර්දේශ/u.test(text) && hasFileReference) return true;
+  return hasFileReference && /\b(?:guess|model)\b/u.test(text);
+}
+
+export function isExplicitSourceReference(value: unknown): boolean {
+  const text = normalizeSourceSearchText(value);
+  return /\b(?:pdf|source|file|document|saved|uploaded)\b|පීඩීඑෆ්|ලේඛන|මූලාශ්‍ර/u.test(text)
+    || /\b(?:paper|pdf)\s*(?:eke|eka|එකේ|එක)\b/u.test(text);
+}
+
+/**
+ * A selected PDF remains available for short, explicit follow-ups, but it must
+ * not silently constrain an unrelated question or a future-paper prediction.
+ */
+export function shouldUseLockedSourceForTurn(value: unknown, routeMode?: unknown): boolean {
+  const text = String(value || "").normalize("NFKC").trim();
+  const normalized = normalizeSourceSearchText(text);
+  if (!normalized || isPaperForecastPrompt(normalized)) return false;
+  if (isExplicitNamedSourceRequest(normalized) || isExplicitSourceReference(normalized)) return true;
+  if (/^(?:(?:q(?:uestion)?|mcq|essay|structured|ප්‍රශ්නය|ප්‍රශ්නය)\s*[-:#]?\s*)?\d{1,3}[?.!]*$/iu.test(normalized)) return true;
+  if (/^(?:ek\s+krmu|eka\s+karamu|එක\s+කරමු|ඒක\s+කරමු|ehem\s+krmu|next|continue)$/iu.test(normalized)) return true;
+
+  // Attachment-specific routes are source-bound by construction even when the
+  // generated prompt does not repeat the filename.
+  return ["uploaded_pdf_qa", "uploaded_pdf_question_qa", "attachment_question"].includes(String(routeMode || ""));
+}
+
 export function parseSourceChoiceIndex(value: unknown, choiceCount: number): number | null {
   const match = String(value || "").trim().match(/^(\d{1,3})[?.!]*$/);
   if (!match) return null;

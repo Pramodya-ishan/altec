@@ -1,0 +1,21 @@
+Production Repair V22 verification
+Date: 2026-07-19
+
+PASS  Server natural-language image intent regressions
+PASS  Client natural-language image intent regressions
+PASS  Explicit saved-source selection regressions
+PASS  Locked-source isolation regressions
+PASS  2026 future-paper prediction routing regressions
+PASS  Application TypeScript
+PASS  Script TypeScript
+PASS  Complete source regression suite
+PASS  Knowledge routing regression suite
+PASS  Security and content-permission suite
+PASS  Secure video suite
+PASS  Production repair static verifier (V1-V22 invariants)
+PASS  Production Vite and Express backend build (3,296 modules)
+PASS  Self-contained Vercel runtime verification
+PASS  Isolated pure-ESM boot and JSON API smoke test
+SKIP  Chromium visual E2E: /usr/bin/chromium is not installed in this container
+
+Result: deployable archive verified; live credentials and deployment remain external operations.

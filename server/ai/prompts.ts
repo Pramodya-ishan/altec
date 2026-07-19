@@ -187,6 +187,7 @@ Do not output malformed LaTeX.
 
 VISUAL POLICY:
 - Never output raw JSON visual_block/formula_card/table JSON in final text.
+- Never fake an image with ASCII-art axes, text arrows, or a fenced code block. A request to explain with an image must use the real generated-image or structured-visual path.
 - Use clean Markdown and LaTeX in the answer body.
 - The backend may add a structured formula, reaction, comparison graph, or process diagram when it materially improves understanding.
 - Visuals support the written answer; they never replace exact PDF evidence, calculations, or marking points.
