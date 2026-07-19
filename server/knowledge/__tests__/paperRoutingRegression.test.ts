@@ -70,4 +70,13 @@ const strict = resolveStrictSource([
 assert.equal(strict.sourceLocked, true);
 assert.equal(strict.selectedSourceId, "paper-2025");
 
+const namedGuessing = [
+  { id: "guess-1", title: "2025 Guessing 1 Essay.pdf", subject: "SFT", storagePath: "papers/g1.pdf", textIndexed: true },
+  { id: "guess-2", title: "2025 Guessing 2 Essay.pdf", subject: "SFT", storagePath: "papers/g2.pdf", textIndexed: true },
+];
+const { selectNamedSource, extractQuestionNumberFromPrompt } = await import("../../ai/sourceSelection");
+const selectedGuessing = selectNamedSource(namedGuessing, "2025 guessing 1 pdf q1");
+assert.equal(selectedGuessing.sourceId, "guess-1");
+assert.equal(extractQuestionNumberFromPrompt("2025 guessing 1 pdf q1"), "1");
+
 console.log("Paper routing regression tests passed.");

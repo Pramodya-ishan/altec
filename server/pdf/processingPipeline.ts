@@ -8,6 +8,9 @@ import { detectLessonForChunk } from "./lessonDetector";
 import { extractPdfPagesWithGemini, isGeminiPdfOcrConfigured } from "./geminiPdfOcr";
 import { isSharedSourceScope } from "../utils/contentPermissions";
 import { updateLessonResourceProcessing } from "../lessonResources/service";
+import { failPdfProcessingJob, startPdfProcessingJob, updatePdfProcessingJob } from "./jobManager";
+import { OcrCandidate, selectOcrEnsemble } from "./ocrEnsemble";
+import { calculateDocumentQuality, calculateTextOnlyQuality, classifyDocumentMetadata } from "../platform/documentIntelligence";
 
 export interface ProcessUploadedPdfParams {
   uid: string;
@@ -51,6 +54,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
   } = params;
 
   console.log(`Starting PDF processing pipeline for sourceId: ${sourceId}, title: "${title}", forceOcr: ${forceOcr}`);
+  await startPdfProcessingJob({ sourceId, uid, maxAttempts: 3, forceRestart: forceOcr });
 
   const db = getAdminDb();
   const sourceRef = db.collection("rag_sources").doc(sourceId);
@@ -61,6 +65,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
         throw new Error("Either buffer or storagePath must be provided.");
       }
       console.log(`Downloading PDF from ${storagePath} for sourceId: ${sourceId}`);
+      await updatePdfProcessingJob(sourceId, "downloading");
       const bucket = getAdminBucket();
       const file = bucket.file(storagePath);
       const [downloaded] = await file.download();
@@ -76,6 +81,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
     let ocrConfidence = 1.0;
 
     // --- STEP A & B: Text Extraction & Quality Detection ---
+    await updatePdfProcessingJob(sourceId, "extracting_text");
     const extraction = await extractPdfText(buffer as Buffer);
     if (extraction.status === "PDF_PARSER_UNAVAILABLE" || extraction.status === "PDF_PARSER_RUNTIME_ERROR") {
       const parserError = new Error(extraction.message || "PDF parser failed.");
@@ -84,10 +90,22 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
     }
     
     pages = extraction.pages || [];
+    const textLayerCandidates: OcrCandidate[] = pages.map((page: any) => ({
+      pageNumber: page.pageNumber,
+      text: String(page.text || page.rawText || ""),
+      provider: String(page.textEncoding || "").startsWith("legacy_") ? "legacy_converter" : "pdf_text",
+      confidence: Number(page.conversionConfidence || (page.pageQuality === "native_unicode" || page.pageQuality === "native_english" ? 0.98 : 0.45)),
+    }));
     fullText = extraction.text || "";
     needsOcr = extraction.needsOcr;
     needsLegacyConversion = extraction.needsLegacyConversion;
     textEncoding = extraction.textEncoding;
+    await updatePdfProcessingJob(sourceId, "repairing_sinhala", {
+      pageCount: pages.length,
+      textEncoding,
+      extractionMethod,
+      warning: extraction.message || null,
+    });
 
     // Calculate quality metrics
     const textLength = fullText.length;
@@ -123,7 +141,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
       isScanned,
       hasHighReplacement,
       needsOcr,
-      needsLegacyConversion
+      needsLegacyConversion,
     });
 
     // --- STEP C & D: Legacy Font Conversion & OCR Fallback ---
@@ -189,6 +207,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
 
       if (isCloudVisionEnabled) {
         console.log(`Triggering Cloud Vision OCR fallback for sourceId: ${sourceId}...`);
+        await updatePdfProcessingJob(sourceId, "ocr_running", { extractionMethod: "cloud_vision_ocr" });
         try {
           const ocrResponse = await runCloudVisionPdfOcr({
             sourceId,
@@ -198,6 +217,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
           });
 
           if (ocrResponse.queued) {
+            await updatePdfProcessingJob(sourceId, "ocr_queued", { extractionMethod: "cloud_vision_ocr" });
             const metaUpdate = {
               ocrStatus: "running",
               indexStatus: "needs_ocr",
@@ -238,20 +258,32 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
           }
 
           if (ocrResponse.result) {
-            pages = ocrResponse.result.pages.map((page) => ({
+            const cloudCandidates: OcrCandidate[] = ocrResponse.result.pages.map((page) => ({
+              pageNumber: page.pageNumber,
+              text: page.text,
+              provider: "cloud_vision",
+              confidence: page.confidence,
+            }));
+            const ensemble = selectOcrEnsemble([...textLayerCandidates, ...cloudCandidates]);
+            pages = ensemble.pages.map((page) => ({
               pageNumber: page.pageNumber,
               text: page.text,
               rawText: page.text,
               textEncoding: "unicode_sinhala",
               conversionApplied: false,
-              conversionConfidence: 1,
+              conversionConfidence: page.qualityScore,
             }));
-            fullText = ocrResponse.result.fullText;
-            extractionMethod = "cloud_vision_ocr";
+            fullText = pages.map((page: any) => page.text).join("\n\n");
+            extractionMethod = ensemble.providers.length > 1 ? "ocr_ensemble" : "cloud_vision_ocr";
             textEncoding = "unicode_sinhala";
-            ocrConfidence = ocrResponse.result.confidence;
+            ocrConfidence = ensemble.averageQuality || ocrResponse.result.confidence;
             needsOcr = false;
             needsLegacyConversion = false;
+            await updatePdfProcessingJob(sourceId, "repairing_sinhala", {
+              extractionMethod,
+              pageCount: pages.length,
+              warning: ensemble.warnings.join(" | ") || null,
+            });
           }
         } catch (ocrErr: any) {
           console.error("Cloud Vision OCR operation failed; trying Gemini PDF OCR:", ocrErr);
@@ -260,22 +292,36 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
       }
 
       if (needsOcr && isGeminiPdfOcrConfigured()) {
+        await updatePdfProcessingJob(sourceId, "ocr_running", { extractionMethod: "gemini_pdf_ocr" });
         try {
           const geminiPages = await extractPdfPagesWithGemini(buffer as Buffer);
-          pages = geminiPages.map((page) => ({
-            ...page,
+          const geminiCandidates: OcrCandidate[] = geminiPages.map((page) => ({
+            pageNumber: page.pageNumber,
+            text: page.text,
+            provider: "gemini_pdf_vision",
+            confidence: 0.85,
+          }));
+          const ensemble = selectOcrEnsemble([...textLayerCandidates, ...geminiCandidates]);
+          pages = ensemble.pages.map((page) => ({
+            pageNumber: page.pageNumber,
+            text: page.text,
             rawText: page.text,
             textEncoding: "unicode_sinhala",
             conversionApplied: false,
-            conversionConfidence: 1,
+            conversionConfidence: page.qualityScore,
           }));
-          fullText = geminiPages.map((page) => page.text).join("\n\n");
-          extractionMethod = "gemini_pdf_ocr";
+          fullText = pages.map((page: any) => page.text).join("\n\n");
+          extractionMethod = ensemble.providers.length > 1 ? "ocr_ensemble" : "gemini_pdf_ocr";
           textEncoding = "unicode_sinhala";
-          ocrConfidence = 0.85;
+          ocrConfidence = ensemble.averageQuality || 0.85;
           needsOcr = false;
           needsLegacyConversion = false;
           console.log(`Gemini PDF OCR completed successfully. Extracted ${pages.length} pages.`);
+          await updatePdfProcessingJob(sourceId, "repairing_sinhala", {
+            extractionMethod,
+            pageCount: pages.length,
+            warning: ensemble.warnings.join(" | ") || null,
+          });
         } catch (ocrErr: any) {
           console.error("Gemini PDF OCR operation failed:", ocrErr);
           ocrErrors.push(`Gemini: ${ocrErr?.message || String(ocrErr)}`);
@@ -295,6 +341,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
           needsLegacyConversion: false,
           status: "needs_ocr",
         });
+        await failPdfProcessingJob(sourceId, { code: "OCR_PROCESSING_UNAVAILABLE", message: errorMsg }, { retryable: true });
         return {
           ok: false,
           status: "needs_ocr",
@@ -329,6 +376,11 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
       };
     }
 
+    await updatePdfProcessingJob(sourceId, "indexing", {
+      extractionMethod,
+      pageCount: pages.length,
+      textEncoding,
+    });
     const finalizeResult = await finalizePipelineProcessing({
       uid,
       sourceId,
@@ -346,7 +398,14 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
       textEncoding,
       ocrConfidence,
       needsOcr,
-      needsLegacyConversion
+      needsLegacyConversion,
+      buffer: buffer as Buffer,
+    });
+    await updatePdfProcessingJob(sourceId, "ready", {
+      extractionMethod,
+      pageCount: pages.length,
+      chunkCount: finalizeResult.chunkCount,
+      textEncoding,
     });
 
     return {
@@ -369,6 +428,7 @@ export async function processUploadedPdf(params: ProcessUploadedPdfParams): Prom
       needsLegacyConversion: false,
       status: "failed"
     });
+    await failPdfProcessingJob(sourceId, err, { retryable: true });
     return {
       ok: false,
       status: "failed",
@@ -406,6 +466,7 @@ interface FinalizeParams {
   ocrConfidence: number;
   needsOcr: boolean;
   needsLegacyConversion: boolean;
+  buffer?: Buffer;
 }
 
 export async function finalizePipelineProcessing(params: FinalizeParams): Promise<{
@@ -430,7 +491,8 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
     textEncoding,
     ocrConfidence,
     needsOcr,
-    needsLegacyConversion
+    needsLegacyConversion,
+    buffer,
   } = params;
 
   const db = getAdminDb();
@@ -548,6 +610,25 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
   });
 
   const textIndexed = chunkCount > 0 && !needsOcr;
+  const combinedText = pages.map((page) => String(page.text || "")).join("\n\n");
+  const documentQuality = buffer?.length
+    ? calculateDocumentQuality({ buffer, text: combinedText, pages, ocrConfidence })
+    : calculateTextOnlyQuality({ text: combinedText, pages, ocrConfidence, fingerprintSeed: `${sourceId}:${storagePath}` });
+  const detectedMetadata = classifyDocumentMetadata({
+    fileName,
+    title,
+    subject,
+    year,
+    resourceType,
+    text: combinedText.slice(0, 25_000),
+  });
+  let duplicateOfSourceId: string | null = null;
+  try {
+    const duplicates = await db.collection("rag_sources").where("fileFingerprint", "==", documentQuality.fileFingerprint).limit(3).get();
+    duplicateOfSourceId = duplicates.docs.map((document: any) => document.id).find((id: string) => id !== sourceId) || null;
+  } catch {
+    // Duplicate detection is advisory and must not block indexing.
+  }
 
   const metaUpdate = {
     chunkCount,
@@ -559,11 +640,17 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
     extractionMethod,
     ocrConfidence,
     ocrStatus: "ready",
-    ocrProvider: "cloud_vision",
+    ocrProvider: extractionMethod,
     ocrTextPdfStoragePath: textPdfResponse.ocrTextPdfStoragePath,
     ocrTextStoragePath: textPdfResponse.ocrTextStoragePath,
     ocrTextPdfStatus: textPdfResponse.ocrTextPdfStatus,
     lesson: lesson?.trim() || null,
+    documentQuality,
+    detectedMetadata,
+    fileFingerprint: documentQuality.fileFingerprint,
+    duplicateOfSourceId,
+    needsTextReview: documentQuality.needsHumanReview,
+    lowConfidencePages: documentQuality.lowConfidencePages,
     processedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -633,6 +720,13 @@ export async function finalizePipelineProcessing(params: FinalizeParams): Promis
 
   invalidateInventoryCache(uid);
 
+  await updatePdfProcessingJob(sourceId, "ready", {
+    extractionMethod,
+    pageCount: pages.length,
+    chunkCount,
+    textEncoding,
+  });
+
   return {
     chunkCount,
     indexStatus: finalIndexStatus as any,
@@ -669,6 +763,7 @@ async function finalizeFailedProcessing(params: {
     sourceScope,
     ...metaUpdate,
   }, { merge: true }).catch(() => {});
+  await failPdfProcessingJob(sourceId, { code: status.toUpperCase(), message: errorMsg }, { retryable: true });
   if (sourceScope === "past_paper") {
     await db.collection("past_papers").doc(sourceId).set({
       id: sourceId,

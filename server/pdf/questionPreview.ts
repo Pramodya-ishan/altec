@@ -8,6 +8,30 @@ export type NormalizedCrop = {
   height: number;
 };
 
+function escapeSvg(value: unknown) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .slice(0, 120);
+}
+
+export function createPdfQuestionPreviewFallback(params: { title?: unknown; pageNumber?: unknown; code?: unknown }) {
+  const pageNumber = Math.max(1, Math.floor(Number(params.pageNumber) || 1));
+  const title = escapeSvg(params.title || "PDF document");
+  const code = escapeSvg(params.code || "PDF_PREVIEW_UNAVAILABLE");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-label="PDF preview unavailable"><rect width="1200" height="720" fill="#f8fafc"/><rect x="90" y="70" width="1020" height="580" rx="36" fill="#fff" stroke="#cbd5e1" stroke-width="4"/><path d="M220 180h250l100 100v260H220z" fill="#eef2ff" stroke="#6366f1" stroke-width="8"/><path d="M470 180v110h100" fill="none" stroke="#6366f1" stroke-width="8"/><text x="640" y="245" font-family="Arial, sans-serif" font-size="46" font-weight="700" fill="#0f172a">PDF preview unavailable</text><text x="640" y="315" font-family="Arial, sans-serif" font-size="30" fill="#475569">${title}</text><text x="640" y="365" font-family="Arial, sans-serif" font-size="28" fill="#475569">Page ${pageNumber}</text><text x="640" y="430" font-family="Arial, sans-serif" font-size="22" fill="#64748b">The answer can still use verified text evidence.</text><text x="640" y="475" font-family="monospace" font-size="18" fill="#94a3b8">${code}</text></svg>`;
+  return {
+    imageUrl: `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`,
+    storagePath: null,
+    pageNumber,
+    crop: null,
+    delivery: "inline_fallback" as const,
+    previewUnavailable: true,
+  };
+}
+
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
 }

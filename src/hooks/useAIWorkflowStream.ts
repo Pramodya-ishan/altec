@@ -19,6 +19,7 @@ export function useAIWorkflowStream() {
   const [sources, setSources] = useState<any[]>([]);
   const [error, setError] = useState("");
   const [isRecoverableError, setIsRecoverableError] = useState(false);
+  const [qualityReport, setQualityReport] = useState<any>(null);
 
   // Web Candidates & Import States
   const [webCandidates, setWebCandidates] = useState<any[]>([]);
@@ -44,6 +45,7 @@ export function useAIWorkflowStream() {
     reason?: string;
     assistantMessageId?: string;
     onToken?: (text: string) => void;
+    onAnswerReplace?: (text: string, reason?: string) => void;
     onSources?: (sources: any[]) => void;
     onSummary?: (items: string[]) => void;
     onStatus?: (status: any) => void;
@@ -56,6 +58,7 @@ export function useAIWorkflowStream() {
     onDone?: (data: any) => void;
     onVisualBlocks?: (blocks: any[]) => void;
     onSuggestions?: (suggestions: string[]) => void;
+    onQualityReport?: (report: any) => void;
   }) {
     const {
       prompt,
@@ -72,6 +75,7 @@ export function useAIWorkflowStream() {
       reason,
       assistantMessageId,
       onToken,
+      onAnswerReplace,
       onSources,
       onSummary,
       onStatus,
@@ -83,7 +87,8 @@ export function useAIWorkflowStream() {
       onError,
       onDone,
       onVisualBlocks,
-      onSuggestions
+      onSuggestions,
+      onQualityReport
     } = params;
 
     if (activeStreamRef.current) {
@@ -96,6 +101,7 @@ export function useAIWorkflowStream() {
     setAnswer("");
     setError("");
     setIsRecoverableError(false);
+    setQualityReport(null);
     setSafeSummary([]);
     setSources([]);
     setTools([]);
@@ -260,6 +266,21 @@ export function useAIWorkflowStream() {
               }, 80);
             }
           }
+          if (eventName === "answer_replace") {
+            const replacement = String(data.text || "");
+            accumulatedFullText = replacement;
+            const { cleanText, blocks } = extractVisualBlocks(replacement);
+            if (blocks.length > 0) onVisualBlocks?.(blocks);
+            const rendered = sanitizeMathMarkdown(stripRawVisualBlocks(cleanText));
+            setAnswer(rendered);
+            lastSentRenderedText = rendered;
+            onAnswerReplace?.(rendered, data.reason);
+          }
+          if (eventName === "quality_report") {
+            const report = data.report || null;
+            setQualityReport(report);
+            onQualityReport?.(report);
+          }
           if (eventName === "safe_summary") {
             const items = data.items || (data.summary ? [data.summary] : []);
             setSafeSummary(items);
@@ -306,21 +327,39 @@ export function useAIWorkflowStream() {
 
               const pollOcrUntilReady = async () => {
                 let delayMs = 1_200;
-                for (let attempt = 1; attempt <= 12; attempt += 1) {
+                let retryStarted = false;
+                for (let attempt = 1; attempt <= 24; attempt += 1) {
                   if (abortRef.current?.signal.aborted) return false;
                   setStatus({
                     stage: "processing",
                     label: "Processing scanned PDF",
-                    message: `OCR is running. The question will retry automatically when the document is ready (${attempt}/12).`,
+                    message: `OCR is running. The question will retry automatically when the document is ready (${attempt}/24).`,
                   });
                   await waitForAbortableDelay(delayMs);
                   if (abortRef.current?.signal.aborted) return false;
                   const response = await apiFetch(`/api/pdf/ocr-status/${encodeURIComponent(sourceId)}`);
                   const payload = await response.json().catch(() => null);
                   if (!response.ok) throw new Error(payload?.message || payload?.error || "Could not check OCR status.");
-                  if (payload?.ocrStatus === "ready" && payload?.textIndexed === true) return true;
+                  const job = payload?.job;
+                  setStatus({
+                    stage: "processing",
+                    label: job?.stage ? String(job.stage).replace(/_/g, " ") : "Processing scanned PDF",
+                    message: `${job?.progress ?? 0}% complete · ${job?.warning || "Reading and indexing the document"}`,
+                  });
+                  if ((payload?.ocrStatus === "ready" && payload?.textIndexed === true) || (job?.status === "ready" && job?.progress === 100)) return true;
                   if (payload?.ocrStatus === "failed" || payload?.error) {
-                    throw new Error("We could not process this scanned document. Please try again later.");
+                    if (!retryStarted && job?.retryable !== false) {
+                      retryStarted = true;
+                      const retryResponse = await apiFetch(`/api/pdf/jobs/${encodeURIComponent(sourceId)}/retry`, { method: "POST" });
+                      const retryPayload = await retryResponse.json().catch(() => null);
+                      if (retryResponse.ok || retryResponse.status === 202) {
+                        setStatus({ stage: "processing", label: "Retrying PDF", message: "The failed page pipeline was restarted automatically." });
+                        delayMs = 1_200;
+                        continue;
+                      }
+                      throw new Error(retryPayload?.message || "The scanned document retry could not be started.");
+                    }
+                    throw new Error(job?.errorMessage || "We could not process this scanned document after an automatic retry.");
                   }
                   delayMs = Math.min(10_000, Math.round(delayMs * 1.65));
                 }
@@ -333,7 +372,7 @@ export function useAIWorkflowStream() {
                   setStatus({ stage: "error", label: "PDF source error", message: errorMsg });
                   onToken?.(errorMsg);
                   doneReceived = true;
-                  onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: "DIRECT_QA_SOURCE_MISSING_STORAGE_PATH" });
+                  onDone?.({ ok: false, completed: false, finishReason: "direct_pdf_qa_failed", errorCode: "DIRECT_QA_SOURCE_MISSING_STORAGE_PATH" });
                   return;
                 }
 
@@ -385,12 +424,28 @@ export function useAIWorkflowStream() {
                   onToken?.(result.answer);
                   doneReceived = true;
                   const answerCompleted = result.completed !== false;
+                  const directQualityReport = result.qualityReport || {
+                    passed: answerCompleted,
+                    confidence: answerCompleted ? 0.8 : 0.35,
+                    coveragePercent: answerCompleted ? 100 : 0,
+                    requestedSubparts: [],
+                    missingRequirements: answerCompleted ? [] : ["The direct PDF answer did not pass its completeness check."],
+                    factualRisks: [],
+                    numericalChecks: [],
+                    citationRisks: [],
+                    strengths: answerCompleted ? ["Direct PDF answer coverage check passed."] : [],
+                    reviewer: "deterministic",
+                    repaired: false,
+                  };
+                  setQualityReport(directQualityReport);
+                  onQualityReport?.(directQualityReport);
                   onDone?.({
                     ok: true,
-                    completed: true,
-                    finishReason: "direct_pdf_qa_complete",
+                    completed: answerCompleted,
+                    finishReason: answerCompleted ? "direct_pdf_qa_complete" : "direct_pdf_qa_incomplete",
                     evidenceComplete: answerCompleted,
                     answer: result.answer,
+                    qualityReport: directQualityReport,
                     sources: [{ id: sourceId, title, storagePath }],
                     paperInfo: {
                       sourceId,
@@ -424,7 +479,7 @@ export function useAIWorkflowStream() {
                   });
                   onToken?.(userMessage);
                   doneReceived = true;
-                  onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode: result.errorCode, sources: [{ id: sourceId, title, storagePath }] });
+                  onDone?.({ ok: false, completed: false, finishReason: "direct_pdf_qa_failed", errorCode: result.errorCode, sources: [{ id: sourceId, title, storagePath }] });
                 }
               } catch (err: any) {
                 const errorCode = err.errorCode || "FATAL_ERROR";
@@ -439,7 +494,7 @@ export function useAIWorkflowStream() {
                 onToken?.(userMessage);
                 onError?.({ error: err.message || userMessage });
                 doneReceived = true;
-                onDone?.({ ok: false, completed: true, finishReason: "direct_pdf_qa_failed", errorCode, sources: [{ id: sourceId, title, storagePath }] });
+                onDone?.({ ok: false, completed: false, finishReason: "direct_pdf_qa_failed", errorCode, sources: [{ id: sourceId, title, storagePath }] });
               } finally {
                 activeDirectQaKeysRef.current.delete(qaKey);
                 setIsStreaming(false);
@@ -651,6 +706,7 @@ export function useAIWorkflowStream() {
     sources,
     error,
     isRecoverableError,
+    qualityReport,
     webCandidates,
     pendingImport,
     importStatus,

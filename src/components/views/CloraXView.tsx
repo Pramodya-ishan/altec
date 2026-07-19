@@ -86,6 +86,7 @@ type SavedChatHistoryItem = {
   sources?: any[];
   summary?: string[];
   answerCompleted?: boolean;
+  answerQuality?: any;
 };
 
 function flattenSavedHistory(history: SavedChatHistoryItem[]) {
@@ -110,6 +111,7 @@ function flattenSavedHistory(history: SavedChatHistoryItem[]) {
         createdAt: item.createdAt || new Date().toISOString(),
         status: item.answerCompleted === false ? 'incomplete' : 'done',
         visualBlocks: extracted.blocks,
+        qualityReport: item.answerQuality || null,
       });
     }
   });
@@ -182,7 +184,8 @@ const [messages, setMessages] = useState<{
     thinkingStatus?: string,
     generatedImage?: { url: string; alt?: string; storagePath?: string; model?: string },
     imageError?: string,
-    imagePrompt?: string
+    imagePrompt?: string,
+    qualityReport?: any
   }[]>([
     {
       role: 'assistant',
@@ -888,6 +891,22 @@ const [messages, setMessages] = useState<{
             });
           }
         },
+        onAnswerReplace: (text) => {
+          if (activeStreamIdRef.current !== streamId) return;
+          const streamBuffer = (window as any)._cloraStreamBuffer;
+          if (streamBuffer?.frameId !== null && streamBuffer?.frameId !== undefined) {
+            cancelAnimationFrame(streamBuffer.frameId);
+          }
+          if (streamBuffer) {
+            streamBuffer.text = "";
+            streamBuffer.frameId = null;
+          }
+          setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: text } : m));
+        },
+        onQualityReport: (qualityReport) => {
+          if (activeStreamIdRef.current !== streamId) return;
+          setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, qualityReport } : m));
+        },
         onSources: (newSources) => {
           if (activeStreamIdRef.current !== streamId) return;
           setMessages(prev =>
@@ -950,10 +969,11 @@ const [messages, setMessages] = useState<{
           setMessages(prev => prev.map(m => {
             if (m.id !== assistantMsgId) return m;
             finalContent = m.content || "";
-            const failed = data?.finishReason === "direct_pdf_qa_failed" || data?.completed === false;
+            const failed = data?.finishReason === "direct_pdf_qa_failed";
             return {
               ...m,
-              status: failed ? "error" : "done",
+              status: failed ? "error" : data?.completed === false ? "incomplete" : "done",
+              qualityReport: data?.qualityReport || m.qualityReport,
               paperInfo: data?.paperInfo || m.paperInfo,
               errorCode: data?.errorCode,
               visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
@@ -1018,6 +1038,14 @@ const [messages, setMessages] = useState<{
                : m
            )
          );
+       },
+       onAnswerReplace: (text) => {
+         if (activeStreamIdRef.current !== streamId) return;
+         setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: text } : m));
+       },
+       onQualityReport: (qualityReport) => {
+         if (activeStreamIdRef.current !== streamId) return;
+         setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, qualityReport } : m));
        },
        onSources: (newSources) => {
          if (activeStreamIdRef.current !== streamId) return;
@@ -1319,6 +1347,14 @@ const [messages, setMessages] = useState<{
         onToken: (text) => {
           if (activeStreamIdRef.current !== streamId) return;
           bufferedAnswerRef.current.set(assistantMsgId, (bufferedAnswerRef.current.get(assistantMsgId) || "") + text);
+        },
+        onAnswerReplace: (text) => {
+          if (activeStreamIdRef.current !== streamId) return;
+          bufferedAnswerRef.current.set(assistantMsgId, text);
+        },
+        onQualityReport: (qualityReport) => {
+          if (activeStreamIdRef.current !== streamId) return;
+          setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, qualityReport } : m));
         },
         onSources: (newSources) => {
           if (activeStreamIdRef.current !== streamId) return;

@@ -10,6 +10,7 @@ import { aiBillingCircuitOpenUntil } from "./aiCircuitBreaker";
 import { lastOk, lastError, setLastOk } from "./modelRouter";
 import { requireRole } from "../utils/authGuards";
 import { readResponseWithLimit, validateRemotePdfUrl } from "../utils/safeRemotePdf";
+import { getAiTelemetrySnapshot } from "../observability/aiTelemetry";
 
 import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
 
@@ -554,6 +555,10 @@ aiRoutes.get("/stream-debug-last", requireRole("admin", "ops"), async (req, res)
   } catch (error: any) {
     res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
+});
+
+aiRoutes.get("/quality-metrics", requireRole("admin", "ops"), async (_req, res) => {
+  res.json({ ok: true, ...getAiTelemetrySnapshot(300), streamTraces: lastStreamTraces.slice(0, 20) });
 });
 
 // Main Respond endpoint

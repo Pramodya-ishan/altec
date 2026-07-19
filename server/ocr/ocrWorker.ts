@@ -1,6 +1,8 @@
 import { getAdminDb } from "../firebase/admin";
 import { checkOcrJobStatus } from "./cloudVisionOcr";
 import { finalizePipelineProcessing } from "../pdf/processingPipeline";
+import { failPdfProcessingJob, updatePdfProcessingJob } from "../pdf/jobManager";
+import { selectOcrEnsemble } from "../pdf/ocrEnsemble";
 
 export function startOcrWorker(intervalMs = 60000) {
   if (process.env.NODE_ENV === "test") return;
@@ -18,6 +20,7 @@ export function startOcrWorker(intervalMs = 60000) {
       for (const doc of snapshot.docs) {
         const sourceId = doc.id;
         try {
+          await updatePdfProcessingJob(sourceId, "ocr_running", { extractionMethod: "cloud_vision_ocr" });
           const job = await checkOcrJobStatus(sourceId);
           if (job.status === "ready" && job.result) {
             console.log(`[OCR Worker] Background OCR job became ready. Running finalization for ${sourceId}`);
@@ -26,6 +29,12 @@ export function startOcrWorker(intervalMs = 60000) {
             if (!srcSnap.exists) continue;
             const src = srcSnap.data()!;
 
+            const ensemble = selectOcrEnsemble(job.result.pages.map((page) => ({
+              pageNumber: page.pageNumber,
+              text: page.text,
+              provider: "cloud_vision",
+              confidence: page.confidence,
+            })));
             await finalizePipelineProcessing({
               uid: src.ownerUid,
               sourceId,
@@ -36,26 +45,28 @@ export function startOcrWorker(intervalMs = 60000) {
               year: src.year,
               resourceType: src.resourceType || "uploaded_pdf",
               sourceScope: src.sourceScope || "personal",
-              pages: job.result.pages.map(p => ({
+              pages: ensemble.pages.map(p => ({
                 pageNumber: p.pageNumber,
                 text: p.text,
                 rawText: p.text,
                 textEncoding: "unicode_sinhala",
                 conversionApplied: false,
-                conversionConfidence: 1.0
+                conversionConfidence: p.qualityScore
               })),
               extractionMethod: "cloud_vision_ocr",
               textEncoding: "unicode_sinhala",
-              ocrConfidence: job.result.confidence,
+              ocrConfidence: ensemble.averageQuality || job.result.confidence,
               needsOcr: false,
               needsLegacyConversion: false
             });
             console.log(`[OCR Worker] Successfully finalized OCR for ${sourceId}`);
           } else if (job.status === "failed") {
             console.warn(`[OCR Worker] Job ${sourceId} failed.`);
+            await failPdfProcessingJob(sourceId, { code: "CLOUD_VISION_OCR_FAILED", message: job.error || "OCR job failed." });
           }
         } catch (err) {
           console.error(`[OCR Worker] Error processing job ${sourceId}:`, err);
+          await failPdfProcessingJob(sourceId, err, { retryable: true });
         }
       }
     } catch (err) {

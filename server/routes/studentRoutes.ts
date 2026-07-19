@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireUser, getAdminBucket, getAdminDb } from "../firebase/admin";
 import { diagnoseStudent } from "../ai-core/student/studentDiagnosis";
 import { generateWarPlan } from "../ai-core/study/warPlan";
-import { loadMistakeRecords } from "../firebase/mistakeStore";
+import { buildMistakeReviewUpdate, isMistakeDue, loadMistakeRecords } from "../firebase/mistakeStore";
 import { invalidateUserAIContext } from "../firebase/userContext";
 
 const router = Router();
@@ -93,9 +93,65 @@ router.get("/mistakes", async (req, res) => {
         ? `/api/student/mistakes/${encodeURIComponent(record.id)}/image?owner=${encodeURIComponent(record.ownerPath || "uid")}`
         : null,
     }));
-    res.json({ ok: true, mistakes });
+    const dueCount = records.filter((record) => isMistakeDue(record)).length;
+    const averageMastery = records.length > 0
+      ? Math.round(records.reduce((total, record) => total + Number(record.masteryScore || 0), 0) / records.length)
+      : 0;
+    res.json({
+      ok: true,
+      mistakes,
+      reviewSummary: {
+        total: records.length,
+        dueCount,
+        masteredCount: records.filter((record) => record.mastered === true).length,
+        averageMastery,
+      },
+    });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: "Internal operation failed." });
+  }
+});
+
+router.get("/mistakes/review-queue", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const records = await loadMistakeRecords(user.uid, user.email, 200);
+    const due = records
+      .filter((record) => isMistakeDue(record))
+      .sort((left, right) => Number(left.masteryScore || 0) - Number(right.masteryScore || 0)
+        || Date.parse(String(left.nextReviewAt || left.retryDate || 0)) - Date.parse(String(right.nextReviewAt || right.retryDate || 0)))
+      .slice(0, 30)
+      .map((record) => ({
+        ...record,
+        hasImage: Boolean(record.imageStoragePath),
+        imageEndpoint: record.imageStoragePath
+          ? `/api/student/mistakes/${encodeURIComponent(record.id)}/image?owner=${encodeURIComponent(record.ownerPath || "uid")}`
+          : null,
+      }));
+    return res.json({ ok: true, due, dueCount: due.length });
+  } catch {
+    return res.status(500).json({ ok: false, code: "MISTAKE_REVIEW_QUEUE_FAILED", error: "Review queue could not be loaded." });
+  }
+});
+
+router.patch("/mistakes/:mistakeId/review", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const quality = Number(req.body?.quality);
+    if (!Number.isFinite(quality) || quality < 0 || quality > 5) {
+      return res.status(400).json({ ok: false, code: "REVIEW_QUALITY_INVALID", error: "Review quality must be from 0 to 5." });
+    }
+    const records = await loadMistakeRecords(user.uid, user.email, 300);
+    const record = records.find((candidate) => candidate.id === String(req.params.mistakeId));
+    if (!record) return res.status(404).json({ ok: false, code: "MISTAKE_NOT_FOUND", error: "Saved error was not found." });
+    const ownerId = record.ownerPath === "legacy_email" ? String(user.email || "").trim().toLowerCase() : user.uid;
+    if (!ownerId) return res.status(403).json({ ok: false, code: "MISTAKE_OWNER_INVALID", error: "Saved error owner could not be verified." });
+    const update = buildMistakeReviewUpdate(record, quality);
+    await getAdminDb().collection("users").doc(ownerId).collection("mistake_notebook").doc(record.id).set(update, { merge: true });
+    invalidateUserAIContext(user.uid);
+    return res.json({ ok: true, id: record.id, review: update });
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: "MISTAKE_REVIEW_SAVE_FAILED", error: "Review result could not be saved." });
   }
 });
 
@@ -137,6 +193,13 @@ router.post("/mistake", async (req, res) => {
     const normalizedLesson = String(lesson || "").trim().slice(0, 180);
     const normalizedError = String(errorText || questionText || "").trim().slice(0, 8000);
     const normalizedImagePath = String(imageStoragePath || "").replace(/^\/+/, "");
+    const errorCategory = /(?:diagram|figure|graph|drawing|රූප|සටහන|ප්‍රස්තාර)/iu.test(normalizedError) || normalizedImagePath
+      ? "diagram"
+      : /(?:calculate|formula|unit|ගණනය|සූත්‍ර|ඒකක|\d+\s*[+\-*/=])/iu.test(normalizedError)
+        ? "calculation"
+        : /(?:read|scan|ocr|unreadable|කියව|නොපෙන)/iu.test(normalizedError)
+          ? "reading"
+          : normalizedError ? "concept" : "unknown";
     if (!["SFT", "ET", "ICT"].includes(normalizedSubject)) {
       return res.status(400).json({ ok: false, error: "Choose SFT, ET, or ICT." });
     }
@@ -162,6 +225,13 @@ router.post("/mistake", async (req, res) => {
       retryDate: new Date().toISOString(),
       repeatCount: 0,
       mastered: false,
+      masteryScore: 0,
+      attemptCount: 0,
+      correctStreak: 0,
+      easinessFactor: 2.5,
+      intervalDays: 0,
+      nextReviewAt: new Date().toISOString(),
+      errorCategory,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });

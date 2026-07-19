@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Check, CheckCircle2, Copy, FileText, Image as ImageIcon, Reply, RotateCcw } from 'lucide-react';
+import { Check, CheckCircle2, Copy, Download, FileText, Image as ImageIcon, Reply, RotateCcw, ShieldCheck } from 'lucide-react';
 import { MathMarkdown } from '../../chat/MathMarkdown';
 import { VisualBlockRenderer } from '../VisualBlockRenderer';
 import { sanitizeAssistantDisplayText } from '../../../lib/assistantTextHygiene';
@@ -129,7 +129,11 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
           {generatedImage?.url && (
             <figure className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
               <img src={generatedImage.url} alt={generatedImage.alt || 'Generated educational image'} className="block h-auto max-h-[680px] w-full object-contain" loading="lazy" />
-              <figcaption className="flex items-center gap-2 px-3 py-2 text-xs text-slate-500"><ImageIcon className="h-3.5 w-3.5" /> {generatedImageCaption}</figcaption>
+              <figcaption className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs text-slate-500">
+                <ImageIcon className="h-3.5 w-3.5" /> <span className="mr-auto">{generatedImageCaption}</span>
+                <a href={generatedImage.url} download={`educational-visual.${generatedImage.url.includes('image/png') ? 'png' : 'jpg'}`} target="_blank" rel="noreferrer" className="inline-flex min-h-8 items-center gap-1 rounded-lg bg-white px-2 font-semibold text-slate-600 ring-1 ring-slate-200 hover:text-slate-900"><Download className="h-3.5 w-3.5" /> Download</a>
+                {message.imagePrompt ? <button type="button" onClick={() => onRetryImage?.(message.imagePrompt)} className="inline-flex min-h-8 items-center gap-1 rounded-lg bg-white px-2 font-semibold text-slate-600 ring-1 ring-slate-200 hover:text-slate-900"><RotateCcw className="h-3.5 w-3.5" /> Regenerate</button> : null}
+              </figcaption>
             </figure>
           )}
 
@@ -143,6 +147,13 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
           {message.content && (
             <div lang={/[\u0D80-\u0DFF]/u.test(displayContent) ? 'si' : 'en'} className="sinhala-rendering prose prose-slate min-w-0 max-w-none text-[15px] leading-7 text-slate-800 [overflow-wrap:anywhere] [word-break:normal] prose-headings:mb-3 prose-headings:mt-6 prose-p:my-3 prose-pre:max-w-full prose-pre:overflow-x-auto prose-table:block prose-table:max-w-full prose-table:overflow-x-auto">
               <MathMarkdown content={displayContent} isStreaming={message.status === 'typing'} />
+            </div>
+          )}
+
+          {!isStreaming && message.qualityReport?.passed === true && (
+            <div className="inline-flex w-fit items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200/70" title={`Coverage ${message.qualityReport.coveragePercent ?? 100}%`}>
+              <ShieldCheck className="h-3.5 w-3.5" />
+              {message.qualityReport.repaired ? "AI-verified and corrected" : "AI-verified complete"}
             </div>
           )}
 
@@ -193,5 +204,8 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
   && previous.message.visualBlocks?.length === next.message.visualBlocks?.length
   && previous.message.suggestions?.join('|') === next.message.suggestions?.join('|')
   && previous.message.generatedImage?.url === next.message.generatedImage?.url
+  && previous.message.qualityReport?.passed === next.message.qualityReport?.passed
+  && previous.message.qualityReport?.repaired === next.message.qualityReport?.repaired
+  && previous.message.qualityReport?.coveragePercent === next.message.qualityReport?.coveragePercent
   && previous.onContinue === next.onContinue
 ));

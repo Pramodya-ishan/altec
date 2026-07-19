@@ -3,6 +3,7 @@ import { getAIClient, AI_MODELS } from "../ai/client";
 import { getAdminBucket, getAdminDb } from "../firebase/admin";
 import { resolveAuthorizedPdfSource } from "../pdf/authorizedSource";
 import { renderPdfPageCrop } from "../pdf/questionPreview";
+import { recordAiTelemetry } from "../observability/aiTelemetry";
 
 function extensionForMimeType(mimeType: string) {
   if (mimeType === "image/png") return "png";
@@ -26,6 +27,21 @@ function findInlineImage(response: any) {
 }
 
 export async function generateEducationalImage(req: any) {
+  const startedAt = Date.now();
+  const telemetryId = `${randomUUID()}_image`;
+  const finish = async (result: any) => {
+    await recordAiTelemetry({
+      id: telemetryId,
+      kind: "image_generation",
+      ok: result?.ok === true,
+      durationMs: Date.now() - startedAt,
+      code: result?.ok === true ? "IMAGE_GENERATION_COMPLETE" : (result?.code || "IMAGE_GENERATION_FAILED"),
+      model: result?.model || null,
+      sourceCount: result?.referenceUsed ? 1 : 0,
+      degraded: result?.ok === true && !result?.storagePath,
+    }).catch(() => undefined);
+    return result;
+  };
   try {
     const {
       prompt,
@@ -42,7 +58,7 @@ export async function generateEducationalImage(req: any) {
 
     if (!prompt) throw new Error("Prompt is required");
     if (process.env.DISABLE_IMAGE_GENERATION === "true") {
-      return { ok: false, code: "IMAGE_GENERATION_DISABLED", error: "Image generation is temporarily unavailable." };
+      return finish({ ok: false, code: "IMAGE_GENERATION_DISABLED", error: "Image generation is temporarily unavailable." });
     }
 
     const boundedReference = String(referenceText || "").trim().slice(0, 5_000);
@@ -153,11 +169,11 @@ export async function generateEducationalImage(req: any) {
 
     if (!imageBase64) {
       console.error("All image generation models failed. Last error:", lastError);
-      return {
+      return finish({
         ok: false,
         code: "IMAGE_MODEL_UNAVAILABLE",
         error: "The image service is temporarily unavailable.",
-      };
+      });
     }
 
     const imageId = randomUUID();
@@ -204,7 +220,7 @@ export async function generateEducationalImage(req: any) {
       console.warn("Failed to save image metadata to Firestore", dbErr);
     }
 
-    return {
+    return finish({
       ok: true,
       imageUrl, storagePath,
       mimeType: outputMimeType,
@@ -212,14 +228,14 @@ export async function generateEducationalImage(req: any) {
       promptUsed: prompt,
       imageId,
       referenceUsed: Boolean(referenceImagePart),
-    };
+    });
 
   } catch (error: any) {
     console.error("generateEducationalImage top-level error:", error);
-    return {
+    return finish({
       ok: false,
       code: "IMAGE_GENERATION_FAILED",
       error: "Internal operation failed."
-    };
+    });
   }
 }

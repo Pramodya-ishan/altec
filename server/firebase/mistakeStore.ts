@@ -19,6 +19,14 @@ export type MistakeRecord = {
   updatedAt?: string;
   lastAttemptAt?: string;
   retryDate?: string;
+  masteryScore?: number;
+  attemptCount?: number;
+  correctStreak?: number;
+  easinessFactor?: number;
+  intervalDays?: number;
+  nextReviewAt?: string;
+  lastReviewQuality?: number;
+  errorCategory?: "concept" | "calculation" | "reading" | "diagram" | "memory" | "unknown";
   [key: string]: unknown;
 };
 
@@ -71,6 +79,56 @@ export function normalizeMistakeRecord(
     updatedAt: typeof source.updatedAt === "string" ? source.updatedAt : undefined,
     lastAttemptAt: typeof source.lastAttemptAt === "string" ? source.lastAttemptAt : undefined,
     retryDate: typeof source.retryDate === "string" ? source.retryDate : undefined,
+    masteryScore: Number.isFinite(Number(source.masteryScore)) ? Math.max(0, Math.min(100, Number(source.masteryScore))) : (source.mastered === true ? 100 : 0),
+    attemptCount: Number.isFinite(Number(source.attemptCount)) ? Math.max(0, Number(source.attemptCount)) : Number(source.repeatCount || 0),
+    correctStreak: Number.isFinite(Number(source.correctStreak)) ? Math.max(0, Number(source.correctStreak)) : 0,
+    easinessFactor: Number.isFinite(Number(source.easinessFactor)) ? Math.max(1.3, Number(source.easinessFactor)) : 2.5,
+    intervalDays: Number.isFinite(Number(source.intervalDays)) ? Math.max(0, Number(source.intervalDays)) : 0,
+    nextReviewAt: typeof source.nextReviewAt === "string" ? source.nextReviewAt : (typeof source.retryDate === "string" ? source.retryDate : undefined),
+    lastReviewQuality: Number.isFinite(Number(source.lastReviewQuality)) ? Math.max(0, Math.min(5, Number(source.lastReviewQuality))) : undefined,
+    errorCategory: ["concept", "calculation", "reading", "diagram", "memory"].includes(String(source.errorCategory))
+      ? source.errorCategory as MistakeRecord["errorCategory"]
+      : "unknown",
+  };
+}
+
+export function isMistakeDue(record: Partial<MistakeRecord>, now = Date.now()) {
+  if (record.mastered === true && Number(record.masteryScore || 0) >= 95) return false;
+  const due = valueToMillis(record.nextReviewAt || record.retryDate);
+  return due === 0 || due <= now;
+}
+
+/** SM-2 inspired scheduling, bounded for exam revision rather than long-term language learning. */
+export function buildMistakeReviewUpdate(record: Partial<MistakeRecord>, qualityValue: unknown, now = new Date()) {
+  const quality = Math.max(0, Math.min(5, Math.round(Number(qualityValue) || 0)));
+  const previousInterval = Math.max(0, Number(record.intervalDays || 0));
+  const previousStreak = Math.max(0, Number(record.correctStreak || 0));
+  const previousEase = Math.max(1.3, Number(record.easinessFactor || 2.5));
+  const correct = quality >= 3;
+  const correctStreak = correct ? previousStreak + 1 : 0;
+  let intervalDays = 1;
+  if (!correct) intervalDays = quality <= 1 ? 0.25 : 1;
+  else if (correctStreak === 1) intervalDays = 1;
+  else if (correctStreak === 2) intervalDays = 3;
+  else intervalDays = Math.min(45, Math.max(4, Math.round(previousInterval * previousEase)));
+  const easinessFactor = Math.max(1.3, Math.min(3, previousEase + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))));
+  const oldMastery = Math.max(0, Math.min(100, Number(record.masteryScore || 0)));
+  const masteryDelta = correct ? 8 + quality * 3 : -(12 + (2 - Math.min(2, quality)) * 6);
+  const masteryScore = Math.max(0, Math.min(100, Math.round(oldMastery * 0.72 + Math.max(0, Math.min(100, oldMastery + masteryDelta)) * 0.28)));
+  const nextReviewAt = new Date(now.getTime() + intervalDays * 24 * 60 * 60 * 1000).toISOString();
+  return {
+    attemptCount: Math.max(0, Number(record.attemptCount || 0)) + 1,
+    repeatCount: correct ? Number(record.repeatCount || 0) : Math.max(0, Number(record.repeatCount || 0)) + 1,
+    correctStreak,
+    easinessFactor: Number(easinessFactor.toFixed(2)),
+    intervalDays,
+    masteryScore,
+    mastered: masteryScore >= 95 && correctStreak >= 3,
+    lastReviewQuality: quality,
+    lastAttemptAt: now.toISOString(),
+    nextReviewAt,
+    retryDate: nextReviewAt,
+    updatedAt: now.toISOString(),
   };
 }
 

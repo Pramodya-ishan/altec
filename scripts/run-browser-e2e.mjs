@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -100,6 +100,12 @@ async function managedChromiumBlocksNavigation() {
 async function main() {
   if (await managedChromiumBlocksNavigation()) {
     console.log("[SKIP] Chromium is managed with URLBlocklist=*; local browser navigation is unavailable in this build environment.");
+    return;
+  }
+  try {
+    await access("/usr/bin/chromium");
+  } catch {
+    console.log("[SKIP] /usr/bin/chromium is not installed; production build and API runtime smoke verification still run separately.");
     return;
   }
   preview = start(process.execPath, ["node_modules/vite/bin/vite.js", "preview", "--host", "127.0.0.1", "--port", String(port)]);

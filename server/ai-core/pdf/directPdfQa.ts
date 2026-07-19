@@ -3,7 +3,11 @@ import { callGeminiWithFallback } from "../../ai/modelRouter";
 import { stripRawVisualBlocks } from "../answer/stripVisualBlocks";
 import { removeUndefinedDeep } from "../memory/chatSanitizer";
 import { getAdminDb } from "../../firebase/admin";
-import { solveExtractedEssayQuestion, solveExtractedMcqQuestion } from "./solveExtractedQuestion";
+import {
+  extractQuestionSubparts,
+  solveExtractedEssayQuestion,
+  solveExtractedMcqQuestion,
+} from "./solveExtractedQuestion";
 import { trackAIUsage } from "../../cost/usageTracker";
 import { classifyAiError } from "../../ai/aiErrorClassifier";
 import { normalizeSinhalaExtractedText } from "../../pdf/legacySinhala";
@@ -13,6 +17,91 @@ function normalizeQuestionEvidenceText(value: unknown) {
   const normalized = normalizeSinhalaExtractedText(raw);
   if (normalized.textEncoding === "legacy_fm_abhaya" && !normalized.normalizedText) return null;
   return (normalized.normalizedText || raw).trim();
+}
+
+function normalizeSubpart(value: unknown) {
+  return String(value || "").trim().replace(/[()\s]/gu, "").replace(/:/gu, ".");
+}
+
+/**
+ * Applies a fail-closed completeness contract to every direct-PDF result.
+ * A verified question is not the same thing as a completed answer: the client
+ * must never turn an extraction-only result or a partial essay into success.
+ */
+export function assessDirectPdfResultCompleteness(result: any, questionType: string) {
+  const questionText = String(result?.sourceEvidence?.questionText || "").trim();
+  const expectedSubparts = extractQuestionSubparts(questionText).map(normalizeSubpart);
+  const answer = result?.answer || {};
+  const solved = answer?.solvedAnswer || null;
+  const officialAnswer = String(answer?.officialAnswer || "").trim();
+  const estimatedAnswer = String(answer?.estimatedAnswer || "").trim();
+  const normalizedType = String(questionType || "").toUpperCase();
+  const isMcq = normalizedType === "MCQ";
+
+  let answeredSubparts: string[] = [];
+  if (Array.isArray(solved?.answeredSubparts)) {
+    answeredSubparts = solved.answeredSubparts.map(normalizeSubpart).filter(Boolean);
+  } else if (officialAnswer) {
+    answeredSubparts = extractQuestionSubparts(officialAnswer).map(normalizeSubpart);
+  }
+  answeredSubparts = Array.from(new Set(answeredSubparts));
+
+  const declaredMissing = Array.isArray(solved?.missingSubparts)
+    ? solved.missingSubparts.map(normalizeSubpart).filter(Boolean)
+    : [];
+  const missingSubparts = Array.from(new Set([
+    ...declaredMissing,
+    ...expectedSubparts.filter((label) => !answeredSubparts.includes(label)),
+  ]));
+
+  const exactEvidenceReady = result?.found === true && questionText.length >= 20;
+  const mcqAnswerReady = Boolean(
+    officialAnswer
+    || estimatedAnswer
+    || (solved && /^[1-5]$/u.test(String(solved.optionNo || "")) && String(solved.explanationSinhala || "").trim().length >= 20),
+  );
+  const essayText = String(solved?.answerMarkdownSinhala || officialAnswer || estimatedAnswer || "").trim();
+  const essayAnswerReady = Boolean(
+    essayText.length >= 40
+    && solved?.complete !== false
+    && missingSubparts.length === 0,
+  );
+  const completed = exactEvidenceReady && (isMcq ? mcqAnswerReady : essayAnswerReady);
+  const denominator = Math.max(1, expectedSubparts.length || 1);
+  const covered = expectedSubparts.length > 0
+    ? Math.max(0, expectedSubparts.length - missingSubparts.length)
+    : (completed ? 1 : 0);
+  const missingRequirements: string[] = [];
+  if (!exactEvidenceReady) missingRequirements.push("Exact question evidence is incomplete.");
+  if (exactEvidenceReady && !(isMcq ? mcqAnswerReady : essayText.length >= 40)) {
+    missingRequirements.push("A substantive answer was not generated from the verified question.");
+  }
+  if (missingSubparts.length > 0) {
+    missingRequirements.push(`Unanswered question parts: ${missingSubparts.join(", ")}.`);
+  }
+
+  return {
+    passed: completed,
+    confidence: completed ? Math.max(0.72, Math.min(0.98, Number(result?.confidence) || 0.82)) : 0.35,
+    coveragePercent: Math.round((covered / denominator) * 100),
+    requestedSubparts: expectedSubparts,
+    missingRequirements,
+    factualRisks: [],
+    numericalChecks: [],
+    citationRisks: exactEvidenceReady ? [] : ["The final answer is missing verified PDF question evidence."],
+    strengths: completed ? ["Exact PDF evidence and answer coverage checks passed."] : [],
+    reviewer: "deterministic" as const,
+    repaired: Boolean(solved?.complete === true && solved?.answeredSubparts?.length),
+  };
+}
+
+function finalizeDirectPdfResult(result: any, questionType: string) {
+  const qualityReport = assessDirectPdfResultCompleteness(result, questionType);
+  return {
+    ...result,
+    completed: qualityReport.passed,
+    qualityReport,
+  };
 }
 
 export function createDirectPdfInputPart(pdfBuffer?: Buffer, pdfUri?: string) {
@@ -245,6 +334,8 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
       }
     }
 
+    result = finalizeDirectPdfResult(result, questionType);
+
     // Save to cache if found
     if (result.found && result.sourceEvidence?.questionText) {
        const db = getAdminDb();
@@ -440,6 +531,7 @@ export async function askGeminiExtractedTextStructured(params: {
     }
   }
 
+  parsed = finalizeDirectPdfResult(parsed, questionType);
   await trackAIUsage(uid, modelUsed || AI_MODELS.pdf, Math.ceil(boundedText.length / 4), 500, "directPdfQaCalls").catch(() => undefined);
   return { ok: true, ...parsed, model: modelUsed, extractionMethod: "server_pdf_text_layer" };
 }

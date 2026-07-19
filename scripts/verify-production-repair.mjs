@@ -451,3 +451,82 @@ assert(
   "V18 Z-score history merge or preferred saved-paper estimate is incomplete",
 );
 console.log("V18 Error Log, chat history, legacy Sinhala, syllabus grounding, essay completeness, and Z-score checks passed.");
+
+
+// V21 planner/reviewer, fail-closed Direct PDF, durable OCR jobs, preview
+// degradation, adaptive Error Log, and observability checks.
+const answerPlannerV21 = await read("server/ai/answerPlanner.ts");
+const answerQualityV21 = await read("server/ai/answerQuality.ts");
+const streamClientV21 = await read("src/hooks/useAIWorkflowStream.ts");
+const pdfJobV21 = await read("server/pdf/jobManager.ts");
+const ocrEnsembleV21 = await read("server/pdf/ocrEnsemble.ts");
+const paperOutlineV21 = await read("server/pdf/paperOutline.ts");
+const telemetryV21 = await read("server/observability/aiTelemetry.ts");
+const studentRoutesV21 = await read("server/routes/studentRoutes.ts");
+const serverEntryV21 = await read("server.ts");
+assert(answerPlannerV21.includes("createAnswerPlan") && answerPlannerV21.includes("calculationChecks") && answerPlannerV21.includes("evidenceNeeds"), "V21 auditable answer planner is incomplete");
+assert(
+  answerQualityV21.includes("reviewAnswerQuality")
+    && answerQualityV21.includes("createQualityRepairedAnswer")
+    && respondStream.includes('emitSse(res, "answer_replace"')
+    && respondStream.includes('emitSse(res, "quality_report"'),
+  "V21 independent answer review/repair stream is incomplete",
+);
+assert(
+  directPdfQaV18.includes("assessDirectPdfResultCompleteness")
+    && streamClientV21.includes('completed: answerCompleted')
+    && streamClientV21.includes('finishReason: answerCompleted ? "direct_pdf_qa_complete" : "direct_pdf_qa_incomplete"')
+    && !streamClientV21.includes('completed: true, finishReason: "direct_pdf_qa_failed"'),
+  "V21 Direct PDF completion still succeeds closed or reports failures as complete",
+);
+assert(
+  pdfPreview.includes("createPdfQuestionPreviewFallback")
+    && pdfPreview.includes("previewUnavailable")
+    && pdfRoutesV17.includes("return res.status(200).json"),
+  "V21 PDF preview degradation can still become an internal-server error",
+);
+assert(
+  pdfJobV21.includes("pdf_processing_jobs")
+    && pdfRoutesV17.includes('pdfRoutes.get("/jobs/:sourceId"')
+    && pdfRoutesV17.includes('pdfRoutes.post("/jobs/:sourceId/retry"')
+    && streamClientV21.includes("pollOcrUntilReady"),
+  "V21 durable PDF jobs or automatic OCR polling/retry is incomplete",
+);
+assert(
+  ocrEnsembleV21.includes("selectOcrEnsemble")
+    && ocrEnsembleV21.includes("LOW_OCR_CONFIDENCE")
+    && ocrEnsembleV21.includes("OCR_PROVIDER_DISAGREEMENT"),
+  "V21 page-level OCR ensemble is incomplete",
+);
+assert(
+  paperOutlineV21.includes("requiredSkills")
+    && paperOutlineV21.includes("formulae")
+    && paperOutlineV21.includes("confidence")
+    && paperOutlineV21.includes("requiresVisual"),
+  "V21 full-paper lesson/point map is missing enriched question metadata",
+);
+assert(
+  mistakeStoreV18.includes("buildMistakeReviewUpdate")
+    && studentRoutesV21.includes('router.get("/mistakes/review-queue"')
+    && studentRoutesV21.includes('router.patch("/mistakes/:mistakeId/review"'),
+  "V21 adaptive Error Log scheduling is incomplete",
+);
+assert(
+  telemetryV21.includes("qualityPassRate")
+    && telemetryV21.includes("previewFallbackCount")
+    && aiRoutesV17.includes('aiRoutes.get("/quality-metrics"'),
+  "V21 answer/PDF observability is incomplete",
+);
+assert(
+  serverEntryV21.includes('app.use("/api/learning"')
+    && serverEntryV21.includes('app.use("/api/platform"'),
+  "V21 learning/platform feature routes are not mounted",
+);
+assert(
+  envExample.includes("AI_PLANNER_ENABLED=true")
+    && envExample.includes("AI_QUALITY_REVIEW_ENABLED=true")
+    && envExample.includes("AI_AUTO_CONTINUATION_PASSES=3")
+    && envExample.includes("ENABLE_AUTO_OCR=true"),
+  "V21 production AI/OCR switches are incomplete",
+);
+console.log("V21 planner, answer verification, Direct PDF, OCR jobs, adaptive learning, and observability checks passed.");

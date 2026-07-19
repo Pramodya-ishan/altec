@@ -33,6 +33,7 @@ export type DirectPdfQaResult = {
   visualBlocks?: VisualBlock[];
   extractionMethod?: string;
   completed?: boolean;
+  qualityReport?: any;
 };
 
 function asksForPdfVisual(value: unknown) {

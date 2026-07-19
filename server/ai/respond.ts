@@ -7,6 +7,8 @@ import { retrieveRelevantKnowledge } from "../rag/retrieve";
 import { getAdminDb } from "../firebase/admin";
 import { isSimpleGreeting, sanitizeAssistantText, simpleGreetingReply } from "./responseHygiene";
 import { assessAnswerCompleteness, buildContinuationInstruction, getModelFinishReason, mergeContinuationText } from "./answerCompleteness";
+import { createAnswerPlan, plannerContext } from "./answerPlanner";
+import { createQualityRepairedAnswer, reviewAnswerQuality } from "./answerQuality";
 
 export async function processAIRequest(req: any) {
   try {
@@ -39,6 +41,9 @@ export async function processAIRequest(req: any) {
     if (knowledgeChunks && knowledgeChunks.length > 0) {
       finalPrompt += `\n\nReference Sources:\n${JSON.stringify(knowledgeChunks)}`;
     }
+    const evidenceRequired = /(?:paper|marking|rag|pdf)/iu.test(mode);
+    const answerPlan = await createAnswerPlan({ prompt, mode, sources: knowledgeChunks, evidenceRequired });
+    finalPrompt += plannerContext(answerPlan);
 
     // 6. Select model & set up fallback chain
     let preferredModel = AI_MODELS.pro;
@@ -110,13 +115,41 @@ export async function processAIRequest(req: any) {
       finishReason = getModelFinishReason(continuation) || "STOP";
       completeness = assessAnswerCompleteness({ prompt, answer: safeResponseText, finishReason, mode });
     }
+    let qualityReview = await reviewAnswerQuality({
+      prompt,
+      answer: safeResponseText,
+      mode,
+      evidenceRequired,
+      sources: knowledgeChunks,
+    });
+    const qualityIssueCount = qualityReview.report.missingRequirements.length
+      + qualityReview.report.factualRisks.length
+      + qualityReview.report.numericalChecks.length
+      + qualityReview.report.citationRisks.length;
+    if (!qualityReview.report.passed && qualityIssueCount > 0) {
+      const repaired = await createQualityRepairedAnswer({
+        originalPrompt: prompt,
+        currentAnswer: safeResponseText,
+        report: qualityReview.report,
+        modelInstruction: qualityReview.repairInstruction,
+        systemInstruction,
+        maxOutputTokens: 12_288,
+      });
+      if (repaired.answer.trim()) {
+        safeResponseText = repaired.answer;
+        completeness = assessAnswerCompleteness({ prompt, answer: safeResponseText, finishReason: "STOP", mode });
+        qualityReview = await reviewAnswerQuality({ prompt, answer: safeResponseText, mode, evidenceRequired, sources: knowledgeChunks });
+        qualityReview.report.repaired = true;
+      }
+    }
+    const answerComplete = completeness.complete && qualityReview.report.passed;
     saveChatToHistory(uid, prompt, safeResponseText, mode, activeSubject, {
-      completed: completeness.complete,
+      completed: answerComplete,
       finishReason,
       completionPasses,
       missingSubparts: completeness.missingSubparts,
       reasons: completeness.reasons,
-    });
+    }, qualityReview.report);
 
     return {
       ok: true,
@@ -124,12 +157,14 @@ export async function processAIRequest(req: any) {
       response: safeResponseText,
       mode,
       model: modelUsed,
-      completed: completeness.complete,
-      finishReason: completeness.complete ? "complete" : "answer_incomplete",
+      completed: answerComplete,
+      finishReason: answerComplete ? "complete" : "answer_incomplete",
       modelFinishReason: finishReason,
       completionPasses,
-      canContinue: !completeness.complete,
+      canContinue: !answerComplete,
       missingSubparts: completeness.missingSubparts,
+      qualityReport: qualityReview.report,
+      answerPlan: { requirementCount: answerPlan.requirements.length, visualNeed: answerPlan.visualNeed, generatedBy: answerPlan.generatedBy },
       sources: knowledgeChunks,
       groundingMetadata: (response.candidates?.[0] as any)?.groundingMetadata
     };
@@ -140,7 +175,7 @@ export async function processAIRequest(req: any) {
   }
 }
 
-async function saveChatToHistory(uid: string, prompt: string, response: string, mode: string, subject?: string, completion?: { completed: boolean; finishReason?: string | null; completionPasses?: number; missingSubparts?: string[]; reasons?: string[] }) {
+async function saveChatToHistory(uid: string, prompt: string, response: string, mode: string, subject?: string, completion?: { completed: boolean; finishReason?: string | null; completionPasses?: number; missingSubparts?: string[]; reasons?: string[] }, quality?: Record<string, unknown> | null) {
   try {
     const db = getAdminDb();
     const batch = db.batch();
@@ -168,6 +203,7 @@ async function saveChatToHistory(uid: string, prompt: string, response: string, 
       completionPasses: completion?.completionPasses || 0,
       missingSubparts: completion?.missingSubparts || [],
       incompleteReasons: completion?.reasons || [],
+      answerQuality: quality || null,
       createdAt: new Date().toISOString()
     });
 

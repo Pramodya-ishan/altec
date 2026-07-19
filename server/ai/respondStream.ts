@@ -34,6 +34,14 @@ import {
   getModelFinishReason,
   mergeContinuationText,
 } from "./answerCompleteness";
+import {
+  AnswerQualityReport,
+  buildAnswerContractInstruction,
+  createQualityRepairedAnswer,
+  reviewAnswerQuality,
+} from "./answerQuality";
+import { recordAiTelemetry } from "../observability/aiTelemetry";
+import { createAnswerPlan, plannerContext } from "./answerPlanner";
 
 interface StreamTrace {
   requestId: string;
@@ -52,6 +60,10 @@ interface StreamTrace {
   modelFinishReason?: string;
   completionPasses?: number;
   incompleteReasons?: string[];
+  qualityPassed?: boolean;
+  qualityConfidence?: number;
+  qualityCoveragePercent?: number;
+  qualityRepaired?: boolean;
 }
 
 export const lastStreamTraces: StreamTrace[] = [];
@@ -140,7 +152,7 @@ export type SaveChatResult = {
   errorMessage?: string;
 };
 
-export async function saveFinalChat(params: {uid: string, email?: string, userText: string, assistantText: string, mode: string, subject?: string, sources?: any[], completion?: { completed: boolean; finishReason?: string | null; completionPasses?: number; missingSubparts?: string[]; reasons?: string[] }}): Promise<SaveChatResult> {
+export async function saveFinalChat(params: {uid: string, email?: string, userText: string, assistantText: string, mode: string, subject?: string, sources?: any[], completion?: { completed: boolean; finishReason?: string | null; completionPasses?: number; missingSubparts?: string[]; reasons?: string[] }, quality?: AnswerQualityReport | null}): Promise<SaveChatResult> {
   // Always strip visual blocks before saving to history
   params.assistantText = sanitizeAssistantText(stripRawVisualBlocks(params.assistantText));
 
@@ -172,6 +184,7 @@ export async function saveFinalChat(params: {uid: string, email?: string, userTe
       completionPasses: params.completion?.completionPasses || 0,
       missingSubparts: params.completion?.missingSubparts || [],
       incompleteReasons: params.completion?.reasons || [],
+      answerQuality: params.quality || null,
     });
 
     const historyRef = db.collection("users").doc(params.uid).collection("chat_history").doc(requestId);
@@ -1826,15 +1839,11 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
     } else if (policy.requireEvidence) {
       finalSysInstruction += "\n\n[STRICT INSTRUCTION]: The user is asking for a real paper question or syllabus discussion. You MUST base your answer strictly on the provided evidence. DO NOT invent or hallucinate any questions, equations, or past-paper details. If the evidence lacks the specific question, reply that you cannot find it.";
     }
-    finalSysInstruction += `
-
-[COMPLETE ANSWER CONTRACT]
-- Before writing, silently make a checklist of every explicit request and every visible (A)/(B), (i)/(ii), or numbered subpart. Do not reveal hidden reasoning or the checklist.
-- The final response must answer every readable requested item exactly once. Never stop after the first item.
-- If a source cannot support one item, state that limitation for that exact item and continue with the remaining items.
-- Prefer a compact complete answer over a long answer that stops halfway.
-- Never end inside a sentence, formula, table, Markdown fence, list item, or math delimiter.
-- Do not say that you will continue later; finish within this response.`;
+    finalSysInstruction += buildAnswerContractInstruction({
+      prompt,
+      mode: route.mode,
+      evidenceRequired: policy.requireEvidence,
+    });
 
     // Build the parts array for the contents object
     const mistakeImageSources: any[] = [];
@@ -1887,9 +1896,13 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         errorText: mistake.errorText || mistake.questionText,
         createdAt: mistake.createdAt,
         hasImage: Boolean(mistake.imageStoragePath),
+        masteryScore: mistake.masteryScore || 0,
+        correctStreak: mistake.correctStreak || 0,
+        nextReviewAt: mistake.nextReviewAt || mistake.retryDate || null,
+        errorCategory: mistake.errorCategory || "unknown",
       })))}\n${selectedMistakeRecord
-        ? "Analyze only this selected record. Read its attached image first. Identify the exact question, diagnose the likely error, show the correct method and answer, then give one similar practice question. Do not list the notebook again."
-        : "These are the user's real saved Error Log records. Summarize only what was requested and use the records for diagnosis or a grounded quiz."}\nNever say the Error Log is empty when this list contains records. If a saved image is attached below, inspect that actual image. Do not ask the user to upload it again. Never replace unreadable or missing details with generic likely mistakes; say exactly what cannot be read.`;
+        ? "Analyze only this selected record. Read its attached image first. Identify the exact question, diagnose the likely error category, show the correct method and checked answer, then give one similar practice question calibrated to its mastery score. Do not list the notebook again."
+        : "These are the user's real saved Error Log records. Summarize only what was requested and use mastery/due-date data for a grounded revision quiz."}\nNever say the Error Log is empty when this list contains records. If a saved image is attached below, inspect that actual image. Do not ask the user to upload it again. Never replace unreadable or missing details with generic likely mistakes; say exactly what cannot be read.`;
       const bucket = getAdminBucket();
       for (const mistake of recentMistakes.slice(0, 3)) {
         if (!mistake.imageStoragePath || !mistake.imageMimeType) continue;
@@ -1952,6 +1965,19 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       }
       aiTask = "image_understanding"; // Use multimodal model
     }
+
+    emitSse(res, "status", {
+      step: "answer_planning",
+      status: "working",
+      message: "Planning every requested part, calculation check, and evidence dependency",
+    });
+    const answerPlan = await createAnswerPlan({
+      prompt,
+      mode: route.mode,
+      sources: allSources,
+      evidenceRequired: policy.requireEvidence,
+    });
+    requestTextPart.text += plannerContext(answerPlan);
 
     let stream: any = null;
     let modelUsed = "";
@@ -2097,10 +2123,91 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       }
     }
 
+    let qualityReport: AnswerQualityReport | null = null;
+    if (completionAssessment.complete && !signal.aborted && !res.writableEnded) {
+      emitSse(res, "status", {
+        step: "answer_verification",
+        status: "working",
+        message: "Independently checking coverage, calculations, units, and evidence",
+      });
+      const initialQuality = await reviewAnswerQuality({
+        prompt,
+        answer: fullText,
+        mode: route.mode,
+        evidenceRequired: policy.requireEvidence,
+        sources: allSources,
+      });
+      qualityReport = initialQuality.report;
+
+      const actionableIssueCount = qualityReport.missingRequirements.length
+        + qualityReport.factualRisks.length
+        + qualityReport.numericalChecks.length
+        + qualityReport.citationRisks.length;
+      if (!qualityReport.passed && actionableIssueCount > 0) {
+        emitSse(res, "status", {
+          step: "answer_repair",
+          status: "working",
+          message: "Correcting the complete answer before final delivery",
+        });
+        try {
+          const repaired = await createQualityRepairedAnswer({
+            originalPrompt: prompt,
+            currentAnswer: fullText,
+            report: qualityReport,
+            modelInstruction: initialQuality.repairInstruction,
+            systemInstruction: finalSysInstruction,
+            contentsParts,
+            maxOutputTokens: getMaxTokens(route.mode),
+          });
+          const repairedAssessment = assessAnswerCompleteness({
+            prompt,
+            answer: repaired.answer,
+            finishReason: "STOP",
+            mode: route.mode,
+          });
+          if (repaired.answer.trim() && repairedAssessment.complete) {
+            fullText = repaired.answer;
+            modelUsed = repaired.modelUsed || modelUsed;
+            completionAssessment = repairedAssessment;
+            emitSse(res, "answer_replace", { text: fullText, reason: "quality_repair" });
+            trace.totalChars = fullText.length;
+            const verifiedRepair = await reviewAnswerQuality({
+              prompt,
+              answer: fullText,
+              mode: route.mode,
+              evidenceRequired: policy.requireEvidence,
+              sources: allSources,
+            });
+            qualityReport = { ...verifiedRepair.report, repaired: true };
+          }
+        } catch (qualityRepairError: any) {
+          console.warn("[ANSWER_QUALITY_REPAIR_FAILED]", qualityRepairError?.message || qualityRepairError);
+          qualityReport = {
+            ...qualityReport,
+            reviewError: `Repair failed: ${String(qualityRepairError?.message || qualityRepairError).slice(0, 400)}`,
+          };
+        }
+      }
+      emitSse(res, "quality_report", { report: qualityReport });
+    }
+
+    if (qualityReport && !qualityReport.passed) {
+      completionAssessment = {
+        ...completionAssessment,
+        complete: false,
+        shouldContinue: true,
+        reasons: Array.from(new Set([...completionAssessment.reasons, "QUALITY_VERIFICATION_FAILED"])),
+      };
+    }
+
     const isInterrupted = !completionAssessment.complete;
     trace.modelFinishReason = modelFinishReason || undefined;
     trace.completionPasses = completionPasses;
     trace.incompleteReasons = completionAssessment.reasons;
+    trace.qualityPassed = qualityReport?.passed;
+    trace.qualityConfidence = qualityReport?.confidence;
+    trace.qualityCoveragePercent = qualityReport?.coveragePercent;
+    trace.qualityRepaired = qualityReport?.repaired;
 
     if (isInterrupted) {
       emitSse(res, "error", {
@@ -2173,6 +2280,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
           missingSubparts: completionAssessment.missingSubparts,
           reasons: completionAssessment.reasons,
         },
+        quality: qualityReport,
       }), { chatSaved: false }, res);
       if (chatRes && chatRes.chatSaved) {
         trace.chatSaved = true;
@@ -2276,6 +2384,24 @@ Do not include any other text or markdown formatting.`;
     // sent to the browser. Only the answer and its usable sources belong in
     // the learner-facing conversation.
     trace.completed = !isInterrupted;
+    await recordAiTelemetry({
+      id: requestId,
+      kind: "answer",
+      ok: !isInterrupted,
+      startedAt: trace.startedAt,
+      endedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAt,
+      code: isInterrupted ? "ANSWER_INCOMPLETE" : "COMPLETE",
+      mode: route.mode,
+      model: modelUsed,
+      completed: !isInterrupted,
+      autoContinued: completionPasses > 0,
+      completionPasses,
+      qualityPassed: qualityReport?.passed ?? null,
+      qualityCoveragePercent: qualityReport?.coveragePercent ?? null,
+      qualityRepaired: qualityReport?.repaired ?? null,
+      sourceCount: allSources.length,
+    });
     emitSse(res, "done", {
       ok: !isInterrupted,
       completed: !isInterrupted,
@@ -2292,6 +2418,12 @@ Do not include any other text or markdown formatting.`;
       canContinue: isInterrupted && !signal.aborted,
       missingSubparts: completionAssessment.missingSubparts,
       incompleteReasons: completionAssessment.reasons,
+      qualityReport,
+      answerPlan: {
+        requirementCount: answerPlan.requirements.length,
+        visualNeed: answerPlan.visualNeed,
+        generatedBy: answerPlan.generatedBy,
+      },
     });
     trace.doneSent = true;
     trace.lastEvent = "done";
@@ -2299,6 +2431,16 @@ Do not include any other text or markdown formatting.`;
     console.error("Stream Error", error);
     trace.errorCode = error.code || "UNKNOWN_ERROR";
     trace.errorMessage = error.message || String(error);
+    await recordAiTelemetry({
+      id: requestId,
+      kind: "answer",
+      ok: false,
+      startedAt: trace.startedAt,
+      endedAt: new Date().toISOString(),
+      durationMs: Date.now() - startedAt,
+      code: trace.errorCode,
+      completed: false,
+    });
 
     // Check if error is AI_BILLING_EXHAUSTED (from checkAiBillingCircuit or classifyAiError)
     const classified = error.code === "AI_BILLING_EXHAUSTED" ? error : classifyAiError(error);

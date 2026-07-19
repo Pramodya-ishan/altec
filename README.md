@@ -1,4 +1,4 @@
-# Clora X - Sinhala A/L Technology AI Tutor
+# Clora X v21 - Sinhala A/L Technology AI Tutor
 
 A specialized, personalized AI tutor for Sri Lankan G.C.E. A/L Technology stream (SFT, ET, ICT).
 
@@ -13,10 +13,13 @@ A specialized, personalized AI tutor for Sri Lankan G.C.E. A/L Technology stream
 ## Core Features
 
 1. **Sinhala-First RAG Pipeline:** Retrieves from syllabus, past papers, and NotebookLM mirrors to construct highly accurate, personalized answers.
-2. **Contextual Memory:** Uses actual logged-in Firebase user profiles, recent marks, and identified weak lessons to drive the tutoring strategy.
-3. **Vertex AI ADC Auth:** Controls authentication mode purely via `GEMINI_USE_VERTEX=true` and `GOOGLE_APPLICATION_CREDENTIALS_JSON` without relying on free-tier AI Studio keys, avoiding "Prepayment Credits Depleted" errors.
-4. **Google Search Grounding:** Dynamic fallback to search the web for latest past papers, marking schemes, and syllabus PDFs.
-5. **Reduced Firestore Quota Burn:** Writes are optimized.
+2. **Planner → Solver → Verifier:** Substantive answers are planned, completed, independently reviewed, and replaced automatically when quality checks fail.
+3. **Evidence-locked PDF QA:** Exact paper/question matching, OCR ensemble selection, full-paper lesson/point maps, visual crops, and fail-closed subpart coverage.
+4. **Contextual Memory:** Uses actual logged-in Firebase user profiles, recent marks, and identified weak lessons to drive tutoring strategy.
+5. **Adaptive Error Log:** Saved text/images feed a spaced-repetition queue with mastery, streak, due date, and error-category tracking.
+6. **Vertex AI ADC Auth:** Controls authentication through `GEMINI_USE_VERTEX=true` and `GOOGLE_APPLICATION_CREDENTIALS_JSON`.
+7. **Educational visuals:** Native SVG diagrams/formula cards plus optional generated images; Sinhala explanatory text stays in the app UI to avoid raster glyph corruption.
+8. **Operational visibility:** Durable PDF job progress and an admin quality dashboard for completion, repairs, preview fallbacks, and latency.
 
 ## Setup Instructions
 

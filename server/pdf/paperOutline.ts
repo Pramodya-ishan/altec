@@ -8,6 +8,14 @@ export type PaperOutlineSection = {
   questionLabel: string;
   lesson: string;
   points: string[];
+  subparts?: string[];
+  competency?: string | null;
+  difficulty?: "easy" | "moderate" | "hard" | "unknown";
+  marks?: number | null;
+  requiresVisual?: boolean;
+  requiredSkills?: string[];
+  formulae?: string[];
+  confidence?: number;
   pageNumber: number | null;
   evidence: string;
 };
@@ -49,18 +57,36 @@ function cleanText(value: unknown, limit: number) {
   return text.replace(/\s+/gu, " ").trim().slice(0, limit);
 }
 
+function boundedStrings(value: unknown, limit: number, itemLimit: number) {
+  return (Array.isArray(value) ? value : [])
+    .map((item: unknown) => cleanText(item, itemLimit))
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
 function normalizeOutline(value: any, sourceId: string, sourceTitle: string, extractionMethod: PaperOutlineResult["extractionMethod"]): PaperOutlineResult {
   const sections = (Array.isArray(value?.sections) ? value.sections : [])
     .map((section: any, index: number) => {
       const lesson = cleanText(section?.lesson, 160);
-      const points = (Array.isArray(section?.points) ? section.points : [])
-        .map((point: unknown) => cleanText(point, 180))
-        .filter(Boolean)
-        .slice(0, 12);
+      const points = boundedStrings(section?.points, 12, 180);
+      const rawDifficulty = String(section?.difficulty || "unknown").toLowerCase();
+      const difficulty: PaperOutlineSection["difficulty"] = ["easy", "moderate", "hard"].includes(rawDifficulty)
+        ? rawDifficulty as PaperOutlineSection["difficulty"]
+        : "unknown";
+      const marks = Number(section?.marks);
+      const confidence = Number(section?.confidence);
       return {
         questionLabel: cleanText(section?.questionLabel || `Q${index + 1}`, 40),
         lesson,
         points,
+        subparts: boundedStrings(section?.subparts, 30, 40),
+        competency: cleanText(section?.competency, 220) || null,
+        difficulty,
+        marks: Number.isFinite(marks) && marks >= 0 ? marks : null,
+        requiresVisual: section?.requiresVisual === true,
+        requiredSkills: boundedStrings(section?.requiredSkills, 10, 120),
+        formulae: boundedStrings(section?.formulae, 10, 160),
+        confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.5,
         pageNumber: Number.isFinite(Number(section?.pageNumber)) ? Math.max(1, Number(section.pageNumber)) : null,
         evidence: cleanText(section?.evidence, 260),
       };
@@ -92,7 +118,7 @@ export async function analyzeSelectedPaperOutline(params: {
   const cacheRef = db.collection("pdf_outline_cache").doc(sourceId);
   const cached = await cacheRef.get().catch(() => null);
   const cachedData = cached?.exists ? cached.data() : null;
-  if (cachedData?.outlineVersion === 2 && cachedData?.complete === true && Array.isArray(cachedData?.sections) && cachedData.sections.length > 0) {
+  if (cachedData?.outlineVersion === 3 && cachedData?.complete === true && Array.isArray(cachedData?.sections) && cachedData.sections.length > 0) {
     return normalizeOutline(cachedData, sourceId, sourceTitle, cachedData.extractionMethod || "indexed_text");
   }
 
@@ -140,6 +166,13 @@ export async function analyzeSelectedPaperOutline(params: {
 Read the COMPLETE selected paper, not just one question. For every main question and every visible A/B/C or numbered section:
 - identify the SFT/ET/ICT syllabus lesson name in natural Sinhala Unicode;
 - list the exact concepts/skills tested as short point names;
+- list all visible subpart labels such as A.i, A.ii, B.i, or Q3(a);
+- map the syllabus competency/learning outcome when it is supported by the question;
+- estimate difficulty as easy, moderate, hard, or unknown from the actual reasoning load;
+- record the printed total marks when visible; otherwise use null;
+- record whether a figure, diagram, graph, table, drawing, or visual dimensions are required;
+- list required answer skills and formulae without solving the question;
+- assign confidence from 0 to 1 based on text/visual readability and mapping certainty;
 - preserve the paper's question label and page number;
 - include a short evidence phrase from the question, paraphrased if copyright-sensitive;
 - never copy legacy-font gibberish into the output;
@@ -152,7 +185,7 @@ Return JSON only:
   "complete": true|false,
   "warning": string|null,
   "sections": [
-    {"questionLabel":"Q1(A)","lesson":"පාඩමේ නම","points":["කරුණ 1","කරුණ 2"],"pageNumber":1,"evidence":"short identifying phrase"}
+    {"questionLabel":"Q1(A)","lesson":"පාඩමේ නම","points":["කරුණ 1","කරුණ 2"],"subparts":["A.i","A.ii"],"competency":"නිපුණතාව හෝ null","difficulty":"easy|moderate|hard|unknown","marks":10,"requiresVisual":true,"requiredSkills":["ගණනය"],"formulae":["F = ma"],"confidence":0.9,"pageNumber":1,"evidence":"short identifying phrase"}
   ]
 }`;
   const extractionMethod: PaperOutlineResult["extractionMethod"] = hasPdfVision && usableIndexedText
@@ -194,7 +227,7 @@ Return JSON only:
   if (outline.complete) {
     await cacheRef.set({
       ...outline,
-      outlineVersion: 2,
+      outlineVersion: 3,
       ownerUid: params.uid,
       updatedAt: new Date().toISOString(),
     }, { merge: true }).catch(() => undefined);
@@ -206,11 +239,14 @@ export function formatPaperOutlineMarkdown(outline: PaperOutlineResult) {
   const cell = (value: unknown) => String(value || "").replace(/\|/g, "\\|").replace(/\r?\n/g, " ").trim();
   const rows = outline.sections.map((section) => {
     const points = cell(section.points.join("; "));
+    const skills = cell(section.requiredSkills?.join("; ") || section.competency || "—");
+    const marks = section.marks == null ? "—" : String(section.marks);
+    const visual = section.requiresVisual ? "අවශ්‍යයි" : "නැහැ";
     const page = section.pageNumber ? String(section.pageNumber) : "—";
-    return `| ${cell(section.questionLabel)} | ${cell(section.lesson)} | ${points} | ${page} |`;
+    return `| ${cell(section.questionLabel)} | ${cell(section.lesson)} | ${points} | ${skills} | ${cell(section.difficulty || "unknown")} | ${marks} | ${visual} | ${page} |`;
   });
   const warning = outline.complete
     ? ""
     : `\n\n> සටහන: ${outline.warning || "PDF එකේ කොටසක් පැහැදිලිව කියවීමට නොහැකි නිසා mapping එක අසම්පූර්ණයි."}`;
-  return `### ${outline.sourceTitle} — පාඩම් සහ කරුණු mapping\n\n| ප්‍රශ්නය | පාඩම | අසන ප්‍රධාන කරුණු | පිටුව |\n|---|---|---|---:|\n${rows.join("\n")}${warning}`;
+  return `### ${outline.sourceTitle} — පාඩම් සහ කරුණු mapping\n\n| ප්‍රශ්නය | පාඩම | අසන ප්‍රධාන කරුණු | නිපුණතාව/skills | මට්ටම | ලකුණු | රූපය | පිටුව |\n|---|---|---|---|---|---:|---|---:|\n${rows.join("\n")}${warning}`;
 }

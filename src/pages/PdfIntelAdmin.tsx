@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { auth } from '../lib/firebase';
 import { 
@@ -13,12 +13,24 @@ import {
   HardDrive
 } from 'lucide-react';
 import { apiFetch } from "../lib/api";
-import { cn } from '../lib/utils';
 
 export default function PdfIntelAdmin() {
   const { user, showNotification, profile } = useApp();
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<any[]>([]);
+  const [metrics, setMetrics] = useState<any>(null);
+
+  const loadMetrics = useCallback(async () => {
+    try {
+      const response = await apiFetch('/api/ai/quality-metrics');
+      const payload = await response.json().catch(() => null);
+      if (response.ok && payload?.ok) setMetrics(payload);
+    } catch {
+      // Metrics are operational telemetry and must not block the admin page.
+    }
+  }, []);
+
+  useEffect(() => { void loadMetrics(); }, [loadMetrics]);
 
   const handleBuildIndex = async () => {
     if (!window.confirm("This will process all PDF sources and extract questions. It may take several minutes. Proceed?")) return;
@@ -32,6 +44,7 @@ export default function PdfIntelAdmin() {
       });
       const data = await res.json();
       setResults(data.results || []);
+      void loadMetrics();
       showNotification("Indexing job completed", "success");
     } catch (err) {
       showNotification("Indexing failed", "error");
@@ -130,32 +143,37 @@ export default function PdfIntelAdmin() {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
         <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm space-y-2">
           <div className="flex items-center justify-between text-gray-400">
-            <span className="text-xs font-bold uppercase tracking-wider">Total Questions</span>
+            <span className="text-xs font-bold uppercase tracking-wider">Recent answers</span>
             <Search className="w-4 h-4" />
           </div>
-          <p className="text-3xl font-bold text-gray-900">1,248</p>
+          <p className="text-3xl font-bold text-gray-900">{metrics?.answerCount ?? '—'}</p>
           <div className="text-[10px] font-bold text-emerald-600 uppercase flex items-center gap-1">
-            <Zap className="w-3 h-3" /> Indexed & Ready
+            <Zap className="w-3 h-3" /> {metrics?.completionRate ?? 0}% complete
           </div>
         </div>
         <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm space-y-2">
           <div className="flex items-center justify-between text-gray-400">
-            <span className="text-xs font-bold uppercase tracking-wider">Storage Usage</span>
-            <HardDrive className="w-4 h-4" />
+            <span className="text-xs font-bold uppercase tracking-wider">Quality pass</span>
+            <CheckCircle className="w-4 h-4" />
           </div>
-          <p className="text-3xl font-bold text-gray-900">452 MB</p>
-          <div className="text-[10px] font-bold text-indigo-600 uppercase">PDF Inventory</div>
+          <p className="text-3xl font-bold text-gray-900">{metrics?.qualityPassRate ?? 0}%</p>
+          <div className="text-[10px] font-bold text-indigo-600 uppercase">{metrics?.qualityRepairRate ?? 0}% auto-repaired</div>
         </div>
         <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm space-y-2">
           <div className="flex items-center justify-between text-gray-400">
-            <span className="text-xs font-bold uppercase tracking-wider">Model Status</span>
-            <Cpu className="w-4 h-4" />
+            <span className="text-xs font-bold uppercase tracking-wider">PDF previews</span>
+            <FileText className="w-4 h-4" />
           </div>
-          <p className="text-3xl font-bold text-emerald-600">ONLINE</p>
-          <div className="text-[10px] font-bold text-gray-400 uppercase">Gemini 1.5 Flash</div>
+          <p className="text-3xl font-bold text-emerald-600">{metrics?.previewSuccessRate ?? 0}%</p>
+          <div className="text-[10px] font-bold text-gray-400 uppercase">{metrics?.previewFallbackCount ?? 0} safe fallbacks</div>
+        </div>
+        <div className="bg-white rounded-2xl border border-gray-100 p-6 shadow-sm space-y-2">
+          <div className="flex items-center justify-between text-gray-400"><span className="text-xs font-bold uppercase tracking-wider">P95 answer time</span><Cpu className="w-4 h-4" /></div>
+          <p className="text-3xl font-bold text-gray-900">{metrics ? `${Math.round((metrics.p95AnswerLatencyMs || 0) / 1000)}s` : '—'}</p>
+          <div className="text-[10px] font-bold text-gray-400 uppercase">Pro verify + repair pipeline</div>
         </div>
       </div>
 
@@ -165,8 +183,8 @@ export default function PdfIntelAdmin() {
             <h3 className="font-bold text-gray-900">Recent Indexing Results</h3>
           </div>
           <div className="divide-y divide-gray-100">
-            {results.map((res, i) => (
-              <div key={i} className="p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+            {results.map((res) => (
+              <div key={`${res.sourceId || res.id || "source"}-${res.count ?? res.error ?? "result"}`} className="p-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
                 <div className="flex items-center gap-3">
                   <FileText className="w-5 h-5 text-gray-400" />
                   <div>
@@ -194,12 +212,14 @@ export default function PdfIntelAdmin() {
       <div className="bg-gray-900 rounded-2xl p-8 text-white space-y-6">
         <h3 className="text-indigo-400 font-bold uppercase tracking-widest text-xs">System Logs</h3>
         <div className="font-mono text-xs space-y-1 opacity-80 max-h-48 overflow-y-auto custom-scrollbar">
-          <p>[SYSTEM] Exam Intelligence Engine v2.0 Initialized</p>
+          <p>[SYSTEM] Exam Intelligence Engine v21 Initialized</p>
           <p>[AUTH] Admin login verified: {user?.email || "Admin"}</p>
           <p>[STORAGE] Connected to al-ai-chat.firebasestorage.app</p>
           <p>[DB] Firestore ready. Collections: exam_question_index, syllabus_nodes</p>
-          <p>[AI] Gemini 1.5 Flash heartbeat OK</p>
-          <p className="text-indigo-400">Waiting for indexing trigger...</p>
+          <p>[AI] Planner → Solver → Quality Verifier → Final Writer enabled</p>
+          <p>[QUALITY] completion={metrics?.completionRate ?? 0}% pass={metrics?.qualityPassRate ?? 0}% repaired={metrics?.qualityRepairRate ?? 0}%</p>
+          {(metrics?.recentFailures || []).slice(0, 5).map((failure: any) => <p key={`${failure.id}-${failure.endedAt}`} className="text-amber-300">[{failure.kind}] {failure.code || 'FAILED'} · {failure.durationMs}ms</p>)}
+          <p className="text-indigo-400">Monitoring live answer and PDF telemetry...</p>
         </div>
       </div>
     </div>

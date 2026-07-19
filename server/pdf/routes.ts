@@ -10,9 +10,12 @@ import { extractPdfText } from "./extractText";
 import { assertContentManager, isContentManager, isSharedSourceScope, isStudentVisibleSource } from "../utils/contentPermissions";
 import { normalizeLessonId, updateLessonResourceProcessing, upsertLessonResource } from "../lessonResources/service";
 import { getSourceInventory, invalidateInventoryCache } from "../sources/sourceInventoryService";
-import { createPdfQuestionPreview } from "./questionPreview";
+import { createPdfQuestionPreview, createPdfQuestionPreviewFallback } from "./questionPreview";
 import { hasExactQuestionMarker } from "../ai-core/pdf/indexedQuestionSelection";
 import { questionRequiresVisualEvidence } from "./visualEvidence";
+import { getPdfProcessingJob, publicPdfJob } from "./jobManager";
+import { selectOcrEnsemble } from "./ocrEnsemble";
+import { recordAiTelemetry } from "../observability/aiTelemetry";
 
 import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
 
@@ -350,10 +353,17 @@ pdfRoutes.get("/ocr-status/:sourceId", requireFirebaseUser, async (req: any, res
       return res.status(403).json({ ok: false, code: "SOURCE_ACCESS_FORBIDDEN", message: "You do not have access to this source." });
     }
     const job = await checkOcrJobStatus(sourceId);
+    const processingJob = publicPdfJob(await getPdfProcessingJob(sourceId).catch(() => null));
 
     // If background job finished, run the finalize step!
     if (job.status === "ready" && job.result) {
       console.log(`Background OCR job became ready. Running finalization for ${sourceId}`);
+      const ensemble = selectOcrEnsemble(job.result.pages.map((page) => ({
+        pageNumber: page.pageNumber,
+        text: page.text,
+        provider: "cloud_vision",
+        confidence: page.confidence,
+      })));
       await finalizePipelineProcessing({
         uid: src.ownerUid,
         sourceId,
@@ -364,17 +374,17 @@ pdfRoutes.get("/ocr-status/:sourceId", requireFirebaseUser, async (req: any, res
         year: src.year,
         resourceType: src.resourceType || "uploaded_pdf",
         sourceScope: src.sourceScope || "personal",
-        pages: job.result.pages.map(p => ({
+        pages: ensemble.pages.map(p => ({
           pageNumber: p.pageNumber,
           text: p.text,
           rawText: p.text,
           textEncoding: "unicode_sinhala",
           conversionApplied: false,
-          conversionConfidence: 1.0
+          conversionConfidence: p.qualityScore
         })),
         extractionMethod: "cloud_vision_ocr",
         textEncoding: "unicode_sinhala",
-        ocrConfidence: job.result.confidence,
+        ocrConfidence: ensemble.averageQuality || job.result.confidence,
         needsOcr: false,
         needsLegacyConversion: false
       });
@@ -394,6 +404,7 @@ pdfRoutes.get("/ocr-status/:sourceId", requireFirebaseUser, async (req: any, res
         extractionMethod: updatedSrc.extractionMethod,
         ocrTextPdfStoragePath: updatedSrc.ocrTextPdfStoragePath,
         ocrTextPdfStatus: updatedSrc.ocrTextPdfStatus,
+        job: publicPdfJob(await getPdfProcessingJob(sourceId).catch(() => null)),
       });
     }
 
@@ -408,11 +419,80 @@ pdfRoutes.get("/ocr-status/:sourceId", requireFirebaseUser, async (req: any, res
       extractionMethod: src.extractionMethod || "none",
       ocrTextPdfStoragePath: src.ocrTextPdfStoragePath || null,
       ocrTextPdfStatus: src.ocrTextPdfStatus || "disabled",
-      error: job.error || null
+      error: job.error || null,
+      job: processingJob,
     });
   } catch (err: any) {
     console.error("Error in ocr-status route:", err);
     return res.status(500).json({ ok: false, error: "Internal operation failed." });
+  }
+});
+
+// Durable, user-visible processing state for large/scanned PDFs.
+pdfRoutes.get("/jobs/:sourceId", requireFirebaseUser, async (req: any, res) => {
+  try {
+    const sourceId = String(req.params.sourceId || "");
+    const sourceSnapshot = await getAdminDb().collection("rag_sources").doc(sourceId).get();
+    if (!sourceSnapshot.exists) return res.status(404).json({ ok: false, code: "SOURCE_NOT_FOUND", message: "Source not found." });
+    const source = sourceSnapshot.data();
+    if (!canViewSource(req.user, source)) return res.status(403).json({ ok: false, code: "SOURCE_ACCESS_FORBIDDEN", message: "You do not have access to this source." });
+    const job = publicPdfJob(await getPdfProcessingJob(sourceId));
+    return res.json({
+      ok: true,
+      sourceId,
+      job: job || {
+        sourceId,
+        stage: source?.textIndexed ? "ready" : "registered",
+        status: source?.textIndexed ? "ready" : "queued",
+        progress: source?.textIndexed ? 100 : 2,
+        retryable: true,
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ ok: false, code: "PDF_JOB_STATUS_FAILED", message: "PDF processing status could not be loaded." });
+  }
+});
+
+pdfRoutes.post("/jobs/:sourceId/retry", requireFirebaseUser, async (req: any, res) => {
+  try {
+    const sourceId = String(req.params.sourceId || "");
+    const sourceSnapshot = await getAdminDb().collection("rag_sources").doc(sourceId).get();
+    if (!sourceSnapshot.exists) return res.status(404).json({ ok: false, code: "SOURCE_NOT_FOUND", message: "Source not found." });
+    const source = sourceSnapshot.data()!;
+    if (isSharedSourceScope(source.sourceScope)) assertContentManager(req.user);
+    else if (source.ownerUid !== req.user.uid && !isContentManager(req.user)) {
+      return res.status(403).json({ ok: false, code: "SOURCE_REPROCESS_FORBIDDEN", message: "You do not have permission to retry this source." });
+    }
+    const existingJob = await getPdfProcessingJob(sourceId).catch(() => null);
+    if (existingJob && (existingJob.retryable === false || existingJob.attempt >= existingJob.maxAttempts)) {
+      return res.status(409).json({
+        ok: false,
+        code: "PDF_JOB_RETRY_LIMIT_REACHED",
+        message: "Automatic PDF retries are exhausted. Re-upload the source or ask an administrator to inspect the failed pages.",
+        job: publicPdfJob(existingJob),
+      });
+    }
+    const result = await processUploadedPdf({
+      uid: source.ownerUid || req.user.uid,
+      sourceId,
+      storagePath: source.storagePath,
+      fileName: source.fileName || `${sourceId}.pdf`,
+      title: source.title || source.fileName || "PDF document",
+      subject: source.subject || "",
+      year: source.year || null,
+      resourceType: source.resourceType || "uploaded_pdf",
+      sourceType: source.sourceType || source.resourceType || "uploaded_pdf",
+      sourceScope: source.sourceScope || "personal",
+      lesson: source.lesson,
+      forceOcr: true,
+    });
+    return res.status(result.status === "queued" ? 202 : 200).json({
+      ...result,
+      sourceId,
+      job: publicPdfJob(await getPdfProcessingJob(sourceId).catch(() => null)),
+    });
+  } catch (error: any) {
+    return res.status(Number(error?.status) || 500).json({ ok: false, code: error?.code || "PDF_JOB_RETRY_FAILED", message: "The PDF retry could not be started." });
   }
 });
 
@@ -1005,6 +1085,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
 });
 
 pdfRoutes.post("/question-preview", requireFirebaseUser, express.json({ limit: "64kb" }), async (req: any, res) => {
+  const previewStartedAt = Date.now();
   try {
     const { sourceId, storagePath, pageNumber, crop, title } = req.body || {};
     if (!sourceId || !pageNumber) {
@@ -1030,16 +1111,45 @@ pdfRoutes.post("/question-preview", requireFirebaseUser, express.json({ limit: "
       title: title || resolved.source?.title || resolved.source?.fileName,
     });
 
+    await recordAiTelemetry({
+      id: `${req.requestId || Date.now()}_preview`,
+      kind: "pdf_preview",
+      ok: true,
+      durationMs: Date.now() - previewStartedAt,
+      code: "PDF_PREVIEW_READY",
+      degraded: preview.delivery !== "signed_url",
+      sourceCount: 1,
+    });
     return res.json({ ok: true, ...preview });
   } catch (error: any) {
     console.error("[PDF_PREVIEW] Failed:", error);
     const unavailable = /@napi-rs\/canvas|Cannot find package|render/i.test(String(error?.message || error));
-    return res.status(unavailable ? 503 : Number(error?.status) || 500).json({
-      ok: false,
-      code: unavailable ? "PDF_PREVIEW_RENDERER_UNAVAILABLE" : (error?.code || "PDF_PREVIEW_FAILED"),
+    const status = Number(error?.status) || 500;
+    if (status >= 400 && status < 500) {
+      await recordAiTelemetry({ id: `${req.requestId || Date.now()}_preview`, kind: "pdf_preview", ok: false, durationMs: Date.now() - previewStartedAt, code: error?.code || "PDF_PREVIEW_ACCESS_FAILED" });
+      return res.status(status).json({
+        ok: false,
+        code: error?.code || "PDF_PREVIEW_ACCESS_FAILED",
+        message: error?.message || "The PDF image preview could not be opened.",
+      });
+    }
+    const code = unavailable ? "PDF_PREVIEW_RENDERER_UNAVAILABLE" : (error?.code || "PDF_PREVIEW_FAILED");
+    await recordAiTelemetry({ id: `${req.requestId || Date.now()}_preview`, kind: "pdf_preview", ok: true, durationMs: Date.now() - previewStartedAt, code, degraded: true });
+    // Preview rendering is optional evidence presentation. Return a valid,
+    // explicit placeholder instead of turning the whole answer flow into a
+    // noisy HTTP 500; verified text/PDF evidence remains available.
+    return res.status(200).json({
+      ok: true,
+      degraded: true,
+      code,
       message: unavailable
-        ? "The PDF image preview service is temporarily unavailable."
-        : (error?.message || "The PDF image preview could not be created."),
+        ? "The PDF image renderer is temporarily unavailable."
+        : "The PDF image preview could not be created, but the answer may continue from verified text evidence.",
+      ...createPdfQuestionPreviewFallback({
+        title: req.body?.title,
+        pageNumber: req.body?.pageNumber,
+        code,
+      }),
     });
   }
 });
