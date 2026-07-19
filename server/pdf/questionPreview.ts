@@ -57,7 +57,12 @@ export async function renderPdfPageCrop(
     }
 
     page = await pdf.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 2 });
+    const baseViewport = page.getViewport({ scale: 1 });
+    // Keep previews sharp enough for dimensions and Sinhala glyphs without
+    // producing multi-megabyte inline fallbacks on unusually large pages.
+    const longestEdge = Math.max(baseViewport.width, baseViewport.height);
+    const renderScale = Math.max(1.25, Math.min(2, 1_800 / Math.max(1, longestEdge)));
+    const viewport = page.getViewport({ scale: renderScale });
     const pageCanvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
     const pageContext = pageCanvas.getContext("2d");
     await page.render({ canvasContext: pageContext, viewport } as any).promise;
@@ -112,39 +117,58 @@ export async function createPdfQuestionPreview(params: {
   const bucket = getAdminBucket();
   const outputFile = bucket.file(storagePath);
 
-  const [exists] = await outputFile.exists().catch(() => [false]);
-  if (!exists) {
-    const rendered = await renderPdfPageCrop(params.pdfBuffer, pageNumber, crop);
-    await outputFile.save(rendered.png, {
-      resumable: false,
-      metadata: {
-        contentType: "image/png",
-        cacheControl: "private, max-age=86400",
-        metadata: {
-          sourceId: params.sourceId,
-          pageNumber: String(pageNumber),
-          createdBy: params.uid,
-        },
-      },
-    });
+  let rendered: Awaited<ReturnType<typeof renderPdfPageCrop>> | null = null;
 
-    await getAdminDb().collection("pdf_question_previews").doc(`${safeSourceId}_${pageNumber}_${cropKey}`).set({
+  // Storage is only a cache. A missing object-signing IAM permission must not
+  // turn an otherwise valid PDF crop into a 500 response.
+  try {
+    const [exists] = await outputFile.exists().catch(() => [false]);
+    if (!exists) {
+      rendered = await renderPdfPageCrop(params.pdfBuffer, pageNumber, crop);
+      await outputFile.save(rendered.png, {
+        resumable: false,
+        metadata: {
+          contentType: "image/png",
+          cacheControl: "private, max-age=86400",
+          metadata: {
+            sourceId: params.sourceId,
+            pageNumber: String(pageNumber),
+            createdBy: params.uid,
+          },
+        },
+      });
+
+      await getAdminDb().collection("pdf_question_previews").doc(`${safeSourceId}_${pageNumber}_${cropKey}`).set({
+        sourceId: params.sourceId,
+        ownerUid: params.uid,
+        pageNumber,
+        crop,
+        storagePath,
+        title: params.title || null,
+        createdAt: new Date().toISOString(),
+      }, { merge: true }).catch(() => undefined);
+    }
+
+    const [imageUrl] = await outputFile.getSignedUrl({
+      action: "read",
+      expires: Date.now() + 24 * 60 * 60 * 1000,
+      responseType: "image/png",
+      responseDisposition: "inline",
+    });
+    return { imageUrl, storagePath, pageNumber, crop, delivery: "signed_url" as const };
+  } catch (storageError) {
+    console.warn("[PDF_PREVIEW] Storage cache/signing unavailable; returning inline crop", {
       sourceId: params.sourceId,
-      ownerUid: params.uid,
+      pageNumber,
+      error: String(storageError),
+    });
+    rendered ||= await renderPdfPageCrop(params.pdfBuffer, pageNumber, crop);
+    return {
+      imageUrl: `data:image/png;base64,${rendered.png.toString("base64")}`,
+      storagePath: null,
       pageNumber,
       crop,
-      storagePath,
-      title: params.title || null,
-      createdAt: new Date().toISOString(),
-    }, { merge: true }).catch(() => undefined);
+      delivery: "inline" as const,
+    };
   }
-
-  const [imageUrl] = await outputFile.getSignedUrl({
-    action: "read",
-    expires: Date.now() + 24 * 60 * 60 * 1000,
-    responseType: "image/png",
-    responseDisposition: "inline",
-  });
-
-  return { imageUrl, storagePath, pageNumber, crop };
 }

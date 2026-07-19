@@ -56,8 +56,6 @@ export function composeMarkingSchemeAnswer(params: MarkingSchemeResponseParams):
       composed += `- **${item.part}**: ${item.marks}\n`;
     });
     composed += `\n`;
-  } else {
-    composed += `📊 **ලකුණු බෙදී යන ආකාරය (Mark Split):**\n- (a) — **Estimated marks allocation**\n\n`;
   }
 
   if (examTips && examTips.length > 0) {

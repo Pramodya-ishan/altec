@@ -260,7 +260,7 @@ Return JSON:
           systemInstruction,
           temperature: 0,
           responseMimeType: "application/json",
-          maxOutputTokens: 2_500,
+          maxOutputTokens: 4_096,
         },
       } as any);
 

@@ -92,7 +92,7 @@ function buildAutomaticVisuals(params: {
   if (visualAid) blocks.push(visualAid);
 
   const imagePreviewUrl = clean(result?.sourceEvidence?.imagePreviewUrl);
-  if (imagePreviewUrl && /^https?:\/\//i.test(imagePreviewUrl)) {
+  if (imagePreviewUrl && /^(?:https?:\/\/|data:image\/(?:png|jpeg|webp);base64,)/i.test(imagePreviewUrl)) {
     blocks.push({
       type: "pdf_image_preview",
       title: "PDF question visual",

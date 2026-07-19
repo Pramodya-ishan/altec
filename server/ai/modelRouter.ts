@@ -57,6 +57,19 @@ interface ModelConfig {
   fallback?: string;
 }
 
+function shouldTryModelFallback(error: any, retryable: boolean) {
+  if (!retryable) return false;
+  const status = Number(error?.status || error?.statusCode || error?.code || 0);
+  const message = String(error?.message || error || "").toLowerCase();
+  return !status
+    || status === 404
+    || status === 408
+    || status === 409
+    || status === 429
+    || status >= 500
+    || /timeout|timed out|network|fetch failed|connection|unavailable|overloaded|econnreset|socket/.test(message);
+}
+
 export function getModelForTask(task: AITask): ModelConfig {
   switch (task) {
     case "direct_pdf_extract":
@@ -66,8 +79,8 @@ export function getModelForTask(task: AITask): ModelConfig {
       };
     case "direct_pdf_solve":
       return {
-        primary: process.env.GEMINI_FAST_MODEL || "gemini-3.5-flash",
-        fallback: "gemini-3.5-flash"
+        primary: process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview",
+        fallback: process.env.GEMINI_FINAL_FALLBACK || "gemini-2.5-pro"
       };
     case "final_answer":
       return {
@@ -91,7 +104,7 @@ export function getModelForTask(task: AITask): ModelConfig {
       };
     case "image_understanding":
       return {
-        primary: process.env.GEMINI_VISION_MODEL || "gemini-3.5-flash",
+        primary: process.env.GEMINI_VISION_MODEL || process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview",
         fallback: "gemini-3.5-flash"
       };
     case "ocr":
@@ -121,8 +134,7 @@ export async function callGeminiWithFallback(task: AITask, payload: GenerateCont
   
   try {
     console.log(`[modelRouter] Attempting primary model ${models.primary} for task ${task}`);
-    payload.model = models.primary;
-    const result = await client.models.generateContent(payload);
+    const result = await client.models.generateContent({ ...payload, model: models.primary });
     if (task === "normal_chat") {
       lastOk = true;
       lastError = null;
@@ -146,13 +158,12 @@ export async function callGeminiWithFallback(task: AITask, payload: GenerateCont
     }
     
     // Check if error is recoverable via fallback
-    const isRetryable = classification.retryable && (err.status === 404 || err.status >= 500);
+    const isRetryable = shouldTryModelFallback(err, classification.retryable);
     
     if (isRetryable && models.fallback) {
       console.log(`[modelRouter] Falling back to model ${models.fallback} for task ${task}`);
       try {
-        payload.model = models.fallback;
-        const result = await client.models.generateContent(payload);
+        const result = await client.models.generateContent({ ...payload, model: models.fallback });
         return { result, modelUsed: models.fallback, warning: `Primary model unavailable, used fallback ${models.fallback}` };
       } catch (fallbackErr: any) {
         console.error(`[modelRouter] Fallback model ${models.fallback} also failed: ${fallbackErr.message}`);
@@ -179,12 +190,9 @@ export async function generateContentStreamWithFallback(task: AITask, payload: G
     
     try {
       console.log(`[modelRouter] Attempting stream with primary model ${models.primary} for task ${task}`);
-      payload.model = models.primary;
-      if (signal) {
-        payload.config = payload.config || {};
-        (payload as any).abortSignal = signal;
-      }
-      const stream = await client.models.generateContentStream(payload);
+      const primaryPayload: any = { ...payload, model: models.primary };
+      if (signal) primaryPayload.abortSignal = signal;
+      const stream = await client.models.generateContentStream(primaryPayload);
       if (task === "normal_chat") {
         lastOk = true;
         lastError = null;
@@ -208,17 +216,14 @@ export async function generateContentStreamWithFallback(task: AITask, payload: G
         throw e;
       }
       
-      const isRetryable = classification.retryable && (err.status === 404 || err.status >= 500);
+      const isRetryable = shouldTryModelFallback(err, classification.retryable);
       
       if (isRetryable && models.fallback) {
         console.log(`[modelRouter] Falling back stream to model ${models.fallback} for task ${task}`);
         try {
-          payload.model = models.fallback;
-      if (signal) {
-        payload.config = payload.config || {};
-        (payload as any).abortSignal = signal;
-      }
-          const stream = await client.models.generateContentStream(payload);
+          const fallbackPayload: any = { ...payload, model: models.fallback };
+          if (signal) fallbackPayload.abortSignal = signal;
+          const stream = await client.models.generateContentStream(fallbackPayload);
           return { stream, modelUsed: models.fallback, warning: `Primary model unavailable, used fallback ${models.fallback}` };
         } catch (fallbackErr: any) {
           console.error(`[modelRouter] Fallback stream model ${models.fallback} also failed: ${fallbackErr.message}`);

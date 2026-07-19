@@ -384,10 +384,12 @@ export function useAIWorkflowStream() {
                 if (result.ok && result.found === true && result.answer) {
                   onToken?.(result.answer);
                   doneReceived = true;
+                  const answerCompleted = result.completed !== false;
                   onDone?.({
                     ok: true,
                     completed: true,
                     finishReason: "direct_pdf_qa_complete",
+                    evidenceComplete: answerCompleted,
                     answer: result.answer,
                     sources: [{ id: sourceId, title, storagePath }],
                     paperInfo: {
@@ -525,17 +527,82 @@ export function useAIWorkflowStream() {
         }
       }
 
-      if (lastSentRenderedText !== accumulatedFullText) {
-        const delta = accumulatedFullText.substring(lastSentRenderedText.length);
+      const { cleanText: finalCleanText, blocks: finalBlocks } = extractVisualBlocks(accumulatedFullText);
+      if (finalBlocks.length > 0) onVisualBlocks?.(finalBlocks);
+      const finalRenderedText = sanitizeMathMarkdown(stripRawVisualBlocks(finalCleanText));
+      if (lastSentRenderedText !== finalRenderedText) {
+        const delta = finalRenderedText.substring(lastSentRenderedText.length);
         if (delta.length > 0) {
           onToken?.(delta);
         }
-        setAnswer(accumulatedFullText);
-        lastSentRenderedText = accumulatedFullText;
+        setAnswer(finalRenderedText);
+        lastSentRenderedText = finalRenderedText;
       }
 
       if (!doneReceived) {
-        onDone?.({ completed: false, reason: "STREAM_CLOSED_BEFORE_DONE" });
+        let recovered = false;
+        if (accumulatedFullText.trim().length >= 80 && !controller.signal.aborted) {
+          try {
+            const recoveryStatus = { stage: "processing", label: "Recovering answer", message: "The connection closed; continuing from the saved partial answer automatically…" };
+            setStatus(recoveryStatus);
+            onStatus?.(recoveryStatus);
+            const recoveryResponse = await apiFetch("/api/ai/continue", {
+              method: "POST",
+              signal: controller.signal,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                originalPrompt: isContinue ? originalPrompt : prompt,
+                previousAssistantText: accumulatedFullText,
+                sources: inputSources,
+                reason: "STREAM_CLOSED_BEFORE_DONE",
+                clientRequestId: `${clientRequestId}_transport_recovery`,
+              }),
+            });
+            if (recoveryResponse.ok && recoveryResponse.body) {
+              const recoveryReader = recoveryResponse.body.getReader();
+              const recoveryDecoder = new TextDecoder();
+              const recoveryParser = new SSEParser();
+              let recoveryDone: any = null;
+              while (true) {
+                const { value, done } = await recoveryReader.read();
+                if (done) break;
+                for (const recoveryEvent of recoveryParser.parse(recoveryDecoder.decode(value, { stream: true }))) {
+                  let recoveryData: any = null;
+                  try { recoveryData = JSON.parse(recoveryEvent.data); } catch { continue; }
+                  if (recoveryEvent.event === "token" || recoveryEvent.event === "chunk") {
+                    accumulatedFullText += recoveryData.text || "";
+                    const { cleanText } = extractVisualBlocks(accumulatedFullText);
+                    const rendered = sanitizeMathMarkdown(stripRawVisualBlocks(cleanText));
+                    const delta = rendered.substring(lastSentRenderedText.length);
+                    if (delta) onToken?.(delta);
+                    lastSentRenderedText = rendered;
+                    setAnswer(rendered);
+                  } else if (recoveryEvent.event === "status") {
+                    setStatus(recoveryData);
+                    onStatus?.(recoveryData);
+                  } else if (recoveryEvent.event === "done") {
+                    recoveryDone = recoveryData;
+                  }
+                }
+              }
+              if (recoveryDone?.completed === true) {
+                recovered = true;
+                doneReceived = true;
+                setIsStreaming(false);
+                setStatus({ stage: "done", label: "Complete" });
+                onDone?.({ ...recoveryDone, transportRecovered: true });
+              }
+            }
+          } catch (recoveryError) {
+            if (import.meta.env.DEV) console.warn("[Stream] Automatic transport recovery failed", recoveryError);
+          }
+        }
+        if (!recovered) {
+          setIsStreaming(false);
+          setIsRecoverableError(true);
+          setStatus({ stage: "error", label: "Answer interrupted", message: "The connection closed before the answer was confirmed complete." });
+          onDone?.({ completed: false, finishReason: "stream_closed_before_done", reason: "STREAM_CLOSED_BEFORE_DONE", canContinue: true });
+        }
       }
     } catch (e: any) {
       if (e.name !== 'AbortError' && e.message !== 'USER_CANCELLED') {

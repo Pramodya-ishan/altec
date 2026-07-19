@@ -12,6 +12,7 @@ import { normalizeLessonId, updateLessonResourceProcessing, upsertLessonResource
 import { getSourceInventory, invalidateInventoryCache } from "../sources/sourceInventoryService";
 import { createPdfQuestionPreview } from "./questionPreview";
 import { hasExactQuestionMarker } from "../ai-core/pdf/indexedQuestionSelection";
+import { questionRequiresVisualEvidence } from "./visualEvidence";
 
 import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
 
@@ -489,7 +490,7 @@ const failedDirectQaCooldown = new Map<string, number>();
 pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), async (req: any, res) => {
   try {
     const { sourceId, storagePath, prompt, questionId, questionNo, questionType, subject, year } = req.body;
-    const visualEvidenceRequested = asksForPdfVisual(prompt);
+    let visualEvidenceRequested = asksForPdfVisual(prompt);
     console.log(`[DirectPDFQA] Received request for sourceId: ${sourceId}, questionNo: ${questionNo}`);
 
     const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}`;
@@ -642,7 +643,13 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
                   .some((value) => String(value || "").toLowerCase().includes("marking"))
                   || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
               });
-              if (indexedResult.ok && indexedResult.found && !visualEvidenceRequested) return indexedResult;
+              if (indexedResult.ok && indexedResult.found) {
+                if (questionRequiresVisualEvidence(indexedResult.sourceEvidence?.questionText)) {
+                  visualEvidenceRequested = true;
+                } else if (!visualEvidenceRequested) {
+                  return indexedResult;
+                }
+              }
             }
           }
         }
@@ -666,19 +673,26 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         // full-PDF/OCR fallback below.
         const localExtraction = await extractPdfText(buffer);
         if (localExtraction.status === "PDF_PARSER_UNAVAILABLE" || localExtraction.status === "PDF_PARSER_RUNTIME_ERROR") {
-          return {
-            ok: false,
-            status: 500,
-            found: false,
-            errorCode: "PDF_PARSER_RUNTIME_ERROR",
-            stage: "PDF_PARSING",
-            message: "The PDF could not be parsed because of an internal server error.",
-            canRetry: true,
-          };
+          // PDF.js is an optimization, not the final source of truth. Gemini
+          // document vision can still read the locked PDF when the local text
+          // parser or its worker is unavailable in a serverless runtime.
+          console.warn("[DirectPDFQA] Local parser unavailable; continuing with document vision", {
+            sourceId,
+            status: localExtraction.status,
+          });
         }
 
         const directVisualLimit = Number(process.env.DIRECT_PDF_INLINE_MAX_BYTES || 10 * 1024 * 1024);
-        if (visualEvidenceRequested && buffer.length <= directVisualLimit) {
+        const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
+        const matchingPages = localExtraction.pages.filter((page: any) => hasExactQuestionMarker(page.text || page.rawText || "", targetNo));
+        const candidateText = matchingPages
+          .slice(0, 4)
+          .map((page: any) => `[Page ${page.pageNumber}]\n${page.text || page.rawText || ""}`)
+          .join("\n\n")
+          .slice(0, 90_000);
+        if (questionRequiresVisualEvidence(candidateText)) visualEvidenceRequested = true;
+
+        if (visualEvidenceRequested && (buffer.length <= directVisualLimit || Boolean(resolvedPdfUri))) {
           const visualResult = await askGeminiDirectPdfStructured({
             uid: req.user.uid,
             sourceId: sourceId || "uploaded_temp",
@@ -700,13 +714,6 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         const hasTrustedLegacyText = localExtraction.textEncoding === "legacy_fm_abhaya"
           && localExtraction.pages.some((page: any) => page.pageQuality === "legacy_convertible" && Number(page.conversionConfidence || 0) >= 0.62);
         if (localExtraction.text.trim().length >= 80 && (localExtraction.textEncoding !== "legacy_fm_abhaya" || hasTrustedLegacyText)) {
-          const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
-          const matchingPages = localExtraction.pages.filter((page: any) => hasExactQuestionMarker(page.text || page.rawText || "", targetNo));
-          const candidateText = matchingPages
-            .slice(0, 4)
-            .map((page: any) => `[Page ${page.pageNumber}]\n${page.text || page.rawText || ""}`)
-            .join("\n\n")
-            .slice(0, 90_000);
           if (candidateText.trim().length >= 80) {
             const textResult = await askGeminiExtractedTextStructured({
               uid: req.user.uid,
@@ -720,7 +727,13 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
                 .some((value) => String(value || "").toLowerCase().includes("marking"))
                 || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
             });
-            if (textResult.ok && textResult.found) return textResult;
+            if (textResult.ok && textResult.found) {
+              if (questionRequiresVisualEvidence(textResult.sourceEvidence?.questionText)) {
+                visualEvidenceRequested = true;
+              } else if (!visualEvidenceRequested) {
+                return textResult;
+              }
+            }
           }
           // No exact marker falls through to the visual PDF extractor. It must
           // not infer a question from page order.

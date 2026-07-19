@@ -4,8 +4,16 @@ import { stripRawVisualBlocks } from "../answer/stripVisualBlocks";
 import { removeUndefinedDeep } from "../memory/chatSanitizer";
 import { getAdminDb } from "../../firebase/admin";
 import { solveExtractedEssayQuestion, solveExtractedMcqQuestion } from "./solveExtractedQuestion";
-import { trackAIUsage, checkSpecificLimit } from "../../cost/usageTracker";
+import { trackAIUsage } from "../../cost/usageTracker";
 import { classifyAiError } from "../../ai/aiErrorClassifier";
+import { normalizeSinhalaExtractedText } from "../../pdf/legacySinhala";
+
+function normalizeQuestionEvidenceText(value: unknown) {
+  const raw = String(value || "").trim();
+  const normalized = normalizeSinhalaExtractedText(raw);
+  if (normalized.textEncoding === "legacy_fm_abhaya" && !normalized.normalizedText) return null;
+  return (normalized.normalizedText || raw).trim();
+}
 
 export function createDirectPdfInputPart(pdfBuffer?: Buffer, pdfUri?: string) {
   if (pdfUri) {
@@ -70,7 +78,8 @@ Return JSON only:
     "questionText": string|null,
     "options": string[]|null,
     "hasRelevantImage": boolean,
-    "imageRegion": {"x":number,"y":number,"width":number,"height":number}|null
+    "imageRegion": {"x":number,"y":number,"width":number,"height":number}|null,
+    "visualDescription": string|null
   },
   "answer": {
     "officialAnswer": string|null,
@@ -103,7 +112,7 @@ Question Number: ${questionNo}
 Source ID: ${sourceId}
 
 Return JSON with exact evidence. If not found, set found:false.
-If a diagram, graph, table, photograph, or other visual is part of the requested question, set hasRelevantImage:true and return its approximate normalized page region. Coordinates must be between 0 and 1, measured from the page's top-left. Otherwise return hasRelevantImage:false and imageRegion:null.
+If a diagram, graph, table, photograph, or other visual is part of the requested question, set hasRelevantImage:true, return its approximate normalized page region, and transcribe all relevant geometry, labels, dimensions, arrows, axes, and table values into visualDescription. Coordinates must be between 0 and 1, measured from the page's top-left. Otherwise return hasRelevantImage:false, imageRegion:null, and visualDescription:null.
 `;
 
   // [PHASE 1] Track Direct PDF QA Call
@@ -123,7 +132,8 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
       config: {
         systemInstruction,
         temperature: 0,
-        responseMimeType: "application/json"
+        responseMimeType: "application/json",
+        maxOutputTokens: 8_192,
       },
     });
 
@@ -132,6 +142,15 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
     }
 
     let result = JSON.parse(response.text.trim());
+
+    const normalizedQuestionText = normalizeQuestionEvidenceText(result?.sourceEvidence?.questionText);
+    if (result?.sourceEvidence) {
+      result.sourceEvidence.questionText = normalizedQuestionText;
+      if (Array.isArray(result.sourceEvidence.options)) {
+        const normalizedOptions = result.sourceEvidence.options.map(normalizeQuestionEvidenceText);
+        result.sourceEvidence.options = normalizedOptions.every(Boolean) ? normalizedOptions : null;
+      }
+    }
 
     // A question paper is evidence for the question, not for an official answer.
     // Never let the model upgrade its own reasoning to an official marking-scheme
@@ -190,11 +209,15 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
       console.log(`[DirectPDFQA] Triggering solver pass for ${questionType} ${questionNo}`);
       try {
         const normalizedType = String(questionType || "").toUpperCase();
+        const visualDescription = String(result.sourceEvidence?.visualDescription || "").trim();
+        const solverQuestionText = visualDescription
+          ? `${result.sourceEvidence.questionText}\n\n[Verified visual evidence from the same PDF page]\n${visualDescription}`
+          : result.sourceEvidence.questionText;
         const solved = normalizedType === "MCQ"
           ? await solveExtractedMcqQuestion({
               uid,
               sourceId,
-              questionText: result.sourceEvidence.questionText,
+              questionText: solverQuestionText,
               options: Array.isArray(result.sourceEvidence.options) ? result.sourceEvidence.options : [],
               subject,
               year,
@@ -203,7 +226,7 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
           : await solveExtractedEssayQuestion({
               uid,
               sourceId,
-              questionText: result.sourceEvidence.questionText,
+              questionText: solverQuestionText,
               subject,
               year,
               questionNo,
@@ -349,6 +372,7 @@ export async function askGeminiExtractedTextStructured(params: {
       systemInstruction,
       temperature: 0,
       responseMimeType: "application/json",
+      maxOutputTokens: 8_192,
     },
   });
 
@@ -363,8 +387,14 @@ export async function askGeminiExtractedTextStructured(params: {
     return { ok: false, found: false, errorCode: "EXTRACTED_TEXT_MODEL_INVALID_JSON", stage: "MODEL_CALL" };
   }
 
-  const questionText = String(parsed?.sourceEvidence?.questionText || "").trim();
-  const options = Array.isArray(parsed?.sourceEvidence?.options) ? parsed.sourceEvidence.options : [];
+  const questionText = normalizeQuestionEvidenceText(parsed?.sourceEvidence?.questionText) || "";
+  const optionCandidates = Array.isArray(parsed?.sourceEvidence?.options) ? parsed.sourceEvidence.options : [];
+  const normalizedOptions = optionCandidates.map(normalizeQuestionEvidenceText);
+  const options = normalizedOptions.every(Boolean) ? normalizedOptions as string[] : [];
+  if (parsed?.sourceEvidence) {
+    parsed.sourceEvidence.questionText = questionText || null;
+    parsed.sourceEvidence.options = options.length > 0 ? options : null;
+  }
   const isValidMcq = String(questionType).toUpperCase() !== "MCQ" || options.length >= 4;
   if (parsed?.found !== true || questionText.length < 20 || !isValidMcq) {
     return {

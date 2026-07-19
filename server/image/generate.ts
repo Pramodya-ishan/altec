@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { getAIClient, AI_MODELS } from "../ai/client";
 import { getAdminBucket, getAdminDb } from "../firebase/admin";
+import { resolveAuthorizedPdfSource } from "../pdf/authorizedSource";
+import { renderPdfPageCrop } from "../pdf/questionPreview";
 
 function extensionForMimeType(mimeType: string) {
   if (mimeType === "image/png") return "png";
@@ -34,6 +36,7 @@ export async function generateEducationalImage(req: any) {
       aspectRatio = "1:1",
       quality,
       referenceText,
+      referencePdf,
     } = req.body;
     const uid = req.user.uid;
 
@@ -45,8 +48,9 @@ export async function generateEducationalImage(req: any) {
     const boundedReference = String(referenceText || "").trim().slice(0, 5_000);
     const finalPrompt = [
       "Create one accurate educational image for a Sri Lankan G.C.E. A/L Technology student.",
-      "Use natural Sinhala Unicode for labels when the request is in Sinhala or Singlish.",
-      "Keep labels short, readable, correctly spelled, and free from decorative filler.",
+      "Do not render Sinhala words inside the raster image because generated Sinhala glyphs can be corrupted.",
+      "Use only universally safe symbols, variables, arrows, numbers, SI units, and short Latin labels inside the image (for example F, R, W, θ, x, y). The app will present Sinhala explanation outside the image.",
+      "Keep any unavoidable labels short, readable, correctly spelled, and free from decorative filler.",
       "Use a clean white or very light background, strong visual hierarchy, and exam-focused content.",
       "Do not add watermarks, logos, fake citations, or unsupported facts.",
       `Subject: ${subject || "Technology"}`,
@@ -55,6 +59,21 @@ export async function generateEducationalImage(req: any) {
       `User request: ${prompt}`,
       boundedReference ? `Relevant previous answer/context:\n${boundedReference}` : "",
     ].filter(Boolean).join("\n\n");
+
+    let referenceImagePart: any = null;
+    if (referencePdf?.sourceId && referencePdf?.pageNumber) {
+      try {
+        const resolved = await resolveAuthorizedPdfSource(req.user, referencePdf.sourceId, referencePdf.storagePath);
+        const [pdfBytes] = await getAdminBucket().file(resolved.path).download();
+        const crop = await renderPdfPageCrop(pdfBytes, Number(referencePdf.pageNumber), referencePdf.crop || null);
+        referenceImagePart = { inlineData: { mimeType: "image/png", data: crop.png.toString("base64") } };
+      } catch (referenceError) {
+        console.warn("[ImageGeneration] PDF reference image unavailable", {
+          sourceId: referencePdf?.sourceId,
+          error: String(referenceError),
+        });
+      }
+    }
 
     let configuredModel = AI_MODELS.image;
     if (mode === "studio" || mode === "pro" || quality === "high" || quality === "4K") {
@@ -86,6 +105,7 @@ export async function generateEducationalImage(req: any) {
       try {
         modelUsed = modelName;
         if (modelName.toLowerCase().startsWith("imagen")) {
+          if (referenceImagePart) continue;
           const response = await ai.models.generateImages({
             model: modelName,
             prompt: finalPrompt,
@@ -103,7 +123,13 @@ export async function generateEducationalImage(req: any) {
         } else {
           const response = await ai.models.generateContent({
             model: modelName,
-            contents: [{ role: "user", parts: [{ text: finalPrompt }] }],
+            contents: [{
+              role: "user",
+              parts: [
+                ...(referenceImagePart ? [referenceImagePart, { text: "Use this verified PDF question crop as the visual source. Preserve its geometry and dimensions; do not invent hidden details." }] : []),
+                { text: finalPrompt },
+              ],
+            }],
             config: {
               responseModalities: ["IMAGE", "TEXT"],
               imageConfig: { aspectRatio },
@@ -184,7 +210,8 @@ export async function generateEducationalImage(req: any) {
       mimeType: outputMimeType,
       model: modelUsed,
       promptUsed: prompt,
-      imageId
+      imageId,
+      referenceUsed: Boolean(referenceImagePart),
     };
 
   } catch (error: any) {

@@ -31,7 +31,7 @@ GOOGLE_APPLICATION_CREDENTIALS_JSON={"type": "service_account", ...}
 
 GEMINI_DEFAULT_MODEL=gemini-3.5-flash
 GEMINI_FAST_MODEL=gemini-3.5-flash
-GEMINI_PDF_QA_MODEL=gemini-3.5-flash
+GEMINI_PDF_QA_MODEL=gemini-3.1-pro-preview
 GEMINI_FINAL_MODEL=gemini-3.1-pro-preview
 
 ENABLE_TTS=false

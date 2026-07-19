@@ -42,6 +42,9 @@ export interface ConversationState {
   selectedQuestionType?: SourceQuestionType | null;
   pendingSourceChoices?: PendingSourceChoice[];
   awaitingSourceSelection?: boolean;
+  pendingMistakeChoices?: string[];
+  awaitingMistakeSelection?: boolean;
+  activeMistakeId?: string | null;
   selectedQuestionId: string | null;
   currentQuestionIndex: number | null;
   requestedResourceType: string | null;
@@ -73,6 +76,9 @@ export async function getConversationState(uid: string): Promise<ConversationSta
     selectedQuestionType: null,
     pendingSourceChoices: [],
     awaitingSourceSelection: false,
+    pendingMistakeChoices: [],
+    awaitingMistakeSelection: false,
+    activeMistakeId: null,
     selectedQuestionId: null,
     currentQuestionIndex: null,
     requestedResourceType: null,
@@ -114,6 +120,9 @@ export async function resetConversationState(uid: string): Promise<ConversationS
     selectedQuestionType: null,
     pendingSourceChoices: [],
     awaitingSourceSelection: false,
+    pendingMistakeChoices: [],
+    awaitingMistakeSelection: false,
+    activeMistakeId: null,
     selectedQuestionId: null,
     currentQuestionIndex: null,
     requestedResourceType: null,

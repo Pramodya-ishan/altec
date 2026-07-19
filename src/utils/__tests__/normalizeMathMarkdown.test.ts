@@ -9,4 +9,7 @@ assert.equal(normalizedSinhala.includes("ප්රශ්නය"), false);
 const math = normalizeMathMarkdown("$P = h\u200D\\rho g$");
 assert.equal(math.includes("\u200D"), false, "ZWJ must be removed inside KaTeX segments");
 
+const friction = normalizeMathMarkdown("$\\mus = 0.4$");
+assert.ok(friction.includes("\\mu_s"), friction);
+
 console.log("Math Markdown Sinhala tests passed.");

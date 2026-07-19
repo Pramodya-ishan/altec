@@ -85,6 +85,7 @@ type SavedChatHistoryItem = {
   createdAt?: string;
   sources?: any[];
   summary?: string[];
+  answerCompleted?: boolean;
 };
 
 function flattenSavedHistory(history: SavedChatHistoryItem[]) {
@@ -103,10 +104,11 @@ function flattenSavedHistory(history: SavedChatHistoryItem[]) {
         role: 'assistant',
         content: extracted.cleanText,
         id: item.userPrompt ? `${baseId}_assistant` : baseId,
+        serverMessageId: baseId,
         sources: item.sources || [],
         summary: item.summary || [],
         createdAt: item.createdAt || new Date().toISOString(),
-        status: 'done',
+        status: item.answerCompleted === false ? 'incomplete' : 'done',
         visualBlocks: extracted.blocks,
       });
     }
@@ -164,6 +166,7 @@ const [messages, setMessages] = useState<{
     role: 'user' | 'assistant',
     content: string,
     id: string,
+    serverMessageId?: string,
     summary?: string[],
     sources?: any[],
     status?: string,
@@ -986,6 +989,7 @@ const [messages, setMessages] = useState<{
       replyTo: replyingTo,
       summary: [] as string[],
       sources: lastAssistantMessage.sources || [],
+      serverMessageId: lastAssistantMessage.serverMessageId,
       createdAt: new Date().toISOString(),
       webCandidates: [] as any[]
     };
@@ -1002,7 +1006,7 @@ const [messages, setMessages] = useState<{
        originalPrompt: originalPrompt || continuePrompt,
        previousAssistantText: lastAssistantMessage.content,
        sources: lastAssistantMessage.sources || [],
-       chatId: lastAssistantMessage.id || undefined,
+       chatId: lastAssistantMessage.serverMessageId || lastAssistantMessage.id || undefined,
        reason: "incomplete",
        assistantMessageId: assistantMsgId,
        onToken: (text) => {
@@ -1070,6 +1074,7 @@ const [messages, setMessages] = useState<{
                return {
                  ...m,
                  status: data?.completed === false ? "incomplete" : "done",
+                 serverMessageId: lastAssistantMessage.serverMessageId || m.serverMessageId,
                  visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
                };
              }
@@ -1197,9 +1202,26 @@ const [messages, setMessages] = useState<{
 
     if (parsedCommand.command === 'image' || isClientImageGenerationIntent(userMsg, Boolean(imagePayload))) {
       try {
-        const referenceText = [...messages]
+        const referenceMessage = [...messages]
           .reverse()
-          .find((message) => message.role === 'assistant' && message.content)?.content || '';
+          .find((message) => message.role === 'assistant' && (message.content || message.paperInfo || message.visualBlocks?.length));
+        const referenceText = referenceMessage?.content || '';
+        const pdfPreview = referenceMessage?.visualBlocks?.find((block: any) => block?.type === 'pdf_image_preview');
+        const evidence = referenceMessage?.paperInfo?.sourceEvidence;
+        const referencePdf = (pdfPreview?.sourceId && pdfPreview?.pageNumber)
+          ? {
+              sourceId: pdfPreview.sourceId,
+              storagePath: pdfPreview.storagePath,
+              pageNumber: pdfPreview.pageNumber,
+              crop: pdfPreview.crop || null,
+            }
+          : (referenceMessage?.paperInfo?.sourceId && evidence?.pageNumber)
+            ? {
+                sourceId: referenceMessage.paperInfo.sourceId,
+                pageNumber: evidence.pageNumber,
+                crop: evidence.imageRegion || null,
+              }
+            : null;
         const imageRes = await apiFetch(apiUrl("/api/image/generate"), {
           method: "POST",
           headers: {
@@ -1208,8 +1230,9 @@ const [messages, setMessages] = useState<{
           },
           body: JSON.stringify({
             prompt: parsedCommand.command === 'image' ? parsedCommand.text : userMsg,
-            subject: undefined,
+            subject: referenceMessage?.paperInfo?.subject || currentSubject,
             referenceText: String(referenceText).slice(0, 5_000),
+            referencePdf,
             aspectRatio: "4:3",
           })
         });
@@ -1379,7 +1402,6 @@ const [messages, setMessages] = useState<{
             return;
           }
 
-          const bufferedContent = bufferedAnswerRef.current.get(assistantMsgId) || "";
           setMessages(prev => prev.map(m => {
             if (m.id !== assistantMsgId) return m;
             return {
@@ -1387,6 +1409,7 @@ const [messages, setMessages] = useState<{
               status: "streaming",
               paperInfo: data?.paperInfo || m.paperInfo,
               errorCode: data?.errorCode,
+              serverMessageId: data?.messageId || m.serverMessageId,
               generatedImage: data?.image?.imageUrl ? { url: data.image.imageUrl, storagePath: data.image.storagePath, model: data.image.model, alt: userMsg } : m.generatedImage,
               visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
               sources: Array.isArray(data?.sources) && data.sources.length > 0
@@ -1394,7 +1417,11 @@ const [messages, setMessages] = useState<{
                 : m.sources,
             };
           }));
-          const finalStatus = (data?.finishReason === "direct_pdf_qa_failed" || data?.completed === false) ? "error" : "done";
+          const finalStatus = data?.finishReason === "direct_pdf_qa_failed"
+            ? "error"
+            : data?.completed === false
+              ? "incomplete"
+              : "done";
           revealBufferedAnswer(assistantMsgId, finalStatus, (revealedContent) => {
             if (isVoiceFeedbackEnabled && revealedContent) speakText(revealedContent, assistantMsgId);
           });
@@ -1603,6 +1630,7 @@ const [messages, setMessages] = useState<{
                       onReply={(message) => setReplyingTo({ id: message.id, role: message.role, content: String(message.content || '').slice(0, 1200) })}
                       onSuggestionClick={(suggestion) => setInput(suggestion)}
                       onRetryImage={(prompt) => { setInput(prompt); requestAnimationFrame(() => document.getElementById('clora-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }))); }}
+                      onContinue={msg.status === 'incomplete' ? handleContinue : undefined}
                       onToolClick={(tool) => {
                          if (tool === 'sources') {
                             setActiveSources(msg.sources || []);

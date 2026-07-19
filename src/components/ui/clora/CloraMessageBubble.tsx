@@ -12,6 +12,7 @@ interface CloraMessageBubbleProps {
   onReply?: (message: any) => void;
   onSuggestionClick?: (suggestion: string) => void;
   onRetryImage?: (prompt: string) => void;
+  onContinue?: () => void;
 }
 
 function ReplyPreview({ replyTo }: { replyTo: any }) {
@@ -50,6 +51,7 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
   onReply,
   onSuggestionClick,
   onRetryImage,
+  onContinue,
 }: CloraMessageBubbleProps) {
   const isUser = message.role === 'user';
   const displayContent = isUser ? String(message.content || '') : sanitizeAssistantDisplayText(message.content);
@@ -104,6 +106,9 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
 
   const showThinking = isStreaming && !message.content;
   const generatedImage = message.generatedImage;
+  const generatedImageCaption = /[\u0D80-\u0DFF]/u.test(String(generatedImage?.alt || message.imagePrompt || ""))
+    ? "අධ්‍යාපනික රූපය"
+    : "Generated educational visual";
 
   return (
     <motion.div layout initial={isStreaming ? { opacity: 1 } : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: isStreaming ? 0 : 0.2 }} className="group mb-9 flex w-full min-w-0 justify-start">
@@ -124,7 +129,7 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
           {generatedImage?.url && (
             <figure className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
               <img src={generatedImage.url} alt={generatedImage.alt || 'Generated educational image'} className="block h-auto max-h-[680px] w-full object-contain" loading="lazy" />
-              <figcaption className="flex items-center gap-2 px-3 py-2 text-xs text-slate-500"><ImageIcon className="h-3.5 w-3.5" /> Generated educational visual</figcaption>
+              <figcaption className="flex items-center gap-2 px-3 py-2 text-xs text-slate-500"><ImageIcon className="h-3.5 w-3.5" /> {generatedImageCaption}</figcaption>
             </figure>
           )}
 
@@ -138,6 +143,15 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
           {message.content && (
             <div lang={/[\u0D80-\u0DFF]/u.test(displayContent) ? 'si' : 'en'} className="sinhala-rendering prose prose-slate min-w-0 max-w-none text-[15px] leading-7 text-slate-800 [overflow-wrap:anywhere] [word-break:normal] prose-headings:mb-3 prose-headings:mt-6 prose-p:my-3 prose-pre:max-w-full prose-pre:overflow-x-auto prose-table:block prose-table:max-w-full prose-table:overflow-x-auto">
               <MathMarkdown content={displayContent} isStreaming={message.status === 'typing'} />
+            </div>
+          )}
+
+          {message.status === 'incomplete' && (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
+              <span>පිළිතුරේ කොටසක් අතරමඟ නතර වුණා. ලැබුණු කොටස සුරැකී ඇත.</span>
+              <button type="button" onClick={onContinue} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold shadow-sm ring-1 ring-amber-200 hover:bg-amber-100">
+                <RotateCcw className="h-3.5 w-3.5" /> ඉතිරි කොටස සම්පූර්ණ කරන්න
+              </button>
             </div>
           )}
 
@@ -179,4 +193,5 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
   && previous.message.visualBlocks?.length === next.message.visualBlocks?.length
   && previous.message.suggestions?.join('|') === next.message.suggestions?.join('|')
   && previous.message.generatedImage?.url === next.message.generatedImage?.url
+  && previous.onContinue === next.onContinue
 ));

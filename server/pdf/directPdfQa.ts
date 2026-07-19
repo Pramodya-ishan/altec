@@ -46,6 +46,7 @@ Instructions:
     config: {
       systemInstruction,
       temperature: 0.1,
+      maxOutputTokens: 12_288,
     },
   });
 
@@ -124,6 +125,7 @@ Instructions:
       config: {
         systemInstruction,
         temperature: 0.2, // Lower temperature for more factual answers
+        maxOutputTokens: 12_288,
       },
     });
 

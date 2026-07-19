@@ -1,4 +1,6 @@
 import { QuestionEvidence } from "./evidenceTypes";
+import { detectSinhalaTextEncoding } from "../../pdf/legacySinhala";
+import { questionRequiresVisualEvidence } from "../../pdf/visualEvidence";
 
 export function validateQuestionEvidence(evidence: QuestionEvidence, request: { year?: string | null, subject?: string | null, questionNo?: string | null, questionType?: string | null }) {
   if (!evidence) return { ok: false, reason: "NO_EVIDENCE" };
@@ -16,6 +18,14 @@ export function validateQuestionEvidence(evidence: QuestionEvidence, request: { 
   }
 
   if (!evidence.questionText || evidence.questionText.length < 20) return { ok: false, reason: "INSUFFICIENT_QUESTION_TEXT" };
+  if (detectSinhalaTextEncoding(evidence.questionText).encoding === "legacy_fm_abhaya") {
+    return { ok: false, reason: "LEGACY_SINHALA_CACHE_REQUIRES_REPROCESSING" };
+  }
+  if (questionRequiresVisualEvidence(evidence.questionText)
+    && !(evidence as any).visualDescription
+    && !(evidence as any).imageRegion) {
+    return { ok: false, reason: "VISUAL_QUESTION_CACHE_MISSING_IMAGE_EVIDENCE" };
+  }
   if (evidence.confidence < 0.7) return { ok: false, reason: "LOW_CONFIDENCE" };
   if (evidence.validationStatus === "rejected") return { ok: false, reason: "EVIDENCE_REJECTED" };
 

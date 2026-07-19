@@ -17,12 +17,28 @@ import { MessageRenderer } from "./MessageRenderer";
 import type { VisualBlock } from "../../lib/visualBlocks";
 import { auth } from "../../lib/firebase";
 import { apiUrl } from "../../lib/apiBase";
+import { useAuthenticatedImage } from "../../hooks/useAuthenticatedImage";
 
 interface VisualBlockRendererProps {
   block: VisualBlock;
 }
 
 type PdfPreviewBlock = Extract<VisualBlock, { type: "pdf_image_preview" }>;
+type MistakePreviewBlock = Extract<VisualBlock, { type: "mistake_image_preview" }>;
+
+function MistakeImagePreview({ block }: { block: MistakePreviewBlock }) {
+  const endpoint = `/api/student/mistakes/${encodeURIComponent(block.mistakeId)}/image?owner=${encodeURIComponent(block.ownerPath || "uid")}`;
+  const { url: imageUrl, failed } = useAuthenticatedImage(endpoint);
+
+  if (failed) return <p className="my-3 text-xs text-slate-500">Saved error image could not be opened.</p>;
+  if (!imageUrl) return <div className="my-4 h-40 max-w-2xl animate-pulse rounded-xl bg-slate-100" aria-label="Loading saved error image" />;
+  return (
+    <figure className="my-4 max-w-2xl">
+      <img src={imageUrl} alt={block.title || "Saved error image"} className="block max-h-[620px] w-auto max-w-full rounded-xl object-contain" />
+      <figcaption className="mt-2 flex items-center gap-1.5 text-xs text-slate-500"><ImageIcon className="h-3.5 w-3.5" />{block.caption || block.title}</figcaption>
+    </figure>
+  );
+}
 
 function PdfImagePreview({ block }: { block: PdfPreviewBlock }) {
   const [imageUrl, setImageUrl] = useState(block.imageUrl);
@@ -102,6 +118,44 @@ export function VisualBlockRenderer({ block }: VisualBlockRendererProps) {
 
     case "pdf_image_preview":
       return <PdfImagePreview block={block} />;
+
+    case "mistake_image_preview":
+      return <MistakeImagePreview block={block} />;
+
+    case "mechanics_diagram":
+      return (
+        <figure className="my-5 max-w-4xl rounded-2xl border border-slate-200 bg-white p-4">
+          <PanelTitle icon={<ArrowRight className="h-4 w-4" />}>{block.title || "නිදහස් බල රූපසටහන"}</PanelTitle>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            {block.scenes.map((scene, index) => {
+              const angle = Math.max(0, Math.min(75, Number(scene.angleDeg) || 0));
+              const radians = angle * Math.PI / 180;
+              const endX = 230 + Math.cos(radians) * 92;
+              const endY = 88 - Math.sin(radians) * 92;
+              return (
+                <div key={`${scene.title}-${index}`} className="rounded-xl bg-slate-50 p-3 ring-1 ring-slate-100">
+                  <p className="mb-2 text-xs font-bold text-slate-700">{scene.title} · {scene.surface === "rough" ? "රළු පෘෂ්ඨය" : "සුමට පෘෂ්ඨය"}</p>
+                  <svg viewBox="0 0 360 210" role="img" aria-label={`${scene.massKg} kg mass with applied force ${scene.appliedForceN} N`} className="h-auto w-full">
+                    <defs>
+                      <marker id={`arrow-${index}`} markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="currentColor" /></marker>
+                    </defs>
+                    <line x1="25" y1="145" x2="335" y2="145" stroke="#64748b" strokeWidth="3" />
+                    {scene.surface === "rough" && Array.from({ length: 13 }).map((_, mark) => <line key={mark} x1={35 + mark * 23} y1="145" x2={25 + mark * 23} y2="158" stroke="#94a3b8" strokeWidth="1.5" />)}
+                    <rect x="145" y="88" width="85" height="57" rx="5" fill="#fff" stroke="#0f172a" strokeWidth="2.5" />
+                    <text x="187.5" y="121" textAnchor="middle" fontSize="15" fontWeight="700" fill="#0f172a">{scene.massKg} kg</text>
+                    <g color="#2563eb"><line x1="187" y1="88" x2="187" y2="28" stroke="currentColor" strokeWidth="3" markerEnd={`url(#arrow-${index})`} /><text x="196" y="39" fontSize="14" fontWeight="700" fill="currentColor">R</text></g>
+                    <g color="#dc2626"><line x1="187" y1="145" x2="187" y2="198" stroke="currentColor" strokeWidth="3" markerEnd={`url(#arrow-${index})`} /><text x="197" y="191" fontSize="14" fontWeight="700" fill="currentColor">W = mg</text></g>
+                    <g color="#059669"><line x1="230" y1="88" x2={endX} y2={endY} stroke="currentColor" strokeWidth="3" markerEnd={`url(#arrow-${index})`} /><text x={Math.min(306, endX - 4)} y={Math.max(20, endY - 8)} textAnchor="end" fontSize="13" fontWeight="700" fill="currentColor">F = {scene.appliedForceN} N</text></g>
+                    {angle > 0 && <><path d="M260 88 A30 30 0 0 0 250 69" fill="none" stroke="#475569" strokeWidth="1.5" /><text x="261" y="72" fontSize="12" fill="#334155">θ = {angle}°</text></>}
+                    {scene.surface === "rough" && <g color="#d97706"><line x1="145" y1="124" x2="78" y2="124" stroke="currentColor" strokeWidth="3" markerEnd={`url(#arrow-${index})`} /><text x="83" y="113" fontSize="13" fontWeight="700" fill="currentColor">fₛ(max) = {scene.frictionN} N</text></g>}
+                  </svg>
+                </div>
+              );
+            })}
+          </div>
+          {block.caption && <figcaption className="mt-3 text-xs leading-relaxed text-slate-500">{block.caption}</figcaption>}
+        </figure>
+      );
 
     case "coordinate_plane":
       return (

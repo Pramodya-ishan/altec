@@ -28,6 +28,12 @@ import { getSubjectSyllabusGroundingPdf } from "../pdf/syllabusGrounding";
 import { extractQuestionNumberFromPrompt, inferQuestionTypeFromText, parseSourceChoiceIndex, rankNamedSources, selectNamedSource, toPendingSourceChoice } from "./sourceSelection";
 import { isMistakeReviewIntent } from "../firebase/mistakeStore";
 import { detectSinhalaTextEncoding, normalizeSinhalaExtractedText } from "../pdf/legacySinhala";
+import {
+  assessAnswerCompleteness,
+  buildContinuationInstruction,
+  getModelFinishReason,
+  mergeContinuationText,
+} from "./answerCompleteness";
 
 interface StreamTrace {
   requestId: string;
@@ -43,6 +49,9 @@ interface StreamTrace {
   lastEvent?: string;
   chatSaved: boolean;
   messageId?: string;
+  modelFinishReason?: string;
+  completionPasses?: number;
+  incompleteReasons?: string[];
 }
 
 export const lastStreamTraces: StreamTrace[] = [];
@@ -92,21 +101,32 @@ async function safeCall<T>(
 
 function getTemperature(mode: string) {
   switch (mode) {
+    case 'paper_question_qa':
+    case 'uploaded_pdf_question_qa':
+    case 'uploaded_pdf_qa':
+    case 'rag_qa':
+    case 'marking_scheme_request': return 0.1;
     case 'today_plan': return 0.25;
     case 'study_plan': return 0.25;
-    case 'tutor_explanation': return 0.35;
-    case 'notes_generation': return 0.3;
-    case 'quiz_generation': return 0.35;
-    case 'past_paper_search': return 0.2;
-    default: return 0.4;
+    case 'tutor_explanation': return 0.2;
+    case 'notes_generation': return 0.2;
+    case 'quiz_generation': return 0.25;
+    case 'past_paper_search': return 0.1;
+    default: return 0.25;
   }
 }
 
-function getMaxTokens(mode: string) {
+export function getMaxTokens(mode: string) {
   if (mode === "uploaded_pdf_question_qa" || mode === "uploaded_pdf_qa" || mode === "rag_qa" || mode === "paper_question_qa") {
-    return 8192;
+    return 16_384;
   }
-  return 2000;
+  if (["notes_generation", "study_plan", "quiz_generation", "tutor_explanation", "marking_scheme_request"].includes(mode)) {
+    return 12_288;
+  }
+  // The old 2,000-token default silently cut otherwise valid explanations.
+  // A generous default is intentional: the model may still answer concisely,
+  // but it is no longer forced to stop before every requested item is covered.
+  return 8_192;
 }
 
 function chooseModel(mode: string) {
@@ -120,7 +140,7 @@ export type SaveChatResult = {
   errorMessage?: string;
 };
 
-export async function saveFinalChat(params: {uid: string, email?: string, userText: string, assistantText: string, mode: string, subject?: string, sources?: any[]}): Promise<SaveChatResult> {
+export async function saveFinalChat(params: {uid: string, email?: string, userText: string, assistantText: string, mode: string, subject?: string, sources?: any[], completion?: { completed: boolean; finishReason?: string | null; completionPasses?: number; missingSubparts?: string[]; reasons?: string[] }}): Promise<SaveChatResult> {
   // Always strip visual blocks before saving to history
   params.assistantText = sanitizeAssistantText(stripRawVisualBlocks(params.assistantText));
 
@@ -146,7 +166,12 @@ export async function saveFinalChat(params: {uid: string, email?: string, userTe
         badge: s.badge || null
       })).filter(s => s.id || s.title),
       createdAt: timestamp,
-      chatSaved: true
+      chatSaved: true,
+      answerCompleted: params.completion?.completed ?? true,
+      modelFinishReason: params.completion?.finishReason || null,
+      completionPasses: params.completion?.completionPasses || 0,
+      missingSubparts: params.completion?.missingSubparts || [],
+      incompleteReasons: params.completion?.reasons || [],
     });
 
     const historyRef = db.collection("users").doc(params.uid).collection("chat_history").doc(requestId);
@@ -194,12 +219,15 @@ export async function aiRespondStream(req: any, res: any) {
       // ignore
     }
   }, 10000);
-  req.on("close", () => {
+  const markClientClosed = () => {
+    if (res.writableEnded || trace.doneSent) return;
     cancelRequest(requestId);
     console.log(`[STREAM] STREAM_CLIENT_CLOSED requestId=${requestId}`);
     trace.clientClosed = true;
     trace.endedAt = new Date().toISOString();
-  });
+  };
+  req.on("aborted", markClientClosed);
+  res.on("close", markClientClosed);
 
   try {
     const { prompt: submittedPrompt, activeSubject, mode: requestedMode = "auto", history = [], image, attachments } = req.body;
@@ -379,6 +407,45 @@ ${originalPrompt}`;
 
     const activeConversationState = await getConversationState(user.uid);
     const normalizedFollowUp = String(prompt || "").trim().toLowerCase();
+    let selectedMistakeRecord: any = null;
+
+    // A numeric reply after the Error Log list selects that record before any
+    // active PDF can reinterpret the same number as Q1/Q2. This is the exact
+    // ambiguity that previously sent record “2” into scanned-PDF QA.
+    const pendingMistakeIds = Array.isArray(activeConversationState.pendingMistakeChoices)
+      ? activeConversationState.pendingMistakeChoices
+      : [];
+    const mistakeChoiceMatch = activeConversationState.awaitingMistakeSelection
+      ? String(prompt || "").trim().match(/^(\d{1,3})[.)]?[?.!]*$/u)
+      : null;
+    if (mistakeChoiceMatch) {
+      const mistakeChoiceIndex = Number(mistakeChoiceMatch[1]) - 1;
+      const selectedMistakeKey = pendingMistakeIds[mistakeChoiceIndex];
+      if (selectedMistakeKey) {
+        const { loadMistakeRecords } = await import("../firebase/mistakeStore");
+        const records = await loadMistakeRecords(user.uid, user.email, 100);
+        const keyMatch = String(selectedMistakeKey).match(/^(uid|legacy_email):(.*)$/u);
+        const selectedOwner = keyMatch?.[1] || "";
+        const selectedMistakeId = keyMatch?.[2] || selectedMistakeKey;
+        selectedMistakeRecord = records.find((record: any) => String(record.id) === String(selectedMistakeId)
+          && (!selectedOwner || String(record.ownerPath || "uid") === selectedOwner)) || null;
+      }
+      if (selectedMistakeRecord) {
+        const selectedSubject = String(selectedMistakeRecord.subject || activeSubject || "SFT").toUpperCase();
+        const selectedLesson = String(selectedMistakeRecord.lesson || "පාඩම සඳහන් කර නැහැ");
+        const selectedDetail = String(selectedMistakeRecord.errorText || selectedMistakeRecord.questionText || "Image-only saved mistake");
+        prompt = `මගේ Error Log එකේ තෝරාගත් record එක විශ්ලේෂණය කරන්න. Subject: ${selectedSubject}. Lesson: ${selectedLesson}. Saved note: ${selectedDetail}. Saved image එක තිබේ නම් එය කියවා, ප්‍රශ්නය, මට වැරදෙන්න ඇති හේතුව, නිවැරදි පියවර, අවසාන පිළිතුර සහ සමාන පුහුණු ප්‍රශ්නයක් දෙන්න.`;
+        route.mode = "tutor_explanation";
+        route.entities = { ...(route.entities || {}), subject: selectedSubject as any, activeSourceId: undefined };
+        route.answerHints = { ...(route.answerHints || {}), mustUseRag: false, mustUseGoogleSearch: false, mustAskClarification: false };
+        await updateConversationState(user.uid, {
+          pendingMistakeChoices: [],
+          awaitingMistakeSelection: false,
+          activeMistakeId: selectedMistakeRecord.id,
+          lastIntent: "mistake_record_review",
+        });
+      }
+    }
 
     // Numeric replies immediately after a PDF list select that exact displayed
     // source. They are not interpreted as a question number until selection is
@@ -485,6 +552,77 @@ ${originalPrompt}`;
       }
     }
     const selectedSourceId = activeConversationState.selectedSourceId || activeConversationState.activeSourceIds?.[0] || null;
+
+    // “full paper lesson name + point name” is a document-wide operation, not
+    // a request for whichever question happened to be active last. Lock the
+    // selected PDF and analyze every question/section in one grounded pass.
+    const { isPaperOutlineIntent, analyzeSelectedPaperOutline, formatPaperOutlineMarkdown } = await import("../pdf/paperOutline");
+    if (selectedSourceId && isPaperOutlineIntent(prompt)) {
+      emitSse(res, "status", { step: "paper_outline", status: "reading", message: "Reading the complete selected paper…" });
+      try {
+        const { getSourceInventory } = await import("../sources/sourceInventoryService");
+        const inventory = await getSourceInventory({
+          uid: user.uid,
+          subject: activeConversationState.selectedSourceSubject || activeSubject || undefined,
+          isAdmin: user.roles?.includes("admin") || user.admin === true,
+        });
+        const source = (inventory.all || []).find((candidate: any) =>
+          String(candidate.id || candidate.sourceId) === String(selectedSourceId),
+        );
+        if (!source) throw Object.assign(new Error("The selected PDF is no longer available in your source inventory."), { code: "SELECTED_PDF_NOT_FOUND" });
+
+        const outline = await analyzeSelectedPaperOutline({ uid: user.uid, source, prompt });
+        const answer = sanitizeAssistantText(formatPaperOutlineMarkdown(outline));
+        const outlineSources = [{
+          id: source.id || source.sourceId,
+          sourceId: source.id || source.sourceId,
+          title: source.title || source.fileName || outline.sourceTitle,
+          storagePath: source.storagePath || null,
+          badge: "Selected PDF",
+          usedInAnswer: true,
+        }];
+        emitSse(res, "sources", { sources: outlineSources });
+        emitSse(res, "token", { text: answer });
+        const chatRes = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: answer,
+          mode: "selected_paper_outline",
+          subject: activeConversationState.selectedSourceSubject || activeSubject,
+          sources: outlineSources,
+        });
+        await updateConversationState(user.uid, { lastIntent: "selected_paper_outline" });
+        trace.completed = true;
+        trace.chatSaved = chatRes.chatSaved;
+        trace.messageId = chatRes.messageId;
+        emitSse(res, "done", {
+          ok: true,
+          completed: true,
+          requestId,
+          messageId: chatRes.messageId || null,
+          chatSaved: chatRes.chatSaved,
+          sources: outlineSources,
+          finishReason: "selected_paper_outline_complete",
+        });
+        trace.doneSent = true;
+        return;
+      } catch (outlineError: any) {
+        const answer = `තෝරාගත් PDF එකේ සම්පූර්ණ lesson/point mapping එක ලබාගැනීමට නොහැකි වුණා. ${String(outlineError?.message || "PDF evidence could not be read.")}`;
+        emitSse(res, "token", { text: answer });
+        emitSse(res, "done", {
+          ok: false,
+          completed: true,
+          requestId,
+          errorCode: outlineError?.code || "PAPER_OUTLINE_FAILED",
+          finishReason: "selected_paper_outline_failed",
+        });
+        trace.completed = true;
+        trace.doneSent = true;
+        return;
+      }
+    }
+
     if (selectedSourceId && /^[?？]+$/.test(String(prompt || "").trim())) {
       const title = activeConversationState.selectedSourceTitle || "තෝරාගත් PDF එක";
       const current = activeConversationState.currentQuestionIndex ? ` දැනට තෝරාගෙන ඇත්තේ ප්‍රශ්නය ${activeConversationState.currentQuestionIndex}.` : "";
@@ -810,7 +948,7 @@ ${originalPrompt}`;
     // Do not ask the model to decide whether the notebook is empty. The server
     // has already merged current UID records with legacy email-keyed records.
     const isMistakeWriteRequest = /(?:save|add|log|record|store|සේව්|සුරකි|එකතු)\s+(?:this|it|මේ|මෙය|mistake|error)/iu.test(String(prompt || ""));
-    if (isMistakeReviewIntent(prompt) && !isMistakeWriteRequest) {
+    if (isMistakeReviewIntent(prompt) && !isMistakeWriteRequest && !selectedMistakeRecord) {
       emitSse(res, "status", { step: "mistake_notebook", status: "reading", message: "Reading your saved Error Log…" });
       const records = Array.isArray(userContext?.recentMistakes) ? userContext.recentMistakes.slice(0, 12) : [];
       let answerText = `### Error Log\n\n`;
@@ -827,6 +965,12 @@ ${originalPrompt}`;
           return `**${index + 1}. ${subject} — ${lesson}**${imageNote}${repeatNote}\n\n${detail}`;
         }).join("\n\n");
         answerText += "\n\nසාකච්ඡා කරන්න ඕන record අංකය දෙන්න. මම ඒ saved record එකේ ප්‍රශ්නය, වැරදුණු හේතුව, නිවැරදි ක්‍රමය සහ නැවත පුහුණු ප්‍රශ්නය දෙන්නම්.";
+        await updateConversationState(user.uid, {
+          pendingMistakeChoices: records.map((record: any) => `${record.ownerPath || "uid"}:${record.id}`),
+          awaitingMistakeSelection: true,
+          activeMistakeId: null,
+          lastIntent: "mistake_notebook",
+        });
       }
       emitSse(res, "token", { text: answerText });
       trace.lastEvent = "token";
@@ -1341,7 +1485,7 @@ ${originalPrompt}`;
           let composedAnswer = "";
           if (route.mode === "pdf_link_request") {
             const pSrc = resolution.paperSource;
-            composedAnswer = `✅ **ඔයා හෙව්ව PDF එක හමු වුණා!**\n\n📌 **${pSrc?.title}**\n- **Subject:** ${requestedSubject}\n- **Year:** ${requestedYear}\n- **Source:** Local Verified Store 🏛️\n\n📥 **Download Link:** [මත ක්ලික් කරන්න](${pSrc?.url || `/api/rag/sources/${pSrc?.id}/download`})\n\nමෙම ලින්ක් එක පැය 24 පුරාම සක්‍රීයව පවතිනවා.`;
+            composedAnswer = `✅ **ඔයා හෙව්ව PDF එක හමු වුණා.**\n\n📌 **${pSrc?.title}**\n- **Subject:** ${requestedSubject}\n- **Year:** ${requestedYear}\n- **Source:** සත්‍යාපිත local source\n\n📥 [PDF එක ආරක්ෂිතව විවෘත කරන්න](${pSrc?.url || `/api/rag/sources/${pSrc?.id}/download`})`;
           } else {
             const { composeMarkingSchemeAnswer } = await import("./markingSchemeResolver");
             composedAnswer = composeMarkingSchemeAnswer({
@@ -1352,7 +1496,10 @@ ${originalPrompt}`;
               markingSchemeSource: resolution.markingSchemeSource,
               syllabusSource: resolution.syllabusSource,
               paperStructureSource: resolution.paperStructureSource,
-              questionText: `G.C.E. A/L ${requestedYear} ${requestedSubject} විභාගයේ ${requestedQuestionNo || "Q1"} ප්‍රශ්නයට අදාළ පිළිතුර මෙසේය.`,
+              // Do not manufacture a generic sentence and label it as the
+              // exact paper question. The verified answer blocks can stand on
+              // their own when the question wording was not extracted here.
+              questionText: undefined,
               officialAnswer: resolution.bestTextBlocks.join("\n\n") || "නිල ලකුණු දීමේ පටිපාටියට අනුකූල පිළිතුර.",
               isEstimated: !resolution.markingSchemeSource,
             });
@@ -1534,7 +1681,7 @@ ${originalPrompt}`;
         query: prompt,
         uid: user.uid,
         subject: route.entities.subject || activeSubject,
-        limit: isLessonEvidenceMode(route.mode) ? 24 : 5,
+        limit: isLessonEvidenceMode(route.mode) ? 32 : 12,
         lesson: route.entities.lesson || evidence.lessonIds[0],
         strictLesson: isLessonEvidenceMode(route.mode),
         allowedSourceIds: evidence.allowedSourceIds,
@@ -1553,7 +1700,7 @@ ${originalPrompt}`;
           const score = scoreSource(c, {
             subject: route.entities.subject || activeSubject,
             year: route.entities.year,
-            resourceType: route.entities.resourceType || route.entities.paperType ? "past_paper" : undefined,
+            resourceType: route.entities.resourceType || (route.entities.paperType ? "past_paper" : undefined),
             paperType: route.entities.questionType,
             keywords: prompt.split(" ")
           });
@@ -1564,7 +1711,8 @@ ${originalPrompt}`;
           if (!isLessonEvidenceMode(route.mode)) {
             allSources.push({ title: c.title, sourceId: c.sourceId || c.id, pageNumber: c.metadata?.pageNumber || c.page, sourceType: c.sourceType || 'rag', sourceScope: c.sourceScope || 'personal', confidence: c.confidence, badge: "RAG" });
           }
-          contextBlocksText += `\n[RAG SOURCE ${i+1}] ${c.title}:\n${c.text.substring(0, 1000)}\n`;
+          const evidenceTextLimit = isLessonEvidenceMode(route.mode) ? 4_000 : 3_000;
+          contextBlocksText += `\n[RAG SOURCE ${i+1}] ${c.title}:\n${c.text.substring(0, evidenceTextLimit)}\n`;
         });
       }
     }
@@ -1643,10 +1791,10 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
 
     // Final prompt setup
     const ai = getAIClient();
-    let aiTask: AITask = "normal_chat";
-    if (["paper_question_qa", "marking_scheme_request", "lesson_marks_intent", "zscore_prediction", "uploaded_pdf_question_qa", "tutor_explanation"].includes(route.mode) || image) {
-      aiTask = image ? "image_understanding" : "final_answer";
-    }
+    // Every learner-facing answer uses the high-quality final writer. Greetings
+    // are handled deterministically above, so there is no reason to trade away
+    // reasoning quality on an actual study question when cost is not constrained.
+    let aiTask: AITask = image ? "image_understanding" : "final_answer";
 
     // [FIX 5] Mandatory Evidence Gate before final LLM
     if (paperIntent.isOfficialPaperCandidate && route.mode === "paper_question_qa" && !hasExactQuestionText) {
@@ -1678,14 +1826,22 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
     } else if (policy.requireEvidence) {
       finalSysInstruction += "\n\n[STRICT INSTRUCTION]: The user is asking for a real paper question or syllabus discussion. You MUST base your answer strictly on the provided evidence. DO NOT invent or hallucinate any questions, equations, or past-paper details. If the evidence lacks the specific question, reply that you cannot find it.";
     }
+    finalSysInstruction += `
+
+[COMPLETE ANSWER CONTRACT]
+- Before writing, silently make a checklist of every explicit request and every visible (A)/(B), (i)/(ii), or numbered subpart. Do not reveal hidden reasoning or the checklist.
+- The final response must answer every readable requested item exactly once. Never stop after the first item.
+- If a source cannot support one item, state that limitation for that exact item and continue with the remaining items.
+- Prefer a compact complete answer over a long answer that stops halfway.
+- Never end inside a sentence, formula, table, Markdown fence, list item, or math delimiter.
+- Do not say that you will continue later; finish within this response.`;
 
     // Build the parts array for the contents object
     const mistakeImageSources: any[] = [];
-    const contentsParts: any[] = [
-      {
-        text: `Context Blocks:\n${contextBlocksText}\n\nPrevious Chat History:\n${history?.length ? JSON.stringify(history) : 'None'}\n\nCurrent User Request:\n${prompt}\nAnswer in Sinhala-first style if appropriate.`
-      }
-    ];
+    const requestTextPart: any = {
+      text: `Context Blocks:\n${contextBlocksText}\n\nPrevious Chat History:\n${history?.length ? JSON.stringify(history) : 'None'}\n\nCurrent User Request:\n${prompt}\nAnswer in Sinhala-first style if appropriate.`,
+    };
+    const contentsParts: any[] = [requestTextPart];
 
     const explicitSubject = String(route.entities?.subject || paperIntent.subject || "").toUpperCase();
     const promptSubject = /(?:\bSFT\b|SCIENCE FOR TECHNOLOGY|තාක්ෂණවේදය සඳහා විද්‍යාව|තාක්ෂණවේදය සඳහා විද්යාව)/iu.test(String(prompt || ""))
@@ -1715,50 +1871,52 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         contentsParts.unshift({ inlineData: { mimeType: "application/pdf", data: syllabusPdf.buffer.toString("base64") } });
       }
       if (syllabusPdf) {
-        contentsParts[contentsParts.length - 1].text += `\n\nAUTHORITATIVE ${groundingSubject} SOURCE: The attached official syllabus PDF defines the allowed scope. For SFT, do not add separate A/L Biology/Chemistry/Physics/Mathematics content unless this syllabus or retrieved approved SFT resources include it.`;
+        requestTextPart.text += `\n\nAUTHORITATIVE ${groundingSubject} SOURCE: The attached official syllabus PDF defines the allowed scope. For SFT, do not add separate A/L Biology/Chemistry/Physics/Mathematics content unless this syllabus or retrieved approved SFT resources include it.`;
       }
     }
 
-    const asksAboutMistakes = isMistakeReviewIntent(prompt);
+    const asksAboutMistakes = Boolean(selectedMistakeRecord) || isMistakeReviewIntent(prompt);
     if (asksAboutMistakes && Array.isArray(modifiedUserContext.recentMistakes)) {
-      const recentMistakes = modifiedUserContext.recentMistakes.slice(0, 8);
-      contentsParts[0].text += `\n\nRecent Mistake Notebook records (real saved data):\n${JSON.stringify(recentMistakes.map((mistake: any) => ({
+      const allRecentMistakes = modifiedUserContext.recentMistakes as any[];
+      const recentMistakes = selectedMistakeRecord
+        ? [selectedMistakeRecord]
+        : allRecentMistakes.slice(0, 8);
+      requestTextPart.text += `\n\n${selectedMistakeRecord ? "SELECTED" : "Recent"} Mistake Notebook records (real saved data):\n${JSON.stringify(recentMistakes.map((mistake: any) => ({
         subject: mistake.subject,
         lesson: mistake.lesson,
         errorText: mistake.errorText || mistake.questionText,
         createdAt: mistake.createdAt,
         hasImage: Boolean(mistake.imageStoragePath),
-      })))}\nThese are the user's real saved Error Log records. Start by acknowledging the exact number of saved records and summarize the most recent records by subject and lesson. Use them for diagnosis, revision, or a grounded quiz. Never say the Error Log is empty when this list contains records. If a saved image is attached below, inspect that actual image. Do not ask the user to upload it again. Never replace unreadable or missing details with generic likely mistakes; say exactly what cannot be read.`;
+      })))}\n${selectedMistakeRecord
+        ? "Analyze only this selected record. Read its attached image first. Identify the exact question, diagnose the likely error, show the correct method and answer, then give one similar practice question. Do not list the notebook again."
+        : "These are the user's real saved Error Log records. Summarize only what was requested and use the records for diagnosis or a grounded quiz."}\nNever say the Error Log is empty when this list contains records. If a saved image is attached below, inspect that actual image. Do not ask the user to upload it again. Never replace unreadable or missing details with generic likely mistakes; say exactly what cannot be read.`;
       const bucket = getAdminBucket();
-      const bucketName = bucket.name;
       for (const mistake of recentMistakes.slice(0, 3)) {
         if (!mistake.imageStoragePath || !mistake.imageMimeType) continue;
-        contentsParts.push({
-          fileData: {
-            fileUri: `gs://${bucketName}/${mistake.imageStoragePath}`,
-            mimeType: mistake.imageMimeType,
-          },
-        });
-        contentsParts.push({ text: `Mistake Notebook image for ${mistake.subject || "subject"} / ${mistake.lesson || "lesson"}. Analyze only when relevant.` });
         try {
-          const [imageUrl] = await bucket.file(mistake.imageStoragePath).getSignedUrl({
-            action: "read",
-            expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
+          const [imageBytes] = await bucket.file(String(mistake.imageStoragePath)).download();
+          if (!imageBytes?.length || imageBytes.length > 12 * 1024 * 1024) throw new Error("Saved image is empty or too large.");
+          contentsParts.push({
+            inlineData: {
+              data: imageBytes.toString("base64"),
+              mimeType: mistake.imageMimeType,
+            },
           });
+          contentsParts.push({ text: `Saved Error Log image for ${mistake.subject || "subject"} / ${mistake.lesson || "lesson"}. This is the actual selected evidence; inspect it before answering.` });
           const source = {
             id: mistake.id,
             sourceId: mistake.id,
             title: mistake.imageFileName || `${mistake.subject || "Subject"} - ${mistake.lesson || "lesson"}`,
-            url: imageUrl,
             sourceType: "mistake_image",
             badge: "Saved error image",
             mimeType: mistake.imageMimeType,
             lesson: mistake.lesson,
+            ownerPath: mistake.ownerPath || "uid",
           };
           mistakeImageSources.push(source);
           allSources.push(source);
         } catch (error) {
-          console.warn("[MistakeNotebook] Could not sign saved image", { mistakeId: mistake.id, error: String(error) });
+          console.warn("[MistakeNotebook] Could not load saved image", { mistakeId: mistake.id, error: String(error) });
         }
         aiTask = "image_understanding";
       }
@@ -1816,18 +1974,20 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       stream = result.stream;
       modelUsed = result.modelUsed;
       if (result.warning) {
-         emitSse(res, "token", { text: `\n\n⚠️ *${result.warning}*\n\n` });
+         emitSse(res, "status", { step: "model_fallback", status: "working", message: "Primary AI model was unavailable; completing with the backup model." });
       }
     } catch (err: any) {
       throw new Error(`All model streaming options failed. ${err.message}`);
     }
 
-    let isInterrupted = false;
     let fullText = "";
     let chunkBuffer = "";
+    let modelFinishReason: string | null = null;
+    let streamFailure: any = null;
     const responseSanitizer = createAssistantStreamSanitizer();
     try {
       for await (const chunk of stream) {
+        modelFinishReason = getModelFinishReason(chunk) || modelFinishReason;
         const text = chunk.text || "";
         if (!text) continue;
         const sanitized = responseSanitizer.push(text);
@@ -1843,31 +2003,129 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
           chunkBuffer = "";
         }
       }
-      const finalSanitized = responseSanitizer.flush();
-      if (finalSanitized) {
-        fullText += finalSanitized;
-        chunkBuffer += finalSanitized;
-        trace.totalChars += finalSanitized.length;
-      }
-      if (chunkBuffer.length > 0) {
-        emitSse(res, "token", { text: chunkBuffer });
-      }
-      if (!isInterrupted && mistakeImageSources.length > 0) {
-        const gallery = `\n\n### Saved error image${mistakeImageSources.length === 1 ? "" : "s"}\n\n${mistakeImageSources.map((source: any) => {
-          const alt = String(source.title || "Saved mistake image").replace(/[\[\]]/g, "");
-          return `![${alt}](${source.url})`;
-        }).join("\n\n")}`;
-        fullText += gallery;
-        emitSse(res, "token", { text: gallery });
-      }
     } catch (e: any) {
       console.warn("Stream interrupted:", e);
-      isInterrupted = true;
-      emitSse(res, "error", { ok: false, error: "Stream interrupted", recoverable: true, code: "STREAM_INTERRUPTED", completed: false, incomplete: true });
+      streamFailure = e;
+    }
+
+    const finalSanitized = responseSanitizer.flush();
+    if (finalSanitized) {
+      fullText += finalSanitized;
+      chunkBuffer += finalSanitized;
+      trace.totalChars += finalSanitized.length;
+    }
+    if (chunkBuffer.length > 0) {
+      emitSse(res, "token", { text: chunkBuffer });
+      trace.lastEvent = "token";
+    }
+
+    let completionAssessment = assessAnswerCompleteness({
+      prompt,
+      answer: fullText,
+      finishReason: streamFailure ? "STREAM_INTERRUPTED" : modelFinishReason,
+      mode: route.mode,
+    });
+    let completionPasses = 0;
+    const maxCompletionPasses = Math.min(3, Math.max(1, Number(process.env.AI_AUTO_CONTINUATION_PASSES || 2)));
+
+    while (
+      completionAssessment.shouldContinue
+      && completionPasses < maxCompletionPasses
+      && !signal.aborted
+      && !res.writableEnded
+    ) {
+      completionPasses += 1;
+      emitSse(res, "status", {
+        step: "completion_recovery",
+        status: "working",
+        message: completionPasses === 1
+          ? "Checking that every requested part is complete"
+          : "Finishing the remaining answer sections",
+        pass: completionPasses,
+      });
+
+      const continuationInstruction = buildContinuationInstruction({
+        originalPrompt: prompt,
+        currentAnswer: fullText,
+        assessment: completionAssessment,
+      });
+      const continuationContents: any[] = [{ role: "user", parts: contentsParts }];
+      if (fullText.trim()) continuationContents.push({ role: "model", parts: [{ text: fullText }] });
+      continuationContents.push({ role: "user", parts: [{ text: continuationInstruction }] });
+
+      try {
+        const continuation = await callGeminiWithFallback("final_answer", {
+          model: "ignored",
+          contents: continuationContents,
+          config: {
+            systemInstruction: finalSysInstruction,
+            temperature: Math.min(0.2, getTemperature(route.mode)),
+            maxOutputTokens: Math.max(8_192, getMaxTokens(route.mode)),
+          },
+        }, ai);
+        modelUsed = continuation.modelUsed || modelUsed;
+        const continuationText = sanitizeAssistantText(continuation.result.text || "");
+        const mergedText = mergeContinuationText(fullText, continuationText);
+        const addedText = mergedText.startsWith(fullText) ? mergedText.slice(fullText.length) : continuationText;
+        if (!addedText.trim()) {
+          completionAssessment = {
+            ...completionAssessment,
+            shouldContinue: false,
+            reasons: Array.from(new Set([...completionAssessment.reasons, "CONTINUATION_MADE_NO_PROGRESS"])),
+          };
+          break;
+        }
+        fullText = mergedText;
+        emitSse(res, "token", { text: addedText });
+        trace.lastEvent = "token";
+        trace.totalChars += addedText.length;
+        modelFinishReason = getModelFinishReason(continuation.result) || "STOP";
+        completionAssessment = assessAnswerCompleteness({
+          prompt,
+          answer: fullText,
+          finishReason: modelFinishReason,
+          mode: route.mode,
+        });
+      } catch (completionError: any) {
+        console.warn("[ANSWER_COMPLETION_RECOVERY_FAILED]", completionError?.message || completionError);
+        completionAssessment = {
+          ...completionAssessment,
+          shouldContinue: false,
+          reasons: Array.from(new Set([...completionAssessment.reasons, "CONTINUATION_REQUEST_FAILED"])),
+        };
+        break;
+      }
+    }
+
+    const isInterrupted = !completionAssessment.complete;
+    trace.modelFinishReason = modelFinishReason || undefined;
+    trace.completionPasses = completionPasses;
+    trace.incompleteReasons = completionAssessment.reasons;
+
+    if (isInterrupted) {
+      emitSse(res, "error", {
+        ok: false,
+        error: "The answer could not be completed automatically.",
+        recoverable: completionAssessment.shouldContinue || !signal.aborted,
+        code: "ANSWER_INCOMPLETE",
+        completed: false,
+        incomplete: true,
+        missingSubparts: completionAssessment.missingSubparts,
+        reasons: completionAssessment.reasons,
+      });
     }
 
     const derivedVisualBlocks = !isInterrupted
-      ? deriveEducationalVisualBlocks({ prompt, answer: fullText, mode: route.mode })
+      ? [
+        ...mistakeImageSources.map((source: any) => ({
+          type: "mistake_image_preview",
+          title: source.title || "Saved error image",
+          mistakeId: source.id,
+          ownerPath: source.ownerPath,
+          caption: `${source.lesson || "Error Log"} · saved image`,
+        })),
+        ...deriveEducationalVisualBlocks({ prompt, answer: fullText, mode: route.mode }),
+      ]
       : [];
     if (derivedVisualBlocks.length > 0) {
       emitSse(res, "visual_blocks", { blocks: derivedVisualBlocks });
@@ -1907,7 +2165,14 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         assistantText: fullText,
         mode: route.mode,
         subject: activeSubject,
-        sources: allSources
+        sources: allSources,
+        completion: {
+          completed: !isInterrupted,
+          finishReason: modelFinishReason,
+          completionPasses,
+          missingSubparts: completionAssessment.missingSubparts,
+          reasons: completionAssessment.reasons,
+        },
       }), { chatSaved: false }, res);
       if (chatRes && chatRes.chatSaved) {
         trace.chatSaved = true;
@@ -1918,7 +2183,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
     }
 
     // Background extraction
-    if (process.env.ENABLE_MEMORY_EXTRACTION !== "false") {
+    if (!isInterrupted && process.env.ENABLE_MEMORY_EXTRACTION !== "false") {
       safeCall("extractStableMemoryIfUseful", () => extractStableMemoryIfUseful({ uid: user.uid, email: user.email, prompt, answer: fullText, userContext: modifiedUserContext }), null, res).catch(() => null);
     }
 
@@ -2020,7 +2285,13 @@ Do not include any other text or markdown formatting.`;
       chatSaved: trace.chatSaved,
       sources: allSources || [],
       visualBlocks: derivedVisualBlocks,
-      finishReason: isInterrupted ? "interrupted" : "complete",
+      finishReason: isInterrupted ? "answer_incomplete" : "complete",
+      modelFinishReason: modelFinishReason || null,
+      autoContinued: completionPasses > 0,
+      completionPasses,
+      canContinue: isInterrupted && !signal.aborted,
+      missingSubparts: completionAssessment.missingSubparts,
+      incompleteReasons: completionAssessment.reasons,
     });
     trace.doneSent = true;
     trace.lastEvent = "done";
@@ -2063,7 +2334,6 @@ Do not include any other text or markdown formatting.`;
     trace.lastEvent = "done";
   } finally {
     clearInterval(heartbeatInterval);
-    unregisterRequest(requestId);
     unregisterRequest(requestId);
     if (!trace.doneSent) {
       try {
@@ -2118,12 +2388,15 @@ export async function aiContinueStream(req: any, res: any) {
     }
   }, 10000);
 
-  req.on("close", () => {
+  const markContinuationClientClosed = () => {
+    if (res.writableEnded || trace.doneSent) return;
     cancelRequest(requestId);
     console.log(`[STREAM] STREAM_CLIENT_CLOSED requestId=${requestId}`);
     trace.clientClosed = true;
     trace.endedAt = new Date().toISOString();
-  });
+  };
+  req.on("aborted", markContinuationClientClosed);
+  res.on("close", markContinuationClientClosed);
 
   try {
     const { originalPrompt, previousAssistantText, sources = [], chatId, reason } = req.body;
@@ -2134,7 +2407,7 @@ export async function aiContinueStream(req: any, res: any) {
 
     emitSse(res, "status", { step: "started", message: "Continuing answer..." });
 
-    const trimmedPrevText = (previousAssistantText || "").slice(-1500);
+    const trimmedPrevText = (previousAssistantText || "").slice(-6000);
 
     const promptText = `
 User original prompt: "${originalPrompt}"
@@ -2156,27 +2429,31 @@ Keep the same tone and language (Sinhala-first style).
         model: "ignored", // will be overridden by router
         contents: promptText,
         config: {
-          maxOutputTokens: 2000
+          temperature: 0.1,
+          maxOutputTokens: 12_288
         },
       }, ai, signal);
 
       stream = result.stream;
       modelUsed = result.modelUsed;
-      if (result.warning) {
-        emitSse(res, "token", { text: `\n\n⚠️ *${result.warning}*\n\n` });
-      }
+      if (result.warning) emitSse(res, "status", { step: "model_fallback", status: "working", message: "Completing with the backup AI model." });
     } catch (err: any) {
       throw new Error(`Continue stream failed: ${err.message}`);
     }
 
     let fullText = "";
     let chunkBuffer = "";
+    let modelFinishReason: string | null = null;
+    const continuationSanitizer = createAssistantStreamSanitizer();
     for await (const chunk of stream) {
+      modelFinishReason = getModelFinishReason(chunk) || modelFinishReason;
       const text = chunk.text || "";
       if (text) {
-        fullText += text;
-        chunkBuffer += text;
-        trace.totalChars += text.length;
+        const safeText = continuationSanitizer.push(text);
+        if (!safeText) continue;
+        fullText += safeText;
+        chunkBuffer += safeText;
+        trace.totalChars += safeText.length;
         trace.tokenCount++;
         if (chunkBuffer.length >= 50 || /[\n\r\.\?!,;]/.test(chunkBuffer)) {
           emitSse(res, "token", { text: chunkBuffer });
@@ -2185,11 +2462,61 @@ Keep the same tone and language (Sinhala-first style).
         }
       }
     }
+    const continuationTail = continuationSanitizer.flush();
+    if (continuationTail) {
+      fullText += continuationTail;
+      chunkBuffer += continuationTail;
+      trace.totalChars += continuationTail.length;
+    }
     if (chunkBuffer.length > 0) {
       emitSse(res, "token", { text: chunkBuffer });
     }
 
-    trace.completed = true;
+    let completionAssessment = assessAnswerCompleteness({
+      prompt: originalPrompt,
+      answer: `${previousAssistantText || ""}\n${fullText}`,
+      finishReason: modelFinishReason,
+      mode: "continue",
+    });
+    let completionPasses = 0;
+    while (completionAssessment.shouldContinue && completionPasses < 2 && !signal.aborted && !res.writableEnded) {
+      completionPasses += 1;
+      emitSse(res, "status", { step: "completion_recovery", status: "working", message: "Finishing the remaining answer sections", pass: completionPasses });
+      const combinedAnswer = `${previousAssistantText || ""}\n${fullText}`.trim();
+      try {
+        const completion = await callGeminiWithFallback("final_answer", {
+          model: "ignored",
+          contents: [
+            { role: "user", parts: [{ text: `Original request:\n${originalPrompt}` }] },
+            { role: "model", parts: [{ text: combinedAnswer }] },
+            { role: "user", parts: [{ text: buildContinuationInstruction({ originalPrompt, currentAnswer: combinedAnswer, assessment: completionAssessment }) }] },
+          ],
+          config: { temperature: 0.1, maxOutputTokens: 12_288 },
+        }, ai);
+        modelUsed = completion.modelUsed || modelUsed;
+        const merged = mergeContinuationText(fullText, sanitizeAssistantText(completion.result.text || ""));
+        const delta = merged.startsWith(fullText) ? merged.slice(fullText.length) : sanitizeAssistantText(completion.result.text || "");
+        if (!delta.trim()) break;
+        fullText = merged;
+        emitSse(res, "token", { text: delta });
+        trace.totalChars += delta.length;
+        modelFinishReason = getModelFinishReason(completion.result) || "STOP";
+        completionAssessment = assessAnswerCompleteness({
+          prompt: originalPrompt,
+          answer: `${previousAssistantText || ""}\n${fullText}`,
+          finishReason: modelFinishReason,
+          mode: "continue",
+        });
+      } catch (completionError: any) {
+        console.warn("[CONTINUATION_COMPLETION_FAILED]", completionError?.message || completionError);
+        break;
+      }
+    }
+
+    trace.completed = completionAssessment.complete;
+    trace.modelFinishReason = modelFinishReason || undefined;
+    trace.completionPasses = completionPasses;
+    trace.incompleteReasons = completionAssessment.reasons;
 
     // Track AI Usage Costs for Continuation
     try {
@@ -2211,7 +2538,12 @@ Keep the same tone and language (Sinhala-first style).
           const updatedAnswer = (prevData?.assistantAnswer || "") + "\n" + fullText;
           await chatRef.update({
             assistantAnswer: updatedAnswer,
-            updatedAt: new Date().toISOString()
+            updatedAt: new Date().toISOString(),
+            answerCompleted: completionAssessment.complete,
+            modelFinishReason: modelFinishReason || null,
+            completionPasses: completionPasses,
+            missingSubparts: completionAssessment.missingSubparts,
+            incompleteReasons: completionAssessment.reasons,
           });
           trace.chatSaved = true;
         }
@@ -2219,10 +2551,17 @@ Keep the same tone and language (Sinhala-first style).
     }
 
     emitSse(res, "done", {
-      ok: true,
-      completed: true,
+      ok: completionAssessment.complete,
+      completed: completionAssessment.complete,
       requestId,
-      chatSaved: trace.chatSaved
+      chatSaved: trace.chatSaved,
+      finishReason: completionAssessment.complete ? "complete" : "answer_incomplete",
+      modelFinishReason: modelFinishReason || null,
+      autoContinued: completionPasses > 0,
+      completionPasses,
+      canContinue: !completionAssessment.complete && !signal.aborted,
+      missingSubparts: completionAssessment.missingSubparts,
+      incompleteReasons: completionAssessment.reasons,
     });
     trace.doneSent = true;
     trace.lastEvent = "done";
@@ -2236,7 +2575,6 @@ Keep the same tone and language (Sinhala-first style).
     trace.lastEvent = "done";
   } finally {
     clearInterval(heartbeatInterval);
-    unregisterRequest(requestId);
     unregisterRequest(requestId);
     if (!trace.doneSent) {
       try {

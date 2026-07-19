@@ -84,24 +84,47 @@ router.get("/mistakes", async (req, res) => {
   try {
     const user = await requireUser(req);
     const records = await loadMistakeRecords(user.uid, user.email, 100);
-    const bucket = getAdminBucket();
-    const mistakes = await Promise.all(records.map(async (record) => {
-      let imageUrl: string | null = null;
-      if (record.imageStoragePath) {
-        try {
-          [imageUrl] = await bucket.file(String(record.imageStoragePath)).getSignedUrl({
-            action: "read",
-            expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
-          });
-        } catch (error) {
-          console.warn("[mistakes] Could not sign image", { id: record.id, error: String(error) });
-        }
-      }
-      return { ...record, imageUrl };
+    // The browser retrieves image bytes through the authenticated endpoint
+    // below. This works even when the server account cannot sign GCS URLs.
+    const mistakes = records.map((record) => ({
+      ...record,
+      hasImage: Boolean(record.imageStoragePath),
+      imageEndpoint: record.imageStoragePath
+        ? `/api/student/mistakes/${encodeURIComponent(record.id)}/image?owner=${encodeURIComponent(record.ownerPath || "uid")}`
+        : null,
     }));
     res.json({ ok: true, mistakes });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: "Internal operation failed." });
+  }
+});
+
+router.get("/mistakes/:mistakeId/image", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const records = await loadMistakeRecords(user.uid, user.email, 200);
+    const requestedOwner = String(req.query.owner || "");
+    const record = records.find((candidate) => String(candidate.id) === String(req.params.mistakeId)
+      && (!requestedOwner || String(candidate.ownerPath || "uid") === requestedOwner));
+    if (!record?.imageStoragePath) {
+      return res.status(404).json({ ok: false, code: "MISTAKE_IMAGE_NOT_FOUND", error: "Saved image was not found." });
+    }
+    const [bytes] = await getAdminBucket().file(String(record.imageStoragePath)).download();
+    if (!bytes?.length) {
+      return res.status(404).json({ ok: false, code: "MISTAKE_IMAGE_EMPTY", error: "Saved image is empty." });
+    }
+    const mimeType = ["image/png", "image/jpeg", "image/webp"].includes(String(record.imageMimeType || ""))
+      ? String(record.imageMimeType)
+      : "image/jpeg";
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Length", String(bytes.length));
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Disposition", "inline");
+    return res.send(bytes);
+  } catch (err: any) {
+    console.error("[mistakes] Could not serve saved image", { id: req.params.mistakeId, error: String(err) });
+    return res.status(500).json({ ok: false, code: "MISTAKE_IMAGE_READ_FAILED", error: "Saved image could not be opened." });
   }
 });
 

@@ -19,6 +19,13 @@ export type VisualBlock =
       caption?: string;
     }
   | {
+      type: "mistake_image_preview";
+      title: string;
+      mistakeId: string;
+      ownerPath?: "uid" | "legacy_email";
+      caption?: string;
+    }
+  | {
       type: "coordinate_plane";
       title: string;
       points: { label: string; x: number; y: number }[];
@@ -57,6 +64,19 @@ export type VisualBlock =
       type: "process_flow";
       title: string;
       steps: string[];
+      caption?: string;
+    }
+  | {
+      type: "mechanics_diagram";
+      title: string;
+      scenes: {
+        title: string;
+        massKg: number;
+        appliedForceN: number;
+        angleDeg: number;
+        surface: "smooth" | "rough";
+        frictionN?: number;
+      }[];
       caption?: string;
     }
   | {

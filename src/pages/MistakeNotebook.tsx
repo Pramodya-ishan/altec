@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, BookOpen, ImageIcon, RefreshCw, Search } from "lucide-react";
 import { apiFetch } from "../lib/api";
 import { Skeleton } from "../components/ui/Skeleton";
+import { useAuthenticatedImage } from "../hooks/useAuthenticatedImage";
 
 type MistakeRecord = {
   id: string;
@@ -10,9 +11,18 @@ type MistakeRecord = {
   errorText?: string;
   questionText?: string;
   imageUrl?: string | null;
+  imageEndpoint?: string | null;
+  hasImage?: boolean;
   imageFileName?: string | null;
   createdAt?: string;
 };
+
+function SavedMistakeImage({ mistake }: { mistake: MistakeRecord }) {
+  const { url, failed } = useAuthenticatedImage(mistake.imageEndpoint);
+  if (failed) return <div className="grid h-32 place-items-center bg-slate-50 text-xs font-semibold text-slate-400">Saved image unavailable</div>;
+  if (!url) return <Skeleton className="h-48 w-full rounded-none" />;
+  return <img src={url} alt={mistake.imageFileName || `Saved ${mistake.lesson || "error"}`} className="max-h-72 w-full bg-slate-50 object-contain" loading="lazy" />;
+}
 
 export default function MistakeNotebook() {
   const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
@@ -77,9 +87,9 @@ export default function MistakeNotebook() {
         <div className="grid gap-4 sm:grid-cols-2">
           {filtered.map((mistake) => (
             <article key={mistake.id} className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-              {mistake.imageUrl ? <img src={mistake.imageUrl} alt={mistake.imageFileName || `Saved ${mistake.lesson || "error"}`} className="max-h-72 w-full bg-slate-50 object-contain" loading="lazy" /> : null}
+              {mistake.hasImage && mistake.imageEndpoint ? <SavedMistakeImage mistake={mistake} /> : null}
               <div className="p-5">
-                <div className="flex items-center gap-2"><span className="rounded-full bg-slate-900 px-2.5 py-1 text-[10px] font-bold text-white">{mistake.subject || "Subject"}</span><span className="truncate text-xs font-semibold text-slate-500">{mistake.lesson || "Lesson"}</span>{mistake.imageUrl ? <ImageIcon className="ml-auto h-4 w-4 text-slate-400" /> : null}</div>
+                <div className="flex items-center gap-2"><span className="rounded-full bg-slate-900 px-2.5 py-1 text-[10px] font-bold text-white">{mistake.subject || "Subject"}</span><span className="truncate text-xs font-semibold text-slate-500">{mistake.lesson || "Lesson"}</span>{mistake.hasImage ? <ImageIcon className="ml-auto h-4 w-4 text-slate-400" /> : null}</div>
                 <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-800">{mistake.errorText || mistake.questionText || "Image-only error record"}</p>
                 {mistake.createdAt ? <time className="mt-4 block text-[11px] text-slate-400">{new Date(mistake.createdAt).toLocaleString()}</time> : null}
               </div>

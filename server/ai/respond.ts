@@ -6,6 +6,7 @@ import { loadUserAIContext } from "../firebase/userContext";
 import { retrieveRelevantKnowledge } from "../rag/retrieve";
 import { getAdminDb } from "../firebase/admin";
 import { isSimpleGreeting, sanitizeAssistantText, simpleGreetingReply } from "./responseHygiene";
+import { assessAnswerCompleteness, buildContinuationInstruction, getModelFinishReason, mergeContinuationText } from "./answerCompleteness";
 
 export async function processAIRequest(req: any) {
   try {
@@ -40,11 +41,11 @@ export async function processAIRequest(req: any) {
     }
 
     // 6. Select model & set up fallback chain
-    let preferredModel = AI_MODELS.default;
-    let temp = 0.35;
+    let preferredModel = AI_MODELS.pro;
+    let temp = 0.2;
     
     if (mode === 'today_plan' || mode === 'study_plan') {
-      preferredModel = AI_MODELS.default; temp = 0.25;
+      preferredModel = AI_MODELS.pro; temp = 0.2;
     } else if (mode === 'past_paper_analysis' || mode === 'zscore_prediction') {
       preferredModel = AI_MODELS.pro; temp = 0.2;
     }
@@ -58,6 +59,7 @@ export async function processAIRequest(req: any) {
     // 7. Call Gemini with Fallback Chain
     const ai = getAIClient();
     let response: any = null;
+    let activeChat: any = null;
     let modelUsed = "";
     let lastError: any = null;
 
@@ -74,10 +76,12 @@ export async function processAIRequest(req: any) {
           config: {
             systemInstruction,
             temperature: temp,
+            maxOutputTokens: 12_288,
             tools: useSearch ? [{ googleSearch: {} }] : undefined
           }
         });
         response = await chat.sendMessage({ message: promptWithHistory });
+        activeChat = chat;
         break; // Success!
       } catch (err: any) {
         lastError = err;
@@ -93,8 +97,26 @@ export async function processAIRequest(req: any) {
 
     // 8. Save final message (only for important modes, or handle outside)
     // We can do this asynchronously
-    const safeResponseText = sanitizeAssistantText(response.text || "No response generated.");
-    saveChatToHistory(uid, prompt, safeResponseText, mode, activeSubject);
+    let safeResponseText = sanitizeAssistantText(response.text || "No response generated.");
+    let finishReason = getModelFinishReason(response);
+    let completeness = assessAnswerCompleteness({ prompt, answer: safeResponseText, finishReason, mode });
+    let completionPasses = 0;
+    while (activeChat && completeness.shouldContinue && completionPasses < 2) {
+      completionPasses += 1;
+      const continuation = await activeChat.sendMessage({
+        message: buildContinuationInstruction({ originalPrompt: prompt, currentAnswer: safeResponseText, assessment: completeness }),
+      });
+      safeResponseText = mergeContinuationText(safeResponseText, sanitizeAssistantText(continuation.text || ""));
+      finishReason = getModelFinishReason(continuation) || "STOP";
+      completeness = assessAnswerCompleteness({ prompt, answer: safeResponseText, finishReason, mode });
+    }
+    saveChatToHistory(uid, prompt, safeResponseText, mode, activeSubject, {
+      completed: completeness.complete,
+      finishReason,
+      completionPasses,
+      missingSubparts: completeness.missingSubparts,
+      reasons: completeness.reasons,
+    });
 
     return {
       ok: true,
@@ -102,6 +124,12 @@ export async function processAIRequest(req: any) {
       response: safeResponseText,
       mode,
       model: modelUsed,
+      completed: completeness.complete,
+      finishReason: completeness.complete ? "complete" : "answer_incomplete",
+      modelFinishReason: finishReason,
+      completionPasses,
+      canContinue: !completeness.complete,
+      missingSubparts: completeness.missingSubparts,
       sources: knowledgeChunks,
       groundingMetadata: (response.candidates?.[0] as any)?.groundingMetadata
     };
@@ -112,7 +140,7 @@ export async function processAIRequest(req: any) {
   }
 }
 
-async function saveChatToHistory(uid: string, prompt: string, response: string, mode: string, subject?: string) {
+async function saveChatToHistory(uid: string, prompt: string, response: string, mode: string, subject?: string, completion?: { completed: boolean; finishReason?: string | null; completionPasses?: number; missingSubparts?: string[]; reasons?: string[] }) {
   try {
     const db = getAdminDb();
     const batch = db.batch();
@@ -135,6 +163,11 @@ async function saveChatToHistory(uid: string, prompt: string, response: string, 
       text: response,
       mode,
       subject: subject || null,
+      answerCompleted: completion?.completed ?? true,
+      modelFinishReason: completion?.finishReason || null,
+      completionPasses: completion?.completionPasses || 0,
+      missingSubparts: completion?.missingSubparts || [],
+      incompleteReasons: completion?.reasons || [],
       createdAt: new Date().toISOString()
     });
 
