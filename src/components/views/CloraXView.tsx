@@ -56,6 +56,21 @@ import { RealtimeLiveCallPanel } from '../ui/clora/RealtimeLiveCallPanel';
 import { VoiceAudioCard } from '../chat/VoiceAudioCard';
 import { parseChatCommand } from '../../lib/chatCommandParser';
 import { isClientImageGenerationIntent } from '../../lib/ai/imageIntent';
+import { buildProjectFileContext, isProjectArchiveFile, isProjectTextFile, MAX_CHAT_UPLOAD_FILES, readProjectArchive, readProjectTextFile } from '../../lib/projectFileUpload';
+
+
+type ChatUpload = {
+  id: string;
+  name: string;
+  size: number;
+  isImage?: boolean;
+  dataUrl?: string;
+  storagePath?: string;
+  mimeType?: string;
+  sourceId?: string;
+  attachmentType?: "pdf" | "image" | "text" | "archive";
+  textContent?: string;
+};
 
 function generateUUID() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -139,9 +154,11 @@ const [messages, setMessages] = useState<{
   const [showErrorLogModal, setShowErrorLogModal] = useState(false);
   const [realtimeVoiceEnabled, setRealtimeVoiceEnabled] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploadedFile, setUploadedFile] = useState<{ name: string; size: number; isImage?: boolean; dataUrl?: string; storagePath?: string; mimeType?: string; sourceId?: string; attachmentType?: string } | null>(null);
+  const [uploadedFiles, setUploadedFiles] = useState<ChatUpload[]>([]);
+  const uploadedFile = uploadedFiles[0] || null;
   const [indexingFailed, setIndexingFailed] = useState(false);
-  const [pendingIngestData, setPendingIngestData] = useState<any>(null);
+  const [pendingIngestData, setPendingIngestData] = useState<any[]>([]);
+  const [isClearingChat, setIsClearingChat] = useState(false);
 
   // Voice Tutor States
   const [isListening, setIsListening] = useState(false);
@@ -464,176 +481,209 @@ const [messages, setMessages] = useState<{
     }, []);
 
   const handleRetryIndexing = async () => {
-    if (!pendingIngestData) return;
+    if (pendingIngestData.length === 0) return;
     setUploading(true);
     setUploadError(null);
     setIndexingFailed(false);
     setUploadTelemetry((current) => current ? { ...current, progress: 1, remainingBytes: 0, etaSeconds: 0, phase: 'processing' } : null);
 
-    try {
-      const ingestRes = await apiFetch("/api/pdf/process-uploaded", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sourceId: pendingIngestData?.sourceId || pendingIngestData?.uploaded?.sourceId || "",
-          storagePath: pendingIngestData?.storagePath || pendingIngestData?.uploaded?.storagePath || "",
-          title: pendingIngestData?.title || pendingIngestData?.file?.name || "upload",
-          fileName: pendingIngestData?.title || pendingIngestData?.file?.name || "upload",
-          subject: currentSubject,
-          resourceType: "uploaded_pdf",
-          sourceType: "uploaded_pdf",
-          sourceScope: "chat_upload",
-          medium: "Sinhala"
-        })
-
-      });
-
-      const data = await ingestRes.json().catch(() => null);
-      if (!ingestRes.ok || !data?.ok) {
-        setUploadError("Uploaded, indexing failed. Retry indexing.");
-        setIndexingFailed(true);
-        setUploadTelemetry((current) => current ? { ...current, phase: 'error' } : null);
-        setUploading(false);
-        return;
+    const failed: any[] = [];
+    for (const pending of pendingIngestData) {
+      try {
+        const ingestRes = await apiFetch("/api/pdf/process-uploaded", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sourceId: pending?.sourceId || pending?.uploaded?.sourceId || "",
+            storagePath: pending?.storagePath || pending?.uploaded?.storagePath || "",
+            title: pending?.title || pending?.file?.name || "upload",
+            fileName: pending?.title || pending?.file?.name || "upload",
+            subject: pending?.subject || currentSubject,
+            resourceType: "uploaded_pdf",
+            sourceType: "uploaded_pdf",
+            sourceScope: "chat_upload",
+            medium: "Sinhala"
+          })
+        });
+        const data = await ingestRes.json().catch(() => null);
+        if (!ingestRes.ok || !data?.ok) {
+          failed.push(pending);
+        }
+      } catch {
+        failed.push(pending);
       }
+    }
 
-      if (data.needsOcr) {
-        setInput(prev => prev + `\n[Uploaded PDF: ${pendingIngestData.title}] ${data.message} `);
-      } else {
-        setInput(prev => prev + `\n[Uploaded PDF: ${pendingIngestData.title}] Please read this pdf and answer: `);
-      }
-      setUploading(false);
-      setPendingIngestData(null);
-      setUploadTelemetry((current) => current ? { ...current, phase: 'success' } : null);
-    } catch (err: any) {
-      console.error("Retry indexing failed:", err);
-      setUploadError("Uploaded, indexing failed. Retry indexing.");
-      setIndexingFailed(true);
+    setPendingIngestData(failed);
+    setIndexingFailed(failed.length > 0);
+    setUploading(false);
+    if (failed.length > 0) {
+      setUploadError(`${failed.length} uploaded PDF${failed.length === 1 ? '' : 's'} still could not be indexed.`);
       setUploadTelemetry((current) => current ? { ...current, phase: 'error' } : null);
-      setUploading(false);
+    } else {
+      setUploadTelemetry((current) => current ? { ...current, phase: 'success' } : null);
+      setInput((current) => current || "Please analyze the uploaded project files.");
     }
   };
+
+  const appendUploadedFile = (upload: ChatUpload) => {
+    setUploadedFiles((current) => {
+      const withoutDuplicate = current.filter((item) => item.id !== upload.id && item.name !== upload.name);
+      return [...withoutDuplicate, upload].slice(0, MAX_CHAT_UPLOAD_FILES);
+    });
+  };
+
+  const readImagePreview = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("The image preview could not be created."));
+    reader.readAsDataURL(file);
+  });
 
   const processFile = async (file: File) => {
     const allowedImageTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
     const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
     const isImage = allowedImageTypes.has(file.type);
-    const maxBytes = isPdf ? 25 * 1024 * 1024 : 10 * 1024 * 1024;
+    const isProjectText = isProjectTextFile(file);
+    const isProjectArchive = isProjectArchiveFile(file);
 
     setUploadError(null);
     setIndexingFailed(false);
-    setPendingIngestData(null);
 
+    if (isProjectArchive) {
+      setUploading(true);
+      beginUploadTelemetry(file);
+      setUploadTelemetry((current) => current ? { ...current, progress: 1, bytesTransferred: file.size, remainingBytes: 0, etaSeconds: 0, phase: "processing" } : null);
+      try {
+        const archive = await readProjectArchive(file);
+        appendUploadedFile({
+          id: generateUUID(),
+          name: file.name,
+          size: file.size,
+          mimeType: file.type || "application/zip",
+          attachmentType: "archive",
+          textContent: archive.text,
+        });
+        setUploadTelemetry((current) => current ? { ...current, phase: "success" } : null);
+        if (archive.truncated) {
+          setUploadError(`Added ${archive.includedFiles.length} useful files from ${file.name}. Large/generated files were safely skipped.`);
+        }
+      } catch (error: any) {
+        setUploadError(error?.message || "The project ZIP could not be read.");
+        setUploadTelemetry((current) => current ? { ...current, phase: "error" } : null);
+      } finally {
+        setUploading(false);
+      }
+      return;
+    }
+
+    if (isProjectText) {
+      try {
+        const textContent = await readProjectTextFile(file);
+        appendUploadedFile({
+          id: generateUUID(),
+          name: file.name,
+          size: file.size,
+          mimeType: file.type || "text/plain",
+          attachmentType: "text",
+          textContent,
+        });
+      } catch (error: any) {
+        setUploadError(error?.message || "The project file could not be read.");
+      }
+      return;
+    }
+
+    const maxBytes = isPdf ? 25 * 1024 * 1024 : 10 * 1024 * 1024;
     if ((!isPdf && !isImage) || file.size <= 0 || file.size > maxBytes) {
       const message = !isPdf && !isImage
-        ? "Only PDF, PNG, JPEG, and WebP files are allowed."
+        ? "Upload PDF, PNG, JPEG, WebP, ZIP, or a supported text/code project file."
         : `The selected ${isPdf ? "PDF" : "image"} exceeds the ${isPdf ? "25 MB" : "10 MB"} limit.`;
       setUploadError(message);
-      setUploadedFile(null);
-      if (fileInputRef.current) fileInputRef.current.value = "";
       return;
     }
 
     setUploading(true);
     beginUploadTelemetry(file);
 
-    if (isImage) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setUploadedFile({
-          name: file.name,
-          size: file.size,
-          isImage: true,
-          mimeType: file.type,
-          dataUrl: reader.result as string,
-        });
-        setUploading(false);
-        setUploadTelemetry(null);
-      };
-      reader.onerror = () => {
-        setUploadError("The image could not be read.");
-        setUploadedFile(null);
-        setUploading(false);
-        setUploadTelemetry(null);
-      };
-      reader.readAsDataURL(file);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      return;
-    }
-
     try {
-      const uploaded = await uploadPdfWithClientStorage({
+      const preview = isImage ? await readImagePreview(file) : undefined;
+      const uploaded = await uploadAttachmentWithClientStorage({
         file,
         subject: currentSubject,
         sourceScope: "chat_upload",
         onProgress: trackUploadProgress(file.name),
       });
 
-      setUploadedFile({
+      appendUploadedFile({
+        id: uploaded.sourceId,
         name: file.name,
         size: file.size,
         sourceId: uploaded.sourceId,
         storagePath: uploaded.storagePath,
-        mimeType: "application/pdf",
-        attachmentType: "pdf",
+        mimeType: uploaded.mimeType,
+        attachmentType: uploaded.attachmentType,
+        isImage,
+        dataUrl: preview,
       });
-      setUploadTelemetry((current) => current ? { ...current, progress: 1, remainingBytes: 0, etaSeconds: 0, phase: "processing" } : null);
 
+      if (isImage) {
+        setUploadTelemetry((current) => current ? { ...current, progress: 1, remainingBytes: 0, etaSeconds: 0, phase: "success" } : null);
+        return;
+      }
+
+      setUploadTelemetry((current) => current ? { ...current, progress: 1, remainingBytes: 0, etaSeconds: 0, phase: "processing" } : null);
+      const ingestPayload = {
+        sourceId: uploaded.sourceId,
+        storagePath: uploaded.storagePath,
+        title: file.name,
+        fileName: file.name,
+        subject: currentSubject,
+        resourceType: "uploaded_pdf",
+        sourceType: "uploaded_pdf",
+        sourceScope: "chat_upload",
+        medium: "Sinhala",
+      };
       const ingestRes = await apiFetch("/api/pdf/process-uploaded", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sourceId: uploaded.sourceId,
-          storagePath: uploaded.storagePath,
-          title: file.name,
-          fileName: file.name,
-          subject: currentSubject,
-          resourceType: "uploaded_pdf",
-          sourceType: "uploaded_pdf",
-          sourceScope: "chat_upload",
-          medium: "Sinhala",
-        }),
+        body: JSON.stringify(ingestPayload),
       });
-
       const data = await ingestRes.json().catch(() => null);
       if (!ingestRes.ok || !data?.ok) {
         setUploadError(data?.message || data?.error || "The PDF was uploaded, but indexing failed.");
         setIndexingFailed(true);
         setUploadTelemetry((current) => current ? { ...current, phase: "error" } : null);
-        setPendingIngestData({
-          file,
-          sourceId: uploaded.sourceId,
-          storagePath: uploaded.storagePath,
-          title: file.name,
-          subject: currentSubject,
-          resourceType: "uploaded_pdf",
-          sourceType: "uploaded_pdf",
-          sourceScope: "chat_upload",
-          medium: "Sinhala",
-        });
+        setPendingIngestData((current) => [...current.filter((item) => item.sourceId !== uploaded.sourceId), ingestPayload]);
       } else {
-        const followUp = data.needsOcr
-          ? "This scanned document is being processed."
-          : "Please read this document and answer:";
-        setInput((current) => `${current}
-[Uploaded PDF: ${file.name}] ${followUp}`);
+        setPendingIngestData((current) => current.filter((item) => item.sourceId !== uploaded.sourceId));
         setUploadTelemetry((current) => current ? { ...current, phase: "success" } : null);
       }
     } catch (err: any) {
       setUploadError(err?.message || "The file could not be uploaded.");
-      setUploadedFile(null);
       setUploadTelemetry((current) => current ? { ...current, phase: "error" } : null);
     } finally {
       setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
-  // Upload file using FormData with fallback
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    await processFile(file);
+    const selected = Array.from(e.target.files || []);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (selected.length === 0) return;
+
+    const availableSlots = Math.max(0, MAX_CHAT_UPLOAD_FILES - uploadedFiles.length);
+    const files = selected.slice(0, availableSlots);
+    if (availableSlots === 0) {
+      setUploadError(`You can attach up to ${MAX_CHAT_UPLOAD_FILES} project files at once.`);
+      return;
+    }
+    if (selected.length > files.length) {
+      setUploadError(`Only the first ${availableSlots} file${availableSlots === 1 ? '' : 's'} were added. The limit is ${MAX_CHAT_UPLOAD_FILES}.`);
+    }
+    for (const file of files) {
+      await processFile(file);
+    }
   };
 
   // Implement client-side confirmation and direct proxy import flow
@@ -1042,18 +1092,20 @@ const [messages, setMessages] = useState<{
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isStreaming) return;
-    const userMsg = input.trim();
+    if ((!input.trim() && uploadedFiles.length === 0) || isStreaming || uploading) return;
+    const currentUploads = [...uploadedFiles];
+    const currentUpload = currentUploads[0] || null;
+    const userMsg = input.trim() || "Analyze the attached project files.";
     setInput('');
     setSummaryExpanded(false);
-
-    const currentUpload = uploadedFile;
-    setUploadedFile(null);
+    setUploadedFiles([]);
     setUploadError(null);
+    setUploadTelemetry(null);
 
     let imagePayload: { mimeType: string; data: string } | undefined = undefined;
-    if (currentUpload?.isImage && currentUpload.dataUrl) {
-      const parts = currentUpload.dataUrl.split(",");
+    const inlineImage = currentUploads.find((file) => file.isImage && file.dataUrl);
+    if (inlineImage?.dataUrl) {
+      const parts = inlineImage.dataUrl.split(",");
       if (parts.length === 2) {
         const mimeType = parts[0].split(";")[0].split(":")[1];
         const data = parts[1];
@@ -1074,12 +1126,15 @@ const [messages, setMessages] = useState<{
       status: "sent",
       createdAt: new Date().toISOString(),
       replyTo: replyingTo,
-      attachments: currentUpload ? [{
-        name: currentUpload.name,
-        mimeType: currentUpload.mimeType || (currentUpload.isImage ? "image/jpeg" : undefined),
-        dataUrl: currentUpload.dataUrl,
-        storagePath: currentUpload.storagePath
-      }] : []
+      attachments: currentUploads.map((file) => ({
+        id: file.id,
+        name: file.name,
+        size: file.size,
+        mimeType: file.mimeType || (file.isImage ? "image/jpeg" : "text/plain"),
+        dataUrl: file.dataUrl,
+        storagePath: file.storagePath,
+        attachmentType: file.attachmentType,
+      }))
     };
 
     const assistantPlaceholder = {
@@ -1214,14 +1269,16 @@ const [messages, setMessages] = useState<{
       messagePrompt = `[Replying to ${replyingTo.role} message: ${replyingTo.content.slice(0, 1200)}]\n\n${messagePrompt}`;
     }
 
-    let attachmentsPayload = undefined;
-    if (currentUpload && !currentUpload.isImage && currentUpload.storagePath && currentUpload.mimeType) {
-       attachmentsPayload = [{
-          storagePath: currentUpload.storagePath,
-          mimeType: currentUpload.mimeType,
-          fileName: currentUpload.name
-       }];
-    }
+    const projectFileContext = buildProjectFileContext(currentUploads);
+    if (projectFileContext) messagePrompt += projectFileContext;
+
+    const attachmentsPayload = currentUploads
+      .filter((file) => file.storagePath && file.mimeType && file.id !== inlineImage?.id)
+      .map((file) => ({
+        storagePath: file.storagePath as string,
+        mimeType: file.mimeType as string,
+        fileName: file.name,
+      }));
 
     await sendAIMessage({
         prompt: messagePrompt,
@@ -1229,7 +1286,7 @@ const [messages, setMessages] = useState<{
         mode: toolMode,
         history: nextMessages.slice(-10).map(m => ({ role: m.role, text: m.content })),
         image: imagePayload,
-        attachments: attachmentsPayload,
+        attachments: attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
         assistantMessageId: assistantMsgId,
         onToken: (text) => {
           if (activeStreamIdRef.current !== streamId) return;
@@ -1345,16 +1402,49 @@ const [messages, setMessages] = useState<{
   };
 
   const handleNewChat = React.useCallback(() => {
-     if (isStreaming) {
+     if (isStreamingRef.current || isStreaming) {
        cancel();
      }
+     activeStreamIdRef.current = null;
+     currentRequestIdRef.current = null;
+     bufferedAnswerRef.current.clear();
+     if (typingTimerRef.current !== null) {
+       window.clearTimeout(typingTimerRef.current);
+       typingTimerRef.current = null;
+     }
+     recognitionRef.current?.stop?.();
+     stopSpeaking();
      setMessages([{ role: 'assistant', content: 'Ask about a lesson, paper, question, or result.', id: 'welcome' }]);
      setInput('');
      setReplyingTo(null);
-     setUploadedFile(null);
+     setUploadedFiles([]);
      setUploadError(null);
      setUploadTelemetry(null);
+     setPendingIngestData([]);
+     setIndexingFailed(false);
+     setImportingStage(null);
+     setImportProgressText('');
+     setIsDrawerOpen(false);
+     setPdfModalUrl('');
   }, [cancel, isStreaming]);
+
+  const handleClearChat = React.useCallback(async () => {
+    if (isClearingChat) return;
+    const confirmed = window.confirm("Clear this chat and remove its saved history? This cannot be undone.");
+    if (!confirmed) return;
+    setIsClearingChat(true);
+    try {
+      const response = await apiFetch("/api/ai/chat-history/clear", { method: "POST" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.ok) throw new Error(data?.error || "Chat history could not be cleared.");
+      handleNewChat();
+      showNotification("Chat cleared.", "success");
+    } catch (error: any) {
+      showNotification(error?.message || "Chat history could not be cleared.", "error");
+    } finally {
+      setIsClearingChat(false);
+    }
+  }, [handleNewChat, isClearingChat, showNotification]);
 
   useEffect(() => {
     const startNewChat = () => handleNewChat();
@@ -1366,7 +1456,7 @@ const [messages, setMessages] = useState<{
 
   const handleComposerSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!input.trim() && (!uploadedFile || !uploadedFile.storagePath)) return;
+    if (!input.trim() && uploadedFiles.length === 0) return;
 
     // Check if we need to call the actual submit
     const syntheticEvent = new Event('submit', { cancelable: true, bubbles: true }) as any;
@@ -1421,9 +1511,25 @@ const [messages, setMessages] = useState<{
             isOpen={showLiveVoiceModal}
             onClose={() => setShowLiveVoiceModal(false)}
             currentSubject={currentSubject}
-            activeSourceId={uploadedFile?.storagePath || undefined}
-            recentAttachmentIds={uploadedFile?.storagePath ? [uploadedFile.storagePath] : undefined}
+            activeSourceId={uploadedFiles.find((file) => file.attachmentType === "pdf")?.storagePath || uploadedFile?.storagePath || undefined}
+            recentAttachmentIds={uploadedFiles.map((file) => file.storagePath).filter(Boolean) as string[]}
           />
+
+          {!isEmptyChat && (
+            <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-100 bg-white px-4 sm:px-6">
+              <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Clora X</span>
+              <button
+                type="button"
+                onClick={handleClearChat}
+                disabled={isClearingChat}
+                className="inline-flex h-9 items-center gap-2 rounded-full px-3 text-xs font-semibold text-slate-500 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50"
+                aria-label="Clear chat history"
+              >
+                {isClearingChat ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                <span>Clear chat</span>
+              </button>
+            </div>
+          )}
 
           <div className="clora-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-white" ref={scrollRef}>
             {isEmptyChat ? (
@@ -1483,11 +1589,11 @@ const [messages, setMessages] = useState<{
               onStopClick={cancel}
               onAttachClick={() => fileInputRef.current?.click()}
               onMicClick={realtimeVoiceEnabled ? () => setShowLiveVoiceModal(true) : undefined}
-              attachments={uploadedFile ? [uploadedFile] : []}
-              onRemoveAttachment={() => {
-                setUploadedFile(null);
+              attachments={uploadedFiles}
+              onRemoveAttachment={(id) => {
+                setUploadedFiles((current) => current.filter((file, index) => file.id !== id && index !== id));
                 setUploadError(null);
-                setUploadTelemetry(null);
+                if (uploadedFiles.length <= 1) setUploadTelemetry(null);
               }}
               disabled={uploading || isStreaming}
               onErrorLogSelect={() => setShowErrorLogModal(true)}
@@ -1504,7 +1610,8 @@ const [messages, setMessages] = useState<{
             ref={fileInputRef}
             onChange={handleFileUpload}
             className="hidden"
-            accept="application/pdf,image/png,image/jpeg,image/webp"
+            multiple
+            accept="application/pdf,application/zip,application/x-zip-compressed,image/png,image/jpeg,image/webp,text/*,.zip,.md,.markdown,.csv,.json,.jsonl,.js,.jsx,.mjs,.cjs,.ts,.tsx,.html,.htm,.css,.scss,.sass,.less,.xml,.yaml,.yml,.py,.java,.c,.h,.cpp,.hpp,.cs,.go,.rs,.php,.rb,.sh,.sql,.env,.ini,.toml,.log"
           />
 
           <ErrorLogModal

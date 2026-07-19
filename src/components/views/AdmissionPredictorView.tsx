@@ -252,7 +252,7 @@ export const DiagnosticJsonDashboard = ({
               </div>
               <Markdown
                 remarkPlugins={[remarkGfm, remarkMath]}
-                rehypePlugins={[rehypeKatex]}
+                rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: "ignore", trust: false, output: "htmlAndMathml" }]]}
               >
                 {safeAdvisorMarkdown(data.targetFeasibility.explanation)}
               </Markdown>
@@ -488,7 +488,7 @@ export const DiagnosticJsonDashboard = ({
             <div className="text-sm text-indigo-950/80 font-medium leading-relaxed italic">
               <Markdown
                 remarkPlugins={[remarkGfm, remarkMath]}
-                rehypePlugins={[rehypeKatex]}
+                rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: "ignore", trust: false, output: "htmlAndMathml" }]]}
               >
                 {safeAdvisorMarkdown(data.finalAdvice)}
               </Markdown>
@@ -566,7 +566,7 @@ const renderMessageContent = (
     return (
       <Markdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: "ignore", trust: false, output: "htmlAndMathml" }]]}
       >
         {safeAdvisorMarkdown(message.text)}
       </Markdown>
@@ -578,7 +578,7 @@ const renderMessageContent = (
       {message.text && message.text.length > 5 && (
         <Markdown
           remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[rehypeKatex]}
+          rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: "ignore", trust: false, output: "htmlAndMathml" }]]}
         >
           {safeAdvisorMarkdown(message.text)}
         </Markdown>

@@ -59,7 +59,14 @@ function lessonFromStoragePath(storagePath: unknown) {
 
 export function invalidateInventoryCache(uid: string) {
   for (const key of cache.keys()) {
-    if (key.startsWith(`${uid}:`) || key.startsWith("all:") || key.startsWith("admin:")) {
+    // Administrator inventories can include sources owned by any user, so a
+    // mutation by one owner must invalidate every cached admin view as well.
+    if (
+      key.startsWith(`${uid}:`)
+      || key.startsWith("all:")
+      || key.startsWith("admin:")
+      || key.endsWith(":admin")
+    ) {
       cache.delete(key);
     }
   }

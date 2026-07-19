@@ -7,10 +7,26 @@ import { solveExtractedEssayQuestion, solveExtractedMcqQuestion } from "./solveE
 import { trackAIUsage, checkSpecificLimit } from "../../cost/usageTracker";
 import { classifyAiError } from "../../ai/aiErrorClassifier";
 
+export function createDirectPdfInputPart(pdfBuffer?: Buffer, pdfUri?: string) {
+  if (pdfUri) {
+    return { fileData: { mimeType: "application/pdf", fileUri: pdfUri } };
+  }
+  if (pdfBuffer?.length) {
+    return {
+      inlineData: {
+        mimeType: "application/pdf",
+        data: pdfBuffer.toString("base64"),
+      },
+    };
+  }
+  return null;
+}
+
 export async function askGeminiDirectPdfStructured(params: {
   uid: string;
   sourceId: string;
-  pdfBuffer: Buffer;
+  pdfBuffer?: Buffer;
+  pdfUri?: string;
   year: string;
   subject: string;
   questionType: string;
@@ -18,7 +34,7 @@ export async function askGeminiDirectPdfStructured(params: {
   prompt: string;
   allowOfficialAnswer?: boolean;
 }) {
-  const { sourceId, pdfBuffer, year, subject, questionType, questionNo, allowOfficialAnswer = false } = params;
+  const { sourceId, pdfBuffer, pdfUri, year, subject, questionType, questionNo, allowOfficialAnswer = false } = params;
   const modelName = AI_MODELS.pdf;
 
   const systemInstruction = `You are an evidence-first Sri Lankan A/L exam PDF extractor.
@@ -66,12 +82,17 @@ Return JSON only:
   "reason": string
 }`;
 
-  const pdfPart = {
-    inlineData: {
-      mimeType: "application/pdf",
-      data: pdfBuffer.toString("base64"),
-    },
-  };
+  if (!pdfBuffer?.length && !pdfUri) {
+    return {
+      ok: false,
+      found: false,
+      errorCode: "DIRECT_PDF_INPUT_MISSING",
+      stage: "PDF_INPUT",
+      message: "The PDF source is unavailable.",
+    };
+  }
+
+  const pdfPart = createDirectPdfInputPart(pdfBuffer, pdfUri);
 
   const userPrompt = `
 Requested:

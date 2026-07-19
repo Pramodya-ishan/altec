@@ -1,10 +1,12 @@
+import { sanitizeKatexMathBoundaries } from "./markdown/katexSafety";
+
 export function sanitizeMathMarkdown(input: string): string {
   if (!input) return "";
 
   // Replace unicode replacement character  with space
   let text = input
     .replace(/\uFFFD/g, " ")
-    .replace(/[\u200B-\u200D\uFEFF]/g, "");
+    .replace(/[\u200B\uFEFF]/g, "");
 
   // Fix common broken sqrt/braces patterns
   text = text.replace(/\\sqrt\{([^}]*)$/g, "\\sqrt{$1}");
@@ -63,7 +65,7 @@ export function sanitizeMathMarkdown(input: string): string {
   // But don't remove ALL backslashes as it breaks legitimate LaTeX like \frac
   // text = text.replace(/\\([^\w\s\{\}\(\)\d\+\-\*\=\/\\\$])/g, "$1"); // Removed dangerous global replace
 
-  return text;
+  return sanitizeKatexMathBoundaries(text);
 }
 
 export function getUnclosedMathInfo(text: string): { hasUnclosed: boolean; index: number; type: "inline" | "block" | null } {

@@ -9,7 +9,7 @@ import { stripRawVisualBlocks } from "../ai-core/answer/stripVisualBlocks";
 import { extractPdfText } from "./extractText";
 import { assertContentManager, isContentManager, isSharedSourceScope, isStudentVisibleSource } from "../utils/contentPermissions";
 import { normalizeLessonId, updateLessonResourceProcessing, upsertLessonResource } from "../lessonResources/service";
-import { invalidateInventoryCache } from "../sources/sourceInventoryService";
+import { getSourceInventory, invalidateInventoryCache } from "../sources/sourceInventoryService";
 import { createPdfQuestionPreview } from "./questionPreview";
 import { hasExactQuestionMarker } from "../ai-core/pdf/indexedQuestionSelection";
 
@@ -20,6 +20,7 @@ pdfRoutes.use(requireFirebaseUser, requireFirebaseAppCheck);
 const upload = multer({ storage: multer.memoryStorage() });
 
 import { isAiBillingCircuitOpen, getAiBillingState } from "../ai/aiCircuitBreaker";
+import { isVertexAiEnabled } from "../ai/client";
 
 function storageObjectPath(input: unknown): string {
   const value = String(input || "").trim();
@@ -494,8 +495,8 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
     const idempotencyKey = `${req.user.uid}:${sourceId}:${questionType}:${questionNo}`;
 
     const cooldownUntil = failedDirectQaCooldown.get(idempotencyKey);
-    if ((cooldownUntil && Date.now() < cooldownUntil) || isAiBillingCircuitOpen()) {
-      return res.status(503).json({
+    if (String(process.env.ENABLE_AI_BILLING_CIRCUIT_BREAKER || "").toLowerCase() === "true" && ((cooldownUntil && Date.now() < cooldownUntil) || isAiBillingCircuitOpen())) {
+      return res.json({
         ok: false,
         found: false,
         errorCode: "AI_BILLING_EXHAUSTED",
@@ -534,6 +535,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
 
       let buffer: Buffer;
       let resolvedSource: any = null;
+      let resolvedPdfUri: string | undefined;
       if (req.file) {
         buffer = req.file.buffer;
         console.log(`[DirectPDFQA] File received via upload. Buffer size: ${buffer.length} bytes`);
@@ -646,7 +648,9 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         }
 
         console.log(`[DirectPDFQA] Reading verified source from Firebase Admin: ${resolved.path}`);
-        const [downloaded] = await getAdminBucket().file(resolved.path).download();
+        const bucket = getAdminBucket();
+        resolvedPdfUri = isVertexAiEnabled() ? `gs://${bucket.name}/${resolved.path}` : undefined;
+        const [downloaded] = await bucket.file(resolved.path).download();
         buffer = downloaded;
         if (!buffer?.length) {
           return { ok: false, status: 404, errorCode: "DIRECT_QA_SOURCE_EMPTY", error: "The stored PDF is empty or unavailable." };
@@ -679,6 +683,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
             uid: req.user.uid,
             sourceId: sourceId || "uploaded_temp",
             pdfBuffer: buffer,
+            pdfUri: resolvedPdfUri,
             year: year || resolvedSource?.year || "unknown",
             subject: subject || resolvedSource?.subject || "unknown",
             questionType,
@@ -813,11 +818,12 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
           // answered through Gemini's native PDF understanding instead of
           // returning an environment/configuration template to the student.
           const fallbackLimit = Number(process.env.DIRECT_PDF_INLINE_MAX_BYTES || 10 * 1024 * 1024);
-          if (buffer.length <= fallbackLimit) {
+          if (buffer.length <= fallbackLimit || resolvedPdfUri) {
             const fallbackResult = await askGeminiDirectPdfStructured({
               uid: req.user.uid,
               sourceId,
               pdfBuffer: buffer,
+              pdfUri: resolvedPdfUri,
               year: year || resolvedSource.year || "unknown",
               subject: subject || resolvedSource.subject || "unknown",
               questionType,
@@ -836,7 +842,6 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
             if (fallbackResult.errorCode === "AI_BILLING_EXHAUSTED" || fallbackResult.errorCode === "AI_RATE_LIMITED") {
               return {
                 ok: false,
-                status: 503,
                 found: false,
                 errorCode: fallbackResult.errorCode,
                 stage: "MODEL_CALL",
@@ -850,7 +855,6 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
 
           return {
             ok: false,
-            status: 503,
             found: false,
             errorCode: "OCR_PROCESSING_UNAVAILABLE",
             stage: "PDF_INDEXING",
@@ -877,6 +881,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
           uid: req.user.uid,
           sourceId: sourceId || "uploaded_temp",
           pdfBuffer: buffer,
+          pdfUri: resolvedPdfUri,
           year: year || "unknown",
           subject: subject || "unknown",
           questionType,
@@ -896,7 +901,7 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
           const isRateLimit = result.errorCode === "AI_RATE_LIMITED";
 
           if (isBilling || result.errorCode === "AI_BILLING_EXHAUSTED") {
-            failedDirectQaCooldown.set(idempotencyKey, Date.now() + 10 * 60 * 1000);
+            if (String(process.env.ENABLE_AI_BILLING_CIRCUIT_BREAKER || "").toLowerCase() === "true") failedDirectQaCooldown.set(idempotencyKey, Date.now() + 10 * 60 * 1000);
             return {
               ok: false,
               found: false,
@@ -963,13 +968,24 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
     }
   } catch (err: any) {
     console.error("[DirectPDFQA] Backend error:", err);
-    return res.status(Number(err.status) || 500).json({
+    const status = Number(err.status) || 500;
+    const expectedUnavailable = status === 503 || [
+      "AI_BILLING_EXHAUSTED",
+      "AI_RATE_LIMITED",
+      "OCR_PROCESSING_UNAVAILABLE",
+      "AI_PROVIDER_UNAVAILABLE",
+    ].includes(String(err.code || err.errorCode || ""));
+    const payload = {
        ok: false,
        found: false,
        errorCode: err.code || err.errorCode || "DIRECT_QA_BACKEND_FAILED",
        stage: err.stage || "MODEL_CALL",
-       message: "The operation failed. Please try again."
-    });
+       message: expectedUnavailable
+         ? "The PDF answer service is temporarily unavailable. Your selected PDF remains active; retry in a moment."
+         : "The operation failed. Please try again.",
+       canRetry: expectedUnavailable,
+    };
+    return expectedUnavailable ? res.json(payload) : res.status(status).json(payload);
   }
 });
 
@@ -1163,17 +1179,29 @@ pdfRoutes.get("/sources", requireFirebaseUser, async (req: any, res) => {
     const user = req.user;
     const db = getAdminDb();
 
-    // Admin sees all, user sees owned
-    const isAdmin = user.roles?.includes("admin") || user.admin === true;
-    let query: any = db.collection("rag_sources");
-    if (!isAdmin) {
-      query = query.where("ownerUid", "==", user.uid);
-    }
+    // Use the normalized inventory so this page includes legacy past papers,
+    // syllabus PDFs, lesson resources, and modern rag_sources records. This is
+    // the authoritative "all PDFs" list used by bulk repair controls.
+    const canManageAllSources = isContentManager(user);
+    const inventory = await getSourceInventory({
+      uid: user.uid,
+      isAdmin: canManageAllSources,
+    });
+    const sources = inventory.all
+      .filter((source: any) => {
+        const fileName = String(source.fileName || source.title || "").toLowerCase();
+        return Boolean(source.storagePath)
+          && source.mediaKind !== "video"
+          && source.mediaKind !== "image"
+          && (fileName.endsWith(".pdf") || source.resourceType !== "image");
+      })
+      .sort((left: any, right: any) => {
+        const leftTime = new Date(left.updatedAt || left.createdAt || 0).getTime();
+        const rightTime = new Date(right.updatedAt || right.createdAt || 0).getTime();
+        return rightTime - leftTime;
+      });
 
-    const snap = await query.orderBy("createdAt", "desc").get();
-    const sources = snap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
-
-    return res.json({ ok: true, sources });
+    return res.json({ ok: true, total: sources.length, sources });
   } catch (err: any) {
     return res.status(500).json({ ok: false, error: "Internal operation failed." });
   }
@@ -1190,6 +1218,11 @@ pdfRoutes.post("/admin/repair-source/:sourceId", requireFirebaseUser, async (req
       return res.status(404).json({ ok: false, error: "Source not found." });
     }
     const src = sourceSnap.data()!;
+    if (isSharedSourceScope(src.sourceScope)) {
+      assertContentManager(req.user);
+    } else if (src.ownerUid !== req.user.uid && !isContentManager(req.user)) {
+      return res.status(403).json({ ok: false, code: "SOURCE_REPAIR_FORBIDDEN", error: "You do not have permission to repair this source." });
+    }
 
     // Reset index status
     await db.collection("rag_sources").doc(sourceId).update({

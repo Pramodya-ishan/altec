@@ -1,3 +1,5 @@
+import { sanitizeKatexMathBoundaries } from "../lib/markdown/katexSafety";
+
 export function normalizeMathMarkdown(
   rawContent: string,
   isStreaming = false,
@@ -94,6 +96,7 @@ export function normalizeMathMarkdown(
     .replace(/(\d)\s*times\s*10\s*([−-])\s*(\d+)/gi, "$1 × 10⁻$3");
 
   output = normalizeDelimitedMath(output);
+  output = sanitizeKatexMathBoundaries(output);
 
   if (isStreaming) {
     output = protectIncompleteStreamingMath(output);

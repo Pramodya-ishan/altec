@@ -28,7 +28,7 @@ assert(!topNav.includes('aria-label="Open navigation"') && sidebar.includes('lg:
 assert(topNav.includes('aria-label="New chat"') && !topNav.includes("/> New chat"), "New chat must be icon-only");
 assert(chat.includes("Ask about a lesson, paper, question, or result."), "English welcome message is missing");
 assert(chat.includes('aria-label="Jump to latest answer"') && !chat.includes("අලුත් පිළිතුර"), "Latest-answer button was not repaired");
-assert(chat.includes('accept="application/pdf,image/png,image/jpeg,image/webp"'), "Assistant attachment input is not restricted");
+assert(chat.includes('accept="') && chat.includes('application/pdf') && chat.includes('application/zip') && chat.includes('.zip') && chat.includes('image/png'), "Assistant attachment input must support validated PDFs, images, and project ZIP files");
 assert(bubble.includes("Thinking") && bubble.includes("Copy answer") && bubble.includes("Reply"), "Assistant thinking/message actions are incomplete");
 assert(chartShell.includes("ResizeObserver") && chartShell.includes("IntersectionObserver"), "Chart shell is missing visibility-aware measurement");
 assert(!chartShell.includes("ResponsiveContainer"), "ResponsiveChartShell must not depend on ResponsiveContainer");
@@ -357,3 +357,30 @@ assert(
 
 console.log("V16 Firebase session, bearer recovery, and 401-storm checks passed.");
 
+
+// V17 chat controls, project upload, PDF maintenance, KaTeX, and Direct PDF availability checks.
+const cloraV17 = await read("src/components/views/CloraXView.tsx");
+const composerV17 = await read("src/components/ui/clora/CloraComposer.tsx");
+const projectUploadV17 = await read("src/lib/projectFileUpload.ts");
+const pdfSourcesV17 = await read("src/pages/PdfSourcesPage.tsx");
+const ragRoutesV17 = await read("server/rag/routes.ts");
+const pdfRoutesV17 = await read("server/pdf/routes.ts");
+const directPdfV17 = await read("server/ai-core/pdf/directPdfQa.ts");
+const katexSafetyV17 = await read("src/lib/markdown/katexSafety.ts");
+const mathRendererV17 = await read("src/components/chat/MathMarkdown.tsx");
+const inventoryV17 = await read("server/sources/sourceInventoryService.ts");
+const aiRoutesV17 = await read("server/ai/routes.ts");
+
+assert(cloraV17.includes("Clear chat") && cloraV17.includes("/api/ai/chat-history/clear") && cloraV17.includes("bufferedAnswerRef.current.clear()"), "V17 clear-chat action or stream cleanup is incomplete");
+assert(aiRoutesV17.includes('chat-history/clear') && aiRoutesV17.includes('collection("chat_context")') && aiRoutesV17.includes('collection("state")'), "V17 server chat-history cleanup is incomplete");
+assert(composerV17.includes("Upload project files") && projectUploadV17.includes("readProjectArchive") && projectUploadV17.includes("node_modules") && projectUploadV17.includes("safeArchivePath") && projectUploadV17.includes('part === ".."'), "V17 project ZIP upload protection is incomplete");
+assert(pdfSourcesV17.includes("Repair all") && pdfSourcesV17.includes("Re-index all") && pdfSourcesV17.includes("OCR required") && pdfSourcesV17.includes("OCR all"), "V17 bulk PDF maintenance controls are incomplete");
+assert(ragRoutesV17.includes("processUploadedPdf") && ragRoutesV17.includes('forceOcr: mode === "ocr"'), "V17 re-index/OCR actions do not use the production PDF pipeline");
+assert(inventoryV17.includes('key.endsWith(":admin")'), "V17 PDF inventory cache does not invalidate administrator views");
+assert(katexSafetyV17.includes("sanitizeKatexMathBoundaries") && katexSafetyV17.includes("INVISIBLE_MATH_CONTROLS") && mathRendererV17.includes('strict: false'), "V17 Sinhala/KaTeX boundary protection is incomplete");
+assert(directPdfV17.includes("createDirectPdfInputPart") && directPdfV17.includes("fileData") && directPdfV17.includes("pdfUri"), "V17 stored Direct PDF requests do not use GCS fileData");
+const directRouteStartV17 = pdfRoutesV17.indexOf('pdfRoutes.post("/direct-qa-file"');
+const directRouteEndV17 = pdfRoutesV17.indexOf('pdfRoutes.post("/question-preview"', directRouteStartV17);
+const directRouteV17 = pdfRoutesV17.slice(directRouteStartV17, directRouteEndV17);
+assert(directRouteStartV17 >= 0 && directRouteEndV17 > directRouteStartV17 && !directRouteV17.includes("res.status(503)"), "V17 Direct PDF endpoint can still surface expected provider unavailability as HTTP 503");
+console.log("V17 chat, project upload, PDF maintenance, KaTeX, and Direct PDF checks passed.");

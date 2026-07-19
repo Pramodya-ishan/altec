@@ -3,8 +3,12 @@ import { classifyAiError } from "./aiErrorClassifier";
 export let aiBillingCircuitOpenUntil = 0;
 let lastBillingError: any = null;
 
+function isBillingCircuitEnforced() {
+  return String(process.env.ENABLE_AI_BILLING_CIRCUIT_BREAKER || "").toLowerCase() === "true";
+}
+
 export function isAiBillingCircuitOpen() {
-  return Date.now() < aiBillingCircuitOpenUntil;
+  return isBillingCircuitEnforced() && Date.now() < aiBillingCircuitOpenUntil;
 }
 
 export function getAiBillingState() {
@@ -16,7 +20,7 @@ export function getAiBillingState() {
 }
 
 export function openAiBillingCircuit(error: any) {
-  aiBillingCircuitOpenUntil = Date.now() + 10 * 60 * 1000;
+  aiBillingCircuitOpenUntil = isBillingCircuitEnforced() ? Date.now() + 10 * 60 * 1000 : 0;
   lastBillingError = {
     code: "AI_BILLING_EXHAUSTED",
     message: "Gemini billing/prepayment credits exhausted",

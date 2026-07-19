@@ -4,6 +4,8 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { requireFirebaseUser, requireNonAnonymousUser } from "../firebase/authMiddleware";
 import { getAdminDb, getAdminBucket, getAdminDbInfo } from "../firebase/admin";
 import { extractPdfText } from "../pdf/extractText";
+import { processUploadedPdf } from "../pdf/processingPipeline";
+import { storageObjectPath } from "../pdf/sourceBuffer";
 import { retryGoogleAuthOperation } from "../utils/retry";
 import multer from "multer";
 import { invalidateInventoryCache, computeIndexStatus } from "../sources/sourceInventoryService";
@@ -660,12 +662,37 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
 
     const db = getAdminDb();
     const sourceRef = db.collection("rag_sources").doc(sourceId);
-    const sourceSnap = await sourceRef.get();
-    if (!sourceSnap.exists) {
-      return res.status(404).json({ ok: false, error: "Source not found in rag_sources." });
-    }
+    let sourceSnap = await sourceRef.get();
+    let sourceData = sourceSnap.exists ? sourceSnap.data() : null;
 
-    const sourceData = sourceSnap.data();
+    // Legacy PDFs can exist in past_papers, lesson_resources, or a user's
+    // syllabus library before a matching rag_sources row was created. Promote
+    // that metadata on first repair so bulk Re-index/OCR truly covers all PDFs.
+    if (!sourceData) {
+      const [paperSnap, lessonSnap, syllabusSnap] = await Promise.all([
+        db.collection("past_papers").doc(sourceId).get(),
+        db.collection("lesson_resources").doc(sourceId).get(),
+        db.collection("users").doc(user.uid).collection("syllabus_resources").doc(sourceId).get(),
+      ]);
+      const legacySnap = [paperSnap, lessonSnap, syllabusSnap].find((snapshot: any) => snapshot.exists);
+      if (!legacySnap) {
+        return res.status(404).json({ ok: false, error: "Source metadata was not found." });
+      }
+      sourceData = legacySnap.data() || {};
+      sourceData = {
+        ...sourceData,
+        id: sourceId,
+        sourceId,
+        ownerUid: sourceData.ownerUid || sourceData.createdBy || user.uid,
+        sourceScope: sourceData.sourceScope
+          || (legacySnap === paperSnap ? "past_paper" : legacySnap === syllabusSnap ? "owner_syllabus" : "paper_structure"),
+        resourceType: sourceData.resourceType || (legacySnap === paperSnap ? "past_paper" : legacySnap === syllabusSnap ? "syllabus" : "paper_structure"),
+        createdAt: sourceData.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await sourceRef.set(sourceData, { merge: true });
+      sourceSnap = await sourceRef.get();
+    }
     if (isSharedSourceScope(sourceData?.sourceScope)) {
       assertContentManager(user);
     } else if (sourceData?.ownerUid !== user.uid && !isContentManager(user)) {
@@ -709,7 +736,7 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
     } else if (!pages && sourceData?.storagePath) {
       try {
         const bucket = getAdminBucket();
-        const file = bucket.file(sourceData.storagePath);
+        const file = bucket.file(storageObjectPath(sourceData.storagePath));
         const [exists] = await file.exists();
         if (exists) {
           const [buffer] = await retryGoogleAuthOperation("fileDownload", async () => await file.download());
@@ -718,6 +745,44 @@ ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUs
       } catch (err: any) {
         console.error("Failed to download PDF from storage for reindexing:", err);
       }
+    }
+
+    // The production PDF pipeline already handles native text, legacy fonts,
+    // Cloud Vision/Gemini OCR, BulkWriter chunk replacement, and metadata sync.
+    // Use it for the common Re-index and OCR actions instead of duplicating a
+    // single Firestore batch that fails once a PDF exceeds 500 operations.
+    if (pdfData && (mode === "auto" || mode === "ocr")) {
+      const sourceOwnerUid = String(sourceData?.ownerUid || user.uid);
+      const processing = await processUploadedPdf({
+        uid: sourceOwnerUid,
+        sourceId,
+        storagePath: storageObjectPath(sourceData?.storagePath),
+        fileName,
+        title,
+        subject,
+        year: year ? String(year) : null,
+        resourceType,
+        sourceType: sourceData?.sourceType || resourceType,
+        sourceScope,
+        lesson: lesson || undefined,
+        buffer: pdfData,
+        forceOcr: mode === "ocr",
+      });
+
+      invalidateInventoryCache(sourceOwnerUid);
+      if (sourceOwnerUid !== user.uid) invalidateInventoryCache(user.uid);
+      return res.status(processing.status === "queued" ? 202 : 200).json({
+        ok: processing.ok,
+        sourceId,
+        status: processing.status,
+        indexStatus: processing.status,
+        chunkCount: processing.chunkCount,
+        needsOcr: processing.needsOcr,
+        extractionMethod: processing.extractionMethod,
+        ocrUnavailable: !processing.ok && processing.status === "needs_ocr" && !isGeminiPdfOcrConfigured(),
+        message: processing.message,
+        error: processing.error,
+      });
     }
 
     // 2. Either process newly uploaded/downloaded file OR use passed-in pages array

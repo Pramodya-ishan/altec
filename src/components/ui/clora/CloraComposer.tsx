@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertCircle,
   ArrowUp,
+  FileArchive,
   FileAudio,
   FileText,
   FileVideo,
@@ -65,6 +66,7 @@ function formatEta(seconds: number) {
 
 function AttachmentIcon({ attachment }: { attachment: any }) {
   const type = String(attachment?.mimeType || attachment?.type || '').toLowerCase();
+  if (attachment?.attachmentType === 'archive' || type.includes('zip')) return <FileArchive className="h-4 w-4" />;
   if (type.startsWith('video/')) return <FileVideo className="h-4 w-4" />;
   if (type.startsWith('audio/')) return <FileAudio className="h-4 w-4" />;
   if (type.startsWith('image/') || attachment?.isImage) return <ImageIcon className="h-4 w-4" />;
@@ -230,8 +232,12 @@ export function CloraComposer({
         {attachments.length > 0 && (
           <div className="flex gap-2 overflow-x-auto px-3 pt-3">
             {attachments.map((attachment, index) => (
-              <div key={attachment.id || attachment.storagePath || `${attachment.name}-${index}`} className="flex max-w-[250px] shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
-                <span className="text-slate-500"><AttachmentIcon attachment={attachment} /></span>
+              <div key={attachment.id || attachment.storagePath || `${attachment.name}-${index}`} className="flex max-w-[270px] shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
+                {attachment?.isImage && attachment?.dataUrl ? (
+                  <img src={attachment.dataUrl} alt="" className="h-9 w-9 shrink-0 rounded-lg object-cover ring-1 ring-slate-200" />
+                ) : (
+                  <span className="text-slate-500"><AttachmentIcon attachment={attachment} /></span>
+                )}
                 <span className="min-w-0">
                   <span className="block truncate font-semibold text-slate-700">{attachment.name || 'Attached file'}</span>
                   {attachment.size ? <span className="text-[10px] text-slate-400">{formatBytes(attachment.size)}</span> : null}
@@ -261,8 +267,9 @@ export function CloraComposer({
 
         <div className="flex items-center justify-between gap-3 px-3 pb-3">
           <div className="flex items-center gap-1">
-            <button type="button" onClick={onAttachClick} disabled={disabled} className="rounded-full p-2.5 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Attach a PDF or image" title="Attach file">
+            <button type="button" onClick={onAttachClick} disabled={disabled} className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Upload project files" title="Upload project files">
               <Paperclip className="h-5 w-5" />
+              <span className="text-xs font-semibold">Upload files</span>
             </button>
             <span className="hidden rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-500 sm:inline">@ tools</span>
           </div>

@@ -64,7 +64,7 @@ export function MessageRenderer({ content }: MessageRendererProps) {
     <div className="text-[15.5px] sm:text-[16px] text-slate-800 leading-[1.8] font-sans break-words prose prose-slate max-w-none prose-headings:font-bold prose-headings:text-slate-950 prose-headings:mt-4 prose-headings:mb-2 prose-p:mb-3 prose-p:leading-[1.8] prose-li:leading-[1.8]">
       <Markdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: "ignore", trust: false, output: "htmlAndMathml" }]]}
         components={{
           img: ({ node, ...props }) => {
             const src = props.src || "";

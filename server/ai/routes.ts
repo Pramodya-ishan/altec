@@ -675,30 +675,38 @@ aiRoutes.post("/chat-history", async (req, res) => {
   }
 });
 
+async function deleteChatCollectionInChunks(collectionRef: any) {
+  let deleted = 0;
+  while (true) {
+    const snapshot = await collectionRef.limit(400).get();
+    if (snapshot.empty) return deleted;
+    const batch = getAdminDb().batch();
+    snapshot.docs.forEach((document: any) => batch.delete(document.ref));
+    await batch.commit();
+    deleted += snapshot.size;
+    if (snapshot.size < 400) return deleted;
+  }
+}
+
 // POST /api/chat-history/clear
 aiRoutes.post("/chat-history/clear", async (req, res) => {
   try {
     const user = await requireUser(req);
     const db = getAdminDb();
-    const batch = db.batch();
-    
-    let opCount = 0;
-    const uidSnap = await db.collection("users").doc(user.uid).collection("chat_history").get().catch(() => ({ docs: [] }));
-    uidSnap.docs.forEach((doc: any) => {
-      batch.delete(doc.ref);
-      opCount++;
-    });
+    const userDocumentIds = Array.from(new Set([user.uid, user.email].filter(Boolean).map(String)));
+    let clearedCount = 0;
 
+    for (const userDocumentId of userDocumentIds) {
+      const userRef = db.collection("users").doc(userDocumentId);
+      clearedCount += await deleteChatCollectionInChunks(userRef.collection("chat_history"));
+      await userRef.collection("chat_context").doc("current").delete().catch(() => undefined);
+      await userRef.collection("state").doc("conversation").delete().catch(() => undefined);
+    }
 
-    // Also delete current chat context
-    const chatCtxRef = db.collection("users").doc(user.uid).collection("chat_context").doc("current");
-    batch.delete(chatCtxRef);
-    opCount++;
-
-    await batch.commit();
-    res.json({ ok: true, clearedCount: opCount });
+    res.json({ ok: true, clearedCount });
   } catch (error: any) {
-    res.status(500).json({ ok: false, error: "Internal operation failed." });
+    console.error("[CHAT_HISTORY_CLEAR_FAILED]", error);
+    res.status(500).json({ ok: false, error: "Chat history could not be cleared." });
   }
 });
 
