@@ -666,6 +666,31 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
         const resolved = await resolveDirectQaSource(req.user, sourceId, storagePath);
         resolvedSource = resolved.source;
 
+        // Reuse the verified question cache / indexed text path before checking
+        // OCR state or downloading the PDF binary. This is the normal path for
+        // follow-up requests such as “q7” and avoids a second full document
+        // read on every question.
+        if (sourceId) {
+          const { answerStructuredFromIndexedPdf } = await import("../ai-core/pdf/indexedDirectPdfQa");
+          const indexedAnswer = await answerStructuredFromIndexedPdf({
+            uid: req.user.uid,
+            sourceId,
+            year: String(year || resolvedSource?.year || "unknown"),
+            subject: String(subject || resolvedSource?.subject || "unknown"),
+            questionType: String(questionType),
+            questionNo: String(questionNo),
+            allowOfficialAnswer: [resolvedSource?.resourceType, resolvedSource?.sourceType, resolvedSource?.sourceScope]
+              .some((value) => String(value || "").toLowerCase().includes("marking"))
+              || /marking[ _-]*scheme/i.test(String(resolvedSource?.title || resolvedSource?.fileName || "")),
+          }).catch((error) => {
+            console.warn("[DirectPDFQA] Indexed fast path failed; continuing to PDF fallback", error);
+            return null;
+          });
+          if (indexedAnswer?.ok && indexedAnswer?.found && indexedAnswer?.completed !== false) {
+            return indexedAnswer;
+          }
+        }
+
         // A scan may already have an asynchronous Vision operation running.
         // Reuse it instead of starting another whole-document scan whenever
         // the student follows up with a short message such as “q1”.

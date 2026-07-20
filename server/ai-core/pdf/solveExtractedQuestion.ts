@@ -91,23 +91,29 @@ type SyllabusContext = {
   referenceSources: Array<Record<string, unknown>>;
 };
 
-async function collectSyllabusContext(params: SolveMcqParams): Promise<SyllabusContext> {
+async function collectSyllabusContext(
+  params: SolveMcqParams,
+  options: { includeHeavyPdfGrounding?: boolean } = {},
+): Promise<SyllabusContext> {
   if (!params.uid) return { text: "", pdfPart: null, referenceParts: [], referenceSources: [] };
 
   const query = `${params.questionText}\n${params.options.join("\n")}`;
+  const fastMode = String(process.env.PDF_FAST_ANSWER_MODE || "true").toLowerCase() !== "false";
+  const lessonLimit = fastMode ? 8 : 16;
+  const generalLimit = fastMode ? 6 : 12;
   const [lessonRetrieval, generalRetrieval] = await Promise.all([
     retrieveRelevantKnowledge({
       uid: params.uid,
       query,
       subject: params.subject,
-      limit: 16,
+      limit: lessonLimit,
       strictLesson: true,
     }).catch(() => ({ chunks: [], sources: [] } as any)),
     retrieveRelevantKnowledge({
       uid: params.uid,
       query,
       subject: params.subject,
-      limit: 12,
+      limit: generalLimit,
     }).catch(() => ({ chunks: [], sources: [] } as any)),
   ]);
 
@@ -129,28 +135,33 @@ async function collectSyllabusContext(params: SolveMcqParams): Promise<SyllabusC
       seen.add(key);
       return Boolean(String(chunk?.text || "").trim());
     })
-    .slice(0, 12);
+    .slice(0, fastMode ? 8 : 12);
 
   const syllabusChunks = approvedChunks
     .map((chunk: any, index: number) => {
       const priority = lessonChunks.includes(chunk) ? "Lesson resource" : "Approved syllabus resource";
       const label = [chunk?.title, chunk?.lesson].filter(Boolean).join(" · ");
-      return `[${priority} ${index + 1}${label ? `: ${label}` : ""}]\n${String(chunk?.text || "").slice(0, 4_000)}`;
+      return `[${priority} ${index + 1}${label ? `: ${label}` : ""}]\n${String(chunk?.text || "").slice(0, fastMode ? 2_500 : 4_000)}`;
     })
     .join("\n\n")
-    .slice(0, 32_000);
+    .slice(0, fastMode ? 18_000 : 32_000);
 
-  const syllabusPdf = await getSubjectSyllabusGroundingPdf(params.uid, params.subject).catch(() => null);
   let pdfPart: any = null;
-  if (syllabusPdf?.gcsUri) {
-    pdfPart = { fileData: { fileUri: syllabusPdf.gcsUri, mimeType: "application/pdf" } };
-  } else if (syllabusPdf?.buffer?.length) {
-    pdfPart = { inlineData: { mimeType: "application/pdf", data: syllabusPdf.buffer.toString("base64") } };
+  let reference: any = { parts: [], sources: [], domains: [] };
+  if (options.includeHeavyPdfGrounding) {
+    const [syllabusPdf, loadedReference] = await Promise.all([
+      getSubjectSyllabusGroundingPdf(params.uid, params.subject).catch(() => null),
+      String(params.subject || "").toUpperCase() === "SFT"
+        ? getSftReferenceGroundingParts(query).catch(() => ({ parts: [], sources: [], domains: [] }))
+        : Promise.resolve({ parts: [], sources: [], domains: [] }),
+    ]);
+    if (syllabusPdf?.gcsUri) {
+      pdfPart = { fileData: { fileUri: syllabusPdf.gcsUri, mimeType: "application/pdf" } };
+    } else if (syllabusPdf?.buffer?.length) {
+      pdfPart = { inlineData: { mimeType: "application/pdf", data: syllabusPdf.buffer.toString("base64") } };
+    }
+    reference = loadedReference;
   }
-
-  const reference = String(params.subject || "").toUpperCase() === "SFT"
-    ? await getSftReferenceGroundingParts(query).catch(() => ({ parts: [], sources: [], domains: [] }))
-    : { parts: [], sources: [], domains: [] };
 
   return {
     text: syllabusChunks,
@@ -188,7 +199,7 @@ export async function solveExtractedMcqQuestion(params: SolveMcqParams): Promise
     return `(${index + 1}) ${cleaned}`;
   });
   
-  const syllabusContext = await collectSyllabusContext(params);
+  const syllabusContext = await collectSyllabusContext(params, { includeHeavyPdfGrounding: false });
 
   const systemInstruction = `
 You are solving an already verified Sri Lankan G.C.E. A/L ${subject} MCQ.
@@ -244,24 +255,54 @@ Return JSON:
 }
 `;
 
-  const parts: any[] = [];
-  if (syllabusContext.pdfPart) parts.push(syllabusContext.pdfPart);
-  if (Array.isArray(syllabusContext.referenceParts)) parts.push(...syllabusContext.referenceParts);
-  parts.push({
-    text: `${userPrompt}\n\nSUPPORTING SYLLABUS TEXT:\n${syllabusContext.text || "No indexed excerpt was available. Use the attached authoritative syllabus PDF. Do not expand beyond its scope."}`,
-  });
+  const buildParts = (context: SyllabusContext) => {
+    const parts: any[] = [];
+    if (context.pdfPart) parts.push(context.pdfPart);
+    if (Array.isArray(context.referenceParts)) parts.push(...context.referenceParts);
+    parts.push({
+      text: `${userPrompt}\n\nSUPPORTING SYLLABUS TEXT:\n${context.text || "No indexed excerpt was available. Use the attached authoritative syllabus PDF. Do not expand beyond its scope."}`,
+    });
+    return parts;
+  };
 
-  for (const task of ["direct_pdf_solve", "final_answer"] as const) {
+  // First pass: small text-only context on the fast PDF solver model.
+  // Skip it when retrieval found no syllabus evidence; otherwise the app would
+  // spend one model call only to discover that the authoritative PDF fallback
+  // is required.
+  if (syllabusContext.text) try {
+    const { result: response } = await callGeminiWithFallback("direct_pdf_solve", {
+      model: "ignored",
+      contents: [{ role: "user", parts: buildParts(syllabusContext) }],
+      config: {
+        systemInstruction,
+        temperature: 0,
+        responseMimeType: "application/json",
+      },
+    } as any);
+
+    if (response.text) {
+      const parsed = parseJsonResponse(response.text);
+      const normalized = normalizeSolvedResult(parsed, normalizedOptions);
+      if (normalized) return normalized;
+    }
+  } catch (err) {
+    console.error("[AI_CORE] MCQ fast solver failed:", err);
+  }
+
+  // Slow fallback: attach authoritative PDFs only after the small fast pass
+  // failed. This removes repeated multi-megabyte PDF grounding from the common
+  // path while preserving the strict syllabus fallback.
+  const fullContext = await collectSyllabusContext(params, { includeHeavyPdfGrounding: true });
+  for (const task of ["final_answer"] as const) {
     try {
       const { result: response } = await callGeminiWithFallback(task, {
         model: "ignored",
-        contents: [{ role: "user", parts }],
+        contents: [{ role: "user", parts: buildParts(fullContext) }],
         config: {
           systemInstruction,
           temperature: 0,
           responseMimeType: "application/json",
-          maxOutputTokens: 4_096,
-        },
+          },
       } as any);
 
       if (!response.text) continue;
@@ -375,21 +416,24 @@ function normalizeEssayResult(value: any, expectedSubparts: string[]): SolvedEss
 
 export async function solveExtractedEssayQuestion(params: SolveEssayParams): Promise<SolvedEssayResult | null> {
   if (!params.questionText || params.questionText.trim().length < 20) return null;
-  const syllabusContext = await collectSyllabusContext({ ...params, options: [] });
+  const syllabusContext = await collectSyllabusContext({ ...params, options: [] }, { includeHeavyPdfGrounding: false });
   const expectedSubparts = extractQuestionSubparts(params.questionText);
-  const parts: any[] = [];
-  if (syllabusContext.pdfPart) parts.push(syllabusContext.pdfPart);
-  if (Array.isArray(syllabusContext.referenceParts)) parts.push(...syllabusContext.referenceParts);
-  parts.push({
-    text: `VERIFIED QUESTION FROM THE SELECTED PDF:
+  const buildEssayParts = (context: SyllabusContext) => {
+    const parts: any[] = [];
+    if (context.pdfPart) parts.push(context.pdfPart);
+    if (Array.isArray(context.referenceParts)) parts.push(...context.referenceParts);
+    parts.push({
+      text: `VERIFIED QUESTION FROM THE SELECTED PDF:
 ${params.questionText}
 
 EXPECTED SUBPARTS: ${expectedSubparts.length > 0 ? expectedSubparts.join(", ") : "No explicit subpart labels detected"}
 
 ` +
       `INDEXED APPROVED SFT EVIDENCE:
-${syllabusContext.text || "No indexed excerpt was available; use only the attached official syllabus and SFT reference PDF."}`,
-  });
+${context.text || "No indexed excerpt was available; use only the attached official syllabus and SFT reference PDF."}`,
+    });
+    return parts;
+  };
 
   const systemInstruction = `
 You answer one exact, already extracted Sri Lankan G.C.E. A/L ${params.subject} ${params.questionType} question.
@@ -413,12 +457,36 @@ NON-NEGOTIABLE RULES:
 `;
 
   let incompleteResult: SolvedEssayResult | null = null;
-  for (const task of ["direct_pdf_solve", "final_answer"] as const) {
+  if (syllabusContext.text) try {
+    const { result } = await callGeminiWithFallback("direct_pdf_solve", {
+      model: "ignored",
+      contents: [{ role: "user", parts: buildEssayParts(syllabusContext) }],
+      config: {
+        systemInstruction,
+        temperature: 0,
+        responseMimeType: "application/json",
+      },
+    } as any);
+    if (result.text) {
+      const parsed = parseJsonResponse(result.text);
+      const normalized = normalizeEssayResult(parsed, expectedSubparts);
+      if (normalized) {
+        if (normalized.scopeStatus !== "in_syllabus" || normalized.complete) return normalized;
+        incompleteResult = normalized;
+      }
+    }
+  } catch (error) {
+    console.error("[AI_CORE] Essay fast solver failed:", error);
+  }
+
+  const fullContext = await collectSyllabusContext({ ...params, options: [] }, { includeHeavyPdfGrounding: true });
+  for (const task of ["final_answer"] as const) {
     try {
       const retryInstruction = incompleteResult
         ? `\n\nPREVIOUS ANSWER WAS INCOMPLETE. Missing labels: ${incompleteResult.missingSubparts.join(", ")}. Return one complete replacement answer, not a continuation fragment. Previous answer:\n${incompleteResult.answerMarkdownSinhala}`
         : "";
-      const requestParts = retryInstruction ? [...parts, { text: retryInstruction }] : parts;
+      const baseParts = buildEssayParts(fullContext);
+      const requestParts = retryInstruction ? [...baseParts, { text: retryInstruction }] : baseParts;
       const { result } = await callGeminiWithFallback(task, {
         model: "ignored",
         contents: [{ role: "user", parts: requestParts }],
@@ -426,8 +494,7 @@ NON-NEGOTIABLE RULES:
           systemInstruction,
           temperature: 0,
           responseMimeType: "application/json",
-          maxOutputTokens: 8_192,
-        },
+          },
       } as any);
       if (!result.text) continue;
       const parsed = parseJsonResponse(result.text);

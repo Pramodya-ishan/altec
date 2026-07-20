@@ -46,7 +46,6 @@ Instructions:
     config: {
       systemInstruction,
       temperature: 0.1,
-      maxOutputTokens: 12_288,
     },
   });
 
@@ -125,8 +124,7 @@ Instructions:
       config: {
         systemInstruction,
         temperature: 0.2, // Lower temperature for more factual answers
-        maxOutputTokens: 12_288,
-      },
+        },
     });
 
     const answer = response.text || "සමාවන්න, එම ප්‍රශ්නයට පිළිතුරු දීමට මට නොහැකි විය.";

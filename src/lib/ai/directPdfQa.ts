@@ -163,32 +163,14 @@ export async function askDirectPdfQa(params: {
     onProgress?.("generating");
     const result = await response.json();
     const evidence = result?.sourceEvidence;
-    if (
-      result?.ok
-      && evidence?.pageNumber
-      && (evidence?.hasRelevantImage === true || asksForPdfVisual(prompt))
-      && (source.id || source.sourceId)
-    ) {
-      try {
-        const previewResponse = await apiFetch(getLargeEndpointUrl("/api/pdf/question-preview"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sourceId: source.id || source.sourceId,
-            storagePath: normalized ? (normalized.kind === "path" ? normalized.path : normalized.url) : source.storagePath,
-            pageNumber: evidence.pageNumber,
-            crop: evidence.imageRegion || null,
-            title: source.title || source.fileName,
-          }),
-        });
-        const preview = await previewResponse.json().catch(() => null);
-        if (previewResponse.ok && preview?.imageUrl) {
-          result.sourceEvidence.imagePreviewUrl = preview.imageUrl;
-          result.sourceEvidence.imagePreviewStoragePath = preview.storagePath;
-        }
-      } catch (previewError) {
-        if (import.meta.env.DEV) console.warn("[DirectPDFQA] PDF image preview unavailable", previewError);
-      }
+    if (result?.ok && evidence?.pageNumber && (source.id || source.sourceId)) {
+      // Do not block the answer on PDF rasterization. The message receives the
+      // verified page/crop metadata immediately and the visual renderer fetches
+      // the exact original question preview in parallel after the answer starts.
+      result.sourceEvidence.sourceId ||= source.id || source.sourceId;
+      result.sourceEvidence.imagePreviewStoragePath ||= normalized
+        ? (normalized.kind === "path" ? normalized.path : normalized.url)
+        : source.storagePath;
     }
     // Transform the evidence-first JSON into clean Markdown plus structured
     // visual aids. The model never emits raw visual JSON into the answer text.

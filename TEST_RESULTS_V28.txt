@@ -1,0 +1,20 @@
+Production Repair V28 verification
+==================================
+PASS  npm run typecheck
+PASS  npm run test:sources
+PASS  npm run verify:repair
+PASS  npm run build:vercel
+PASS  Vite production compilation
+PASS  Self-contained Vercel runtime verification
+PASS  Isolated runtime smoke boot
+
+Covered regressions:
+- Uncapped learner-facing AI and PDF answer paths
+- Up to 12 automatic continuation passes
+- Non-blocking exact original PDF question preview
+- Full question-region metadata for tables/graphs/diagrams
+- Multiple meaningful Z-score points on the same day
+- No duplicate unchanged predictor autosaves
+- Quick move between Papers, Models, and Marking Schemes
+- Structured paper type support
+- Tooltip containment on Z-score and marks graphs

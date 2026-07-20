@@ -294,7 +294,7 @@ export async function createQualityRepairedAnswer(params: {
   modelInstruction?: unknown;
   systemInstruction: string;
   contentsParts?: any[];
-  maxOutputTokens: number;
+  maxOutputTokens?: number;
 }) {
   const repair = buildQualityRepairInstruction(params);
   const contents = params.contentsParts?.length
@@ -310,7 +310,7 @@ export async function createQualityRepairedAnswer(params: {
     config: {
       systemInstruction: params.systemInstruction,
       temperature: 0.05,
-      maxOutputTokens: Math.max(12_288, params.maxOutputTokens),
+      ...(params.maxOutputTokens ? { maxOutputTokens: Math.max(12_288, params.maxOutputTokens) } : {}),
     },
   }, getAIClient());
   return {

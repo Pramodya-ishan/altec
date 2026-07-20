@@ -81,7 +81,6 @@ export async function processAIRequest(req: any) {
           config: {
             systemInstruction,
             temperature: temp,
-            maxOutputTokens: 12_288,
             tools: useSearch ? [{ googleSearch: {} }] : undefined
           }
         });
@@ -106,7 +105,8 @@ export async function processAIRequest(req: any) {
     let finishReason = getModelFinishReason(response);
     let completeness = assessAnswerCompleteness({ prompt, answer: safeResponseText, finishReason, mode });
     let completionPasses = 0;
-    while (activeChat && completeness.shouldContinue && completionPasses < 2) {
+    const maxCompletionPasses = Math.max(1, Math.min(12, Number(process.env.AI_AUTO_CONTINUATION_PASSES || 12) || 12));
+    while (activeChat && completeness.shouldContinue && completionPasses < maxCompletionPasses) {
       completionPasses += 1;
       const continuation = await activeChat.sendMessage({
         message: buildContinuationInstruction({ originalPrompt: prompt, currentAnswer: safeResponseText, assessment: completeness }),
@@ -133,7 +133,6 @@ export async function processAIRequest(req: any) {
         report: qualityReview.report,
         modelInstruction: qualityReview.repairInstruction,
         systemInstruction,
-        maxOutputTokens: 12_288,
       });
       if (repaired.answer.trim()) {
         safeResponseText = repaired.answer;

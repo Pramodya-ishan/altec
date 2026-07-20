@@ -217,8 +217,10 @@ export function upsertDailyPredictorHistory<T extends Record<string, any>>(
     : [];
   const parsedDate = new Date(input.date || new Date().toISOString());
   const timestamp = Number.isFinite(parsedDate.getTime()) ? parsedDate.toISOString() : new Date().toISOString();
-  const day = timestamp.slice(0, 10);
-  const fingerprint = `predictor:${day}:${input.projectedMarks.sft}:${input.projectedMarks.et}:${input.projectedMarks.ict}:${input.zScore}`;
+  // Keep every meaningful progress change, including multiple changes on the
+  // same day. Deduplicate by the calculated values rather than by date so an
+  // autosave of unchanged values does not create an endless history loop.
+  const fingerprint = `predictor:${input.projectedMarks.sft}:${input.projectedMarks.et}:${input.projectedMarks.ict}:${input.zScore}:${input.subjectZScores.sft}:${input.subjectZScores.et}:${input.subjectZScores.ict}`;
   const point = {
     date: timestamp,
     zScore: Number(input.zScore.toFixed(4)),
@@ -238,11 +240,7 @@ export function upsertDailyPredictorHistory<T extends Record<string, any>>(
     return { data: nextData, changed: false };
   }
 
-  const sameDayIndex = history.findIndex((entry: any) =>
-    entry?.calculationBasis === "exam_score_predictor" && String(entry?.date || "").slice(0, 10) === day,
-  );
-  if (sameDayIndex >= 0) history[sameDayIndex] = point;
-  else history.push(point);
+  history.push(point);
 
   (nextData as any).zScoreHistory = history
     .sort((left: any, right: any) => Date.parse(String(left?.date || "")) - Date.parse(String(right?.date || "")))

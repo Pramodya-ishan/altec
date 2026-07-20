@@ -166,6 +166,7 @@ Return JSON only:
     "questionNo": "${questionNo}",
     "questionText": string|null,
     "options": string[]|null,
+    "questionRegion": {"x":number,"y":number,"width":number,"height":number}|null,
     "hasRelevantImage": boolean,
     "imageRegion": {"x":number,"y":number,"width":number,"height":number}|null,
     "visualDescription": string|null
@@ -201,7 +202,8 @@ Question Number: ${questionNo}
 Source ID: ${sourceId}
 
 Return JSON with exact evidence. If not found after searching the complete PDF, set found:false. Do not require MCQ options when Question Type is ESSAY or STRUCTURED.
-If a diagram, graph, table, photograph, or other visual is part of the requested question, set hasRelevantImage:true, return its approximate normalized page region, and transcribe all relevant geometry, labels, dimensions, arrows, axes, and table values into visualDescription. Coordinates must be between 0 and 1, measured from the page's top-left. Otherwise return hasRelevantImage:false, imageRegion:null, and visualDescription:null.
+Always return questionRegion for the complete printed question block, including its heading, every visible subpart, marks, table, graph, diagram, and continuation visible on that page. Add a small margin around the block. If the question spans multiple pages, use the first page and include as much of the main block as possible; the UI can fall back to the full page. Coordinates must be between 0 and 1, measured from the page's top-left.
+If a diagram, graph, table, photograph, or other visual is part of the requested question, set hasRelevantImage:true, return its approximate normalized imageRegion, and transcribe all relevant geometry, labels, dimensions, arrows, axes, and table values into visualDescription. Otherwise return hasRelevantImage:false, imageRegion:null, and visualDescription:null.
 `;
 
   // [PHASE 1] Track Direct PDF QA Call
@@ -226,8 +228,7 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
           systemInstruction,
           temperature: 0,
           responseMimeType: "application/json",
-          maxOutputTokens: 8_192,
-        },
+          },
       });
       if (!response.text) throw new Error("Empty response from Gemini API");
       return JSON.parse(response.text.trim().replace(/^```json\s*/iu, "").replace(/\s*```$/u, ""));
@@ -304,15 +305,16 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
       };
     }
 
-    const region = result?.sourceEvidence?.imageRegion;
-    if (region && typeof region === "object") {
+    for (const regionKey of ["questionRegion", "imageRegion"] as const) {
+      const region = result?.sourceEvidence?.[regionKey];
+      if (!region || typeof region !== "object") continue;
       const values = [region.x, region.y, region.width, region.height].map(Number);
       const valid = values.every(Number.isFinite)
         && values[0] >= 0 && values[1] >= 0
         && values[2] > 0 && values[3] > 0
         && values[0] + values[2] <= 1.02
         && values[1] + values[3] <= 1.02;
-      if (!valid) result.sourceEvidence.imageRegion = null;
+      if (!valid) result.sourceEvidence[regionKey] = null;
     }
 
     // Solver runs only after the exact question has passed validation.
@@ -487,7 +489,6 @@ export async function askGeminiExtractedTextStructured(params: {
       systemInstruction,
       temperature: 0,
       responseMimeType: "application/json",
-      maxOutputTokens: 8_192,
     },
   });
 

@@ -79,8 +79,17 @@ export function getModelForTask(task: AITask): ModelConfig {
       };
     case "direct_pdf_solve":
       return {
-        primary: process.env.GEMINI_FINAL_MODEL || "gemini-3.1-pro-preview",
-        fallback: process.env.GEMINI_FINAL_FALLBACK || "gemini-2.5-pro"
+        // PDF answers already have an exact, verified question before this
+        // task runs. A Flash model is substantially faster and is sufficient
+        // for the first syllabus-bounded solve pass. The slower Pro path is
+        // still available through the explicit final_answer fallback in the
+        // solver when the fast pass is incomplete.
+        primary: process.env.GEMINI_PDF_SOLVE_MODEL
+          || process.env.GEMINI_PDF_QA_MODEL
+          || "gemini-3.5-flash",
+        fallback: process.env.GEMINI_PDF_SOLVE_FALLBACK
+          || process.env.GEMINI_PDF_QA_FALLBACK
+          || "gemini-2.5-flash"
       };
     case "final_answer":
       return {

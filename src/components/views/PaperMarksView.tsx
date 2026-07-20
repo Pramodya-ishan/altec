@@ -124,11 +124,11 @@ export default function PaperMarksView() {
  <div className="w-full h-[280px]">
  <ResponsiveChartShell minHeight={280}>
  {({ width, height }) => (
- <LineChart width={width} height={height} data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
+ <LineChart width={width} height={height} data={chartData} margin={{ top: 15, right: 28, left: -10, bottom: 20 }}>
  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
  <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 12 ? v.substring(0, 12) + '...' : v} dy={10} />
  <YAxis domain={[0, maxScale]} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }} />
- <Tooltip cursor={{ stroke: '#cbd5e1', strokeWidth: 1, strokeDasharray: '3 3' }} content={<ChartTooltip />} offset={12} allowEscapeViewBox={{ x: true, y: true }} wrapperStyle={{ pointerEvents: 'none', zIndex: 20 }} />
+ <Tooltip cursor={{ stroke: '#cbd5e1', strokeWidth: 1, strokeDasharray: '3 3' }} content={<ChartTooltip />} offset={8} allowEscapeViewBox={{ x: false, y: false }} wrapperStyle={{ pointerEvents: 'none', zIndex: 30, maxWidth: 'calc(100% - 12px)' }} isAnimationActive={false} />
  <Legend verticalAlign="top" height={36} iconType="circle" wrapperStyle={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }} />
  <Line connectNulls type="monotone" dataKey="total" name="Total marks" stroke="var(--primary-600)" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: 'currentColor', strokeWidth: 2 }} activeDot={{ r: 6, strokeWidth: 2 }} />
  </LineChart>
@@ -165,11 +165,11 @@ export default function PaperMarksView() {
  <div className="w-full h-[200px]">
  <ResponsiveChartShell minHeight={200}>
  {({ width, height }) => (
- <LineChart width={width} height={height} data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
+ <LineChart width={width} height={height} data={chartData} margin={{ top: 15, right: 28, left: -10, bottom: 20 }}>
  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
  <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 10 ? v.substring(0, 10) + '...' : v} dy={10} />
  <YAxis domain={[0, maxSubScale]} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }} />
- <Tooltip cursor={{ stroke: '#cbd5e1', strokeWidth: 1, strokeDasharray: '3 3' }} content={<ChartTooltip />} offset={12} allowEscapeViewBox={{ x: true, y: true }} wrapperStyle={{ pointerEvents: 'none', zIndex: 20 }} />
+ <Tooltip cursor={{ stroke: '#cbd5e1', strokeWidth: 1, strokeDasharray: '3 3' }} content={<ChartTooltip />} offset={8} allowEscapeViewBox={{ x: false, y: false }} wrapperStyle={{ pointerEvents: 'none', zIndex: 30, maxWidth: 'calc(100% - 12px)' }} isAnimationActive={false} />
  <Line connectNulls type="monotone" dataKey="mcq" name="MCQ" stroke="#f59e0b" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: 'currentColor', strokeWidth: 2 }} activeDot={{ r: 6, strokeWidth: 2 }} />
  </LineChart>
  )}
@@ -183,11 +183,11 @@ export default function PaperMarksView() {
  <div className="w-full h-[200px]">
  <ResponsiveChartShell minHeight={200}>
  {({ width, height }) => (
- <LineChart width={width} height={height} data={chartData} margin={{ top: 15, right: 10, left: -20, bottom: 20 }}>
+ <LineChart width={width} height={height} data={chartData} margin={{ top: 15, right: 28, left: -10, bottom: 20 }}>
  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
  <XAxis dataKey="title" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 600 }} tickFormatter={(v) => v.length > 10 ? v.substring(0, 10) + '...' : v} dy={10} />
  <YAxis domain={[0, maxSubScale]} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#94a3b8', fontWeight: 600 }} />
- <Tooltip cursor={{ stroke: '#cbd5e1', strokeWidth: 1, strokeDasharray: '3 3' }} content={<ChartTooltip />} offset={12} allowEscapeViewBox={{ x: true, y: true }} wrapperStyle={{ pointerEvents: 'none', zIndex: 20 }} />
+ <Tooltip cursor={{ stroke: '#cbd5e1', strokeWidth: 1, strokeDasharray: '3 3' }} content={<ChartTooltip />} offset={8} allowEscapeViewBox={{ x: false, y: false }} wrapperStyle={{ pointerEvents: 'none', zIndex: 30, maxWidth: 'calc(100% - 12px)' }} isAnimationActive={false} />
  <Line connectNulls type="monotone" dataKey="essay" name="Essay" stroke="#10b981" strokeWidth={3} strokeLinecap="round" dot={{ r: 4, fill: 'currentColor', strokeWidth: 2 }} activeDot={{ r: 6, strokeWidth: 2 }} />
  </LineChart>
  )}

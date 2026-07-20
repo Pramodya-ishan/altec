@@ -83,6 +83,15 @@ const predictorOnce = upsertDailyPredictorHistory(mixedHistory, {
   projectedMarks: { sft: 60, et: 61, ict: 62 },
 });
 assert.equal(predictorOnce.changed, true);
+
+const predictorChangedSameDay = upsertDailyPredictorHistory(predictorOnce.data, {
+  date: "2026-07-18T10:30:00.000Z",
+  zScore: 1.6,
+  subjectZScores: { sft: 1.5, et: 1.6, ict: 1.7 },
+  projectedMarks: { sft: 62, et: 63, ict: 64 },
+});
+assert.equal(predictorChangedSameDay.changed, true, "a real same-day predictor change must be preserved");
+assert.equal(predictorChangedSameDay.data.zScoreHistory.length, predictorOnce.data.zScoreHistory.length + 1);
 const predictorAgain = upsertDailyPredictorHistory(predictorOnce.data, {
   date: "2026-07-18T11:00:00.000Z",
   zScore: 1.5,

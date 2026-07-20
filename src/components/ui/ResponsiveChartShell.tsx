@@ -69,7 +69,7 @@ export const ResponsiveChartShell: React.FC<ResponsiveChartShellProps> = ({
   return (
     <div
       ref={containerRef}
-      className="relative w-full min-w-0 overflow-hidden"
+      className="chart-boundary relative w-full min-w-0 overflow-hidden"
       style={{ height: minHeight, minHeight, minWidth: 0 }}
       aria-busy={!isReady}
     >

@@ -306,7 +306,6 @@ STRICT RULES:
         required: ["paperMode", "paperType", "title", "disclaimer", "questions", "confidenceReport", "committeeSummary"],
       },
       temperature: mode === "safe" ? 0.12 : mode === "surprise" ? 0.38 : 0.22,
-      maxOutputTokens: 16_000,
     },
   };
   let parsed: any = {};

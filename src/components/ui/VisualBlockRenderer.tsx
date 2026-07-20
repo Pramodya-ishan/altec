@@ -1,13 +1,17 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   BarChart3,
   CheckCircle2,
   FileCode,
   FlaskConical,
+  ExternalLink,
   HelpCircle,
   Image as ImageIcon,
   Layers,
+  Loader2,
+  Minus,
+  Plus,
   ShieldCheck,
   Table as TableIcon,
 } from "lucide-react";
@@ -41,16 +45,20 @@ function MistakeImagePreview({ block }: { block: MistakePreviewBlock }) {
 }
 
 function PdfImagePreview({ block }: { block: PdfPreviewBlock }) {
-  const [imageUrl, setImageUrl] = useState(block.imageUrl);
+  const [imageUrl, setImageUrl] = useState(block.imageUrl || "");
   const [failed, setFailed] = useState(false);
+  const [loading, setLoading] = useState(!block.imageUrl);
+  const [zoom, setZoom] = useState(1);
   const refreshAttempted = useRef(false);
 
   const refreshSignedUrl = async () => {
     if (refreshAttempted.current || !block.sourceId || !block.pageNumber) {
+      setLoading(false);
       setFailed(true);
       return;
     }
     refreshAttempted.current = true;
+    setLoading(true);
     try {
       const token = await auth.currentUser?.getIdToken();
       if (!token) throw new Error("LOGIN_REQUIRED");
@@ -62,9 +70,10 @@ function PdfImagePreview({ block }: { block: PdfPreviewBlock }) {
         },
         body: JSON.stringify({
           sourceId: block.sourceId,
+          storagePath: block.storagePath,
           pageNumber: block.pageNumber,
           crop: block.crop || null,
-          title: block.title,
+          title: block.sourceTitle || block.title,
         }),
       });
       const payload = await response.json().catch(() => null);
@@ -73,26 +82,71 @@ function PdfImagePreview({ block }: { block: PdfPreviewBlock }) {
       setFailed(false);
     } catch {
       setFailed(true);
+    } finally {
+      setLoading(false);
     }
   };
 
+  useEffect(() => {
+    if (!imageUrl) void refreshSignedUrl();
+    // A preview is fetched only once for a given immutable message block.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (failed) {
-    return <p className="my-3 text-xs text-slate-500">PDF visual preview is temporarily unavailable.</p>;
+    return (
+      <div className="my-4 max-w-4xl rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+        Original PDF layout preview is temporarily unavailable. The verified question text and answer remain visible below.
+      </div>
+    );
   }
 
   return (
-    <figure className="my-4 max-w-2xl">
-      <img
-        src={imageUrl}
-        alt={block.title || "PDF question visual"}
-        className="block max-h-[620px] w-auto max-w-full rounded-xl object-contain"
-        loading="lazy"
-        referrerPolicy="no-referrer"
-        onError={() => void refreshSignedUrl()}
-      />
-      <figcaption className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
-        <ImageIcon className="h-3.5 w-3.5" />
-        <span>{block.caption || block.title}{block.pageNumber ? ` · Page ${block.pageNumber}` : ""}</span>
+    <figure className="pdf-question-card my-5 w-full max-w-4xl overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-[0_14px_44px_rgba(15,23,42,0.08)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50/90 px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.14em] text-indigo-600">
+            <ImageIcon className="h-3.5 w-3.5" /> Original PDF question
+          </div>
+          <p className="mt-1 truncate text-sm font-bold text-slate-900">{block.questionLabel || block.title || "Question"}</p>
+          {(block.sourceTitle || block.pageNumber) && (
+            <p className="mt-0.5 truncate text-[11px] font-medium text-slate-500">
+              {block.sourceTitle || "Selected source"}{block.pageNumber ? ` · Page ${block.pageNumber}` : ""}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <button type="button" onClick={() => setZoom((value) => Math.max(0.8, Number((value - 0.2).toFixed(1))))} disabled={zoom <= 0.8} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Zoom out PDF question"><Minus className="h-3.5 w-3.5" /></button>
+          <span className="min-w-12 text-center text-[10px] font-black tabular-nums text-slate-500">{Math.round(zoom * 100)}%</span>
+          <button type="button" onClick={() => setZoom((value) => Math.min(2, Number((value + 0.2).toFixed(1))))} disabled={zoom >= 2} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Zoom in PDF question"><Plus className="h-3.5 w-3.5" /></button>
+          {imageUrl && <a href={imageUrl} target="_blank" rel="noreferrer" className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100" aria-label="Open original PDF question image"><ExternalLink className="h-3.5 w-3.5" /></a>}
+        </div>
+      </div>
+
+      <div className="relative max-h-[760px] overflow-auto bg-[#eef1f5] p-3 sm:p-5">
+        {loading && (
+          <div className="flex min-h-64 items-center justify-center gap-2 rounded-xl bg-white text-xs font-semibold text-slate-500 shadow-sm">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading the exact printed question…
+          </div>
+        )}
+        {imageUrl && (
+          <div className="mx-auto w-fit min-w-full text-center">
+            <img
+              src={imageUrl}
+              alt={block.title || "Original PDF question"}
+              className="mx-auto block h-auto rounded-sm bg-white object-contain shadow-[0_4px_18px_rgba(15,23,42,0.16)] transition-[width] duration-200"
+              style={{ width: `${zoom * 100}%`, maxWidth: "none" }}
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              onLoad={() => setLoading(false)}
+              onError={() => void refreshSignedUrl()}
+            />
+          </div>
+        )}
+      </div>
+
+      <figcaption className="border-t border-slate-200 px-4 py-3 text-[11px] font-medium leading-5 text-slate-500">
+        {block.caption || "Original layout preserved from the selected PDF, including tables, graphs, diagrams, labels, dimensions, and allocated marks."}
       </figcaption>
     </figure>
   );

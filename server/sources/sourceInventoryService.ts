@@ -7,6 +7,7 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>();
+const sourceByIdCache = new Map<string, CacheEntry>();
 
 function inventoryText(value: unknown) {
   return String(value || "")
@@ -70,6 +71,67 @@ export function invalidateInventoryCache(uid: string) {
       cache.delete(key);
     }
   }
+  sourceByIdCache.clear();
+}
+
+export async function getSourceById(params: {
+  uid: string;
+  sourceId: string;
+  isAdmin?: boolean;
+}) {
+  const { uid, sourceId, isAdmin } = params;
+  const cacheKey = `${uid}:${sourceId}:${isAdmin ? "admin" : "user"}`;
+  const now = Date.now();
+  const cached = sourceByIdCache.get(cacheKey);
+  if (cached && cached.expiry > now) return cached.data;
+
+  const db = getAdminDb();
+  const [ragSnapshot, paperSnapshot, lessonSnapshot, syllabusSnapshot] = await Promise.all([
+    db.collection("rag_sources").doc(sourceId).get().catch(() => null),
+    db.collection("past_papers").doc(sourceId).get().catch(() => null),
+    db.collection("lesson_resources").doc(sourceId).get().catch(() => null),
+    db.collection("users").doc(uid).collection("syllabus_resources").doc(sourceId).get().catch(() => null),
+  ]);
+
+  const rows = [ragSnapshot, paperSnapshot, lessonSnapshot, syllabusSnapshot]
+    .filter((snapshot: any) => snapshot?.exists)
+    .map((snapshot: any) => ({ id: snapshot.id, ...snapshot.data() }));
+  if (rows.length === 0) return null;
+
+  const merged = rows.reduce((acc: any, row: any) => ({ ...acc, ...row }), {} as any);
+  const ownerUid = merged.ownerUid || merged.createdBy || null;
+  const visible = isStudentVisibleSource(merged);
+  if (!isAdmin && ownerUid !== uid && !visible) return null;
+  if (String(merged.processingStatus || "").toLowerCase() === "archived") return null;
+
+  const subject = String(merged.subject || inferSubject(merged) || "").trim().toUpperCase() || null;
+  const year = String(merged.year || extractTitleYear(merged.title || merged.fileName) || "").trim() || null;
+  const resourceType = inferResourceType(merged);
+  const source = {
+    ...merged,
+    id: sourceId,
+    sourceId,
+    title: merged.title || merged.fileName || "Untitled PDF",
+    fileName: merged.fileName || merged.title || "untitled.pdf",
+    subject,
+    year,
+    resourceType,
+    sourceType: merged.sourceType || resourceType,
+    sourceScope: String(merged.sourceScope || "").trim().toLowerCase() || null,
+    storagePath: merged.storagePath || null,
+    ownerUid,
+    chunkCount: Number(merged.chunkCount || 0),
+    indexStatus: computeIndexStatus({
+      chunkCount: Number(merged.chunkCount || 0),
+      needsOcr: merged.needsOcr === true,
+      needsLegacyConversion: merged.needsLegacyConversion === true,
+      textEncoding: merged.textEncoding,
+      indexStatus: merged.indexStatus || merged.processingStatus,
+    }),
+  };
+
+  sourceByIdCache.set(cacheKey, { data: source, expiry: now + 2 * 60 * 1000 });
+  return source;
 }
 
 export function computeIndexStatus(src: {
@@ -118,34 +180,25 @@ export async function getSourceInventory(params: {
 
   const db = getAdminDb();
 
-  // A. Query past_papers collection
-  let ppQuery = db.collection("past_papers");
-  const ppSnap = await ppQuery.get();
+  // Run the four independent inventory reads concurrently. The old sequential
+  // version added one full Firestore round trip per collection before PDF QA
+  // could even begin.
+  const [ppSnap, ragSnap, sylSnap, lessonSnapshot] = await Promise.all([
+    db.collection("past_papers").get(),
+    db.collection("rag_sources").get(),
+    db.collection("users").doc(uid).collection("syllabus_resources").get().catch((error: unknown) => {
+      console.warn("Failed to query syllabus_resources for inventory", error);
+      return null;
+    }),
+    db.collection("lesson_resources").get().catch((error: unknown) => {
+      console.warn("Failed to query lesson_resources for inventory", error);
+      return null;
+    }),
+  ]);
   const ppDocs = ppSnap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
-
-  // B. Query rag_sources collection
-  let ragQuery = db.collection("rag_sources");
-  const ragSnap = await ragQuery.get();
   const ragDocs = ragSnap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
-
-  // C. Query users/{uid}/syllabus_resources
-  let syllabusDocs: any[] = [];
-  try {
-    const sylSnap = await db.collection("users").doc(uid).collection("syllabus_resources").get();
-    syllabusDocs = sylSnap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
-  } catch (e) {
-    console.warn("Failed to query syllabus_resources for inventory", e);
-  }
-
-  // D. Query authoritative shared lesson resources. These records own
-  // publication/visibility metadata while rag_sources owns extracted text.
-  let lessonResourceDocs: any[] = [];
-  try {
-    const lessonSnapshot = await db.collection("lesson_resources").get();
-    lessonResourceDocs = lessonSnapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
-  } catch (e) {
-    console.warn("Failed to query lesson_resources for inventory", e);
-  }
+  const syllabusDocs = sylSnap?.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })) || [];
+  const lessonResourceDocs = lessonSnapshot?.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })) || [];
 
   const ragBySourceId = new Map<string, any>();
   for (const source of ragDocs) {

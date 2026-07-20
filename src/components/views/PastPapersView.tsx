@@ -118,6 +118,7 @@ export default function PastPapersView() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadTelemetry, setUploadTelemetry] = useState<UploadTelemetry | null>(null);
   const [updatingPriorityId, setUpdatingPriorityId] = useState<string | null>(null);
+  const [movingCollectionId, setMovingCollectionId] = useState<string | null>(null);
   const [editingPaper, setEditingPaper] = useState<EditPaper | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [toast, setToast] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
@@ -322,6 +323,29 @@ export default function PastPapersView() {
     }
   };
 
+  const handleCollectionChange = async (paper: any, category: PaperCollection, event: React.ChangeEvent<HTMLSelectElement>) => {
+    event.stopPropagation();
+    if (!canManagePastPapers || category === String(paper.category || "A/L Past Papers")) return;
+    const paperId = paperKey(paper);
+    setMovingCollectionId(paperId);
+    try {
+      const response = await apiFetch(`/api/rag/past-papers/${encodeURIComponent(paperId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) throw new Error(payload?.message || "Paper could not be moved.");
+      const destination = CATEGORIES.find((item) => item.value === category)?.label || category;
+      updatePaperInState(paperId, payload.paper || { category });
+      setToast({ type: "success", message: `Moved to ${destination}.` });
+    } catch (error: any) {
+      setToast({ type: "error", message: error?.message || "Paper could not be moved." });
+    } finally {
+      setMovingCollectionId(null);
+    }
+  };
+
   const saveEdit = async () => {
     if (!editingPaper) return;
     setSavingEdit(true);
@@ -433,6 +457,7 @@ export default function PastPapersView() {
                   <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-3" onClick={(event) => event.stopPropagation()}>
                     <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">Open PDF</span>
                     <div className="flex items-center gap-1.5">
+                      {canManagePastPapers && <label className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500" title="Move paper to another collection"><i className={cn("fa-solid text-[9px]", movingCollectionId === paperKey(paper) ? "fa-circle-notch fa-spin" : "fa-folder-tree")} /><select aria-label={`Move ${paper.title} to collection`} value={String(paper.category || "A/L Past Papers")} disabled={movingCollectionId === paperKey(paper)} onChange={(event) => void handleCollectionChange(paper, event.target.value as PaperCollection, event)} className="max-w-24 bg-transparent font-black text-slate-700 outline-none">{CATEGORIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>}
                       {canManagePastPapers && <label className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500" title="Display priority"><span>Priority</span><select aria-label={`Display priority for ${paper.title}`} value={priority(paper.displayPriority)} disabled={updatingPriorityId === paperKey(paper)} onChange={(event) => void handlePriorityChange(paper, Number(event.target.value), event)} className="bg-transparent font-black text-slate-700 outline-none">{!PRIORITY_OPTIONS.includes(priority(paper.displayPriority)) && <option value={priority(paper.displayPriority)}>{priority(paper.displayPriority)}</option>}{PRIORITY_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>}
                       {canManagePastPapers && <button type="button" onClick={() => setEditingPaper(editModel(paper))} className="grid h-8 w-8 place-items-center rounded-full border border-slate-200 bg-slate-50 text-slate-400 transition hover:border-primary-200 hover:bg-primary-50 hover:text-primary-600" title="Edit paper data"><i className="fa-solid fa-pen text-xs" /></button>}
                       {isDeleteAllowed(paper) && <button type="button" onClick={(event) => void handleDeletePaper(paper, event)} className="grid h-8 w-8 place-items-center rounded-full border border-slate-200 bg-slate-50 text-slate-400 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600" title="Delete paper"><i className="fa-regular fa-trash-can text-xs" /></button>}
@@ -455,7 +480,7 @@ export default function PastPapersView() {
                 {([ ["Title", "title"], ["Filename", "fileName"], ["Year", "year"] ] as const).map(([label, key]) => <label key={key} className={key === "title" || key === "fileName" ? "sm:col-span-2" : ""}><span className="mb-1.5 block text-xs font-bold text-slate-600">{label}</span><input value={editingPaper[key]} onChange={(event) => setEditingPaper({ ...editingPaper, [key]: event.target.value })} className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-primary-500" /></label>)}
                 <label><span className="mb-1.5 block text-xs font-bold text-slate-600">Subject</span><select value={editingPaper.subject} onChange={(event) => setEditingPaper({ ...editingPaper, subject: event.target.value })} className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">{["SFT", "ET", "ICT"].map((value) => <option key={value}>{value}</option>)}</select></label>
                 <label><span className="mb-1.5 block text-xs font-bold text-slate-600">Collection</span><select value={editingPaper.category} onChange={(event) => setEditingPaper({ ...editingPaper, category: event.target.value as PaperCollection })} className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">{CATEGORIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-                <label><span className="mb-1.5 block text-xs font-bold text-slate-600">Paper type</span><select value={editingPaper.paperType} onChange={(event) => setEditingPaper({ ...editingPaper, paperType: event.target.value })} className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">{["MCQ", "Essay", "Full Paper"].map((value) => <option key={value}>{value}</option>)}</select></label>
+                <label><span className="mb-1.5 block text-xs font-bold text-slate-600">Paper type</span><select value={editingPaper.paperType} onChange={(event) => setEditingPaper({ ...editingPaper, paperType: event.target.value })} className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">{["MCQ", "Structured", "Essay", "Full Paper"].map((value) => <option key={value}>{value}</option>)}</select></label>
                 <label><span className="mb-1.5 block text-xs font-bold text-slate-600">Medium</span><select value={editingPaper.medium} onChange={(event) => setEditingPaper({ ...editingPaper, medium: event.target.value })} className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm">{["Sinhala", "English", "Tamil"].map((value) => <option key={value}>{value}</option>)}</select></label>
                 <label><span className="mb-1.5 block text-xs font-bold text-slate-600">Display priority</span><input type="number" min={-1000} max={1000} value={editingPaper.displayPriority} onChange={(event) => setEditingPaper({ ...editingPaper, displayPriority: priority(event.target.value) })} className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" /></label>
                 <label className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-bold text-slate-600"><input type="checkbox" checked={editingPaper.published} onChange={(event) => setEditingPaper({ ...editingPaper, published: event.target.checked })} className="h-4 w-4" /> Published for students</label>

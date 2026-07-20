@@ -6,7 +6,7 @@ export interface InferredPaperMetadata {
   year: string;
   subject: "SFT" | "ET" | "ICT";
   category: PaperCollection;
-  paperType: "MCQ" | "Essay" | "Full Paper";
+  paperType: "MCQ" | "Structured" | "Essay" | "Full Paper";
   resourceType: "past_paper" | "model_paper" | "marking_scheme";
   medium: "Sinhala" | "English" | "Tamil";
   paperNumber: string;

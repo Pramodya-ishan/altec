@@ -46,9 +46,11 @@ export function normalizeZHistoryEntry(entry: any, fallbackSource = "history_arr
 }
 
 function entryKey(entry: NormalizedZHistoryEntry): string {
-  const day = String(entry.date || "unknown").slice(0, 10);
+  const explicitFingerprint = String(entry.fingerprint || "").trim();
+  if (explicitFingerprint) return explicitFingerprint;
+  const timestamp = String(entry.date || "unknown").slice(0, 16);
   const sourceGroup = sourcePriority(entry.source) >= 4 ? "actual" : sourcePriority(entry.source) <= 1 ? "predictor" : entry.source;
-  return `${day}:${sourceGroup}`;
+  return `${timestamp}:${sourceGroup}:${entry.overall}:${entry.sft ?? ""}:${entry.et ?? ""}:${entry.ict ?? ""}`;
 }
 
 export function mergeZScoreHistory(...collections: any[][]): NormalizedZHistoryEntry[] {

@@ -209,7 +209,6 @@ Return JSON only:
         config: {
           temperature: 0,
           responseMimeType: "application/json",
-          maxOutputTokens: 16_384,
           systemInstruction,
         },
       });

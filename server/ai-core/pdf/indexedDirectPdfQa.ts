@@ -7,6 +7,24 @@ import { selectIndexedQuestionChunks, type IndexedQuestionChunk } from "./indexe
 
 type IndexedChunk = IndexedQuestionChunk;
 
+const indexedChunkCache = new Map<string, { expiresAt: number; chunks: IndexedChunk[] }>();
+const indexedAnswerCache = new Map<string, { expiresAt: number; result: any }>();
+
+async function loadIndexedChunks(sourceId: string) {
+  const now = Date.now();
+  const cached = indexedChunkCache.get(sourceId);
+  if (cached && cached.expiresAt > now) return cached.chunks;
+
+  const snapshot = await getAdminDb().collection("rag_chunks").where("sourceId", "==", sourceId).get();
+  const chunks: IndexedChunk[] = snapshot.docs.map((document: any) => ({
+    id: document.id,
+    ...document.data(),
+    text: String(document.data()?.text || ""),
+  }));
+  indexedChunkCache.set(sourceId, { expiresAt: now + 60_000, chunks });
+  return chunks;
+}
+
 function cleanJson(text: string) {
   return text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
 }
@@ -52,6 +70,8 @@ export async function answerStructuredFromIndexedPdf(params: {
 
   const db = getAdminDb();
   const cacheId = `${sourceId}_${questionType}_${questionNo}`.replace(/\//g, "_");
+  const memoryCached = indexedAnswerCache.get(cacheId);
+  if (memoryCached && memoryCached.expiresAt > Date.now()) return memoryCached.result;
   const cached = await db.collection("pdf_question_cache").doc(cacheId).get();
   const cachedData = cached.exists ? cached.data() : null;
   if (cachedData
@@ -61,15 +81,13 @@ export async function answerStructuredFromIndexedPdf(params: {
     && cachedData.completed !== false
     && Number(cachedData.evidenceVersion || 0) >= 3) {
     const result = resultFromCache(cachedData);
-    if (result) return result;
+    if (result) {
+      indexedAnswerCache.set(cacheId, { expiresAt: Date.now() + 5 * 60_000, result });
+      return result;
+    }
   }
 
-  const snapshot = await db.collection("rag_chunks").where("sourceId", "==", sourceId).get();
-  const chunks: IndexedChunk[] = snapshot.docs.map((document: any) => ({
-    id: document.id,
-    ...document.data(),
-    text: String(document.data()?.text || ""),
-  }));
+  const chunks = await loadIndexedChunks(sourceId);
   const selected = selectIndexedQuestionChunks(chunks, questionNo);
   if (selected.length === 0) return null;
 
@@ -97,7 +115,10 @@ ${allowOfficialAnswer ? "Copy officialAnswer only when it is explicitly printed 
   try {
     response = await Promise.race([
       modelRequest,
-      new Promise((_resolve, reject) => setTimeout(() => reject(Object.assign(new Error("Indexed PDF answer timed out."), { code: "INDEXED_QA_TIMEOUT" })), 45_000)),
+      new Promise((_resolve, reject) => setTimeout(
+        () => reject(Object.assign(new Error("Indexed PDF answer timed out."), { code: "INDEXED_QA_TIMEOUT" })),
+        Math.max(8_000, Number(process.env.INDEXED_PDF_QA_TIMEOUT_MS || 20_000)),
+      )),
     ]);
   } catch (error: any) {
     if (error?.code === "INDEXED_QA_TIMEOUT") return null;
@@ -144,5 +165,7 @@ ${allowOfficialAnswer ? "Copy officialAnswer only when it is explicitly printed 
     await db.collection("pdf_question_cache").doc(cacheId).set(cacheData, { merge: true });
   }
 
-  return resultFromCache(cacheData);
+  const finalResult = resultFromCache(cacheData);
+  if (finalResult) indexedAnswerCache.set(cacheId, { expiresAt: Date.now() + 5 * 60_000, result: finalResult });
+  return finalResult;
 }

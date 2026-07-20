@@ -717,62 +717,70 @@ export default function AdmissionPredictorView() {
   const chartData = useMemo(() => {
     if (!historyPoints || historyPoints.length === 0) return [];
 
-    const today = new Date();
-    today.setHours(12, 0, 0, 0);
+    const now = new Date();
     const validYearFloor = 2024;
-    const validYearCeiling = today.getFullYear() + 1;
-    const normalized = historyPoints.map((point, index) => {
-      const raw = new Date(String(point?.date || ""));
-      const hasRealDate = Number.isFinite(raw.getTime())
-        && raw.getFullYear() >= validYearFloor
-        && raw.getFullYear() <= validYearCeiling;
-      const date = hasRealDate
-        ? raw
-        : new Date(today.getTime() - (historyPoints.length - 1 - index) * 86_400_000);
-      date.setHours(12, 0, 0, 0);
-      return { ...point, normalizedDate: date };
-    }).sort((left, right) => left.normalizedDate.getTime() - right.normalizedDate.getTime());
-
-    const byDay = new Map<string, any>();
-    normalized.forEach((point) => {
-      const name = point.normalizedDate.toISOString().slice(0, 10);
-      const basis = String(point.calculationBasis || "legacy_exam_score_predictor");
-      const priority = basis === "actual_saved_paper_marks" ? 3 : basis === "exam_score_predictor" ? 2 : 1;
-      const existing = byDay.get(name);
-      if (!existing || priority >= existing.priority) {
-        byDay.set(name, {
-          name,
+    const validYearCeiling = now.getFullYear() + 1;
+    const normalized = historyPoints
+      .map((point, index) => {
+        const raw = new Date(String(point?.date || ""));
+        const hasRealDate = Number.isFinite(raw.getTime())
+          && raw.getFullYear() >= validYearFloor
+          && raw.getFullYear() <= validYearCeiling;
+        const date = hasRealDate
+          ? raw
+          : new Date(now.getTime() - (historyPoints.length - 1 - index) * 3_600_000);
+        return {
+          name: date.toISOString(),
+          timestamp: date.getTime(),
           "Calculated Z-score": Number(point.zScore),
           reason: point.reason,
-          calculationBasis: basis,
-          priority,
-        });
-      }
-    });
+          calculationBasis: String(point.calculationBasis || "legacy_exam_score_predictor"),
+        };
+      })
+      .filter((point) => Number.isFinite(point["Calculated Z-score"]))
+      .sort((left, right) => left.timestamp - right.timestamp);
 
-    const uniquePoints = Array.from(byDay.values());
-    const maximumVisiblePoints = 36;
-    const stride = Math.max(1, Math.ceil(uniquePoints.length / maximumVisiblePoints));
-    const visiblePoints = uniquePoints.filter((_point, index) => index % stride === 0 || index === uniquePoints.length - 1);
+    // Retain same-day changes and sample only for rendering performance. The
+    // first and latest records are always preserved.
+    const maximumVisiblePoints = 72;
+    const stride = Math.max(1, Math.ceil(normalized.length / maximumVisiblePoints));
+    const visiblePoints = normalized.filter((_point, index) => index === 0 || index === normalized.length - 1 || index % stride === 0);
 
     if (visiblePoints.length === 1) {
-      const previousDate = new Date(`${visiblePoints[0].name}T12:00:00`);
-      previousDate.setDate(previousDate.getDate() - 1);
+      const previousDate = new Date(visiblePoints[0].timestamp - 3_600_000);
       visiblePoints.unshift({
         ...visiblePoints[0],
-        name: previousDate.toISOString().slice(0, 10),
+        name: previousDate.toISOString(),
+        timestamp: previousDate.getTime(),
         reason: "Progress tracking started",
       });
     }
     return visiblePoints;
   }, [historyPoints]);
 
+  const chartSpansSingleDay = useMemo(() => {
+    if (chartData.length < 2) return true;
+    return new Date(chartData[0].timestamp).toDateString() === new Date(chartData[chartData.length - 1].timestamp).toDateString();
+  }, [chartData]);
+
+  const formatProgressTick = (value: unknown) => {
+    const parsed = new Date(String(value || ""));
+    if (!Number.isFinite(parsed.getTime())) return String(value || "");
+    return chartSpansSingleDay
+      ? parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : parsed.toLocaleDateString([], { month: "short", day: "2-digit" });
+  };
+
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (!active || !payload?.length) return null;
     const entry = payload[0];
+    const parsedLabel = new Date(String(label || ""));
+    const displayLabel = Number.isFinite(parsedLabel.getTime())
+      ? parsedLabel.toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+      : String(label || "");
     return (
-      <div className="pointer-events-none max-w-[170px] rounded-xl border border-slate-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
-        <p className="truncate text-[10px] font-semibold text-slate-500">{label}</p>
+      <div className="pointer-events-none w-[170px] max-w-[calc(100vw-32px)] rounded-xl border border-slate-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+        <p className="truncate text-[10px] font-semibold text-slate-500">{displayLabel}</p>
         <p className="mt-0.5 truncate text-[9px] font-medium text-slate-400">
           {payload[0]?.payload?.calculationBasis === "actual_saved_paper_marks" ? "Saved paper marks" : "Exam Score Predictor"}
         </p>
@@ -954,7 +962,7 @@ export default function AdmissionPredictorView() {
                           width={width}
                           height={height}
                           data={chartData}
-                          margin={{ top: 15, right: 15, left: -25, bottom: 20 }}
+                          margin={{ top: 18, right: 28, left: -12, bottom: 22 }}
                         >
                           <defs>
                             <linearGradient
@@ -993,7 +1001,7 @@ export default function AdmissionPredictorView() {
                             textAnchor="middle"
                             interval="preserveStartEnd"
                             minTickGap={34}
-                            tickFormatter={(value) => String(value).slice(5)}
+                            tickFormatter={formatProgressTick}
                           />
                           <YAxis
                             stroke="#94a3b8"
@@ -1003,7 +1011,7 @@ export default function AdmissionPredictorView() {
                             axisLine={false}
                             domain={[-2.5, 3.0]}
                           />
-                          <Tooltip content={<CustomTooltip />} offset={14} allowEscapeViewBox={{ x: true, y: true }} wrapperStyle={{ pointerEvents: "none", zIndex: 20 }} />
+                          <Tooltip content={<CustomTooltip />} offset={10} allowEscapeViewBox={{ x: false, y: false }} wrapperStyle={{ pointerEvents: "none", zIndex: 30, maxWidth: "calc(100% - 12px)" }} isAnimationActive={false} />
                           <Legend
                             verticalAlign="top"
                             height={36}

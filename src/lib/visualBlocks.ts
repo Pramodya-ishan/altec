@@ -17,6 +17,9 @@ export type VisualBlock =
       pageNumber?: number;
       crop?: { x: number; y: number; width: number; height: number } | null;
       caption?: string;
+      sourceTitle?: string;
+      questionLabel?: string;
+      originalLayout?: boolean;
     }
   | {
       type: "mistake_image_preview";

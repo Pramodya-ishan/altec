@@ -321,3 +321,19 @@ html {
     font-size: 0.92rem;
   }
 }
+
+/* Keep Recharts hover cards inside their chart viewport on desktop and mobile. */
+.chart-boundary .recharts-tooltip-wrapper {
+  max-width: calc(100% - 12px) !important;
+  pointer-events: none !important;
+  z-index: 30 !important;
+}
+
+.chart-boundary .recharts-tooltip-wrapper > * {
+  max-width: min(190px, calc(100vw - 32px));
+  overflow-wrap: anywhere;
+}
+
+.chart-boundary .recharts-default-tooltip {
+  white-space: normal !important;
+}

@@ -92,16 +92,22 @@ function buildAutomaticVisuals(params: {
   if (visualAid) blocks.push(visualAid);
 
   const imagePreviewUrl = clean(result?.sourceEvidence?.imagePreviewUrl);
-  if (imagePreviewUrl && /^(?:https?:\/\/|data:image\/(?:png|jpeg|webp);base64,)/i.test(imagePreviewUrl)) {
+  const previewSourceId = clean(result?.sourceEvidence?.sourceId || result?.sourceId);
+  const previewPageNumber = Number(result?.sourceEvidence?.pageNumber) || undefined;
+  const hasUsablePreviewUrl = /^(?:https?:\/\/|data:image\/(?:png|jpeg|webp);base64,)/i.test(imagePreviewUrl);
+  if ((hasUsablePreviewUrl || previewSourceId) && previewPageNumber) {
     blocks.push({
       type: "pdf_image_preview",
-      title: "PDF question visual",
-      imageUrl: imagePreviewUrl,
-      sourceId: clean(result?.sourceEvidence?.sourceId || result?.sourceId),
+      title: `${params.year || ""} ${params.questionType || "Question"} ${params.questionNo || ""}`.trim() || "Original PDF question",
+      imageUrl: hasUsablePreviewUrl ? imagePreviewUrl : "",
+      sourceId: previewSourceId,
       storagePath: clean(result?.sourceEvidence?.imagePreviewStoragePath),
-      pageNumber: Number(result?.sourceEvidence?.pageNumber) || undefined,
-      crop: result?.sourceEvidence?.imageRegion || null,
-      caption: "Relevant visual from the selected PDF question.",
+      pageNumber: previewPageNumber,
+      crop: result?.sourceEvidence?.questionRegion || result?.sourceEvidence?.imageRegion || null,
+      caption: "Original question layout from the selected PDF — tables, graphs, diagrams, labels, and marks are preserved exactly.",
+      sourceTitle: params.sourceTitle,
+      questionLabel: params.questionNo ? `Question ${params.questionNo}` : undefined,
+      originalLayout: true,
     });
   }
 

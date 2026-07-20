@@ -118,7 +118,7 @@ assert(composer.includes("clora:composer-focus") && sidebar.includes("clora:comp
 assert(memoryExtractor.includes('"weak_points"') && memoryExtractor.includes('"mistake_notebook"') && memoryExtractor.includes('"learning_signal_aggregates"'), "Separate learning memory collections are missing");
 assert(userContext.includes("weak_points") && userContext.includes("loadMistakeRecords") && userContext.includes("learning_signal_aggregates"), "Saved learning signals are not loaded into AI context");
 assert(notesModal.includes("lesson-resources:changed") && notesModal.includes("lessonTitle"), "Lesson resources do not refresh or use stable lesson matching");
-assert(admissionView.includes("max-w-[170px]") && admissionView.includes("allowEscapeViewBox"), "Z-score tooltip still obscures the chart");
+assert(admissionView.includes("w-[170px]") && admissionView.includes("allowEscapeViewBox={{ x: false, y: false }}"), "Z-score tooltip still obscures the chart");
 
 const pastPapersView = await read("src/components/views/PastPapersView.tsx");
 const lessonResourceRoutes = await read("server/lessonResources/routes.ts");
@@ -441,7 +441,7 @@ assert(
     && essaySolverV18.includes("කෝක් කැම්බියම")
     && essaySolverV18.includes("expectedSubparts")
     && essaySolverV18.includes("missingSubparts")
-    && essaySolverV18.includes("maxOutputTokens: 8_192"),
+    && !essaySolverV18.includes("maxOutputTokens: 8_192"),
   "V18 strict lesson/syllabus grounding or complete essay retry is incomplete",
 );
 assert(
@@ -531,7 +531,7 @@ assert(
 assert(
   envExample.includes("AI_PLANNER_ENABLED=true")
     && envExample.includes("AI_QUALITY_REVIEW_ENABLED=true")
-    && envExample.includes("AI_AUTO_CONTINUATION_PASSES=3")
+    && envExample.includes("AI_AUTO_CONTINUATION_PASSES=12")
     && envExample.includes("ENABLE_AUTO_OCR=true"),
   "V21 production AI/OCR switches are incomplete",
 );
@@ -566,3 +566,44 @@ assert(
   "V22 visual-explanation generation or missing-preview handling is incomplete",
 );
 console.log("V22 source isolation, forecast routing, and real-image explanation checks passed.");
+
+
+// V28 uncapped answers, exact PDF-question visuals, persistent same-day Z-score
+// history, paper collection moves, and bounded chart hover cards.
+const respondV28 = await read("server/ai/respond.ts");
+const clientDirectPdfV28 = await read("src/lib/ai/directPdfQa.ts");
+const paperMarksV28 = await read("src/components/views/PaperMarksView.tsx");
+const zscoreV28 = await read("src/shared/zscore.ts");
+assert(
+  respondStream.includes("AI_MAX_OUTPUT_TOKENS")
+    && respondStream.includes("answerTokenConfig")
+    && respondStream.includes("AI_AUTO_CONTINUATION_PASSES || 12")
+    && !respondV28.includes("maxOutputTokens: 12_288"),
+  "V28 substantive AI answers still have an application-imposed output cap",
+);
+assert(
+  directFormatter.includes("originalLayout: true")
+    && directFormatter.includes('imageUrl: hasUsablePreviewUrl ? imagePreviewUrl : ""')
+    && visualRenderer.includes("Loading the exact printed question")
+    && clientDirectPdfV28.includes("Do not block the answer on PDF rasterization"),
+  "V28 original PDF question layout or asynchronous preview loading is incomplete",
+);
+assert(
+  zscoreV28.includes("Deduplicate by the calculated values rather than by date")
+    && admissionV15.includes("chartSpansSingleDay")
+    && zScoreContextV18.includes('slice(0, 16)'),
+  "V28 same-day Z-score history preservation is incomplete",
+);
+assert(
+  pastPapersView.includes("handleCollectionChange")
+    && pastPapersView.includes("Move paper to another collection")
+    && ragRoutes.includes('"Structured", "Essay", "Full Paper"'),
+  "V28 paper collection move or Structured paper type support is incomplete",
+);
+assert(
+  chartShell.includes("chart-boundary")
+    && paperMarksV28.includes("allowEscapeViewBox={{ x: false, y: false }}")
+    && admissionView.includes("allowEscapeViewBox={{ x: false, y: false }}"),
+  "V28 chart hover cards can still leave the graph viewport",
+);
+console.log("V28 long-answer, PDF layout, Z-score history, paper move, and graph hover checks passed.");

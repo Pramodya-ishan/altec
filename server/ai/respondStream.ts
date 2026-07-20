@@ -150,17 +150,24 @@ function getTemperature(mode: string) {
   }
 }
 
-export function getMaxTokens(mode: string) {
-  if (mode === "uploaded_pdf_question_qa" || mode === "uploaded_pdf_qa" || mode === "rag_qa" || mode === "paper_question_qa") {
-    return 16_384;
-  }
-  if (["notes_generation", "study_plan", "quiz_generation", "tutor_explanation", "marking_scheme_request"].includes(mode)) {
-    return 12_288;
-  }
-  // The old 2,000-token default silently cut otherwise valid explanations.
-  // A generous default is intentional: the model may still answer concisely,
-  // but it is no longer forced to stop before every requested item is covered.
-  return 8_192;
+export function getMaxTokens(_mode: string): number | undefined {
+  // Substantive learner answers have no application-imposed token ceiling by
+  // default. The provider/model context window remains the only hard limit,
+  // and the completion loop automatically requests the unfinished remainder.
+  // Operators may still add an emergency ceiling without changing code.
+  const configured = Number(process.env.AI_MAX_OUTPUT_TOKENS || 0);
+  if (!Number.isFinite(configured) || configured <= 0) return undefined;
+  return Math.max(8_192, Math.min(65_536, Math.trunc(configured)));
+}
+
+function answerTokenConfig(mode: string) {
+  const maxOutputTokens = getMaxTokens(mode);
+  return maxOutputTokens ? { maxOutputTokens } : {};
+}
+
+function completionPassLimit() {
+  const configured = Number(process.env.AI_AUTO_CONTINUATION_PASSES || 12);
+  return Math.max(1, Math.min(12, Number.isFinite(configured) ? Math.trunc(configured) : 12));
 }
 
 function chooseModel(mode: string) {
@@ -1538,13 +1545,21 @@ ${originalPrompt}`;
         let resolution: any = { sources: [], paperSource: null };
 
         const { resolveStrictSource } = await import("../ai-core/sources/sourceResolver");
-        const { getSourceInventory } = await import("../sources/sourceInventoryService");
+        const { getSourceInventory, getSourceById } = await import("../sources/sourceInventoryService");
 
         const isAdminUser = user.roles?.includes("admin") || user.admin === true;
-        const inventory = await getSourceInventory({ uid: user.uid, subject: requestedSubject, isAdmin: isAdminUser });
-        const allAvailableSources = [...inventory.groups.pastPapers, ...inventory.groups.markingSchemes, ...inventory.groups.syllabus, ...inventory.groups.uploadedPdfs, ...inventory.groups.paperStructure];
+        const directSource = activePaperSourceId
+          ? await getSourceById({ uid: user.uid, sourceId: String(activePaperSourceId), isAdmin: isAdminUser })
+          : null;
+        let availableSources: any[];
+        if (directSource) {
+          availableSources = [directSource];
+        } else {
+          const inventory = await getSourceInventory({ uid: user.uid, subject: requestedSubject, isAdmin: isAdminUser });
+          availableSources = [...inventory.groups.pastPapers, ...inventory.groups.markingSchemes, ...inventory.groups.syllabus, ...inventory.groups.uploadedPdfs, ...inventory.groups.paperStructure];
+        }
 
-        const strictRes = resolveStrictSource(allAvailableSources, {
+        const strictRes = resolveStrictSource(availableSources, {
           year: requestedYear,
           subject: requestedSubject,
           activeSourceId: activePaperSourceId,
@@ -1615,6 +1630,84 @@ ${originalPrompt}`;
         if (hasPaperSource && route.mode !== "pdf_link_request") {
           const db = getAdminDb();
           const { retrieveEvidenceForPaperQuestion } = await import("../ai-core/evidence/evidenceRetriever");
+
+          // Fast path for already-indexed PDFs. It checks the verified question
+          // cache first, then reads only the chunks around the requested
+          // question and solves them on the fast PDF model. This avoids ending
+          // the stream and forcing the browser to start a second request.
+          if (questionId && requestedQuestionNo) {
+            emitSse(res, "status", { step: "indexed_pdf_fast_path", message: "Checking the indexed PDF question…" });
+            const sourceIdentity = `${paperSource?.resourceType || ""} ${paperSource?.sourceType || ""} ${paperSource?.sourceScope || ""} ${paperSource?.title || ""}`.toLowerCase();
+            const allowOfficialAnswer = /marking|scheme|answer|පිළිතුරු/u.test(sourceIdentity);
+            const { answerStructuredFromIndexedPdf } = await import("../ai-core/pdf/indexedDirectPdfQa");
+            const indexedAnswer = await safeCall("answerStructuredFromIndexedPdf", () => answerStructuredFromIndexedPdf({
+              uid: user.uid,
+              sourceId: String(paperSource.id || paperSource.sourceId),
+              year: String(requestedYear || paperSource.year || "unknown"),
+              subject: String(requestedSubject || paperSource.subject || "unknown"),
+              questionType: String(requestedQuestionType),
+              questionNo: String(requestedQuestionNo),
+              allowOfficialAnswer,
+            }), null, res);
+
+            if (indexedAnswer?.ok && indexedAnswer?.found && indexedAnswer?.completed !== false) {
+              const { formatDirectPdfResultMarkdown } = await import("../ai-core/pdf/formatDirectPdfResult");
+              const fastAnswer = formatDirectPdfResultMarkdown(indexedAnswer, requestedQuestionType);
+              if (fastAnswer) {
+                const fastPageNumber = Number(indexedAnswer?.sourceEvidence?.pageNumber) || undefined;
+                const fastVisualBlocks = fastPageNumber ? [{
+                  type: "pdf_image_preview",
+                  title: `${requestedYear || paperSource.year || ""} ${requestedQuestionType || "Question"} ${requestedQuestionNo || ""}`.trim(),
+                  imageUrl: "",
+                  sourceId: String(paperSource.id || paperSource.sourceId),
+                  storagePath: paperSource.storagePath || undefined,
+                  pageNumber: fastPageNumber,
+                  crop: indexedAnswer?.sourceEvidence?.questionRegion || indexedAnswer?.sourceEvidence?.imageRegion || null,
+                  caption: "Original question layout from the selected PDF — tables, graphs, diagrams, labels, and marks are preserved exactly.",
+                  sourceTitle: paperSource.title || undefined,
+                  questionLabel: requestedQuestionNo ? `Question ${requestedQuestionNo}` : undefined,
+                  originalLayout: true,
+                }] : [];
+                emitSse(res, "status", { step: "indexed_pdf_fast_path", status: "complete", message: "Answer found in the indexed PDF." });
+                if (fastVisualBlocks.length > 0) emitSse(res, "visual_blocks", { blocks: fastVisualBlocks });
+                emitSse(res, "token", { text: fastAnswer });
+                trace.lastEvent = "token";
+                const chatRes = await saveFinalChat({
+                  uid: user.uid,
+                  email: user.email,
+                  userText: prompt,
+                  assistantText: fastAnswer,
+                  mode: route.mode,
+                  subject: requestedSubject,
+                  sources: allSources,
+                });
+                trace.chatSaved = chatRes.chatSaved;
+                trace.messageId = chatRes.messageId;
+                trace.completed = true;
+                emitSse(res, "done", {
+                  ok: true,
+                  completed: true,
+                  requestId,
+                  messageId: chatRes.messageId || null,
+                  chatSaved: chatRes.chatSaved,
+                  sources: allSources,
+                  visualBlocks: fastVisualBlocks,
+                  fastPath: true,
+                  finishReason: indexedAnswer.cached ? "pdf_question_cache_hit" : "indexed_pdf_fast_answer",
+                  paperInfo: {
+                    sourceId: paperSource.id || paperSource.sourceId,
+                    questionNo: requestedQuestionNo,
+                    year: requestedYear,
+                    subject: requestedSubject,
+                    questionType: requestedQuestionType,
+                    extractionMethod: indexedAnswer.extractionMethod || "indexed_pdf_text",
+                  },
+                });
+                trace.doneSent = true;
+                return;
+              }
+            }
+          }
 
           // 1.1 Check Evidence first!
           if (questionId) {
@@ -2302,7 +2395,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
           config: {
             systemInstruction: finalSysInstruction,
             temperature: getTemperature(route.mode),
-            maxOutputTokens: getMaxTokens(route.mode)
+            ...answerTokenConfig(route.mode),
           }
         },
         ai,
@@ -2363,7 +2456,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       mode: route.mode,
     });
     let completionPasses = 0;
-    const maxCompletionPasses = Math.min(3, Math.max(1, Number(process.env.AI_AUTO_CONTINUATION_PASSES || 3)));
+    const maxCompletionPasses = completionPassLimit();
 
     while (
       completionAssessment.shouldContinue
@@ -2397,7 +2490,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
           config: {
             systemInstruction: finalSysInstruction,
             temperature: Math.min(0.2, getTemperature(route.mode)),
-            maxOutputTokens: Math.max(8_192, getMaxTokens(route.mode)),
+            ...answerTokenConfig(route.mode),
           },
         }, ai);
         modelUsed = continuation.modelUsed || modelUsed;
@@ -2812,7 +2905,7 @@ Keep the same tone and language (Sinhala-first style).
         contents: promptText,
         config: {
           temperature: 0.1,
-          maxOutputTokens: 12_288
+          ...answerTokenConfig("continue"),
         },
       }, ai, signal);
 
@@ -2861,7 +2954,7 @@ Keep the same tone and language (Sinhala-first style).
       mode: "continue",
     });
     let completionPasses = 0;
-    while (completionAssessment.shouldContinue && completionPasses < 3 && !signal.aborted && !res.writableEnded) {
+    while (completionAssessment.shouldContinue && completionPasses < completionPassLimit() && !signal.aborted && !res.writableEnded) {
       completionPasses += 1;
       emitSse(res, "status", { step: "completion_recovery", status: "working", message: "Finishing the remaining answer sections", pass: completionPasses });
       const combinedAnswer = `${previousAssistantText || ""}\n${fullText}`.trim();
@@ -2873,7 +2966,7 @@ Keep the same tone and language (Sinhala-first style).
             { role: "model", parts: [{ text: combinedAnswer }] },
             { role: "user", parts: [{ text: buildContinuationInstruction({ originalPrompt, currentAnswer: combinedAnswer, assessment: completionAssessment }) }] },
           ],
-          config: { temperature: 0.1, maxOutputTokens: 12_288 },
+          config: { temperature: 0.1, ...answerTokenConfig("continue") },
         }, ai);
         modelUsed = completion.modelUsed || modelUsed;
         const merged = mergeContinuationText(fullText, sanitizeAssistantText(completion.result.text || ""));

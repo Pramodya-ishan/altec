@@ -451,7 +451,7 @@ ragRoutes.patch("/past-papers/:id", requireNonAnonymousUser, async (req: any, re
       ? String(req.body.category)
       : String(current.category || "A/L Past Papers");
     const resourceType = category === "Marking Schemes" ? "marking_scheme" : category === "Model Papers" ? "model_paper" : "past_paper";
-    const paperType = ["MCQ", "Essay", "Full Paper"].includes(String(req.body?.paperType))
+    const paperType = ["MCQ", "Structured", "Essay", "Full Paper"].includes(String(req.body?.paperType))
       ? String(req.body.paperType)
       : String(current.paperType || current.type || "Full Paper");
     const medium = ["Sinhala", "English", "Tamil"].includes(String(req.body?.medium))
