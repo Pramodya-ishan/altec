@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import "./paperMetadata.test";
+import "../../../server/ai-core/exam-intel/__tests__/predictionPolicy.test";
 import {
   buildPracticeZSnapshot,
   calculateOfficialZ,

@@ -140,11 +140,17 @@ const syllabusGrounding = await readFile("server/pdf/syllabusGrounding.ts", "utf
 const directFormatterV10 = await readFile("src/lib/ai/directPdfAnswerFormatter.ts", "utf8");
 const lessonRoutesV10 = await readFile("server/lessonResources/routes.ts", "utf8");
 const predictionV10 = await readFile("server/ai-core/exam-intel/predictedPaper.ts", "utf8");
+const syllabusCorpusV26 = await readFile("server/ai-core/exam-intel/syllabusCorpus.ts", "utf8");
 const cloraHeroV10 = await readFile("src/components/ui/clora/CloraHero.tsx", "utf8");
 assert(syllabusGrounding.includes("DEFAULT_SFT_SYLLABUS_STORAGE_PATH") && syllabusGrounding.includes("bundled_sft_syllabus"), "V10 authoritative SFT syllabus fallback is missing");
 assert(!directFormatterV10.includes('type: "source_evidence"'), "V10 still adds the visible Verified PDF evidence container");
 assert(lessonRoutesV10.includes('collection("rag_sources")') && lessonRoutesV10.includes("isStudentVisibleSource") && lessonRoutesV10.includes("subjectVariants"), "V10 lesson resource legacy merge or historical subject normalization is missing");
-assert(predictionV10.includes("exam_question_index") && predictionV10.includes("getSubjectSyllabusGroundingPdf"), "V10 prediction engine is not grounded in indexed papers and syllabus");
+assert(
+  predictionV10.includes("exam_question_index")
+    && predictionV10.includes("loadSubjectSyllabusCorpus")
+    && syllabusCorpusV26.includes("getSubjectSyllabusGroundingPdf"),
+  "Prediction engine is not grounded in indexed papers and the authoritative syllabus corpus",
+);
 assert(cloraHeroV10.includes("Made by Pramodya Ishan") && !cloraHeroV10.includes("Clora X"), "V18 creator attribution or removed product label is incorrect");
 
 const sourceSelectionV10 = await readFile("server/ai/sourceSelection.ts", "utf8");

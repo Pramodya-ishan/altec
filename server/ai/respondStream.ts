@@ -63,6 +63,7 @@ import {
   detectEvidenceContradictions,
   evidenceContractInstruction,
 } from "./evidenceContract";
+import { formatPredictedPaperForChat, generatePredictedPaper } from "../ai-core/exam-intel/predictedPaper";
 
 interface StreamTrace {
   requestId: string;
@@ -833,6 +834,99 @@ ${originalPrompt}`;
           evidenceMode: "none",
           allowGeneratedContent: true,
         });
+      }
+    }
+
+    // A future-paper forecast is a generation request, not a saved-PDF lookup.
+    // It deliberately runs after exact named-source resolution, so
+    // “Guessing 01 Essay PDF q6” still opens that PDF while “2026 A/L එකට
+    // එන්න පුළුවන් SFT ප්‍රශ්නයක්” generates a fresh evidence-based model.
+    if (paperForecastPrompt && !isExplicitNamedSourceRequest(prompt)) {
+      const normalizedForecastPrompt = String(prompt || "").normalize("NFKC");
+      const upperPrompt = normalizedForecastPrompt.toUpperCase();
+      const requestedSubject = /\bICT\b/u.test(upperPrompt)
+        ? "ICT"
+        : /\bSFT\b/u.test(upperPrompt)
+          ? "SFT"
+          : /(?:^|\s)ET(?:\s|$)/u.test(upperPrompt)
+            ? "ET"
+            : String(route.entities?.subject || paperIntent.subject || activeSubject || "SFT").toUpperCase();
+      const forecastSubject = ["SFT", "ET", "ICT"].includes(requestedSubject) ? requestedSubject : "SFT";
+      const targetYear = Number(normalizedForecastPrompt.match(/\b(20\d{2})\b/u)?.[1] || 2026);
+      const paperType = /\bmcq\b|බහුවරණ/iu.test(normalizedForecastPrompt)
+        ? "MCQ"
+        : /\bessay\b|රචනා/iu.test(normalizedForecastPrompt)
+          ? "Essay"
+          : /\bstructured\b|ව්‍යුහගත|වුහගත/iu.test(normalizedForecastPrompt)
+            ? "Structured"
+            : /full\s*paper|සම්පූර්ණ\s*(?:paper|ප්‍රශ්න\s*පත්‍ර)/iu.test(normalizedForecastPrompt)
+              ? "Full Paper"
+              : "Structured";
+      const explicitCount = normalizedForecastPrompt.match(/\b(\d{1,2})\s*(?:questions?|ප්‍රශ්න|prashna|prshn)/iu)?.[1];
+      const asksOne = /ප්‍රශ්නයක්|ගණනක්|prashnayak|prshnyk|ganak|question\s*(?:one|1|a)\b/iu.test(normalizedForecastPrompt);
+      const questionCount = Math.max(1, Math.min(20, Number(explicitCount || (asksOne ? 1 : paperType === "Full Paper" ? 15 : 5))));
+      const includeAnswers = /answer|solution|විසඳුම|පිළිතුර|පියවරෙන්|hadala|hදලා/iu.test(normalizedForecastPrompt);
+
+      emitSse(res, "status", { step: "prediction_sources", status: "reading", message: `Reading approved ${forecastSubject} syllabus and indexed papers…` });
+      emitSse(res, "status", { step: "prediction_committee", status: "working", message: "Running independent pattern, syllabus and calibration reviews…" });
+      try {
+        const predictedPaper = await generatePredictedPaper({
+          subject: forecastSubject,
+          targetYear,
+          mode: "balanced",
+          paperType,
+          questionCount,
+          targetMarks: Math.max(5, questionCount * (paperType === "MCQ" ? 1 : 5)),
+          includeAnswers,
+          includeImages: true,
+          maxImageQuestions: Math.min(4, Math.max(1, questionCount)),
+          committeeSize: 3,
+          studentUid: user.uid,
+          user,
+        });
+        emitSse(res, "status", { step: "prediction_images", status: "complete", message: `Prepared ${predictedPaper.evidenceSummary?.generatedImages || 0} question image(s).` });
+        const answer = formatPredictedPaperForChat(predictedPaper, includeAnswers);
+        const sourceMap = new Map<string, any>();
+        for (const question of predictedPaper.questions || []) {
+          for (const source of question.evidence || []) {
+            const sourceId = String(source?.sourceId || "").trim();
+            if (sourceId) sourceMap.set(sourceId, { id: sourceId, sourceId, title: source.title || sourceId, badge: "Forecast evidence", usedInAnswer: true });
+          }
+        }
+        const predictionSources = [...sourceMap.values()];
+        if (predictionSources.length > 0) emitSse(res, "sources", { sources: predictionSources });
+        emitSse(res, "token", { text: answer });
+        const chatRes = await saveFinalChat({
+          uid: user.uid,
+          email: user.email,
+          userText: prompt,
+          assistantText: answer,
+          mode: "evidence_calibrated_prediction",
+          subject: forecastSubject,
+          sources: predictionSources,
+          completion: { completed: true, finishReason: "prediction_complete", completionPasses: 1, missingSubparts: [], reasons: [] },
+        });
+        await updateConversationState(user.uid, { lastIntent: "evidence_calibrated_prediction", activeSubject: forecastSubject });
+        emitSse(res, "suggestions", { suggestions: [
+          "මේ paper එකේ marking scheme එක exam answer ලෙස පෙන්වන්න",
+          "ඉහළම priority topic එකෙන් රූපයක් සමඟ තවත් ප්‍රශ්නයක් දෙන්න",
+          "මගේ Error Log දුර්වලතා අනුව අලුත් revision paper එකක් හදන්න",
+        ] });
+        trace.completed = true;
+        trace.chatSaved = chatRes.chatSaved;
+        trace.messageId = chatRes.messageId;
+        emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: predictionSources, finishReason: "prediction_complete" });
+        trace.doneSent = true;
+        return;
+      } catch (predictionError: any) {
+        const message = `Evidence-based ${forecastSubject} revision forecast එක සම්පූර්ණ කරගන්න බැරි වුණා. ${String(predictionError?.message || "Prediction generation failed.")}`;
+        emitSse(res, "token", { text: message });
+        const chatRes = await saveFinalChat({ uid: user.uid, email: user.email, userText: prompt, assistantText: message, mode: "evidence_calibrated_prediction", subject: forecastSubject, sources: [] });
+        trace.completed = true;
+        trace.chatSaved = chatRes.chatSaved;
+        emitSse(res, "done", { ok: false, completed: true, requestId, messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: [], errorCode: predictionError?.code || "PREDICTION_GENERATION_FAILED", finishReason: "prediction_failed" });
+        trace.doneSent = true;
+        return;
       }
     }
 

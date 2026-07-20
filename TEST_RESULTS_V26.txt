@@ -1,0 +1,23 @@
+Production Repair V26 verification
+=================================
+
+PASS  npm run typecheck:app
+PASS  npm run typecheck:scripts
+PASS  npm test
+      - source and registry tests
+      - PDF extraction, preview, visual evidence, OCR and Direct PDF tests
+      - named source, question-number and source-lock routing tests
+      - answer completeness, quality and contextual suggestion tests
+      - prediction policy, reliability, backtest and image fallback tests
+      - knowledge, security, role, upload and video tests
+      - AI evaluations: 600/600
+PASS  npm run build
+PASS  npm run build:vercel
+      - self-contained runtime verified
+      - isolated pure-ESM boot and JSON API smoke test verified
+PASS  npm run verify:repair
+
+Expected non-fatal notices:
+- Vite reports existing large shared chunks.
+- The local npm client reports a newer optional npm version.
+- The CJS development bundle reports existing import.meta warnings; the Vercel pure-ESM runtime verification passes.
