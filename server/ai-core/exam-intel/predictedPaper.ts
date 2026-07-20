@@ -33,6 +33,32 @@ function normalizedPaperType(value: unknown): PredictionPaperType {
   return "Full Paper";
 }
 
+function normalizedFocus(value: unknown) {
+  return String(value || "").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function focusScore(item: any, focusLesson?: string, focusTopic?: string) {
+  const focus = normalizedFocus(`${focusLesson || ""} ${focusTopic || ""}`);
+  if (!focus) return 0;
+  const candidate = normalizedFocus(`${item?.lesson || ""} ${item?.topic || ""} ${item?.subtopic || ""} ${(item?.subtopics || []).join(" ")}`);
+  if (!candidate) return 0;
+  if (candidate === focus) return 1000;
+  if (candidate.includes(focus) || focus.includes(candidate)) return 800;
+  const focusTokens = new Set(focus.split(/\s+/).filter(Boolean));
+  const candidateTokens = new Set(candidate.split(/\s+/).filter(Boolean));
+  let overlap = 0;
+  for (const token of focusTokens) if (candidateTokens.has(token)) overlap += 1;
+  return overlap * 120;
+}
+
+function withFocusedRankings(rankings: any[], focusLesson?: string, focusTopic?: string) {
+  if (!focusLesson && !focusTopic) return rankings;
+  return [...rankings].sort((left, right) => {
+    const focusDelta = focusScore(right, focusLesson, focusTopic) - focusScore(left, focusLesson, focusTopic);
+    return focusDelta || Number(right?.probabilityPercent || 0) - Number(left?.probabilityPercent || 0);
+  });
+}
+
 async function runPredictionCommittee(params: {
   subject: string;
   targetYear: number;
@@ -106,11 +132,25 @@ function attachCalibratedEvidence(question: any, index: number, rankings: any[],
     confidenceInterval: ranking?.confidenceInterval || [10, 50],
     evidenceSourceIds,
     evidence: evidenceSourceIds.map((sourceId) => ({ sourceId, title: sourceById.get(sourceId)?.title || sourceId })),
+    visualReference: (() => {
+      const evidence = (ranking?.evidence || []).find((item: any) => item?.sourceId && item?.pageNumber);
+      if (!evidence) return null;
+      const source = sourceById.get(String(evidence.sourceId));
+      const storagePath = source?.storagePath || source?.path || source?.objectPath || null;
+      if (!storagePath) return null;
+      return {
+        sourceId: String(evidence.sourceId),
+        storagePath: String(storagePath),
+        pageNumber: Number(evidence.pageNumber),
+        crop: evidence.crop || null,
+        sourceTitle: source?.title || evidence.sourceTitle || null,
+      };
+    })(),
     officialQuestion: false,
   };
 }
 
-async function attachQuestionImages(questions: any[], params: { user?: any; subject: string; maximumImages: number }) {
+async function attachQuestionImages(questions: any[], params: { user?: any; subject: string; maximumImages: number; timeoutMs?: number }) {
   const output = [...questions];
   const indexes = output.map((question, index) => question.requiresImage === true ? index : -1).filter((index) => index >= 0).slice(0, params.maximumImages);
   let cursor = 0;
@@ -121,19 +161,25 @@ async function attachQuestionImages(questions: any[], params: { user?: any; subj
       const question = output[index];
       let image: any = null;
       if (params.user?.uid) {
-        const result = await generateEducationalImage({
+        const generationTask = generateEducationalImage({
           user: params.user,
           body: {
             prompt: question.visualSpec.prompt,
             subject: params.subject,
             lesson: question.lesson,
-            style: "clean examination diagram with exact geometry and no decorative content",
-            mode: "pro",
-            quality: "high",
+            style: "Sri Lankan A/L past-paper line diagram; white page; thin black lines; accurate proportions; no decorative content",
+            mode: "fast",
+            quality: "standard",
             aspectRatio: "4:3",
-            referenceText: `Question: ${question.text}\nMust show: ${(question.visualSpec.mustShow || []).join(", ")}\nAllowed short labels: ${(question.visualSpec.labels || []).join(", ")}`,
+            referenceText: `Question: ${question.text}\nMust show: ${(question.visualSpec.mustShow || []).join(", ")}\nExact Unicode labels when needed: ${(question.visualSpec.labels || []).join(", ")}`,
+            referencePdf: question.visualReference || undefined,
           },
         }).catch(() => null);
+        const timeoutMs = Math.max(4_000, Math.min(20_000, Number(params.timeoutMs || 12_000)));
+        const result = await Promise.race([
+          generationTask,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+        ]);
         if (result?.ok && result?.imageUrl) {
           image = {
             url: result.imageUrl,
@@ -153,6 +199,45 @@ async function attachQuestionImages(questions: any[], params: { user?: any; subj
   return output;
 }
 
+export async function hydratePredictedPaperImages(paper: any, params: { user?: any; subject: string; maximumImages?: number; timeoutMs?: number }) {
+  const questions = await attachQuestionImages(paper?.questions || [], {
+    user: params.user,
+    subject: params.subject,
+    maximumImages: Math.max(0, Number(params.maximumImages ?? paper?.questions?.length ?? 0)),
+    timeoutMs: params.timeoutMs,
+  });
+  return {
+    ...paper,
+    questions,
+    evidenceSummary: {
+      ...(paper?.evidenceSummary || {}),
+      generatedImages: questions.filter((question: any) => question.image?.generatedBy === "ai_image_model").length,
+    },
+  };
+}
+
+export function buildPredictedPaperVisualBlocks(paper: any) {
+  return (paper?.questions || []).map((question: any) => ({
+    type: "prediction_question_card",
+    title: paper?.title || `${paper?.targetYear || 2026} ${paper?.subject || "Technology"} Revision Forecast`,
+    subject: paper?.subject || "SFT",
+    targetYear: Number(paper?.targetYear || 2026),
+    paperType: paper?.paperType || "Structured",
+    questionNo: Number(question?.questionNo || 1),
+    lesson: question?.lesson || "Syllabus question",
+    subtopic: question?.subtopic || "",
+    marks: Number(question?.marks || 0),
+    text: String(question?.text || ""),
+    options: Array.isArray(question?.options) ? question.options : [],
+    image: question?.image || buildPredictionFallbackVisual(question),
+    caption: question?.visualSpec?.caption || question?.image?.caption || "",
+    disclaimer: paper?.disclaimer || "AI-generated revision practice only.",
+    predictionProbability: Number(question?.predictionProbability || 0),
+    predictionConfidence: Number(question?.predictionConfidence || 0),
+    referenceSourceTitle: question?.visualReference?.sourceTitle || null,
+  }));
+}
+
 export async function generatePredictedPaper(params: {
   subject: string;
   mode?: PredictionMode;
@@ -168,6 +253,9 @@ export async function generatePredictedPaper(params: {
   maxImageQuestions?: number;
   committeeSize?: number;
   settings?: any;
+  focusLesson?: string;
+  focusTopic?: string;
+  deferImages?: boolean;
 }) {
   const db = getAdminDb();
   const subject = normalizePredictionSubject(params.subject);
@@ -216,7 +304,11 @@ export async function generatePredictedPaper(params: {
     });
   const storedSyllabusNodes = syllabusNodeSnap ? syllabusNodeSnap.docs.map((document: any) => ({ id: document.id, ...document.data() })) : [];
   const syllabusNodes = [...storedSyllabusNodes, ...syllabusCorpus.syllabusNodes];
-  const rankings = calculateCalibratedForecast({ subject, questions: indexedEvidence, syllabusNodes, targetYear, settings });
+  const rankings = withFocusedRankings(
+    calculateCalibratedForecast({ subject, questions: indexedEvidence, syllabusNodes, targetYear, settings }),
+    params.focusLesson,
+    params.focusTopic,
+  );
   const committee = await runPredictionCommittee({
     subject,
     targetYear,
@@ -244,7 +336,11 @@ PAPER TYPE: ${paperType}
 MODE: ${mode}
 QUESTION COUNT: exactly ${questionCount}
 TARGET MARKS: approximately ${targetMarks}
-VISUAL REQUIREMENT: Mark image/diagram-dependent questions with requiresImage=true and give a precise visualSpec. Aim for up to ${maximumImages} genuinely useful visual questions; never attach an irrelevant decorative image. Every question marked requiresImage will receive an actual image asset after text generation.
+REQUESTED LESSON LOCK: ${params.focusLesson || "none"}
+REQUESTED TOPIC LOCK: ${params.focusTopic || "none"}
+When a requested lesson/topic lock is present, every generated question must stay inside that lesson/topic. Do not substitute a different high-ranked lesson.
+LANGUAGE AND LAYOUT: Write the complete question in natural Sinhala Unicode. Put each main paragraph and each (a), (b), (i), (ii), (iii) subpart on its own line. Do not compress the whole question into one paragraph.
+VISUAL REQUIREMENT: Mark image/diagram-dependent questions with requiresImage=true and give a precise visualSpec. Aim for up to ${maximumImages} genuinely useful visual questions; never attach an irrelevant decorative image. Every question marked requiresImage will receive an actual image asset after text generation.${questionCount === 1 && maximumImages > 0 ? " This single-question request must be designed as a meaningful image, graph, table, circuit, apparatus or engineering-drawing question with requiresImage=true." : ""}
 
 OFFICIAL SYLLABUS COVERAGE:
 ${JSON.stringify(syllabusCorpus.coverage)}
@@ -270,7 +366,8 @@ STRICT RULES:
 - Generate new revision questions; do not copy a full copyrighted paper verbatim.
 - Include section, questionType, lesson, subtopic, marks, answer, markingPoints, evidenceSourceIds, requiresImage, visualOpportunity and visualSpec.
 - evidenceSourceIds must come from the supplied indexed evidence. Never invent a source ID.
-- Visual specifications must describe exact geometry/components and use only short English/symbol labels inside the image; Sinhala explanation belongs in altText/caption outside the image.
+- Visual specifications must describe exact geometry/components. Prefer symbols and numbers. When a word label is necessary, provide the exact short Sinhala Unicode label in visualSpec.labels; never output legacy-font ASCII or transliteration.
+- Match the restrained black-and-white layout language of Sri Lankan past papers: no decorative gradients, fantasy objects, or unrelated stock art.
 - For an image-based question, the text must explicitly tell the student to use the supplied image.
 - Use natural Sinhala Unicode where appropriate.
 - includeAnswers=${Boolean(params.includeAnswers)}. When false, keep answer empty but still create private markingPoints for the marking scheme data.
@@ -318,13 +415,16 @@ STRICT RULES:
             ...generationRequest,
             contents: [{ role: "user", parts: [
               ...parts,
-              { text: `REPAIR PASS: The previous response was missing, truncated, or contained fewer than ${questionCount} questions. Return one complete JSON object with exactly ${questionCount} fully formed questions. Keep every required field and stay concise enough to finish.` },
+              { text: `REPAIR PASS: The previous response was missing, truncated, contained fewer than ${questionCount} questions, or violated the requested lesson lock. Return one complete JSON object with exactly ${questionCount} fully formed questions. Every question must use subject ${subject}${params.focusLesson ? ` and lesson ${params.focusLesson}` : ""}${params.focusTopic ? ` and topic ${params.focusTopic}` : ""}. Keep every required field and stay concise enough to finish.` },
             ] }],
           };
       const { result } = await callGeminiWithFallback("final_answer", request, getAIClient());
       const candidate = safeJson(result.text);
-      if ((candidate?.questions?.length || 0) > (parsed?.questions?.length || 0)) parsed = candidate;
-      if (candidate?.questions?.length >= questionCount) break;
+      const candidateQuestions = Array.isArray(candidate?.questions) ? candidate.questions : [];
+      const focusLocked = Boolean(params.focusLesson || params.focusTopic);
+      const focusSatisfied = !focusLocked || candidateQuestions.slice(0, questionCount).every((question: any) => focusScore(question, params.focusLesson, params.focusTopic) > 0);
+      if ((candidateQuestions.length || 0) > (parsed?.questions?.length || 0) || (candidateQuestions.length >= questionCount && focusSatisfied)) parsed = candidate;
+      if (candidateQuestions.length >= questionCount && focusSatisfied) break;
     } catch (error) {
       lastGenerationError = error;
     }
@@ -332,11 +432,15 @@ STRICT RULES:
   if (!Array.isArray(parsed.questions) || parsed.questions.length === 0) {
     throw Object.assign(new Error(lastGenerationError?.message || "The forecast model did not return a usable question set after an automatic repair pass."), { code: "PREDICTION_EMPTY_RESULT" });
   }
-  const calibratedQuestions = parsed.questions.slice(0, questionCount).map((question: any, index: number) => attachCalibratedEvidence(question, index, rankings, sourceById));
+  const calibratedQuestions = parsed.questions.slice(0, questionCount).map((question: any, index: number) => attachCalibratedEvidence({
+    ...question,
+    lesson: params.focusLesson || question?.lesson,
+    subtopic: params.focusTopic || question?.subtopic,
+  }, index, rankings, sourceById));
   const visualQuestions = ensureVisualQuestionIntegrity(calibratedQuestions, maximumImages);
-  const questions = maximumImages > 0
+  const questions = maximumImages > 0 && params.deferImages !== true
     ? await attachQuestionImages(visualQuestions, { user: params.user, subject, maximumImages })
-    : visualQuestions;
+    : visualQuestions.map((question: any) => question.requiresImage ? { ...question, image: buildPredictionFallbackVisual(question) } : question);
   const answerKey = questions.map((question: any) => ({ questionNo: question.questionNo, answer: question.answer, markingPoints: question.markingPoints, marks: question.marks }));
   const totalMarks = questions.reduce((sum: number, question: any) => sum + Number(question.marks || 0), 0);
 
@@ -360,7 +464,7 @@ STRICT RULES:
       eligibleSources: eligibleSources.length,
       syllabus: syllabusCorpus.coverage,
       committeeMembers: committee.length,
-      generatedImages: questions.filter((question: any) => question.image?.url).length,
+      generatedImages: questions.filter((question: any) => question.image?.generatedBy === "ai_image_model").length,
       targetYear,
     },
     topForecasts: rankings.slice(0, 20),
@@ -375,19 +479,19 @@ export function formatPredictedPaperForChat(paper: any, includeAnswers = false) 
     "",
     `> ${paper.disclaimer}`,
     "",
+    `**${paper.subject} · ${paper.targetYear} · ${paper.paperType} · ${paper.totalMarks} marks**`,
+    "",
+    "ප්‍රශ්න මුල් විභාග ප්‍රශ්න පත්‍රයකට සමීප paper-card ආකාරයෙන් පහත පෙන්වා ඇත. රූප, වගු සහ උපප්‍රශ්න එකම card එක තුළ තබා ඇත.",
+    "",
   ];
-  for (const question of paper.questions || []) {
-    lines.push(`### ${question.questionNo}. ${question.lesson || "Syllabus question"} (${question.marks} marks)`, "", String(question.text || ""), "");
-    if (question.image?.url) lines.push(`![${question.image.altText || `Question ${question.questionNo} diagram`}](${question.image.url})`, `*${question.image.caption || "Question image"}*`, "");
-    if (Array.isArray(question.options)) question.options.forEach((option: string, index: number) => lines.push(`${index + 1}. ${option}`));
-    if (question.options?.length) lines.push("");
-    lines.push(`Prediction priority: **${question.predictionProbability}%** · Evidence confidence: **${question.predictionConfidence}%**`, "");
-    if (includeAnswers) {
-      lines.push(`**Answer:** ${question.answer || "See marking points."}`);
+  if (includeAnswers) {
+    lines.push("### පිළිතුරු සාරාංශය", "");
+    for (const question of paper.questions || []) {
+      lines.push(`**${question.questionNo}.** ${question.answer || "Marking points බලන්න."}`);
       if (question.markingPoints?.length) lines.push(...question.markingPoints.map((point: string) => `- ${point}`));
       lines.push("");
     }
   }
-  lines.push(`Evidence used: ${paper.evidenceSummary?.indexedQuestions || 0} indexed questions, ${paper.evidenceSummary?.syllabus?.attachedDocuments || 0} syllabus PDF(s), ${paper.evidenceSummary?.committeeMembers || 0} independent analysis passes.`);
+  lines.push(`Evidence used: ${paper.evidenceSummary?.indexedQuestions || 0} indexed questions, ${paper.evidenceSummary?.syllabus?.attachedDocuments || 0} syllabus PDF(s), ${paper.evidenceSummary?.committeeMembers || 0} independent analysis pass(es).`);
   return lines.join("\n");
 }

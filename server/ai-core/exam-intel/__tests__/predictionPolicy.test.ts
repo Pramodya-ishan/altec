@@ -32,4 +32,8 @@ assert.equal(visualQuestions[1].requiresImage, false, "visual quota must be enfo
 const fallbackImage = buildPredictionFallbackVisual(visualQuestions[0]);
 assert.match(fallbackImage.url, /^data:image\/svg\+xml;base64,/);
 assert.equal(fallbackImage.generatedBy, "deterministic_svg_fallback");
+const sinhalaFallback = buildPredictionFallbackVisual({ questionNo: 3, visualSpec: { kind: "measurement", labels: ["ප්‍රධාන පරිමාණය", "වර්නියර් පරිමාණය"] } });
+const decodedSinhalaSvg = Buffer.from(String(sinhalaFallback.url).split(",")[1], "base64").toString("utf8");
+assert.match(decodedSinhalaSvg, /ප්‍රධාන පරිමාණය/, "Sinhala labels must remain Unicode in deterministic paper visuals");
+assert.doesNotMatch(decodedSinhalaSvg, /#2563eb|#7c3aed|gradient/i, "fallback question visuals should remain restrained black-and-white paper diagrams");
 console.log("prediction policy and backtest tests passed");

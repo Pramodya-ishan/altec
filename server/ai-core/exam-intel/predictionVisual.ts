@@ -6,36 +6,85 @@ function dataUrl(svg: string) {
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
 
+function safeUnicodeLabel(value: unknown) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 34);
+}
+
+const font = `"Noto Sans Sinhala","Nirmala UI","Iskoola Pota","Segoe UI",Arial,sans-serif`;
+const marker = `<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#111827"/></marker><pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="8" stroke="#64748b" stroke-width="1"/></pattern></defs>`;
+
+function label(text: string, x: number, y: number, anchor = "middle", size = 20) {
+  return `<text x="${x}" y="${y}" text-anchor="${anchor}" font-family='${font}' font-size="${size}" fill="#111827">${xml(text)}</text>`;
+}
+
 export function buildPredictionFallbackVisual(question: any) {
   const spec = question?.visualSpec || {};
   const kind = String(spec.kind || spec.visualKind || "educational_diagram").toLowerCase();
-  const labels: string[] = (Array.isArray(spec.labels) ? spec.labels : []).map((item: any) => String(item || "").replace(/[^A-Za-z0-9°θμΩ+\-=/(). ]/g, "").slice(0, 24)).filter(Boolean).slice(0, 8);
-  const safeLabels: string[] = labels.length ? labels : ["A", "B", "C"];
-  const title = `Q${Number(question?.questionNo || 1)} ${String(spec.kind || "Exam diagram").replace(/_/g, " ")}`;
-  const common = `<defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#2563eb"/></marker></defs><rect width="800" height="480" rx="24" fill="#f8fafc"/><text x="40" y="50" font-family="Arial,sans-serif" font-size="22" font-weight="700" fill="#0f172a">${xml(title)}</text>`;
+  const labels: string[] = (Array.isArray(spec.labels) ? spec.labels : [])
+    .map(safeUnicodeLabel)
+    .filter(Boolean)
+    .slice(0, 8);
+  const safeLabels = labels.length ? labels : ["A", "B", "C"];
   let drawing = "";
 
   if (/force|body|mechanic|incline/.test(kind)) {
-    drawing = `<path d="M100 390L680 390L680 170Z" fill="#e2e8f0" stroke="#475569" stroke-width="4"/><g transform="translate(410 285) rotate(-20)"><rect x="-60" y="-45" width="120" height="90" rx="6" fill="#fff" stroke="#0f172a" stroke-width="4"/></g><line x1="410" y1="270" x2="410" y2="100" stroke="#2563eb" stroke-width="5" marker-end="url(#a)"/><text x="424" y="125" font-family="Arial" font-size="20" fill="#2563eb">R</text><line x1="410" y1="285" x2="410" y2="445" stroke="#dc2626" stroke-width="5" marker-end="url(#a)"/><text x="425" y="430" font-family="Arial" font-size="20" fill="#dc2626">W</text><line x1="450" y1="260" x2="610" y2="205" stroke="#059669" stroke-width="5" marker-end="url(#a)"/><text x="565" y="185" font-family="Arial" font-size="20" fill="#059669">F</text>`;
+    drawing = `
+      <path d="M105 405L690 405L690 190Z" fill="url(#hatch)" stroke="#111827" stroke-width="3"/>
+      <g transform="translate(425 300) rotate(-20)"><rect x="-64" y="-45" width="128" height="90" fill="#fff" stroke="#111827" stroke-width="3"/></g>
+      <line x1="425" y1="282" x2="425" y2="112" stroke="#111827" stroke-width="3" marker-end="url(#arrow)"/>${label(safeLabels[0] || "R", 442, 130, "start")}
+      <line x1="425" y1="300" x2="425" y2="462" stroke="#111827" stroke-width="3" marker-end="url(#arrow)"/>${label(safeLabels[1] || "W", 443, 447, "start")}
+      <line x1="468" y1="275" x2="626" y2="220" stroke="#111827" stroke-width="3" marker-end="url(#arrow)"/>${label(safeLabels[2] || "F", 615, 202)}
+      <path d="M486 291A42 42 0 0 0 478 269" fill="none" stroke="#111827" stroke-width="2"/>${label("θ", 505, 269, "start", 18)}`;
   } else if (/graph/.test(kind)) {
-    drawing = `<line x1="110" y1="410" x2="730" y2="410" stroke="#0f172a" stroke-width="4" marker-end="url(#a)"/><line x1="110" y1="410" x2="110" y2="90" stroke="#0f172a" stroke-width="4" marker-end="url(#a)"/><path d="M120 390 C230 370 260 270 360 245 S520 150 700 120" fill="none" stroke="#7c3aed" stroke-width="6"/><circle cx="360" cy="245" r="8" fill="#7c3aed"/><text x="720" y="440" font-family="Arial" font-size="20">x</text><text x="75" y="95" font-family="Arial" font-size="20">y</text>`;
+    const xLabel = safeLabels[0] || "x";
+    const yLabel = safeLabels[1] || "y";
+    drawing = `
+      <g stroke="#cbd5e1" stroke-width="1">${Array.from({ length: 12 }, (_, i) => `<line x1="${120 + i * 50}" y1="82" x2="${120 + i * 50}" y2="420"/>`).join("")}${Array.from({ length: 7 }, (_, i) => `<line x1="120" y1="${120 + i * 50}" x2="720" y2="${120 + i * 50}"/>`).join("")}</g>
+      <line x1="120" y1="420" x2="745" y2="420" stroke="#111827" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="120" y1="420" x2="120" y2="70" stroke="#111827" stroke-width="3" marker-end="url(#arrow)"/>
+      <path d="M130 398 C230 380 268 295 360 270 S535 162 710 122" fill="none" stroke="#111827" stroke-width="4"/>
+      <circle cx="360" cy="270" r="6" fill="#111827"/>${label(xLabel, 746, 453, "end", 18)}${label(yLabel, 88, 82, "start", 18)}`;
   } else if (/circuit|logic/.test(kind)) {
-    drawing = `<path d="M120 240H230M570 240H690M690 240V390H120V240" fill="none" stroke="#0f172a" stroke-width="5"/><rect x="230" y="170" width="160" height="140" rx="16" fill="#dbeafe" stroke="#2563eb" stroke-width="4"/><path d="M390 170Q530 170 570 240Q530 310 390 310Z" fill="#ede9fe" stroke="#7c3aed" stroke-width="4"/><circle cx="120" cy="240" r="9" fill="#0f172a"/><circle cx="690" cy="240" r="9" fill="#0f172a"/>`;
+    drawing = `
+      <path d="M100 250H235M570 250H710M710 250V410H100V250" fill="none" stroke="#111827" stroke-width="4"/>
+      <rect x="235" y="180" width="155" height="140" fill="#fff" stroke="#111827" stroke-width="3"/>
+      <path d="M390 180Q535 180 570 250Q535 320 390 320Z" fill="#fff" stroke="#111827" stroke-width="3"/>
+      <circle cx="100" cy="250" r="7" fill="#111827"/><circle cx="710" cy="250" r="7" fill="#111827"/>
+      ${label(safeLabels[0] || "A", 168, 235)}${label(safeLabels[1] || "B", 315, 258)}${label(safeLabels[2] || "Y", 638, 235)}`;
   } else if (/flow|network|erd|data/.test(kind)) {
-    const positions = [[140,150],[400,150],[660,150],[270,340],[530,340]];
-    drawing = positions.map(([x,y], index) => `<rect x="${x-85}" y="${y-42}" width="170" height="84" rx="18" fill="${index % 2 ? "#ede9fe" : "#dbeafe"}" stroke="#475569" stroke-width="3"/><text x="${x}" y="${y+7}" text-anchor="middle" font-family="Arial" font-size="18" font-weight="700">${xml(safeLabels[index % safeLabels.length])}</text>`).join("") + `<path d="M225 150H315M485 150H575M200 192L245 298M600 192L555 298M355 340H445" stroke="#2563eb" stroke-width="4" marker-end="url(#a)" fill="none"/>`;
+    const positions = [[145,150],[400,150],[655,150],[270,350],[530,350]];
+    drawing = positions.map(([x,y], index) => `<rect x="${x-88}" y="${y-42}" width="176" height="84" rx="3" fill="#fff" stroke="#111827" stroke-width="2.5"/>${label(safeLabels[index % safeLabels.length], x, y+7, "middle", 18)}`).join("")
+      + `<path d="M233 150H312M488 150H567M203 192L245 306M597 192L555 306M358 350H442" stroke="#111827" stroke-width="2.5" marker-end="url(#arrow)" fill="none"/>`;
   } else if (/engineering|drawing|construction|mechanism/.test(kind)) {
-    drawing = `<path d="M180 340V160H360V220H610V340Z" fill="#e2e8f0" stroke="#0f172a" stroke-width="5"/><circle cx="290" cy="250" r="55" fill="#fff" stroke="#2563eb" stroke-width="5"/><line x1="180" y1="390" x2="610" y2="390" stroke="#7c3aed" stroke-width="3"/><path d="M180 375V405M610 375V405" stroke="#7c3aed" stroke-width="3"/><text x="395" y="425" text-anchor="middle" font-family="Arial" font-size="20">L</text>`;
+    drawing = `
+      <path d="M170 350V160H360V225H625V350Z" fill="#fff" stroke="#111827" stroke-width="4"/>
+      <circle cx="290" cy="255" r="58" fill="#fff" stroke="#111827" stroke-width="3"/>
+      <line x1="170" y1="400" x2="625" y2="400" stroke="#111827" stroke-width="2"/>
+      <path d="M170 382V418M625 382V418" stroke="#111827" stroke-width="2"/>
+      ${label(safeLabels[0] || "L", 398, 438, "middle", 18)}
+      <line x1="125" y1="160" x2="125" y2="350" stroke="#111827" stroke-width="2"/><path d="M108 160H142M108 350H142" stroke="#111827" stroke-width="2"/>${label(safeLabels[1] || "H", 93, 260, "middle", 18)}`;
+  } else if (/table|measurement|vernier|micrometer/.test(kind)) {
+    drawing = `
+      <line x1="105" y1="210" x2="710" y2="210" stroke="#111827" stroke-width="4"/>
+      ${Array.from({ length: 31 }, (_, i) => `<line x1="${120+i*18}" y1="${i%5===0?176:188}" x2="${120+i*18}" y2="224" stroke="#111827" stroke-width="${i%5===0?2:1}"/>`).join("")}
+      <line x1="195" y1="280" x2="550" y2="280" stroke="#111827" stroke-width="3"/>
+      ${Array.from({ length: 21 }, (_, i) => `<line x1="${205+i*16}" y1="280" x2="${205+i*16}" y2="${i%5===0?330:315}" stroke="#111827" stroke-width="${i%5===0?2:1}"/>`).join("")}
+      ${label(safeLabels[0] || "ප්‍රධාන පරිමාණය", 410, 145, "middle", 20)}${label(safeLabels[1] || "වර්නියර් පරිමාණය", 380, 365, "middle", 20)}`;
   } else {
-    drawing = `<circle cx="400" cy="235" r="90" fill="#dbeafe" stroke="#2563eb" stroke-width="5"/>${safeLabels.slice(0,4).map((label,index) => { const angle = index * Math.PI/2; const x=400+Math.cos(angle)*210; const y=235+Math.sin(angle)*150; return `<line x1="${400+Math.cos(angle)*90}" y1="${235+Math.sin(angle)*90}" x2="${x}" y2="${y}" stroke="#2563eb" stroke-width="4" marker-end="url(#a)"/><text x="${x}" y="${y-12}" text-anchor="middle" font-family="Arial" font-size="19" font-weight="700">${xml(label)}</text>`; }).join("")}`;
+    drawing = `<circle cx="400" cy="245" r="90" fill="#fff" stroke="#111827" stroke-width="3"/>${safeLabels.slice(0,4).map((item,index) => { const angle = index * Math.PI/2; const x=400+Math.cos(angle)*220; const y=245+Math.sin(angle)*155; return `<line x1="${400+Math.cos(angle)*90}" y1="${245+Math.sin(angle)*90}" x2="${x}" y2="${y}" stroke="#111827" stroke-width="2.5" marker-end="url(#arrow)"/>${label(item, x, y-12, "middle", 18)}`; }).join("")}`;
   }
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="480" viewBox="0 0 800 480" role="img" aria-label="${xml(spec.altText || title)}">${common}${drawing}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="840" height="500" viewBox="0 0 840 500" role="img" aria-label="${xml(spec.altText || `Question ${question?.questionNo || 1} diagram`)}"><rect width="840" height="500" fill="#fff"/>${marker}${drawing}</svg>`;
   return {
     url: dataUrl(svg),
     mimeType: "image/svg+xml",
-    altText: String(spec.altText || title),
-    caption: String(spec.caption || "Generated examination-support diagram"),
+    altText: String(spec.altText || `Question ${question?.questionNo || 1} diagram`),
+    caption: String(spec.caption || "ප්‍රශ්නය සඳහා නිර්මාණය කළ විභාග ආකෘති රූපසටහන"),
     generatedBy: "deterministic_svg_fallback",
     storagePath: null,
   };
@@ -55,9 +104,9 @@ export function ensureVisualQuestionIntegrity(questions: any[], maximumImages: n
         kind: String(spec?.kind || "educational_diagram"),
         prompt: String(spec?.prompt || `Create an accurate exam diagram for question ${question.questionNo}.`).slice(0, 1800),
         altText: String(spec?.altText || `Diagram for question ${question.questionNo}`).slice(0, 300),
-        caption: String(spec?.caption || "Use this image as part of the question.").slice(0, 500),
-        labels: Array.isArray(spec?.labels) ? spec.labels.slice(0, 12) : [],
-        mustShow: Array.isArray(spec?.mustShow) ? spec.mustShow.slice(0, 12) : [],
+        caption: String(spec?.caption || "මෙම රූපය භාවිතයෙන් ප්‍රශ්නයට පිළිතුරු සපයන්න.").slice(0, 500),
+        labels: Array.isArray(spec?.labels) ? spec.labels.map(safeUnicodeLabel).filter(Boolean).slice(0, 12) : [],
+        mustShow: Array.isArray(spec?.mustShow) ? spec.mustShow.map(safeUnicodeLabel).filter(Boolean).slice(0, 12) : [],
       },
     };
   });

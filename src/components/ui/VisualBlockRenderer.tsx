@@ -29,6 +29,7 @@ interface VisualBlockRendererProps {
 
 type PdfPreviewBlock = Extract<VisualBlock, { type: "pdf_image_preview" }>;
 type MistakePreviewBlock = Extract<VisualBlock, { type: "mistake_image_preview" }>;
+type PredictionQuestionBlock = Extract<VisualBlock, { type: "prediction_question_card" }>;
 
 function MistakeImagePreview({ block }: { block: MistakePreviewBlock }) {
   const endpoint = `/api/student/mistakes/${encodeURIComponent(block.mistakeId)}/image?owner=${encodeURIComponent(block.ownerPath || "uid")}`;
@@ -152,6 +153,81 @@ function PdfImagePreview({ block }: { block: PdfPreviewBlock }) {
   );
 }
 
+function normalizeExamQuestionText(value: unknown) {
+  let text = String(value || "").normalize("NFKC").replace(/\r\n?/g, "\n").trim();
+  if (!text) return "";
+  const marker = "(?:[a-h]|i{1,3}|iv|v|vi{0,3}|ix|x)";
+  text = text.replace(new RegExp(`\\s+(?=\\(${marker}\\)\\s*)`, "giu"), "\n\n");
+  text = text.replace(/\s+(?=(?:[①②③④⑤⑥⑦⑧⑨⑩]|[•●▪])\s*)/gu, "\n");
+  return text.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function PredictionQuestionCard({ block }: { block: PredictionQuestionBlock }) {
+  const questionText = normalizeExamQuestionText(block.text);
+  const paragraphs = questionText.split(/\n{2,}/u).map((part) => part.trim()).filter(Boolean);
+  const probability = Math.max(0, Math.min(100, Number(block.predictionProbability || 0)));
+  const confidence = Math.max(0, Math.min(100, Number(block.predictionConfidence || 0)));
+
+  return (
+    <article lang="si" className="prediction-paper-card mx-auto my-5 w-full max-w-[780px] overflow-hidden border border-slate-300 bg-white shadow-[0_8px_28px_rgba(15,23,42,0.07)] [font-family:'Noto_Sans_Sinhala','Nirmala_UI','Iskoola_Pota','Segoe_UI',sans-serif]">
+      <header className="border-b-2 border-slate-900 px-4 py-3 sm:px-7">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">AI revision forecast · official paper style</p>
+            <h3 className="mt-1 text-sm font-black text-slate-950 sm:text-[15px]">{block.targetYear} {block.subject} — {block.paperType}</h3>
+          </div>
+          <span className="border border-slate-400 px-2 py-1 text-[10px] font-bold text-slate-700">Practice only</span>
+        </div>
+      </header>
+
+      <div className="px-4 py-5 sm:px-7 sm:py-6">
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <p className="min-w-0 text-[11px] font-semibold text-slate-500">{block.lesson}{block.subtopic ? ` · ${block.subtopic}` : ""}</p>
+          {block.marks > 0 && <span className="shrink-0 text-xs font-bold text-slate-700">(ලකුණු {block.marks.toString().padStart(2, "0")})</span>}
+        </div>
+
+        <div className="flex items-start gap-2.5 text-[15px] font-medium leading-8 text-slate-900 [overflow-wrap:anywhere] [word-break:normal] sm:gap-3">
+          <span className="shrink-0 pt-0.5 text-[16px] font-black text-slate-950">{String(block.questionNo).padStart(2, "0")}.</span>
+          <div className="min-w-0 flex-1 space-y-3">
+            {paragraphs.map((paragraph, index) => (
+              <div key={`${block.questionNo}-paragraph-${index}`} className="exam-question-paragraph">
+                <MessageRenderer content={paragraph} />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {block.image?.url && (
+          <figure className="mx-auto mt-5 w-full max-w-[680px] border-y border-slate-200 bg-white py-4 text-center">
+            <img
+              src={block.image.url}
+              alt={block.image.altText || `ප්‍රශ්න ${block.questionNo} රූපසටහන`}
+              className="mx-auto block h-auto max-h-[460px] w-auto max-w-full object-contain"
+              loading="lazy"
+              referrerPolicy="no-referrer"
+            />
+            {(block.caption || block.image.caption) && <figcaption className="mx-auto mt-2 max-w-xl text-[11px] font-medium leading-5 text-slate-500">{block.caption || block.image.caption}</figcaption>}
+          </figure>
+        )}
+
+        {Array.isArray(block.options) && block.options.length > 0 && (
+          <ol className="mt-5 grid gap-x-8 gap-y-2 border-t border-slate-200 pt-4 text-[14px] leading-6 text-slate-900 sm:grid-cols-2">
+            {block.options.map((option, index) => <li key={`${block.questionNo}-option-${index}`} className="flex gap-2"><span className="font-bold">({index + 1})</span><span>{option}</span></li>)}
+          </ol>
+        )}
+      </div>
+
+      <footer className="border-t border-slate-200 bg-slate-50 px-4 py-3 text-[10px] leading-5 text-slate-500 sm:px-7">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+          <span>{block.disclaimer || "AI-generated revision practice; not an official or guaranteed examination question."}</span>
+          {(probability > 0 || confidence > 0) && <span className="font-semibold tabular-nums text-slate-600">Revision priority {Math.round(probability)}% · evidence confidence {Math.round(confidence)}%</span>}
+        </div>
+        {block.referenceSourceTitle && <p className="mt-1">Visual pattern reference: {block.referenceSourceTitle}. The practice question and diagram are newly generated.</p>}
+      </footer>
+    </article>
+  );
+}
+
 function PanelTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="flex min-w-0 items-center gap-2 border-b border-slate-200/70 pb-3">
@@ -175,6 +251,9 @@ export function VisualBlockRenderer({ block }: VisualBlockRendererProps) {
 
     case "mistake_image_preview":
       return <MistakeImagePreview block={block} />;
+
+    case "prediction_question_card":
+      return <PredictionQuestionCard block={block} />;
 
     case "mechanics_diagram":
       return (

@@ -16,3 +16,9 @@ const mathWithJoiner = normalizeAnswerMarkdown("$P = h\u200D\\rho g$");
 assert.equal(mathWithJoiner.includes("\u200D"), false, "zero-width joiners must not reach KaTeX");
 
 console.log("answer Markdown normalization tests passed");
+
+const compactQuestion = "කම්බියක් සලකන්න. (i) දිග සඳහන් කරන්න. (ii) ප්‍රතිරෝධය ගණනය කරන්න. (iii) ප්‍රස්තාරය අඳින්න.";
+const spacedQuestion = normalizeAnswerMarkdown(compactQuestion);
+assert.match(spacedQuestion, /\n\n\(i\)/, "exam subparts should begin on separate paragraphs");
+assert.match(spacedQuestion, /\n\n\(ii\)/, "successive exam subparts should remain separated");
+assert.match(spacedQuestion, /\n\n\(iii\)/, "all compact subparts should be separated");

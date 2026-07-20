@@ -1,3 +1,14 @@
+function splitExamSubparts(content: string) {
+  const markerPattern = /\((?:[a-h]|i{1,3}|iv|v|vi{0,3}|ix|x)\)/giu;
+  const matches = content.match(markerPattern) || [];
+  if (matches.length < 2) return content;
+
+  return content.split(/(\$\$[\s\S]*?\$\$|\$[^\n$]*\$)/g).map((part, index) => {
+    if (index % 2 === 1) return part;
+    return part.replace(/[^\S\r\n]+(?=\((?:[a-h]|i{1,3}|iv|v|vi{0,3}|ix|x)\)\s*)/giu, "\n\n");
+  }).join("").replace(/\n{3,}/g, "\n\n");
+}
+
 function paragraphizeLongAnswer(content: string) {
   return content.split(/\n{2,}/).map((block) => {
     const trimmed = block.trim();
@@ -37,5 +48,5 @@ export function normalizeAnswerMarkdown(content: string): string {
     .replace(/<\/?details(?:\s[^>]*)?>/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  return paragraphizeLongAnswer(removeMathJoiners(normalized));
+  return paragraphizeLongAnswer(splitExamSubparts(removeMathJoiners(normalized)));
 }

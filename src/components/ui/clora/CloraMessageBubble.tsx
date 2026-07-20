@@ -58,8 +58,8 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
   const [copied, setCopied] = useState(false);
   const visualBlocks = Array.isArray(message.visualBlocks) ? message.visualBlocks : [];
   const answerSources = Array.isArray(message.sources) ? message.sources.filter((source: any) => source?.usedInAnswer !== false) : [];
-  const leadVisualBlocks = visualBlocks.filter((block: any) => block?.type === 'pdf_image_preview');
-  const supportingVisualBlocks = visualBlocks.filter((block: any) => block?.type !== 'source_evidence' && block?.type !== 'pdf_image_preview');
+  const leadVisualBlocks = visualBlocks.filter((block: any) => block?.type === 'pdf_image_preview' || block?.type === 'prediction_question_card');
+  const supportingVisualBlocks = visualBlocks.filter((block: any) => !['source_evidence', 'pdf_image_preview', 'prediction_question_card'].includes(block?.type));
   const copyTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => () => {
@@ -86,13 +86,30 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
           <div className="rounded-[22px] rounded-br-md bg-[#f4f4f4] px-4 py-3 text-[15px] leading-6 text-slate-900 [overflow-wrap:anywhere] [word-break:normal]">
             <p className="whitespace-pre-wrap">{message.content}</p>
             {message.attachments?.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
-                {message.attachments.map((attachment: any, index: number) => (
-                  <span key={attachment.storagePath || attachment.name || index} className="inline-flex max-w-[220px] items-center gap-2 rounded-lg bg-white p-2 text-xs text-slate-600 ring-1 ring-slate-200">
-                    <FileText className="h-4 w-4 shrink-0" />
-                    <span className="truncate font-semibold">{attachment.name}</span>
-                  </span>
-                ))}
+              <div className="mt-3 grid gap-2 border-t border-slate-200 pt-3 sm:grid-cols-2">
+                {message.attachments.map((attachment: any, index: number) => {
+                  const previewUrl = attachment.dataUrl || attachment.previewUrl;
+                  const canPreview = Boolean(previewUrl && (attachment.isImage || String(attachment.mimeType || '').startsWith('image/') || attachment.attachmentType === 'pdf'));
+                  if (canPreview) {
+                    return (
+                      <figure key={attachment.storagePath || attachment.name || index} className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                        <div className="flex min-h-24 items-center justify-center bg-slate-50 p-2">
+                          <img src={previewUrl} alt={attachment.name || 'Uploaded file preview'} className="block h-auto max-h-[260px] w-auto max-w-full object-contain" loading="lazy" />
+                        </div>
+                        <figcaption className="flex min-w-0 items-center gap-2 border-t border-slate-100 px-2.5 py-2 text-xs text-slate-600">
+                          {attachment.isImage || String(attachment.mimeType || '').startsWith('image/') ? <ImageIcon className="h-4 w-4 shrink-0" /> : <FileText className="h-4 w-4 shrink-0" />}
+                          <span className="truncate font-semibold">{attachment.name}</span>
+                        </figcaption>
+                      </figure>
+                    );
+                  }
+                  return (
+                    <span key={attachment.storagePath || attachment.name || index} className="inline-flex min-w-0 max-w-[260px] items-center gap-2 rounded-lg bg-white p-2 text-xs text-slate-600 ring-1 ring-slate-200">
+                      <FileText className="h-4 w-4 shrink-0" />
+                      <span className="truncate font-semibold">{attachment.name}</span>
+                    </span>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -128,7 +145,7 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
 
           {generatedImage?.url && (
             <figure className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-              <img src={generatedImage.url} alt={generatedImage.alt || 'Generated educational image'} className="block h-auto max-h-[680px] w-full object-contain" loading="lazy" />
+              <img src={generatedImage.url} alt={generatedImage.alt || 'Generated educational image'} className="mx-auto block h-auto max-h-[520px] w-auto max-w-full object-contain" loading="lazy" />
               <figcaption className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs text-slate-500">
                 <ImageIcon className="h-3.5 w-3.5" /> <span className="mr-auto">{generatedImageCaption}</span>
                 <a href={generatedImage.url} download={`educational-visual.${generatedImage.url.includes('image/png') ? 'png' : 'jpg'}`} target="_blank" rel="noreferrer" className="inline-flex min-h-8 items-center gap-1 rounded-lg bg-white px-2 font-semibold text-slate-600 ring-1 ring-slate-200 hover:text-slate-900"><Download className="h-3.5 w-3.5" /> Download</a>
@@ -200,7 +217,7 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
   && previous.message.status === next.message.status
   && previous.message.thinkingStatus === next.message.thinkingStatus
   && previous.message.sources?.length === next.message.sources?.length
-  && previous.message.visualBlocks?.length === next.message.visualBlocks?.length
+  && previous.message.visualBlocks === next.message.visualBlocks
   && previous.message.suggestions?.join('|') === next.message.suggestions?.join('|')
   && previous.message.generatedImage?.url === next.message.generatedImage?.url
   && previous.message.answerStatus === next.message.answerStatus

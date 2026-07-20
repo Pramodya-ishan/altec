@@ -1,0 +1,50 @@
+ALTEC PRODUCTION REPAIR V29 — TEST RESULTS
+==========================================
+
+Repository audit
+----------------
+PASS  61,275 source lines scanned across src/server/api/scripts
+PASS  No old “Do not render Sinhala words” image prompt remains
+PASS  No old Latin-only prediction-label sanitizer remains
+PASS  No forecast-route uppercase-only subject fallback remains
+PASS  No QUALITY_VERIFICATION_FAILED conversion to incomplete remains
+PASS  No main-submit answer buffering until done remains
+
+Type and regression verification
+--------------------------------
+PASS  npm run typecheck
+PASS  npm run test:sources
+PASS  forecastIntent.test.ts
+PASS  predictionPolicy.test.ts
+PASS  normalizeAnswerMarkdown.test.ts
+PASS  answerCompleteness.test.ts
+PASS  answerQuality.test.ts
+PASS  projectFileUpload.test.ts
+
+Forecast regression coverage
+----------------------------
+PASS  “guessing electrical…” routes to ET, not active-tab SFT
+PASS  Electrical Technology lesson lock
+PASS  Electrical Machines specificity over generic Electrical Technology
+PASS  ICT Database routing
+PASS  Explicit SFT Electricity routing
+PASS  ET Civil routing
+PASS  Sinhala labels survive deterministic SVG generation
+PASS  Visual fallback remains restrained black-and-white paper style
+PASS  Visual quota remains deterministic
+
+Production build and runtime
+----------------------------
+PASS  Vite production build (3,296 modules)
+PASS  Self-contained Vercel API bundle
+PASS  Vercel runtime import verification (49 imports)
+PASS  Isolated pure-ESM runtime boot
+PASS  JSON API smoke handling
+PASS  npm run verify:repair
+PASS  Existing V28 long-answer, PDF layout, Z-score history, paper move, and graph-hover checks
+
+Artifact verification
+---------------------
+PASS  ZIP integrity test
+PASS  SHA-256 checksum created
+PASS  No standalone font files included in archive

@@ -63,17 +63,18 @@ export async function generateEducationalImage(req: any) {
 
     const boundedReference = String(referenceText || "").trim().slice(0, 5_000);
     const finalPrompt = [
-      "Create one accurate educational image for a Sri Lankan G.C.E. A/L Technology student.",
-      "Do not render Sinhala words inside the raster image because generated Sinhala glyphs can be corrupted.",
-      "Use only universally safe symbols, variables, arrows, numbers, SI units, and short Latin labels inside the image (for example F, R, W, θ, x, y). The app will present Sinhala explanation outside the image.",
-      "Keep any unavoidable labels short, readable, correctly spelled, and free from decorative filler.",
-      "Use a clean white or very light background, strong visual hierarchy, and exam-focused content.",
-      "Do not add watermarks, logos, fake citations, or unsupported facts.",
+      "Create one accurate examination-support visual for a Sri Lankan G.C.E. A/L Technology student.",
+      "The surrounding application renders the complete Sinhala question as live Unicode text. Generate only the diagram, apparatus, graph, table geometry, circuit, construction detail, or other visual evidence required by that question; never rasterize a long paragraph of question text.",
+      "Match the restrained visual language of Sri Lankan Department of Examinations past papers: white page, thin black or dark-grey line work, correct proportions, compact labels, no decorative gradients, no glossy 3D styling, no unrelated stock art.",
+      "Prefer symbols, variables, arrows, numbers and SI units. When a word label is required, copy the exact supplied Sinhala Unicode label. Never convert Sinhala into legacy-font ASCII, transliteration, garbled glyphs, or phonetic English.",
+      "Keep every label short, readable and correctly attached to the relevant component. Leave enough whitespace so labels never collide or fall outside the diagram.",
+      "When a past-paper reference image is supplied, use it only as a layout, geometry and examination-style reference. Create a new, non-identical practice visual; do not reproduce an entire copyrighted page or watermark.",
+      "Do not add logos, watermarks, fake citations, prediction percentages, answer hints, or unsupported facts inside the image.",
       `Subject: ${subject || "Technology"}`,
       `Lesson: ${lesson || "General"}`,
-      style ? `Requested style: ${style}` : "Style: modern educational diagram",
-      `User request: ${prompt}`,
-      boundedReference ? `Relevant previous answer/context:\n${boundedReference}` : "",
+      style ? `Requested style: ${style}` : "Style: black-and-white Sri Lankan examination line diagram",
+      `Visual request: ${prompt}`,
+      boundedReference ? `Required question context and exact Unicode labels:\n${boundedReference}` : "",
     ].filter(Boolean).join("\n\n");
 
     let referenceImagePart: any = null;

@@ -63,7 +63,8 @@ import {
   detectEvidenceContradictions,
   evidenceContractInstruction,
 } from "./evidenceContract";
-import { formatPredictedPaperForChat, generatePredictedPaper } from "../ai-core/exam-intel/predictedPaper";
+import { buildPredictedPaperVisualBlocks, formatPredictedPaperForChat, generatePredictedPaper, hydratePredictedPaperImages } from "../ai-core/exam-intel/predictedPaper";
+import { inferForecastLesson, inferForecastSubject } from "../ai-core/exam-intel/forecastIntent";
 
 interface StreamTrace {
   requestId: string;
@@ -181,7 +182,7 @@ export type SaveChatResult = {
   errorMessage?: string;
 };
 
-export async function saveFinalChat(params: {uid: string, email?: string, userText: string, assistantText: string, mode: string, subject?: string, sources?: any[], completion?: { completed: boolean; finishReason?: string | null; completionPasses?: number; missingSubparts?: string[]; reasons?: string[] }, quality?: AnswerQualityReport | null}): Promise<SaveChatResult> {
+export async function saveFinalChat(params: {uid: string, email?: string, userText: string, assistantText: string, mode: string, subject?: string, sources?: any[], visualBlocks?: any[], completion?: { completed: boolean; finishReason?: string | null; completionPasses?: number; missingSubparts?: string[]; reasons?: string[] }, quality?: AnswerQualityReport | null}): Promise<SaveChatResult> {
   // Always strip visual blocks before saving to history
   params.assistantText = sanitizeAssistantText(stripRawVisualBlocks(params.assistantText));
 
@@ -214,6 +215,7 @@ export async function saveFinalChat(params: {uid: string, email?: string, userTe
       missingSubparts: params.completion?.missingSubparts || [],
       incompleteReasons: params.completion?.reasons || [],
       answerQuality: params.quality || null,
+      visualBlocks: Array.isArray(params.visualBlocks) ? params.visualBlocks.slice(0, 60) : [],
     });
 
     const historyRef = db.collection("users").doc(params.uid).collection("chat_history").doc(requestId);
@@ -850,15 +852,11 @@ ${originalPrompt}`;
     // එන්න පුළුවන් SFT ප්‍රශ්නයක්” generates a fresh evidence-based model.
     if (paperForecastPrompt && !isExplicitNamedSourceRequest(prompt)) {
       const normalizedForecastPrompt = String(prompt || "").normalize("NFKC");
-      const upperPrompt = normalizedForecastPrompt.toUpperCase();
-      const requestedSubject = /\bICT\b/u.test(upperPrompt)
-        ? "ICT"
-        : /\bSFT\b/u.test(upperPrompt)
-          ? "SFT"
-          : /(?:^|\s)ET(?:\s|$)/u.test(upperPrompt)
-            ? "ET"
-            : String(route.entities?.subject || paperIntent.subject || activeSubject || "SFT").toUpperCase();
-      const forecastSubject = ["SFT", "ET", "ICT"].includes(requestedSubject) ? requestedSubject : "SFT";
+      const forecastSubject = inferForecastSubject(
+        normalizedForecastPrompt,
+        route.entities?.subject || paperIntent.subject || activeSubject || "SFT",
+      );
+      const focusLesson = inferForecastLesson(normalizedForecastPrompt, forecastSubject);
       const targetYear = Number(normalizedForecastPrompt.match(/\b(20\d{2})\b/u)?.[1] || 2026);
       const paperType = /\bmcq\b|බහුවරණ/iu.test(normalizedForecastPrompt)
         ? "MCQ"
@@ -887,12 +885,15 @@ ${originalPrompt}`;
           includeAnswers,
           includeImages: true,
           maxImageQuestions: Math.min(4, Math.max(1, questionCount)),
-          committeeSize: 3,
+          committeeSize: questionCount === 1 ? 1 : 3,
+          focusLesson: focusLesson || undefined,
+          focusTopic: focusLesson || undefined,
+          deferImages: true,
           studentUid: user.uid,
           user,
         });
-        emitSse(res, "status", { step: "prediction_images", status: "complete", message: `Prepared ${predictedPaper.evidenceSummary?.generatedImages || 0} question image(s).` });
         const answer = formatPredictedPaperForChat(predictedPaper, includeAnswers);
+        let predictionVisualBlocks = buildPredictedPaperVisualBlocks(predictedPaper);
         const sourceMap = new Map<string, any>();
         for (const question of predictedPaper.questions || []) {
           for (const source of question.evidence || []) {
@@ -903,6 +904,21 @@ ${originalPrompt}`;
         const predictionSources = [...sourceMap.values()];
         if (predictionSources.length > 0) emitSse(res, "sources", { sources: predictionSources });
         emitSse(res, "token", { text: answer });
+        if (predictionVisualBlocks.length > 0) emitSse(res, "visual_blocks", { blocks: predictionVisualBlocks });
+
+        if (predictedPaper.questions?.some((question: any) => question.requiresImage === true)) {
+          emitSse(res, "status", { step: "prediction_images", status: "working", message: "Refining the past-paper-style diagram in the background…" });
+          const hydratedPaper = await hydratePredictedPaperImages(predictedPaper, {
+            user,
+            subject: forecastSubject,
+            maximumImages: Math.min(4, Math.max(1, questionCount)),
+            timeoutMs: 10_000,
+          }).catch(() => predictedPaper);
+          predictionVisualBlocks = buildPredictedPaperVisualBlocks(hydratedPaper);
+          if (predictionVisualBlocks.length > 0) emitSse(res, "visual_blocks", { blocks: predictionVisualBlocks });
+          emitSse(res, "status", { step: "prediction_images", status: "complete", message: `Prepared ${hydratedPaper.evidenceSummary?.generatedImages || 0} enhanced diagram(s); paper-style fallbacks remain available.` });
+        }
+
         const chatRes = await saveFinalChat({
           uid: user.uid,
           email: user.email,
@@ -911,6 +927,7 @@ ${originalPrompt}`;
           mode: "evidence_calibrated_prediction",
           subject: forecastSubject,
           sources: predictionSources,
+          visualBlocks: predictionVisualBlocks,
           completion: { completed: true, finishReason: "prediction_complete", completionPasses: 1, missingSubparts: [], reasons: [] },
         });
         await updateConversationState(user.uid, { lastIntent: "evidence_calibrated_prediction", activeSubject: forecastSubject });
@@ -922,7 +939,7 @@ ${originalPrompt}`;
         trace.completed = true;
         trace.chatSaved = chatRes.chatSaved;
         trace.messageId = chatRes.messageId;
-        emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: predictionSources, finishReason: "prediction_complete" });
+        emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: predictionSources, visualBlocks: predictionVisualBlocks, finishReason: "prediction_complete" });
         trace.doneSent = true;
         return;
       } catch (predictionError: any) {
@@ -2595,13 +2612,12 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       emitSse(res, "quality_report", { report: qualityReport });
     }
 
+    // A quality warning must not misclassify an otherwise structurally complete
+    // response as a transport interruption. Repair is attempted above; any
+    // remaining verifier concern is shown in the quality report while the
+    // complete answer stays usable.
     if (qualityReport && !qualityReport.passed) {
-      completionAssessment = {
-        ...completionAssessment,
-        complete: false,
-        shouldContinue: true,
-        reasons: Array.from(new Set([...completionAssessment.reasons, "QUALITY_VERIFICATION_FAILED"])),
-      };
+      qualityReport = { ...qualityReport, warningOnly: true } as AnswerQualityReport;
     }
 
     const isInterrupted = !completionAssessment.complete;
@@ -2677,6 +2693,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         mode: route.mode,
         subject: activeSubject,
         sources: allSources,
+        visualBlocks: derivedVisualBlocks,
         completion: {
           completed: !isInterrupted,
           finishReason: modelFinishReason,

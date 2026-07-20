@@ -29,6 +29,32 @@ export type VisualBlock =
       caption?: string;
     }
   | {
+      type: "prediction_question_card";
+      title: string;
+      subject: string;
+      targetYear: number;
+      paperType: string;
+      questionNo: number;
+      lesson: string;
+      subtopic?: string;
+      marks: number;
+      text: string;
+      options?: string[];
+      image?: {
+        url: string;
+        mimeType?: string;
+        altText?: string;
+        caption?: string;
+        generatedBy?: string;
+        storagePath?: string | null;
+      } | null;
+      caption?: string;
+      disclaimer?: string;
+      predictionProbability?: number;
+      predictionConfidence?: number;
+      referenceSourceTitle?: string | null;
+    }
+  | {
       type: "coordinate_plane";
       title: string;
       points: { label: string; x: number; y: number }[];

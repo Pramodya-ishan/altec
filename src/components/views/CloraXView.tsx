@@ -66,6 +66,7 @@ type ChatUpload = {
   size: number;
   isImage?: boolean;
   dataUrl?: string;
+  previewUrl?: string;
   storagePath?: string;
   mimeType?: string;
   sourceId?: string;
@@ -87,6 +88,7 @@ type SavedChatHistoryItem = {
   summary?: string[];
   answerCompleted?: boolean;
   answerQuality?: any;
+  visualBlocks?: any[];
 };
 
 function flattenSavedHistory(history: SavedChatHistoryItem[]) {
@@ -110,7 +112,10 @@ function flattenSavedHistory(history: SavedChatHistoryItem[]) {
         summary: item.summary || [],
         createdAt: item.createdAt || new Date().toISOString(),
         status: item.answerCompleted === false ? 'incomplete' : 'done',
-        visualBlocks: extracted.blocks,
+        visualBlocks: [
+          ...(Array.isArray(item.visualBlocks) ? item.visualBlocks : []),
+          ...extracted.blocks,
+        ],
         qualityReport: item.answerQuality || null,
       });
     }
@@ -428,26 +433,30 @@ const [messages, setMessages] = useState<{
     if (typingTimerRef.current !== null) window.clearTimeout(typingTimerRef.current);
   }, []);
 
+  const queueVisibleAnswer = React.useCallback((messageId: string, text: string, replace = false) => {
+    const nextText = replace ? text : (bufferedAnswerRef.current.get(messageId) || '') + text;
+    bufferedAnswerRef.current.set(messageId, nextText);
+    if (typingTimerRef.current !== null) return;
+    typingTimerRef.current = window.setTimeout(() => {
+      typingTimerRef.current = null;
+      const visible = bufferedAnswerRef.current.get(messageId) || '';
+      setMessages(prev => prev.map(message => message.id === messageId
+        ? { ...message, content: visible, status: 'streaming', thinkingStatus: visible ? 'Writing the answer' : message.thinkingStatus }
+        : message));
+    }, 28);
+  }, []);
+
   const revealBufferedAnswer = React.useCallback((messageId: string, finalStatus: string, onComplete?: (content: string) => void) => {
+    if (typingTimerRef.current !== null) {
+      window.clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = null;
+    }
     const fullText = bufferedAnswerRef.current.get(messageId) || '';
     bufferedAnswerRef.current.delete(messageId);
-    if (!fullText) {
-      setMessages(prev => prev.map(message => message.id === messageId ? { ...message, status: finalStatus } : message));
-      onComplete?.('');
-      return;
-    }
-    let cursor = 0;
-    setMessages(prev => prev.map(message => message.id === messageId ? { ...message, content: '', status: 'typing', thinkingStatus: 'Writing the answer' } : message));
-    const tick = () => {
-      const remaining = fullText.length - cursor;
-      const chunkSize = remaining > 2400 ? 48 : remaining > 900 ? 24 : 10;
-      cursor = Math.min(fullText.length, cursor + chunkSize);
-      const visible = fullText.slice(0, cursor);
-      setMessages(prev => prev.map(message => message.id === messageId ? { ...message, content: visible, status: cursor >= fullText.length ? finalStatus : 'typing' } : message));
-      if (cursor < fullText.length) typingTimerRef.current = window.setTimeout(tick, 16);
-      else { typingTimerRef.current = null; onComplete?.(fullText); }
-    };
-    tick();
+    setMessages(prev => prev.map(message => message.id === messageId
+      ? { ...message, content: fullText || message.content || '', status: finalStatus, thinkingStatus: undefined }
+      : message));
+    onComplete?.(fullText);
   }, []);
 
   const [uploading, setUploading] = useState(false);
@@ -596,6 +605,18 @@ const [messages, setMessages] = useState<{
     reader.readAsDataURL(file);
   });
 
+  const requestPdfPreview = async (sourceId: string, storagePath: string, title: string) => {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) return undefined;
+    const response = await apiFetch(apiUrl("/api/pdf/question-preview"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ sourceId, storagePath, pageNumber: 1, crop: null, title }),
+    });
+    const payload = await response.json().catch(() => null);
+    return response.ok && payload?.imageUrl ? String(payload.imageUrl) : undefined;
+  };
+
   const processFile = async (file: File) => {
     const allowedImageTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
     const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
@@ -713,6 +734,11 @@ const [messages, setMessages] = useState<{
         setPendingIngestData((current) => [...current.filter((item) => item.sourceId !== uploaded.sourceId), ingestPayload]);
       } else {
         setPendingIngestData((current) => current.filter((item) => item.sourceId !== uploaded.sourceId));
+        void requestPdfPreview(uploaded.sourceId, uploaded.storagePath, file.name)
+          .then((previewUrl) => {
+            if (previewUrl) setUploadedFiles((current) => current.map((item) => item.id === uploaded.sourceId ? { ...item, previewUrl } : item));
+          })
+          .catch(() => undefined);
         setUploadTelemetry((current) => current ? { ...current, phase: "success" } : null);
       }
     } catch (err: any) {
@@ -1229,7 +1255,9 @@ const [messages, setMessages] = useState<{
         name: file.name,
         size: file.size,
         mimeType: file.mimeType || (file.isImage ? "image/jpeg" : "text/plain"),
+        isImage: file.isImage,
         dataUrl: file.dataUrl,
+        previewUrl: file.previewUrl,
         storagePath: file.storagePath,
         sourceId: file.sourceId,
         attachmentType: file.attachmentType,
@@ -1426,11 +1454,11 @@ const [messages, setMessages] = useState<{
         assistantMessageId: assistantMsgId,
         onToken: (text) => {
           if (activeStreamIdRef.current !== streamId) return;
-          bufferedAnswerRef.current.set(assistantMsgId, (bufferedAnswerRef.current.get(assistantMsgId) || "") + text);
+          queueVisibleAnswer(assistantMsgId, text, false);
         },
         onAnswerReplace: (text) => {
           if (activeStreamIdRef.current !== streamId) return;
-          bufferedAnswerRef.current.set(assistantMsgId, text);
+          queueVisibleAnswer(assistantMsgId, text, true);
         },
         onQualityReport: (qualityReport) => {
           if (activeStreamIdRef.current !== streamId) return;

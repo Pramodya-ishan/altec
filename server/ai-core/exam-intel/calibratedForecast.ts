@@ -9,6 +9,8 @@ export interface ForecastQuestionEvidence {
   questionNo?: string;
   marks?: number;
   questionType?: string;
+  pageNumber?: number;
+  crop?: { x: number; y: number; width: number; height: number } | null;
 }
 
 export interface CalibratedTopicForecast {
@@ -161,6 +163,8 @@ export function calculateCalibratedForecast(params: {
         questionNo: question?.questionNo ? String(question.questionNo) : undefined,
         marks: Number(question?.marks || 0) || undefined,
         questionType: question?.questionType || question?.paperType || undefined,
+        pageNumber: Number(question?.pageNumber || 0) || undefined,
+        crop: question?.crop || question?.boundingBox || question?.bbox || null,
       }));
 
     const why = [
