@@ -36,7 +36,7 @@ export function useAIWorkflowStream() {
     mode?: string;
     history?: any[];
     image?: { mimeType: string; data: string };
-    attachments?: { storagePath: string; mimeType: string; fileName: string }[];
+    attachments?: { sourceId?: string; storagePath: string; mimeType: string; fileName: string }[];
     isContinue?: boolean;
     originalPrompt?: string;
     previousAssistantText?: string;
@@ -139,7 +139,7 @@ export function useAIWorkflowStream() {
       const endpoint = isContinue ? "/api/ai/continue" : "/api/ai/respond-stream";
       const payload: any = isContinue
         ? { originalPrompt, previousAssistantText, sources: inputSources, chatId, reason }
-        : { prompt, activeSubject, mode, history, image, attachments };
+        : { prompt, activeSubject, mode, history, image, attachments, chatId };
       payload.clientRequestId = clientRequestId;
 
       while (attempt < maxAttempts) {
@@ -374,7 +374,7 @@ export function useAIWorkflowStream() {
                   setStatus({ stage: "error", label: "PDF source error", message: errorMsg });
                   onToken?.(errorMsg);
                   doneReceived = true;
-                  onDone?.({ ok: false, completed: false, finishReason: "direct_pdf_qa_failed", errorCode: "DIRECT_QA_SOURCE_MISSING_STORAGE_PATH" });
+                  onDone?.({ ok: false, completed: false, finishReason: "direct_pdf_qa_failed", errorCode: "DIRECT_QA_SOURCE_MISSING_STORAGE_PATH", sources: [], clearSources: true });
                   return;
                 }
 
@@ -484,7 +484,7 @@ export function useAIWorkflowStream() {
                   });
                   onToken?.(userMessage);
                   doneReceived = true;
-                  onDone?.({ ok: false, completed: false, finishReason: "direct_pdf_qa_failed", errorCode: result.errorCode, sources: [{ id: sourceId, title, storagePath }] });
+                  onDone?.({ ok: false, completed: false, finishReason: "direct_pdf_qa_failed", errorCode: result.errorCode, sources: [], clearSources: true });
                 }
               } catch (err: any) {
                 const errorCode = err.errorCode || "FATAL_ERROR";
@@ -499,7 +499,7 @@ export function useAIWorkflowStream() {
                 onToken?.(userMessage);
                 onError?.({ error: err.message || userMessage });
                 doneReceived = true;
-                onDone?.({ ok: false, completed: false, finishReason: "direct_pdf_qa_failed", errorCode, sources: [{ id: sourceId, title, storagePath }] });
+                onDone?.({ ok: false, completed: false, finishReason: "direct_pdf_qa_failed", errorCode, sources: [], clearSources: true });
               } finally {
                 activeDirectQaKeysRef.current.delete(qaKey);
                 setIsStreaming(false);

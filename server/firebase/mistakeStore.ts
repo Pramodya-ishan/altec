@@ -176,6 +176,57 @@ export function isMistakeReviewIntent(prompt: string): boolean {
   ].some((pattern) => pattern.test(normalized) || pattern.test(compact));
 }
 
+function normalizeMistakeSearch(value: unknown) {
+  return String(value || "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^඀-෿\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const LESSON_ALIAS_GROUPS = [
+  ["බලය", "balaya", "balaya padama", "force", "mechanics"],
+  ["තරල", "tharala", "tarala", "fluid", "fluids"],
+  ["මිනුම්", "minum", "measurement", "measuring instruments"],
+  ["ඛණ්ඩාංක", "කන්ඩාංක", "kandanka", "coordinate", "coordinate geometry"],
+  ["සංඛ්‍යානය", "sankyanaya", "statistics", "statistical"],
+];
+
+/** Selects a named lesson record directly, so an Error Log request can perform
+ * the requested action instead of always showing the record-number menu. */
+export function selectMistakeRecordForPrompt(records: MistakeRecord[], prompt: string): MistakeRecord | null {
+  const query = normalizeMistakeSearch(prompt);
+  if (!query) return null;
+  const expandedQuery = new Set(query.split(" ").filter((token) => token.length > 2));
+  for (const aliases of LESSON_ALIAS_GROUPS) {
+    if (aliases.some((alias) => query.includes(normalizeMistakeSearch(alias)))) {
+      aliases.flatMap((alias) => normalizeMistakeSearch(alias).split(" ")).forEach((token) => expandedQuery.add(token));
+    }
+  }
+
+  let best: { record: MistakeRecord; score: number } | null = null;
+  for (const record of records || []) {
+    const lesson = normalizeMistakeSearch(record.lesson);
+    const subject = normalizeMistakeSearch(record.subject);
+    const detail = normalizeMistakeSearch(`${record.questionText || ""} ${record.errorText || ""}`);
+    let score = 0;
+    if (lesson && query.includes(lesson)) score += 140;
+    for (const token of expandedQuery) {
+      if (lesson.includes(token)) score += 35;
+      else if (subject === token) score += 20;
+      else if (detail.includes(token)) score += 3;
+    }
+    for (const aliases of LESSON_ALIAS_GROUPS) {
+      const recordMatchesGroup = aliases.some((alias) => lesson.includes(normalizeMistakeSearch(alias)));
+      const queryMatchesGroup = aliases.some((alias) => query.includes(normalizeMistakeSearch(alias)));
+      if (recordMatchesGroup && queryMatchesGroup) score += 180;
+    }
+    if (!best || score > best.score) best = { record, score };
+  }
+  return best && best.score >= 55 ? best.record : null;
+}
+
 async function readPath(ref: any, ownerPath: MistakeRecord["ownerPath"], limit: number): Promise<MistakeRecord[]> {
   // Intentionally avoid orderBy. Older manually-created records only have createdAt,
   // while quiz-created records may only have updatedAt/lastAttemptAt. Ordering on one

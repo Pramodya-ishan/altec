@@ -6,6 +6,7 @@ import {
   isPaperForecastPrompt,
   parseSourceChoiceIndex,
   rankNamedSources,
+  resolveLockedQuestionType,
   selectNamedSource,
   shouldUseLockedSourceForTurn,
 } from "../sourceSelection";
@@ -21,11 +22,26 @@ assert.equal(named.locked, true);
 assert.equal(named.sourceId, "guess-essay");
 assert.equal(extractQuestionNumberFromPrompt("guessing 1 essay q1"), "1");
 assert.equal(inferQuestionTypeFromText("Guessing 01 Essay"), "ESSAY");
+assert.equal(resolveLockedQuestionType({
+  prompt: "q6",
+  selectedQuestionType: "ESSAY",
+  selectedSourceTitle: "Guessing 01 Essay",
+  routedQuestionType: "MCQ",
+}), "ESSAY", "the locked Essay type must beat an unrelated router default");
+assert.equal(resolveLockedQuestionType({
+  prompt: "mcq 6",
+  selectedQuestionType: "ESSAY",
+  selectedSourceTitle: "Guessing 01 Essay",
+  routedQuestionType: "ESSAY",
+}), "MCQ", "an explicit type in the current prompt must win");
 assert.equal(parseSourceChoiceIndex("2", 3), 1);
 assert.equal(parseSourceChoiceIndex("4", 3), null);
 assert.deepEqual(rankNamedSources(sources, "guessing 1 essay pdf").map((item) => item.source.id)[0], "guess-essay");
 
 assert.equal(isExplicitNamedSourceRequest("guessing 1 essay q1"), true);
+assert.equal(isExplicitNamedSourceRequest("guessing papr 1 essay eke 6 weni main prshne krmu"), true);
+assert.equal(selectNamedSource(sources, "guessing papr 1 essay eke 6 weni main prshne krmu").sourceId, "guess-essay");
+assert.equal(selectNamedSource(sources, "guessin 01 essay q6 weni eka").sourceId, "guess-essay");
 assert.equal(isExplicitNamedSourceRequest("2025 guessing 1 pdf q1"), true);
 assert.equal(isExplicitNamedSourceRequest("Guessing 01 Essay"), true);
 assert.equal(isPaperForecastPrompt("2026 al paper ekt enna puuluwn sankayanaya ganak denna guessing krl deep thinking"), true);

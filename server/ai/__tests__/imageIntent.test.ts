@@ -7,6 +7,7 @@ assert.equal(isImageGenerationIntent("meka diagram ekak hadanna"), true);
 assert.equal(isImageGenerationIntent("මේක රූපයක් සමඟ පැහැදිලි කරන්න"), true);
 assert.equal(isImageGenerationIntent("meka image ekkin explain krnn"), true);
 assert.equal(isImageGenerationIntent("explain this with a diagram"), true);
+assert.equal(isImageGenerationIntent("prshnyk denna images ekka"), true);
 assert.equal(isVisualExplanationIntent("මේක රූප සටහනක් සමග පැහැදිලි කරන්න"), true);
 assert.equal(isImageGenerationIntent("what is in this image", true), false);
 assert.equal(isImageGenerationIntent("explain this image", true), false);

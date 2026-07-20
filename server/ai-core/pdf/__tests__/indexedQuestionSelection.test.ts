@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { selectIndexedQuestionChunks } from "../indexedQuestionSelection";
+import { hasExactQuestionMarker, selectIndexedQuestionChunks } from "../indexedQuestionSelection";
 
 const noMarker = [
   { id: "a", text: "General introduction without a numbered question", chunkIndex: 0, pageNumber: 1 },
@@ -14,5 +14,19 @@ const exact = [
 ];
 const selected = selectIndexedQuestionChunks(exact, "1");
 assert.ok(selected.some((chunk) => chunk.id === "b"));
+
+assert.equal(hasExactQuestionMarker("\nQuestion No. 06\nAnswer every part.", "6"), true);
+assert.equal(hasExactQuestionMarker("\nESSAY 06: Answer all sections.\n", "6"), true);
+assert.equal(hasExactQuestionMarker("\n06' (A) Explain the process.\n", "6"), true);
+assert.equal(hasExactQuestionMarker("Page 6 of 20", "6"), false, "page numbers are not question markers");
+
+const essayPages = [
+  { id: "p10", text: "Previous page", chunkIndex: 9, pageNumber: 10 },
+  { id: "p11", text: "Question No. 06\n(A) Explain the process.", chunkIndex: 10, pageNumber: 11 },
+  { id: "p12", text: "(B) Continue the same main question.", chunkIndex: 11, pageNumber: 12 },
+  { id: "p13", text: "(C) Final section.", chunkIndex: 12, pageNumber: 13 },
+];
+const essayWindow = selectIndexedQuestionChunks(essayPages, "6");
+assert.deepEqual(essayWindow.map((page) => page.id), ["p10", "p11", "p12", "p13"]);
 
 console.log("Indexed question selection tests passed.");

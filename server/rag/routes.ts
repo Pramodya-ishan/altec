@@ -12,6 +12,7 @@ import { invalidateInventoryCache, computeIndexStatus } from "../sources/sourceI
 import { isGeminiPdfOcrConfigured } from "../pdf/geminiPdfOcr";
 import { assertContentManager, isContentManager, isSharedSourceScope } from "../utils/contentPermissions";
 import { normalizeDisplayPriority, normalizeLessonId, resourceTimestampMillis, upsertLessonResource } from "../lessonResources/service";
+import { inferPaperMetadata } from "../../src/shared/paperMetadata";
 
 import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
 
@@ -327,6 +328,8 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
       chunkCount,
       needsOcr,
       displayPriority,
+      medium,
+      published,
       createdAt,
       updatedAt
     } = req.body;
@@ -359,7 +362,8 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
       ownerEmail: req.user.email || "unknown",
       uploaded: true,
       visibility: "official",
-      published: true,
+      published: published !== false,
+      medium: ["Sinhala", "English", "Tamil"].includes(String(medium)) ? String(medium) : "Sinhala",
       createdBy: req.user.uid,
       lesson: String(req.body.lesson || "Past papers"),
       lessonId: normalizeLessonId(req.body.lessonId || req.body.lesson || "Past papers"),
@@ -381,13 +385,13 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
       subject: normSubject,
       lessonId: paperDoc.lessonId,
       lessonTitle: paperDoc.lesson,
-      resourceType: "past_paper",
+      resourceType: paperDoc.resourceType,
       mediaKind: "pdf",
       title: paperDoc.title,
       fileName: paperDoc.fileName,
       storagePath: paperDoc.storagePath,
       visibility: "official",
-      published: true,
+      published: paperDoc.published,
       processingStatus: paperDoc.chunkCount > 0 ? "ready" : "queued",
       needsOcr: paperDoc.needsOcr,
       textIndexed: paperDoc.chunkCount > 0 && !paperDoc.needsOcr,
@@ -405,7 +409,29 @@ ragRoutes.post("/past-papers", requireNonAnonymousUser, async (req: any, res) =>
   }
 });
 
-// 4. Update past-paper display priority. Higher values appear first.
+ragRoutes.post("/past-papers/infer-metadata", requireNonAnonymousUser, async (req: any, res) => {
+  try {
+    assertContentManager(req.user);
+    const sourceId = String(req.body?.sourceId || "").trim();
+    const fileName = String(req.body?.fileName || "paper.pdf").trim();
+    if (!sourceId) return res.status(400).json({ ok: false, code: "SOURCE_ID_REQUIRED" });
+
+    const db = getAdminDb();
+    const chunks = await db.collection("rag_chunks").where("sourceId", "==", sourceId).limit(40).get();
+    const sampleText = chunks.docs
+      .sort((left: any, right: any) => Number(left.data()?.chunkIndex || 0) - Number(right.data()?.chunkIndex || 0))
+      .map((document: any) => String(document.data()?.text || document.data()?.content || ""))
+      .join("\n")
+      .slice(0, 16_000);
+    const metadata = inferPaperMetadata(fileName, sampleText, req.body?.fallbackSubject || "SFT");
+    return res.json({ ok: true, metadata, evidence: { chunkCount: chunks.size, usedIndexedText: sampleText.length > 0 } });
+  } catch (err: any) {
+    const status = Number(err?.status) || 500;
+    return res.status(status).json({ ok: false, code: err?.code || "PAPER_METADATA_INFERENCE_FAILED", message: err?.message || "Paper metadata could not be inferred." });
+  }
+});
+
+// 4. Edit paper metadata and display order. Changes propagate to retrieval indexes.
 ragRoutes.patch("/past-papers/:id", requireNonAnonymousUser, async (req: any, res) => {
   try {
     assertContentManager(req.user);
@@ -417,19 +443,61 @@ ragRoutes.patch("/past-papers/:id", requireNonAnonymousUser, async (req: any, re
     const paperSnapshot = await paperRef.get();
     if (!paperSnapshot.exists) return res.status(404).json({ ok: false, code: "PAST_PAPER_NOT_FOUND" });
 
-    const displayPriority = normalizeDisplayPriority(req.body?.displayPriority, 0);
-    const update = { displayPriority, updatedAt: new Date().toISOString() };
+    const current = paperSnapshot.data() || {};
+    const stringField = (key: string, fallback: unknown, max = 180) => req.body?.[key] === undefined
+      ? String(fallback || "").slice(0, max)
+      : String(req.body[key] || "").trim().slice(0, max);
+    const category = ["A/L Past Papers", "Model Papers", "Marking Schemes"].includes(String(req.body?.category))
+      ? String(req.body.category)
+      : String(current.category || "A/L Past Papers");
+    const resourceType = category === "Marking Schemes" ? "marking_scheme" : category === "Model Papers" ? "model_paper" : "past_paper";
+    const paperType = ["MCQ", "Essay", "Full Paper"].includes(String(req.body?.paperType))
+      ? String(req.body.paperType)
+      : String(current.paperType || current.type || "Full Paper");
+    const medium = ["Sinhala", "English", "Tamil"].includes(String(req.body?.medium))
+      ? String(req.body.medium)
+      : String(current.medium || "Sinhala");
+    const update = {
+      title: stringField("title", current.title || current.fileName || "Untitled paper"),
+      fileName: stringField("fileName", current.fileName || current.title || "paper.pdf"),
+      year: stringField("year", current.year, 8),
+      subject: normalizeSubject(stringField("subject", current.subject || "SFT", 12)),
+      category,
+      paperType,
+      type: paperType,
+      medium,
+      resourceType,
+      sourceType: resourceType,
+      published: req.body?.published === undefined ? current.published !== false : req.body.published === true,
+      displayPriority: req.body?.displayPriority === undefined
+        ? normalizeDisplayPriority(current.displayPriority, 0)
+        : normalizeDisplayPriority(req.body.displayPriority, 0),
+      updatedAt: new Date().toISOString(),
+    };
     const batch = db.batch();
     batch.set(paperRef, update, { merge: true });
     batch.set(db.collection("rag_sources").doc(sourceId), update, { merge: true });
     batch.set(db.collection("lesson_resources").doc(sourceId), update, { merge: true });
+    const chunkSnapshot = await db.collection("rag_chunks").where("sourceId", "==", sourceId).limit(450).get();
+    const chunkMetadata = {
+      title: update.title,
+      fileName: update.fileName,
+      year: update.year,
+      subject: update.subject,
+      category: update.category,
+      paperType: update.paperType,
+      medium: update.medium,
+      resourceType: update.resourceType,
+      sourceType: update.sourceType,
+    };
+    chunkSnapshot.docs.forEach((document: any) => batch.set(document.ref, chunkMetadata, { merge: true }));
     await batch.commit();
     invalidateInventoryCache(req.user.uid);
 
-    return res.json({ ok: true, sourceId, displayPriority });
+    return res.json({ ok: true, sourceId, displayPriority: update.displayPriority, paper: { id: sourceId, sourceId, ...current, ...update } });
   } catch (err: any) {
     const status = Number(err?.status) || 500;
-    return res.status(status).json({ ok: false, code: err?.code || "PAST_PAPER_PRIORITY_UPDATE_FAILED", message: err?.message || "Priority could not be updated." });
+    return res.status(status).json({ ok: false, code: err?.code || "PAST_PAPER_UPDATE_FAILED", message: err?.message || "Paper data could not be updated." });
   }
 });
 

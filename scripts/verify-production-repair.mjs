@@ -158,7 +158,7 @@ assert(sourceSelectionV10.includes("parseSourceChoiceIndex") && sourceSelectionV
 assert(conversationStateV10.includes("selectedSourceTitle") && conversationStateV10.includes("pendingSourceChoices") && conversationStateV10.includes("awaitingSourceSelection"), "V10 selected PDF conversation lock is missing");
 assert(indexedSelectionV10.includes("hasExactQuestionMarker") && indexedSelectionV10.includes("selectIndexedQuestionChunks"), "V10 exact question marker validation is missing");
 assert(!evidenceRetrievalV10.includes("first matching subject/year source"), "V10 still contains an arbitrary source fallback");
-assert(pdfRoutes.includes("hasExactQuestionMarker") && !pdfRoutes.includes("targetNo - 1"), "V10 PDF route can still use positional page fallback");
+assert(pdfRoutes.includes("selectIndexedQuestionChunks") && !pdfRoutes.includes("targetNo - 1"), "V24 PDF route can still use positional page fallback");
 assert(sftReferencesV10.includes("SFT_PHYSICS_REFERENCE_STORAGE_PATH") && sftReferencesV10.includes("SFT_BIOLOGY_REFERENCE_STORAGE_PATH") && sftReferencesV10.includes("SFT_CHEMISTRY_REFERENCE_STORAGE_PATH"), "V10 authoritative SFT resource grounding is incomplete");
 assert(pdfSolver.includes("inSyllabus") && pdfSolver.includes("syllabusBasis") && pdfSolver.includes("do not answer from general memory"), "V10 syllabus-scope enforcement is incomplete");
 assert(clientSinhalaV10.includes("normalizeMathSegment") && !clientSinhalaV10.includes("replace(/[\u200C\u200D\uFEFF]/g"), "V10 client rendering still strips Sinhala joiners globally");

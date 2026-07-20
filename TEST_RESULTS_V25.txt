@@ -1,0 +1,25 @@
+ALTEC PRODUCTION REPAIR V25 - TEST RESULTS
+Date: 2026-07-20
+
+PASS  npm run typecheck:app
+PASS  npm run typecheck:scripts
+PASS  npm test
+PASS  Source/PDF/OCR/Image/Error Log/metadata regression tests
+PASS  Knowledge routing tests
+PASS  Security and content-permission tests
+PASS  Secure video tests
+PASS  AI evals: 600/600
+PASS  npm run build
+PASS  npm run build:vercel
+PASS  Vercel isolated pure-ESM runtime smoke test
+PASS  npm run verify:repair
+
+New V25 regression coverage:
+- guessin 01 essay q6 named-source routing
+- legacy main-question marker 06'
+- plural image request: prshnyk denna images ekka
+- Error Log alias selection: balaya -> බලය
+- bulk paper metadata inference and marking-scheme classification
+- contextual follow-up suggestion JSON parsing
+
+Result: READY FOR DEPLOYMENT

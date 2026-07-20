@@ -11,7 +11,7 @@ import { lastOk, lastError, setLastOk } from "./modelRouter";
 import { requireRole } from "../utils/authGuards";
 import { readResponseWithLimit, validateRemotePdfUrl } from "../utils/safeRemotePdf";
 import { getAiTelemetrySnapshot } from "../observability/aiTelemetry";
-import { getConversationState, updateConversationState } from "../knowledge/conversationState";
+import { getConversationState, resetConversationState, updateConversationState } from "../knowledge/conversationState";
 import { evaluateArithmeticExpression, verifyExamAnswer } from "./deterministicExamVerifier";
 
 import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
@@ -189,6 +189,17 @@ aiRoutes.post("/conversation/source-unlock", async (req, res) => {
     return res.json({ ok: true, mode: "general_ai" });
   } catch {
     return res.status(500).json({ ok: false, code: "SOURCE_UNLOCK_FAILED", message: "The PDF source could not be unlocked." });
+  }
+});
+
+aiRoutes.post("/conversation/reset", async (req, res) => {
+  try {
+    const user = await requireUser(req);
+    const conversationId = String(req.body?.conversationId || "").trim() || undefined;
+    const state = await resetConversationState(user.uid, conversationId);
+    return res.json({ ok: true, conversationId: state.conversationId, mode: "general_ai" });
+  } catch {
+    return res.status(500).json({ ok: false, code: "CONVERSATION_RESET_FAILED", message: "The new chat could not be initialized." });
   }
 });
 

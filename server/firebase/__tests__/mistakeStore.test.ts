@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { isMistakeReviewIntent, mergeMistakeRecords, normalizeMistakeRecord } from "../mistakeStore";
+import { isMistakeReviewIntent, mergeMistakeRecords, normalizeMistakeRecord, selectMistakeRecordForPrompt } from "../mistakeStore";
 
 const manual = normalizeMistakeRecord("manual", {
   subject: "sft",
@@ -35,4 +35,9 @@ for (const phrase of [
   assert.equal(isMistakeReviewIntent(phrase), true, `intent should match: ${phrase}`);
 }
 assert.equal(isMistakeReviewIntent("2025 SFT Q7"), false);
+const force = normalizeMistakeRecord("force", { subject: "SFT", lesson: "බලය", errorText: "මේ වගේ ප්‍රශ්න බැ" }, "uid");
+assert.equal(
+  selectMistakeRecordForPrompt([manual, quiz, force], "mage error log eke balaya padame prshna wage prshnyk denna")?.id,
+  "force",
+);
 console.log("mistake store tests passed");

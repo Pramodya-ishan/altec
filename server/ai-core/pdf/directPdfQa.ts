@@ -144,7 +144,7 @@ Question Type: ${questionType}
 Question Number: ${questionNo}
 
 STRICT RULES:
-1. First find the exact requested question in the PDF.
+1. First find the exact requested question in the PDF. Search the complete document and accept equivalent printed headers such as ${questionNo}, 0${questionNo}, Q${questionNo}, Question ${questionNo}, Question No. ${questionNo}, (${questionNo}), ${questionType} ${questionNo}, and the Sinhala numbered-question form.
 2. Extract exact question text as written in the PDF.
 3. If MCQ, extract all options exactly.
 4. Only if exact questionText is extracted, solve/explain.
@@ -200,7 +200,7 @@ Question Type: ${questionType}
 Question Number: ${questionNo}
 Source ID: ${sourceId}
 
-Return JSON with exact evidence. If not found, set found:false.
+Return JSON with exact evidence. If not found after searching the complete PDF, set found:false. Do not require MCQ options when Question Type is ESSAY or STRUCTURED.
 If a diagram, graph, table, photograph, or other visual is part of the requested question, set hasRelevantImage:true, return its approximate normalized page region, and transcribe all relevant geometry, labels, dimensions, arrows, axes, and table values into visualDescription. Coordinates must be between 0 and 1, measured from the page's top-left. Otherwise return hasRelevantImage:false, imageRegion:null, and visualDescription:null.
 `;
 
@@ -210,27 +210,49 @@ If a diagram, graph, table, photograph, or other visual is part of the requested
   const uid = (params as any).uid || "anonymous";
 
   try {
-    const { result: response } = await callGeminiWithFallback("direct_pdf_extract", {
-      model: modelName,
-      contents: [
-        {
-          role: "user",
-          parts: [pdfPart as any, { text: userPrompt }]
-        }
-      ],
-      config: {
-        systemInstruction,
-        temperature: 0,
-        responseMimeType: "application/json",
-        maxOutputTokens: 8_192,
-      },
-    });
+    const requestExtraction = async (exhaustive: boolean) => {
+      const retryInstruction = exhaustive
+        ? `\n\nEXHAUSTIVE RETRY: The first locator pass did not produce complete evidence. Inspect every page, ignore table-of-contents mentions, locate the actual body of ${questionType} ${questionNo}, and include every continuation/subpart page belonging to that main question.`
+        : "";
+      const { result: response } = await callGeminiWithFallback("direct_pdf_extract", {
+        model: modelName,
+        contents: [
+          {
+            role: "user",
+            parts: [pdfPart as any, { text: `${userPrompt}${retryInstruction}` }]
+          }
+        ],
+        config: {
+          systemInstruction,
+          temperature: 0,
+          responseMimeType: "application/json",
+          maxOutputTokens: 8_192,
+        },
+      });
+      if (!response.text) throw new Error("Empty response from Gemini API");
+      return JSON.parse(response.text.trim().replace(/^```json\s*/iu, "").replace(/\s*```$/u, ""));
+    };
 
-    if (!response.text) {
-       throw new Error("Empty response from Gemini API");
+    let result: any = null;
+    let extractionPasses = 0;
+    let lastExtractionError: unknown = null;
+    for (const exhaustive of [false, true]) {
+      try {
+        result = await requestExtraction(exhaustive);
+        extractionPasses += 1;
+        const preliminaryText = normalizeQuestionEvidenceText(result?.sourceEvidence?.questionText) || "";
+        const preliminaryOptions = Array.isArray(result?.sourceEvidence?.options) ? result.sourceEvidence.options : [];
+        const typeNeedsOptions = String(questionType || "").toUpperCase() === "MCQ";
+        const evidenceLooksComplete = result?.found === true
+          && preliminaryText.length >= 20
+          && (!typeNeedsOptions || preliminaryOptions.length >= 4);
+        if (evidenceLooksComplete) break;
+      } catch (extractionError) {
+        lastExtractionError = extractionError;
+      }
     }
-
-    let result = JSON.parse(response.text.trim());
+    if (!result) throw lastExtractionError || new Error("Direct PDF extraction returned no result");
+    result.extractionPasses = extractionPasses;
 
     const normalizedQuestionText = normalizeQuestionEvidenceText(result?.sourceEvidence?.questionText);
     if (result?.sourceEvidence) {

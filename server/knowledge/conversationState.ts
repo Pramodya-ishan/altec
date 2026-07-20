@@ -107,10 +107,10 @@ export async function updateConversationState(uid: string, updates: Partial<Conv
   return newState;
 }
 
-export async function resetConversationState(uid: string): Promise<ConversationState> {
+export async function resetConversationState(uid: string, conversationId?: string): Promise<ConversationState> {
   const defaultState: ConversationState = {
     uid,
-    conversationId: "conv_" + Date.now(),
+    conversationId: String(conversationId || "conv_" + Date.now()).slice(0, 160),
     activeLessonIds: [],
     activeSourceIds: [],
     selectedSourceId: null,

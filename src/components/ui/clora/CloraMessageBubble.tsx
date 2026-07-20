@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Check, CheckCircle2, Copy, Download, FileText, Image as ImageIcon, Reply, RotateCcw, ShieldCheck } from 'lucide-react';
+import { Check, CheckCircle2, Copy, Download, FileText, Image as ImageIcon, Reply, RotateCcw } from 'lucide-react';
 import { MathMarkdown } from '../../chat/MathMarkdown';
 import { VisualBlockRenderer } from '../VisualBlockRenderer';
 import { sanitizeAssistantDisplayText } from '../../../lib/assistantTextHygiene';
@@ -14,14 +14,6 @@ interface CloraMessageBubbleProps {
   onRetryImage?: (prompt: string) => void;
   onContinue?: () => void;
 }
-
-const ANSWER_STATUS_LABELS = {
-  official: { label: 'Official source answer', className: 'bg-blue-50 text-blue-700 ring-blue-200/70' },
-  ai_solved: { label: 'AI-solved from source', className: 'bg-violet-50 text-violet-700 ring-violet-200/70' },
-  predicted: { label: 'Prediction — not guaranteed', className: 'bg-amber-50 text-amber-800 ring-amber-200/70' },
-  model_question: { label: 'AI model question', className: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200/70' },
-  general: { label: 'General AI answer', className: 'bg-slate-50 text-slate-600 ring-slate-200/70' },
-} as const;
 
 function ReplyPreview({ replyTo }: { replyTo: any }) {
   if (!replyTo) return null;
@@ -69,7 +61,6 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
   const leadVisualBlocks = visualBlocks.filter((block: any) => block?.type === 'pdf_image_preview');
   const supportingVisualBlocks = visualBlocks.filter((block: any) => block?.type !== 'source_evidence' && block?.type !== 'pdf_image_preview');
   const copyTimeoutRef = useRef<number | null>(null);
-  const answerStatus = ANSWER_STATUS_LABELS[message.answerStatus as keyof typeof ANSWER_STATUS_LABELS];
 
   useEffect(() => () => {
     if (copyTimeoutRef.current !== null) window.clearTimeout(copyTimeoutRef.current);
@@ -159,23 +150,9 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
             </div>
           )}
 
-          {!isStreaming && answerStatus && (
-            <div className={`inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${answerStatus.className}`}>
-              <ShieldCheck className="h-3.5 w-3.5" />
-              {answerStatus.label}
-            </div>
-          )}
-
           {!isStreaming && Array.isArray(message.evidenceContradictions) && message.evidenceContradictions.length > 0 && (
             <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
               Source conflict detected. The answer keeps the conflicting evidence separate instead of silently choosing one.
-            </div>
-          )}
-
-          {!isStreaming && message.qualityReport?.passed === true && (
-            <div className="inline-flex w-fit items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200/70" title={`Coverage ${message.qualityReport.coveragePercent ?? 100}%`}>
-              <ShieldCheck className="h-3.5 w-3.5" />
-              {message.qualityReport.repaired ? "AI-verified and corrected" : "AI-verified complete"}
             </div>
           )}
 
@@ -226,9 +203,6 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
   && previous.message.visualBlocks?.length === next.message.visualBlocks?.length
   && previous.message.suggestions?.join('|') === next.message.suggestions?.join('|')
   && previous.message.generatedImage?.url === next.message.generatedImage?.url
-  && previous.message.qualityReport?.passed === next.message.qualityReport?.passed
-  && previous.message.qualityReport?.repaired === next.message.qualityReport?.repaired
-  && previous.message.qualityReport?.coveragePercent === next.message.qualityReport?.coveragePercent
   && previous.message.answerStatus === next.message.answerStatus
   && previous.message.evidenceContradictions?.length === next.message.evidenceContradictions?.length
   && previous.onContinue === next.onContinue

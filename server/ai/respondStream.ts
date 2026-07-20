@@ -15,7 +15,7 @@ import { readUrlsWithGemini } from "./tools/urlContext";
 import { groundedSearch } from "./tools/googleSearchGrounding";
 import { ExamResolutionResult } from "./examResourceResolver";
 import { askGeminiDirectPdfStream } from "../pdf/directPdfQa";
-import { getConversationState, updateConversationState } from "../knowledge/conversationState";
+import { getConversationState, resetConversationState, updateConversationState } from "../knowledge/conversationState";
 import { retrieveEvidence } from "../knowledge/evidenceRetrieval";
 import { generateContentStreamWithFallback, callGeminiWithFallback, AITask } from "./modelRouter";
 import { resolveAnswerPolicy } from "./answerPolicy";
@@ -32,11 +32,13 @@ import {
   isPaperForecastPrompt,
   parseSourceChoiceIndex,
   rankNamedSources,
+  resolveLockedQuestionType,
   selectNamedSource,
   shouldUseLockedSourceForTurn,
   toPendingSourceChoice,
 } from "./sourceSelection";
-import { isMistakeReviewIntent } from "../firebase/mistakeStore";
+import { resolveFastConversation } from "./fastConversation";
+import { isMistakeReviewIntent, selectMistakeRecordForPrompt } from "../firebase/mistakeStore";
 import { detectSinhalaTextEncoding, normalizeSinhalaExtractedText } from "../pdf/legacySinhala";
 import {
   assessAnswerCompleteness,
@@ -52,6 +54,7 @@ import {
 } from "./answerQuality";
 import { recordAiTelemetry } from "../observability/aiTelemetry";
 import { createAnswerPlan, plannerContext } from "./answerPlanner";
+import { buildFollowUpSuggestionPrompt, parseFollowUpSuggestions, withSuggestionTimeout } from "./followUpSuggestions";
 import { secureEvidenceText, sourceSecurityInstruction } from "./sourceContentSecurity";
 import {
   attachEvidenceContractToSources,
@@ -261,7 +264,7 @@ export async function aiRespondStream(req: any, res: any) {
   res.on("close", markClientClosed);
 
   try {
-    const { prompt: submittedPrompt, activeSubject, mode: requestedMode = "auto", history = [], image, attachments } = req.body;
+    const { prompt: submittedPrompt, activeSubject, mode: requestedMode = "auto", history = [], image, attachments, chatId } = req.body;
     const user = req.user;
     const originalPrompt = String(submittedPrompt || "");
     let prompt = originalPrompt;
@@ -279,9 +282,6 @@ ${originalPrompt}`;
         emitSse(res, "status", { step: "legacy_sinhala", status: "ocr_required", message: "Legacy Sinhala needs the original PDF or page image." });
       }
     }
-
-    // Check Daily Safety Limit Guardrails (REMOVED)
-    const { trackAIUsage } = await import("../cost/usageTracker");
 
     let allSources: any[] = [];
 
@@ -308,6 +308,40 @@ ${originalPrompt}`;
         chatSaved: chatRes.chatSaved,
         sources: [],
         finishReason: "simple_greeting",
+      });
+      trace.doneSent = true;
+      return;
+    }
+
+    const fastConversation = !image && (!attachments || attachments.length === 0)
+      ? resolveFastConversation(prompt)
+      : null;
+    if (fastConversation) {
+      emitSse(res, "token", { text: fastConversation.answer });
+      const chatRes = await saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: fastConversation.answer,
+        mode: "normal_chat",
+        subject: activeSubject,
+        sources: [],
+      });
+      trace.chatSaved = chatRes.chatSaved;
+      trace.messageId = chatRes.messageId;
+      trace.completed = true;
+      emitSse(res, "done", {
+        ok: true,
+        completed: true,
+        requestId,
+        messageId: chatRes.messageId || null,
+        chatSaved: chatRes.chatSaved,
+        sources: [],
+        suggestions: [],
+        fastPath: true,
+        answerStatus: "general",
+        sourceMode: "general_ai",
+        finishReason: `fast_conversation_${fastConversation.intent}`,
       });
       trace.doneSent = true;
       return;
@@ -383,6 +417,27 @@ ${originalPrompt}`;
     const { detectOfficialPaperCandidate } = await import("../ai-core/intent/paperQuestionParser");
     const paperIntent = detectOfficialPaperCandidate(prompt, activeSubject);
     const paperForecastPrompt = isPaperForecastPrompt(prompt);
+    let activeConversationState = await getConversationState(user.uid);
+    if (chatId && String(activeConversationState.conversationId || "") !== String(chatId)) {
+      activeConversationState = await resetConversationState(user.uid, String(chatId));
+    }
+    const attachedPdf = Array.isArray(attachments)
+      ? attachments.find((attachment: any) => attachment?.sourceId && String(attachment?.mimeType || "").toLowerCase().includes("pdf"))
+      : null;
+    if (attachedPdf?.sourceId) {
+      activeConversationState = await updateConversationState(user.uid, {
+        conversationId: String(chatId || activeConversationState.conversationId),
+        selectedSourceId: String(attachedPdf.sourceId),
+        selectedSourceTitle: String(attachedPdf.fileName || "Uploaded PDF"),
+        selectedSourceSubject: activeSubject || activeConversationState.activeSubject || null,
+        activeSourceIds: [String(attachedPdf.sourceId)],
+        evidenceMode: "strict",
+        allowGeneratedContent: false,
+        awaitingSourceSelection: false,
+        pendingSourceChoices: [],
+        lastIntent: "uploaded_pdf_qa",
+      });
+    }
 
     // Check if it's an official paper candidate but subject is missing
     if (paperIntent.isOfficialPaperCandidate && !paperForecastPrompt && paperIntent.needsSubjectClarification) {
@@ -402,22 +457,53 @@ ${originalPrompt}`;
       return;
     }
 
-    const route = await safeCall("routeKnowledgeRequest", () => routeKnowledgeRequest({
-      prompt,
-      uid: user.uid,
-      email: user.email,
-      activeSubject: paperIntent.subject || activeSubject,
-      conversationHistory: history,
-    }), {
-      mode: paperForecastPrompt ? "past_paper_analysis" : (paperIntent.isOfficialPaperCandidate ? "paper_question_qa" : "normal_chat"),
-      answerHints: { mustUseRag: true, mustUseGoogleSearch: false, mustUseUrlContext: false, mustAskClarification: false },
-      entities: {
-        year: paperIntent.year,
-        subject: paperIntent.subject,
-        questionNo: paperIntent.questionNo,
-        questionType: paperIntent.questionType
-      }
-    } as any, res);
+    const normalizedInitialPrompt = String(prompt || "").normalize("NFKC").trim().toLowerCase();
+    const explicitLockedQuestionNo = extractQuestionNumberFromPrompt(normalizedInitialPrompt);
+    const bareLockedQuestionNo = activeConversationState.lastIntent !== "lesson_pdf_search"
+      ? normalizedInitialPrompt.match(/^(\d{1,3})[?.!]*$/u)?.[1] || null
+      : null;
+    const lockedQuestionNo = explicitLockedQuestionNo || bareLockedQuestionNo;
+    const canUseLockedQuestionFastRoute = Boolean(
+      activeConversationState.selectedSourceId
+      && lockedQuestionNo
+      && !activeConversationState.awaitingMistakeSelection
+      && !activeConversationState.awaitingSourceSelection
+      && !isExplicitNamedSourceRequest(prompt)
+      && !paperIntent.isOfficialPaperCandidate,
+    );
+
+    const route: any = canUseLockedQuestionFastRoute
+      ? {
+          mode: "paper_question_qa",
+          answerHints: { mustUseRag: true, mustUseGoogleSearch: false, mustUseUrlContext: false, mustAskClarification: false },
+          entities: {
+            activeSourceId: activeConversationState.selectedSourceId,
+            subject: activeConversationState.selectedSourceSubject || activeConversationState.activeSubject || activeSubject || "SFT",
+            year: activeConversationState.selectedSourceYear || undefined,
+            questionNo: lockedQuestionNo,
+            questionType: resolveLockedQuestionType({
+              prompt: normalizedInitialPrompt,
+              selectedQuestionType: activeConversationState.selectedQuestionType,
+              selectedSourceTitle: activeConversationState.selectedSourceTitle,
+            }),
+          },
+        }
+      : await safeCall("routeKnowledgeRequest", () => routeKnowledgeRequest({
+          prompt,
+          uid: user.uid,
+          email: user.email,
+          activeSubject: paperIntent.subject || activeSubject,
+          conversationHistory: history,
+        }), {
+          mode: paperForecastPrompt ? "past_paper_analysis" : (paperIntent.isOfficialPaperCandidate ? "paper_question_qa" : "normal_chat"),
+          answerHints: { mustUseRag: true, mustUseGoogleSearch: false, mustUseUrlContext: false, mustAskClarification: false },
+          entities: {
+            year: paperIntent.year,
+            subject: paperIntent.subject,
+            questionNo: paperIntent.questionNo,
+            questionType: paperIntent.questionType
+          }
+        } as any, res);
 
     // [FIX 1] Force paper intent over LLM router if it looks like a paper question
     if (paperIntent.isOfficialPaperCandidate && !paperForecastPrompt) {
@@ -437,7 +523,6 @@ ${originalPrompt}`;
       route.mode = "paper_question_qa";
     }
 
-    const activeConversationState = await getConversationState(user.uid);
     const normalizedFollowUp = String(prompt || "").trim().toLowerCase();
     let selectedMistakeRecord: any = null;
 
@@ -707,7 +792,12 @@ ${originalPrompt}`;
       route.entities.year = route.entities.year || activeConversationState.selectedSourceYear || undefined;
       if (questionFollowUp) {
         route.entities.questionNo = questionFollowUp[1];
-        route.entities.questionType = route.entities.questionType || activeConversationState.selectedQuestionType || "MCQ";
+        route.entities.questionType = resolveLockedQuestionType({
+          prompt: normalizedFollowUp,
+          selectedQuestionType: activeConversationState.selectedQuestionType,
+          selectedSourceTitle: activeConversationState.selectedSourceTitle,
+          routedQuestionType: route.entities.questionType,
+        });
       }
       route.answerHints = {
         ...(route.answerHints || {}),
@@ -731,6 +821,19 @@ ${originalPrompt}`;
           mustAskClarification: false,
         };
       }
+      if (selectedSourceId) {
+        activeConversationState = await updateConversationState(user.uid, {
+          activeSourceIds: [],
+          selectedSourceId: null,
+          selectedSourceTitle: null,
+          selectedSourceSubject: null,
+          selectedSourceYear: null,
+          selectedQuestionType: null,
+          selectedQuestionId: null,
+          evidenceMode: "none",
+          allowGeneratedContent: true,
+        });
+      }
     }
 
     const evidenceConversationState = sourceContextApplies
@@ -753,12 +856,12 @@ ${originalPrompt}`;
     await updateConversationState(user.uid, {
       activeSubject: evidence.subject || activeConversationState.activeSubject,
       activeLessonIds: evidence.lessonIds.length > 0 ? evidence.lessonIds : activeConversationState.activeLessonIds,
-      activeSourceIds: evidence.allowedSourceIds.length > 0 ? evidence.allowedSourceIds : activeConversationState.activeSourceIds,
-      selectedSourceId: evidence.selectedSource?.id || evidence.selectedSource?.sourceId || activeConversationState.selectedSourceId,
-      selectedSourceTitle: evidence.selectedSource?.title || evidence.selectedSource?.fileName || activeConversationState.selectedSourceTitle || null,
-      selectedSourceSubject: evidence.selectedSource?.subject || activeConversationState.selectedSourceSubject || evidence.subject || null,
-      selectedSourceYear: evidence.selectedSource?.year ? String(evidence.selectedSource.year) : activeConversationState.selectedSourceYear || null,
-      selectedQuestionType: (route.entities?.questionType as any) || activeConversationState.selectedQuestionType || null,
+      activeSourceIds: evidence.allowedSourceIds.length > 0 ? evidence.allowedSourceIds : (sourceContextApplies ? activeConversationState.activeSourceIds : []),
+      selectedSourceId: evidence.selectedSource?.id || evidence.selectedSource?.sourceId || (sourceContextApplies ? activeConversationState.selectedSourceId : null),
+      selectedSourceTitle: evidence.selectedSource?.title || evidence.selectedSource?.fileName || (sourceContextApplies ? activeConversationState.selectedSourceTitle : null) || null,
+      selectedSourceSubject: evidence.selectedSource?.subject || (sourceContextApplies ? activeConversationState.selectedSourceSubject : null) || evidence.subject || null,
+      selectedSourceYear: evidence.selectedSource?.year ? String(evidence.selectedSource.year) : (sourceContextApplies ? activeConversationState.selectedSourceYear : null) || null,
+      selectedQuestionType: (route.entities?.questionType as any) || (sourceContextApplies ? activeConversationState.selectedQuestionType : null) || null,
       currentQuestionIndex: questionFollowUp ? Number(questionFollowUp[1]) : activeConversationState.currentQuestionIndex,
       lastIntent: evidence.intent
     });
@@ -1030,6 +1133,21 @@ ${originalPrompt}`;
     if (isMistakeReviewIntent(prompt) && !isMistakeWriteRequest && !selectedMistakeRecord) {
       emitSse(res, "status", { step: "mistake_notebook", status: "reading", message: "Reading your saved Error Log…" });
       const records = Array.isArray(userContext?.recentMistakes) ? userContext.recentMistakes.slice(0, 12) : [];
+      selectedMistakeRecord = selectMistakeRecordForPrompt(records, prompt);
+      if (selectedMistakeRecord) {
+        const originalMistakeRequest = prompt;
+        prompt = `${originalMistakeRequest}\n\nUse this exact saved Error Log record as the learner-specific basis: Subject ${selectedMistakeRecord.subject || "SFT"}; lesson ${selectedMistakeRecord.lesson || "unknown"}; saved note ${selectedMistakeRecord.errorText || selectedMistakeRecord.questionText || "image-only record"}. Preserve the action requested in the first sentence. Do not list all Error Log records and do not ask the learner to choose a record.`;
+        route.mode = "tutor_explanation";
+        route.entities = { ...(route.entities || {}), subject: selectedMistakeRecord.subject || activeSubject, activeSourceId: undefined };
+        route.answerHints = { ...(route.answerHints || {}), mustUseRag: false, mustUseGoogleSearch: false, mustAskClarification: false };
+        await updateConversationState(user.uid, {
+          pendingMistakeChoices: [],
+          awaitingMistakeSelection: false,
+          activeMistakeId: selectedMistakeRecord.id,
+          lastIntent: "mistake_record_review",
+        });
+      }
+      if (!selectedMistakeRecord) {
       let answerText = `### Error Log\n\n`;
       if (records.length === 0) {
         answerText += "ඔයාගේ current account UID path එකත් පැරණි email-based path එකත් දෙකම පරීක්ෂා කළා. මේ account එකට සුරැකි Error Log record එකක් හමු වුණේ නැහැ.";
@@ -1078,6 +1196,7 @@ ${originalPrompt}`;
       trace.doneSent = true;
       trace.lastEvent = "done";
       return;
+      }
     }
 
     // B. LESSON MARKS & WEIGHTING INTENT
@@ -1306,10 +1425,17 @@ ${originalPrompt}`;
     const isPaperQa = !hasUploadedPdf && (route.mode === "paper_question_qa" || route.mode === "marking_scheme_request" || route.mode === "pdf_link_request");
     if (isPaperQa) {
       const requestedSubject = route.entities.subject || activeSubject || "SFT";
-      let requestedYear = route.entities.year || activeConversationState.selectedSourceYear || undefined;
+      let requestedYear = route.entities.year || (sourceContextApplies ? activeConversationState.selectedSourceYear : undefined) || undefined;
       const requestedQuestionNo = route.entities.questionNo;
-      const requestedQuestionType = String(route.entities.questionType || activeConversationState.selectedQuestionType || paperIntent.questionType || "MCQ").toUpperCase();
-      const activePaperSourceId = route.entities?.activeSourceId || activeConversationState.selectedSourceId || null;
+      const requestedQuestionType = String(
+        route.entities.questionType
+        || (sourceContextApplies ? activeConversationState.selectedQuestionType : null)
+        || paperIntent.questionType
+        || "MCQ",
+      ).toUpperCase();
+      const activePaperSourceId = route.entities?.activeSourceId
+        || (sourceContextApplies ? activeConversationState.selectedSourceId : null)
+        || null;
 
       if (requestedSubject && (requestedYear || activePaperSourceId)) {
         emitSse(res, "status", { step: "exam_db", status: "searching" });
@@ -2065,8 +2191,8 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
     emitSse(res, "answer_status", {
       status: answerEvidenceStatus,
       sourceMode: sourceContextApplies ? "locked_pdf" : "general_ai",
-      lockedSourceActive: Boolean(selectedSourceId),
-      sourceTitle: selectedSourceId ? (evidence.selectedSource?.title || activeConversationState.selectedSourceTitle || allSources[0]?.title || null) : null,
+      lockedSourceActive: sourceContextApplies,
+      sourceTitle: sourceContextApplies ? (evidence.selectedSource?.title || activeConversationState.selectedSourceTitle || allSources[0]?.title || null) : null,
       contradictions: evidenceContradictions,
     });
 
@@ -2143,7 +2269,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       mode: route.mode,
     });
     let completionPasses = 0;
-    const maxCompletionPasses = Math.min(3, Math.max(1, Number(process.env.AI_AUTO_CONTINUATION_PASSES || 2)));
+    const maxCompletionPasses = Math.min(3, Math.max(1, Number(process.env.AI_AUTO_CONTINUATION_PASSES || 3)));
 
     while (
       completionAssessment.shouldContinue
@@ -2386,88 +2512,21 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       safeCall("extractStableMemoryIfUseful", () => extractStableMemoryIfUseful({ uid: user.uid, email: user.email, prompt, answer: fullText, userContext: modifiedUserContext }), null, res).catch(() => null);
     }
 
-    // Generate suggestions
+    // Suggestions are generated from the actual turn. They are optional and
+    // time-bounded so they never delay delivery of the completed answer.
     if (!isInterrupted && fullText.length > 0) {
       try {
-        let finalSuggestions: string[] = [];
-
-        function getDeterministicSuggestions(mode: string): string[] {
-          if (mode === "paper_question_qa") {
-            return [
-              "මේක PDF එකෙන් ආයෙත් verify කරන්න",
-              "මේ ප්‍රශ්නයේ marking points දෙන්න",
-              "මේ වගේ තව MCQ 5ක් දෙන්න"
-            ];
-          }
-
-          if (mode === "tutor_explanation" || mode === "normal_chat") {
-            return [
-              "මේක සරලව නැවත පැහැදිලි කරන්න",
-              "මේක රූපයක් සමඟ පැහැදිලි කරන්න",
-              "මගේ දුර්වල කොටස් අනුව ප්‍රශ්න අහන්න"
-            ];
-          }
-
-          return [
-            "තව කෙටියෙන් කියන්න",
-            "exam answer එකක් ලෙස ලියන්න",
-            "මතක තබාගන්න tips දෙන්න"
-          ];
+        const task = callGeminiWithFallback("fast_background", {
+          model: "ignored",
+          contents: buildFollowUpSuggestionPrompt(prompt, fullText),
+          config: { temperature: 0.55, maxOutputTokens: 220, responseMimeType: "application/json" },
+        }, getAIClient()).then(({ result }) => parseFollowUpSuggestions(result.text || ""));
+        const suggestions = await withSuggestionTimeout(task, 1_800);
+        if (Array.isArray(suggestions) && suggestions.length === 3) {
+          emitSse(res, "suggestions", { suggestions });
         }
-
-        if (process.env.ENABLE_AI_SUGGESTIONS === "true") {
-          const suggPrompt = `Based on the user's message: "${prompt}" and the assistant's answer: "${fullText.substring(0, 1000)}...", generate 3 short, contextual follow-up suggestions in Sinhala.
-Important: Output ONLY a valid JSON array of 3 strings.
-Tec A/L සඳහා උදාහරණ:
-- "මේ ප්‍රශ්නය PDF එකෙන් ආයෙත් පරීක්ෂා කරන්න" (Recheck from PDF)
-- "මේ අවුරුද්දේ marking scheme එක දෙන්න" (Get marking scheme)
-- "මේ lesson එකෙන් තව mcq ප්‍රශ්න දෙන්න" (More MCQs from this lesson)
-- "මේක වැරදියි, නැවත පරීක්ෂා කරන්න" (This is wrong, recheck)
-Do not include any other text or markdown formatting.`;
-
-          try {
-            const { result: sugResult } = await callGeminiWithFallback("fast_background", {
-                model: "ignored",
-                contents: suggPrompt,
-                config: {
-                    temperature: 0.7,
-                    maxOutputTokens: 200,
-                    responseMimeType: "application/json"
-                }
-            }, getAIClient());
-
-            const sugText = sugResult.text || "";
-            let cleaned = sugText.replace(/```json/gi, "").replace(/```/g, "").trim();
-
-            let parsed = null;
-            try {
-              parsed = JSON.parse(cleaned);
-            } catch (e) {
-              const start = cleaned.indexOf("[");
-              const end = cleaned.lastIndexOf("]");
-              if (start >= 0 && end > start) {
-                try {
-                  parsed = JSON.parse(cleaned.slice(start, end + 1));
-                } catch (e) {}
-              }
-            }
-
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              finalSuggestions = parsed.filter(x => typeof x === "string").slice(0, 3);
-            }
-          } catch (e) {
-             console.warn("Failed to generate AI suggestions, falling back to deterministic", e);
-          }
-        }
-
-        if (finalSuggestions.length === 0) {
-           finalSuggestions = getDeterministicSuggestions(route.mode);
-        }
-
-        emitSse(res, "suggestions", { suggestions: finalSuggestions });
-
       } catch (err) {
-        console.warn("Failed to generate suggestions", err);
+        console.warn("Contextual suggestions unavailable", err);
       }
     }
 
@@ -2545,13 +2604,6 @@ Do not include any other text or markdown formatting.`;
         message: "AI credits අවසන් වෙලා තියෙනවා. Billing update කළාම නැවත AI answer දෙන්නම්.",
         canRetry: false,
         localOnlyAvailable: true
-      });
-      emitSse(res, "suggestions", {
-        suggestions: [
-          "Firebase PDFs list කරන්න",
-          "Indexed PDF chunks බලන්න",
-          "Billing fix කළාට පස්සේ answer continue කරන්න"
-        ]
       });
       emitSse(res, "done", {
         completed: false,
@@ -2715,7 +2767,7 @@ Keep the same tone and language (Sinhala-first style).
       mode: "continue",
     });
     let completionPasses = 0;
-    while (completionAssessment.shouldContinue && completionPasses < 2 && !signal.aborted && !res.writableEnded) {
+    while (completionAssessment.shouldContinue && completionPasses < 3 && !signal.aborted && !res.writableEnded) {
       completionPasses += 1;
       emitSse(res, "status", { step: "completion_recovery", status: "working", message: "Finishing the remaining answer sections", pass: completionPasses });
       const combinedAnswer = `${previousAssistantText || ""}\n${fullText}`.trim();

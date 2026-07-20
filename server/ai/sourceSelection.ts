@@ -39,7 +39,8 @@ export function normalizeSourceSearchText(value: unknown): string {
   return String(value || "")
     .normalize("NFKC")
     .toLowerCase()
-    .replace(/\bguess(?:ing)?\b(?:\s+paper\b)?/g, "guess")
+    .replace(/\bpapr\b/g, "paper")
+    .replace(/\bguess(?:in|ing)?\b(?:\s+paper\b)?/g, "guess")
     .replace(/model\s*paper/g, "model")
     .replace(/structured\s*essay/g, "structured")
     .replace(/\b0+(\d+)\b/g, "$1")
@@ -54,6 +55,19 @@ export function inferQuestionTypeFromText(value: unknown): SourceQuestionType | 
   if (/\bstructured\b|ව්‍යුහගත|වුහගත/u.test(text)) return "STRUCTURED";
   if (/\bessay\b|රචනා/u.test(text)) return "ESSAY";
   return null;
+}
+
+export function resolveLockedQuestionType(params: {
+  prompt?: unknown;
+  selectedQuestionType?: unknown;
+  selectedSourceTitle?: unknown;
+  routedQuestionType?: unknown;
+}): SourceQuestionType {
+  return inferQuestionTypeFromText(params.prompt)
+    || inferQuestionTypeFromText(params.selectedQuestionType)
+    || inferQuestionTypeFromText(params.selectedSourceTitle)
+    || inferQuestionTypeFromText(params.routedQuestionType)
+    || "MCQ";
 }
 
 export function extractQuestionNumberFromPrompt(value: unknown): string | null {

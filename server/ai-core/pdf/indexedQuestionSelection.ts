@@ -16,7 +16,9 @@ export function hasExactQuestionMarker(value: unknown, questionNo: unknown): boo
   const escaped = number.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const text = String(value || "");
   const patterns = [
-    new RegExp(`(?:^|\\n)\\s*(?:mcq\\s*)?(?:q(?:uestion)?\\s*)?0*${escaped}\\s*[.\\):\\-]`, "im"),
+    new RegExp(`(?:^|\\n)\\s*(?:mcq\\s*)?(?:q(?:uestion)?\\s*)?0*${escaped}\\s*['’.\\):\\-]`, "im"),
+    new RegExp(`(?:^|\\n)\\s*(?:q|question)\\s*(?:no\\.?|number)?\\s*[:.\\-]?\\s*0*${escaped}(?:\\s|['’.):-]|$)`, "im"),
+    new RegExp(`(?:^|\\n)\\s*(?:essay|structured)\\s*(?:q(?:uestion)?\\s*)?0*${escaped}(?:\\s|['’.):-]|$)`, "im"),
     new RegExp(`(?:^|\\n)\\s*\\(\\s*0*${escaped}\\s*\\)\\s+`, "m"),
     new RegExp(`(?:^|\\n)\\s*(?:ප්‍රශ්නය|ප්රශ්නය)\\s*0*${escaped}(?:\\s|[.):-]|$)`, "m"),
     new RegExp(`(?:^|\\n)\\s*0*${escaped}\\s*(?:වන|වෙනි)(?:\\s|$)`, "m"),

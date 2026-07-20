@@ -80,10 +80,10 @@ export function rebuildFullPaperText(chunks: IndexedPaperChunk[]): Array<{ pageN
 function markerPatterns(questionNo: string): RegExp[] {
   const escaped = questionNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return [
-    new RegExp(`(?:^|\\n)\\s*(?:Q(?:uestion)?|MCQ)\\s*0*${escaped}\\s*(?:[.):-]|$)`, "i"),
-    new RegExp(`(?:^|\\n)\\s*0*${escaped}\\s*[.]\\s+`, "i"),
+    new RegExp(`(?:^|\\n)\\s*(?:Q(?:uestion)?|MCQ)\\s*0*${escaped}\\s*(?:['’.):-]|$)`, "i"),
+    new RegExp(`(?:^|\\n)\\s*0*${escaped}\\s*['’.]\\s*`, "i"),
     new RegExp(`(?:^|\\n)\\s*0*${escaped}\\s*[)]\\s+(?=[^\\n]{8,})`, "i"),
-    new RegExp(`(?:^|\\n)\\s*(?:ප්‍රශ්නය|ප්රශ්නය)\\s*0*${escaped}\\s*(?:[.):-]|$)`, "i"),
+    new RegExp(`(?:^|\\n)\\s*(?:ප්‍රශ්නය|ප්රශ්නය)\\s*0*${escaped}\\s*(?:['’.):-]|$)`, "i"),
   ];
 }
 

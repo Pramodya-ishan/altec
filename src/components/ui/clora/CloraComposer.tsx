@@ -190,7 +190,7 @@ export function CloraComposer({
             </button>
           </div>
         )}
-        {(uploadTelemetry || uploadError) && (
+        {((uploadTelemetry && uploadTelemetry.phase !== 'success') || uploadError) && (
           <div className="border-b border-slate-100 px-4 py-3">
             {uploadTelemetry && (
               <div>

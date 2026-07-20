@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import "./followUpSuggestions.test";
 import {
   createAssistantStreamSanitizer,
   isSimpleGreeting,

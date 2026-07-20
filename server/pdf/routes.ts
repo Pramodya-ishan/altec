@@ -11,7 +11,7 @@ import { assertContentManager, isContentManager, isSharedSourceScope, isStudentV
 import { normalizeLessonId, updateLessonResourceProcessing, upsertLessonResource } from "../lessonResources/service";
 import { getSourceInventory, invalidateInventoryCache } from "../sources/sourceInventoryService";
 import { createPdfQuestionPreview, createPdfQuestionPreviewFallback } from "./questionPreview";
-import { hasExactQuestionMarker } from "../ai-core/pdf/indexedQuestionSelection";
+import { selectIndexedQuestionChunks } from "../ai-core/pdf/indexedQuestionSelection";
 import { questionRequiresVisualEvidence } from "./visualEvidence";
 import { getPdfProcessingJob, pausePdfProcessingJob, preparePdfJobResume, publicPdfJob } from "./jobManager";
 import { selectOcrEnsemble } from "./ocrEnsemble";
@@ -729,23 +729,19 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
 
           if (indexedChunks.length > 0) {
             const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
-            const exactIndexes = indexedChunks
-              .map((chunk: any, index: number) => hasExactQuestionMarker(chunk.text, targetNo) ? index : -1)
-              .filter((index: number) => index >= 0);
-            const selectedIndexes = new Set<number>();
-            if (exactIndexes.length > 0) {
-              exactIndexes.slice(0, 3).forEach((index: number) => {
-                for (let offset = -1; offset <= 2; offset += 1) {
-                  if (indexedChunks[index + offset]) selectedIndexes.add(index + offset);
-                }
-              });
-            }
+            const selectedChunks = selectIndexedQuestionChunks(
+              indexedChunks.map((chunk: any, index: number) => ({
+                ...chunk,
+                id: String(chunk.id || `${sourceId}_${index}`),
+                text: String(chunk.text || ""),
+                chunkIndex: index,
+              })),
+              targetNo,
+            );
             // No exact marker means no indexed answer. Continue to the locked
             // PDF extractor instead of treating the first chunks as Q1.
-            const indexedText = Array.from(selectedIndexes)
-              .sort((a, b) => a - b)
-              .map((index) => {
-                const chunk = indexedChunks[index];
+            const indexedText = selectedChunks
+              .map((chunk: any) => {
                 return `[Page ${chunk.pageNumber || "?"}]\n${chunk.text}`;
               })
               .join("\n\n")
@@ -806,9 +802,16 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
 
         const directVisualLimit = Number(process.env.DIRECT_PDF_INLINE_MAX_BYTES || 10 * 1024 * 1024);
         const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
-        const matchingPages = localExtraction.pages.filter((page: any) => hasExactQuestionMarker(page.text || page.rawText || "", targetNo));
+        const matchingPages = selectIndexedQuestionChunks(
+          localExtraction.pages.map((page: any, index: number) => ({
+            ...page,
+            id: `page_${page.pageNumber || index + 1}`,
+            text: String(page.text || page.rawText || ""),
+            chunkIndex: index,
+          })),
+          targetNo,
+        );
         const candidateText = matchingPages
-          .slice(0, 4)
           .map((page: any) => `[Page ${page.pageNumber}]\n${page.text || page.rawText || ""}`)
           .join("\n\n")
           .slice(0, 90_000);
@@ -907,11 +910,17 @@ pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), as
                   || Number(left.chunkIndex || 0) - Number(right.chunkIndex || 0));
               if (orderedChunks.length > 0) {
                 const targetNo = String(questionNo).replace(/\D/g, "") || String(questionNo);
-                const exactIndex = orderedChunks.findIndex((chunk: any) => hasExactQuestionMarker(chunk.text, targetNo));
-                const startIndex = exactIndex >= 0 ? Math.max(0, exactIndex - 1) : -1;
-                const indexedText = exactIndex >= 0
-                  ? orderedChunks
-                    .slice(startIndex, startIndex + 5)
+                const questionChunks = selectIndexedQuestionChunks(
+                  orderedChunks.map((chunk: any, index: number) => ({
+                    ...chunk,
+                    id: String(chunk.id || `${sourceId}_${index}`),
+                    text: String(chunk.text || ""),
+                    chunkIndex: index,
+                  })),
+                  targetNo,
+                );
+                const indexedText = questionChunks.length > 0
+                  ? questionChunks
                     .map((chunk: any) => `[Page ${chunk.pageNumber || "?"}]\n${chunk.text}`)
                     .join("\n\n")
                     .slice(0, 90_000)

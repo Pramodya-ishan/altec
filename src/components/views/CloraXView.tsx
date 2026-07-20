@@ -214,6 +214,18 @@ const [messages, setMessages] = useState<{
   const [savedChatHistory, setSavedChatHistory] = useState<SavedChatHistoryItem[]>([]);
   const [isLoadingChatHistory, setIsLoadingChatHistory] = useState(false);
   const [sourceMode, setSourceMode] = useState<{ mode: 'locked_pdf' | 'general_ai'; title: string | null }>({ mode: 'general_ai', title: null });
+  const chatSessionIdRef = useRef(`chat_${generateUUID()}`);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    void apiFetch('/api/ai/conversation/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: chatSessionIdRef.current }),
+    }).then((response) => {
+      if (response.ok) setSourceMode({ mode: 'general_ai', title: null });
+    }).catch(() => undefined);
+  }, [user?.uid]);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -443,6 +455,12 @@ const [messages, setMessages] = useState<{
   const uploadStartedAtRef = useRef(0);
   const [importingStage, setImportingStage] = useState<string | null>(null);
   const [importProgressText, setImportProgressText] = useState("");
+
+  useEffect(() => {
+    if (uploadTelemetry?.phase !== "success") return;
+    const timer = window.setTimeout(() => setUploadTelemetry(null), 500);
+    return () => window.clearTimeout(timer);
+  }, [uploadTelemetry?.phase]);
 
   const beginUploadTelemetry = (file: File) => {
     uploadStartedAtRef.current = performance.now();
@@ -1012,7 +1030,9 @@ const [messages, setMessages] = useState<{
               sourceMode: data?.sourceMode || m.sourceMode,
               evidenceContradictions: data?.evidenceContradictions || m.evidenceContradictions,
               visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
-              sources: Array.isArray(data?.sources) && data.sources.length > 0
+              sources: data?.clearSources === true
+                ? []
+                : Array.isArray(data?.sources) && data.sources.length > 0
                 ? Array.from(new Map([...(m.sources || []), ...data.sources].map((source: any) => [source.id || source.sourceId || source.title, source])).values())
                 : m.sources,
             };
@@ -1211,6 +1231,7 @@ const [messages, setMessages] = useState<{
         mimeType: file.mimeType || (file.isImage ? "image/jpeg" : "text/plain"),
         dataUrl: file.dataUrl,
         storagePath: file.storagePath,
+        sourceId: file.sourceId,
         attachmentType: file.attachmentType,
       }))
     };
@@ -1388,6 +1409,7 @@ const [messages, setMessages] = useState<{
     const attachmentsPayload = currentUploads
       .filter((file) => file.storagePath && file.mimeType && file.id !== inlineImage?.id)
       .map((file) => ({
+        sourceId: file.sourceId,
         storagePath: file.storagePath as string,
         mimeType: file.mimeType as string,
         fileName: file.name,
@@ -1400,6 +1422,7 @@ const [messages, setMessages] = useState<{
         history: nextMessages.slice(-10).map(m => ({ role: m.role, text: m.content })),
         image: imagePayload,
         attachments: attachmentsPayload.length > 0 ? attachmentsPayload : undefined,
+        chatId: chatSessionIdRef.current,
         assistantMessageId: assistantMsgId,
         onToken: (text) => {
           if (activeStreamIdRef.current !== streamId) return;
@@ -1510,7 +1533,9 @@ const [messages, setMessages] = useState<{
               serverMessageId: data?.messageId || m.serverMessageId,
               generatedImage: data?.image?.imageUrl ? { url: data.image.imageUrl, storagePath: data.image.storagePath, model: data.image.model, alt: userMsg } : m.generatedImage,
               visualBlocks: Array.isArray(data?.visualBlocks) && data.visualBlocks.length > 0 ? data.visualBlocks : m.visualBlocks,
-              sources: Array.isArray(data?.sources) && data.sources.length > 0
+              sources: data?.clearSources === true
+                ? []
+                : Array.isArray(data?.sources) && data.sources.length > 0
                 ? Array.from(new Map([...(m.sources || []), ...data.sources].map((source: any) => [source.id || source.sourceId || source.title, source])).values())
                 : m.sources,
             };
@@ -1556,6 +1581,13 @@ const [messages, setMessages] = useState<{
      setImportProgressText('');
      setIsDrawerOpen(false);
      setPdfModalUrl('');
+     chatSessionIdRef.current = `chat_${generateUUID()}`;
+     setSourceMode({ mode: 'general_ai', title: null });
+     void apiFetch('/api/ai/conversation/reset', {
+       method: 'POST',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({ conversationId: chatSessionIdRef.current }),
+     }).catch(() => undefined);
   }, [cancel, isStreaming]);
 
   const handleClearChat = React.useCallback(async () => {
