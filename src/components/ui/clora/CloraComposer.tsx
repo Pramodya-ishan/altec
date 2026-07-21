@@ -14,6 +14,7 @@ import {
   RotateCcw,
   Square,
   X,
+  Wrench,
 } from 'lucide-react';
 import { CloraToolPalette, type ToolOption } from './CloraToolPalette';
 
@@ -218,6 +219,7 @@ export function CloraComposer({
         query={commandQuery}
         onSelect={handleToolSelect}
         position={{ top: 0, left: 18 }}
+        onClose={() => setShowCommandPalette(false)}
       />
 
       <motion.div
@@ -326,7 +328,22 @@ export function CloraComposer({
               <Paperclip className="h-5 w-5" />
               <span className="text-xs font-semibold">Upload files</span>
             </button>
-            <span className="hidden rounded-full border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-500 sm:inline">@ tools</span>
+            <button
+              type="button"
+              onClick={() => {
+                setCommandQuery('');
+                setShowCommandPalette((open) => !open);
+                requestAnimationFrame(() => textareaRef.current?.focus());
+              }}
+              disabled={disabled}
+              className={`inline-flex h-10 items-center gap-2 rounded-full px-3 text-xs font-semibold transition disabled:opacity-40 ${showCommandPalette ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+              aria-expanded={showCommandPalette}
+              aria-label="Open AI tools"
+              title="Open AI tools"
+            >
+              <Wrench className="h-4 w-4" />
+              <span>Tools</span>
+            </button>
           </div>
 
           <div className="flex items-center gap-1.5">

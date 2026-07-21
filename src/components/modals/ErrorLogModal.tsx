@@ -37,7 +37,7 @@ function fileKey(file: File) {
 }
 
 export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps) {
-  const { user, currentSubject, showNotification } = useApp();
+  const { user, currentSubject, showNotification, data } = useApp();
   const [subject, setSubject] = useState(currentSubject.toUpperCase());
   const [lesson, setLesson] = useState("");
   const [errorText, setErrorText] = useState("");
@@ -58,6 +58,12 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
   useEffect(() => () => {
     images.forEach((item) => URL.revokeObjectURL(item.preview));
   }, []);
+
+  const lessonOptions = useMemo(() => {
+    const subjectKey = subject.toLowerCase() as 'sft' | 'et' | 'ict';
+    const paperStructureLessons = Object.keys(data?.[subjectKey]?.topics || {}).filter(Boolean);
+    return Array.from(new Set([...paperStructureLessons, ...(LESSON_SUGGESTIONS[subject] || [])])).sort((a, b) => a.localeCompare(b, 'si'));
+  }, [data, subject]);
 
   const totalBytes = useMemo(() => images.reduce((sum, item) => sum + item.file.size, 0), [images]);
 
@@ -143,7 +149,7 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
   const handleSave = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!user?.email) return showNotification("Sign in before saving a mistake.", "error");
-    if (!lesson.trim()) return showNotification("Choose a lesson or enter its name.", "error");
+    if (!lesson.trim()) return showNotification("Choose the Paper Structure lesson or enter its name.", "error");
     if (!errorText.trim() && images.length === 0) return showNotification("Describe the mistake or upload one or more images.", "error");
 
     setSaving(true);
@@ -221,8 +227,8 @@ export function ErrorLogModal({ isOpen, onClose, onLogged }: ErrorLogModalProps)
                   </select>
                 </label>
                 <label className="space-y-2 text-xs font-bold uppercase tracking-wide text-slate-500">Lesson
-                  <input value={lesson} onChange={(event) => setLesson(event.target.value)} list={`mistake-lessons-${subject}`} placeholder="Choose a lesson or enter its name" className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-medium normal-case text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100" />
-                  <datalist id={`mistake-lessons-${subject}`}>{LESSON_SUGGESTIONS[subject].map((item) => <option key={item} value={item} />)}</datalist>
+                  <input value={lesson} onChange={(event) => setLesson(event.target.value)} list={`mistake-lessons-${subject}`} placeholder="Choose the Paper Structure lesson or enter its name" className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm font-medium normal-case text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100" />
+                  <datalist id={`mistake-lessons-${subject}`}>{lessonOptions.map((item) => <option key={item} value={item} />)}</datalist>
                 </label>
               </div>
 

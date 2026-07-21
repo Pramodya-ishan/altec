@@ -14,6 +14,8 @@ import {
   Plus,
   ShieldCheck,
   Table as TableIcon,
+  Crop as CropIcon,
+  Maximize2,
 } from "lucide-react";
 import { apiFetch } from "../../lib/api";
 import { CoordinatePlane } from "./CoordinatePlane";
@@ -50,6 +52,8 @@ function PdfImagePreview({ block }: { block: PdfPreviewBlock }) {
   const [failed, setFailed] = useState(false);
   const [loading, setLoading] = useState(!block.imageUrl);
   const [zoom, setZoom] = useState(1);
+  const [viewMode, setViewMode] = useState<'crop' | 'page'>(block.crop ? 'crop' : 'page');
+  const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
   const refreshAttempted = useRef(false);
 
   const refreshSignedUrl = async () => {
@@ -94,6 +98,22 @@ function PdfImagePreview({ block }: { block: PdfPreviewBlock }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const normalizedCrop = (() => {
+    if (!block.crop || !naturalSize.width || !naturalSize.height) return null;
+    const raw = block.crop;
+    const x = raw.x <= 1 ? raw.x : raw.x / naturalSize.width;
+    const y = raw.y <= 1 ? raw.y : raw.y / naturalSize.height;
+    const width = raw.width <= 1 ? raw.width : raw.width / naturalSize.width;
+    const height = raw.height <= 1 ? raw.height : raw.height / naturalSize.height;
+    if (![x, y, width, height].every(Number.isFinite) || width <= 0.02 || height <= 0.02) return null;
+    return {
+      x: Math.max(0, Math.min(0.98, x)),
+      y: Math.max(0, Math.min(0.98, y)),
+      width: Math.max(0.02, Math.min(1 - x, width)),
+      height: Math.max(0.02, Math.min(1 - y, height)),
+    };
+  })();
+
   if (failed) {
     return (
       <div className="my-4 max-w-4xl rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
@@ -117,6 +137,12 @@ function PdfImagePreview({ block }: { block: PdfPreviewBlock }) {
           )}
         </div>
         <div className="flex items-center gap-1.5">
+          {block.crop ? (
+            <>
+              <button type="button" onClick={() => { setViewMode('crop'); setZoom(1); }} className={`hidden h-8 items-center gap-1.5 rounded-lg border px-2 text-[10px] font-bold sm:inline-flex ${viewMode === 'crop' ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-100'}`} aria-label="Show question crop"><CropIcon className="h-3.5 w-3.5" /> Question</button>
+              <button type="button" onClick={() => { setViewMode('page'); setZoom(1); }} className={`hidden h-8 items-center gap-1.5 rounded-lg border px-2 text-[10px] font-bold sm:inline-flex ${viewMode === 'page' ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-100'}`} aria-label="Show full PDF page"><Maximize2 className="h-3.5 w-3.5" /> Page</button>
+            </>
+          ) : null}
           <button type="button" onClick={() => setZoom((value) => Math.max(0.8, Number((value - 0.2).toFixed(1))))} disabled={zoom <= 0.8} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Zoom out PDF question"><Minus className="h-3.5 w-3.5" /></button>
           <span className="min-w-12 text-center text-[10px] font-black tabular-nums text-slate-500">{Math.round(zoom * 100)}%</span>
           <button type="button" onClick={() => setZoom((value) => Math.min(2, Number((value + 0.2).toFixed(1))))} disabled={zoom >= 2} className="grid h-8 w-8 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Zoom in PDF question"><Plus className="h-3.5 w-3.5" /></button>
@@ -130,7 +156,30 @@ function PdfImagePreview({ block }: { block: PdfPreviewBlock }) {
             <Loader2 className="h-4 w-4 animate-spin" /> Loading the exact printed question…
           </div>
         )}
-        {imageUrl && (
+        {imageUrl && viewMode === 'crop' && normalizedCrop ? (
+          <div className="mx-auto w-full max-w-3xl overflow-auto text-center">
+            <div
+              className="relative mx-auto overflow-hidden rounded-sm bg-white shadow-[0_4px_18px_rgba(15,23,42,0.16)]"
+              style={{ width: `${zoom * 100}%`, aspectRatio: `${normalizedCrop.width * naturalSize.width} / ${normalizedCrop.height * naturalSize.height}` }}
+            >
+              <img
+                src={imageUrl}
+                alt={block.title || "Original PDF question"}
+                className="absolute max-w-none bg-white"
+                style={{
+                  width: `${100 / normalizedCrop.width}%`,
+                  height: 'auto',
+                  left: `${-(normalizedCrop.x / normalizedCrop.width) * 100}%`,
+                  top: `${-(normalizedCrop.y / normalizedCrop.height) * 100}%`,
+                }}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                onLoad={(event) => { setNaturalSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight }); setLoading(false); }}
+                onError={() => void refreshSignedUrl()}
+              />
+            </div>
+          </div>
+        ) : imageUrl ? (
           <div className="mx-auto w-fit min-w-full text-center">
             <img
               src={imageUrl}
@@ -139,11 +188,11 @@ function PdfImagePreview({ block }: { block: PdfPreviewBlock }) {
               style={{ width: `${zoom * 100}%`, maxWidth: "none" }}
               loading="lazy"
               referrerPolicy="no-referrer"
-              onLoad={() => setLoading(false)}
+              onLoad={(event) => { setNaturalSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight }); setLoading(false); }}
               onError={() => void refreshSignedUrl()}
             />
           </div>
-        )}
+        ) : null}
       </div>
 
       <figcaption className="border-t border-slate-200 px-4 py-3 text-[11px] font-medium leading-5 text-slate-500">

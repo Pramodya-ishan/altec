@@ -58,6 +58,7 @@ import { VoiceAudioCard } from '../chat/VoiceAudioCard';
 import { parseChatCommand } from '../../lib/chatCommandParser';
 import { isClientImageGenerationIntent, isClientVisualExplanationIntent } from '../../lib/ai/imageIntent';
 import { buildProjectFileContext, isProjectArchiveFile, isProjectTextFile, MAX_CHAT_UPLOAD_FILES, readProjectArchive, readProjectTextFile } from '../../lib/projectFileUpload';
+import { buildTutorPersonalizationContext } from '../../lib/personalization';
 
 
 type ChatUpload = {
@@ -1429,6 +1430,23 @@ const [messages, setMessages] = useState<{
       messagePrompt = parsedCommand.text;
     } else if (parsedCommand.command === 'pdf') {
       messagePrompt = `[PDF Intent] ${parsedCommand.text || "Please answer from the uploaded PDF"}`;
+    } else if (parsedCommand.command === 'guessing') {
+      messagePrompt = `[GUESSING TOOL]
+Active subject: ${currentSubject.toUpperCase()}
+Requested lesson or scope: ${parsedCommand.text || "Ask the learner to choose a lesson"}
+Use indexed official syllabus, past papers, model papers, and marking schemes. Generate a new revision question, not a copied question. Keep Sinhala Unicode text live and use a separate visual block only when the question genuinely needs a diagram, table, circuit, graph, or instrument scale. Clearly label it as AI revision practice.`;
+    } else if (parsedCommand.command === 'video') {
+      messagePrompt = `[VIDEO EXPLANATION TOOL]
+Active subject: ${currentSubject.toUpperCase()}
+Topic/question: ${parsedCommand.text || "Use the current selected question"}
+Create a production-ready Sinhala teaching package using syllabus/PDF evidence: (1) concise lesson objective, (2) scene-by-scene storyboard, (3) clear neutral Sinhala teacher narration, (4) on-screen labels, formulas and diagrams, (5) checkpoints, (6) final recap. Keep the total estimated duration within the personalized maximum video length. Do not claim a rendered video file exists unless one is actually produced.`;
+    } else if (parsedCommand.command === 'explain') {
+      messagePrompt = `[CLEAR EXPLANATION TOOL]
+Explain in accurate Sinhala, step by step, using the selected paper/PDF and syllabus evidence. Separate data, rule/formula, working, answer, and common mistake.
+Question: ${parsedCommand.text || "Use the current selected question"}`;
+    } else if (parsedCommand.command === 'personalize') {
+      messagePrompt = `[PERSONALIZED TUTOR TOOL]
+${parsedCommand.text || "Review my recent lesson context and teach the next useful step based on weak areas. Ask only one essential clarification when context is missing."}`;
     }
 
     if (replyingTo) {
@@ -1437,6 +1455,9 @@ const [messages, setMessages] = useState<{
 
     const projectFileContext = buildProjectFileContext(currentUploads);
     if (projectFileContext) messagePrompt += projectFileContext;
+    messagePrompt += `
+
+${buildTutorPersonalizationContext(currentSubject)}`;
 
     const attachmentsPayload = currentUploads
       .filter((file) => file.storagePath && file.mimeType && file.id !== inlineImage?.id)
