@@ -1,0 +1,59 @@
+ALTEC V31 — FINAL TEST RESULTS
+==============================
+
+STATIC AUDIT
+- Project files scanned (excluding dependencies/generated output): 509
+- Lines scanned: 97,148
+- Changed/added entries relative to V30: 23
+
+TYPE SAFETY
+- npm run typecheck: PASS
+  - Application TypeScript: PASS
+  - Operational scripts TypeScript: PASS
+
+MAIN REGRESSION CHAIN
+- npm run test:sources: PASS
+- Test commands in chain: 44
+- Includes PDF extraction/preview/visual/OCR, AI hygiene, fast conversation,
+  completeness, quality, turn risk, context budgeting, model health,
+  stream watchdog, source selection, paper context, upload validation,
+  security circuit, mistake store, Z-score, legacy Sinhala, and document intelligence.
+
+ADDITIONAL SUITES
+- npm run test:knowledge: PASS
+- npm run test:security: PASS
+- npm run test:video: PASS
+- npm run test:ai-evals: PASS (600/600)
+  - arithmetic: 100/100
+  - source_security: 100/100
+  - source_readiness: 100/100
+  - visual_region: 100/100
+  - calibrated_forecast: 100/100
+  - two_subject_plan: 100/100
+
+V31-SPECIFIC TESTS
+- Adaptive turn-risk routing: PASS
+- Evidence/history context budget: PASS
+- Model health cooldown: PASS
+- Stuck model request timeout + fallback: PASS
+- Unhealthy-primary stream fallback remains streaming: PASS
+- Stream idle watchdog: PASS
+- Continuation semantic deduplication/progress: PASS
+- Sinhala-first and legacy-text quality checks: PASS
+- ET/SFT subject-aware lesson routing: PASS
+
+PRODUCTION VERIFICATION
+- npm run verify:repair: PASS
+- Vite production build: PASS (3,297 modules)
+- Vercel API runtime bundle: PASS
+- Runtime import verification: PASS (49 imports)
+- Isolated pure-ESM runtime smoke boot: PASS
+
+NON-BLOCKING BUILD WARNINGS
+- Vite reports existing large client chunks and one mixed static/dynamic import.
+  These are bundle-optimization warnings, not build failures, and were not introduced
+  by the server-side AI hardening changes.
+
+LIVE-SERVICE NOTE
+- No live Vertex/Firebase latency benchmark was performed because deployment
+  credentials and production data are intentionally absent from this build runtime.

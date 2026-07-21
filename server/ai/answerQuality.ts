@@ -1,8 +1,9 @@
 import { getAIClient } from "./client";
-import { callGeminiWithFallback } from "./modelRouter";
+import { callGeminiWithFallback, AITask } from "./modelRouter";
 import { sanitizeAssistantText } from "./responseHygiene";
 import { assessAnswerCompleteness, extractRequestedSubparts } from "./answerCompleteness";
 import { verifyExamAnswer } from "./deterministicExamVerifier";
+import { detectSinhalaTextEncoding } from "../pdf/legacySinhala";
 
 export type AnswerQualityReport = {
   passed: boolean;
@@ -129,6 +130,22 @@ export function deterministicQualityReport(params: {
   if (/\b(?:probably|maybe|likely)\b|බොහෝ\s*විට|විය\s*හැකිය/iu.test(answer) && /(?:official|නිල|paper|පත්‍ර)/iu.test(prompt)) {
     factualRisks.push("The official-paper answer contains unresolved uncertainty language.");
   }
+
+  const answerEncoding = detectSinhalaTextEncoding(answer);
+  if (answerEncoding.encoding === "legacy_fm_abhaya" || answerEncoding.encoding === "legacy_unknown") {
+    factualRisks.push("The answer contains legacy Sinhala/mojibake instead of readable Unicode Sinhala.");
+  }
+  const promptIsSinhala = /[\u0D80-\u0DFF]/u.test(prompt);
+  if (promptIsSinhala && answer.length >= 160) {
+    const sinhalaChars = (answer.match(/[\u0D80-\u0DFF]/gu) || []).length;
+    const latinChars = (answer.match(/[A-Za-z]/g) || []).length;
+    if (latinChars > Math.max(80, sinhalaChars * 1.8)) {
+      factualRisks.push("The answer is not Sinhala-first even though the learner asked in Sinhala.");
+    }
+  }
+  if (/(?:^|\n)\s*(?:thought process|chain of thought|internal reasoning|analysis)\s*[:：]/iu.test(answer)) {
+    factualRisks.push("The answer exposes internal reasoning labels instead of a concise student-facing explanation.");
+  }
   if (completeness.reasons.includes("UNCLOSED_MARKDOWN_OR_MATH")) missingRequirements.push("Close all Markdown or math delimiters.");
   if (completeness.reasons.includes("TRUNCATED_ENDING")) missingRequirements.push("Complete the final sentence or list item.");
 
@@ -179,6 +196,7 @@ export async function reviewAnswerQuality(params: {
   mode?: unknown;
   evidenceRequired?: boolean;
   sources?: any[];
+  useModelReview?: boolean;
 }) {
   const prompt = String(params.prompt || "").slice(0, 30_000);
   const answer = String(params.answer || "").slice(0, 80_000);
@@ -192,7 +210,7 @@ export async function reviewAnswerQuality(params: {
     sources,
   });
 
-  if (!isSubstantiveAnswerMode(params.mode) || process.env.AI_QUALITY_REVIEW_ENABLED === "false") {
+  if (params.useModelReview === false || !isSubstantiveAnswerMode(params.mode) || process.env.AI_QUALITY_REVIEW_ENABLED === "false") {
     return { report: deterministic, repairInstruction: "" };
   }
 
@@ -295,6 +313,7 @@ export async function createQualityRepairedAnswer(params: {
   systemInstruction: string;
   contentsParts?: any[];
   maxOutputTokens?: number;
+  repairTask?: Extract<AITask, "normal_chat" | "final_answer">;
 }) {
   const repair = buildQualityRepairInstruction(params);
   const contents = params.contentsParts?.length
@@ -304,7 +323,7 @@ export async function createQualityRepairedAnswer(params: {
       { role: "user", parts: [{ text: repair }] },
     ]
     : repair;
-  const { result, modelUsed } = await callGeminiWithFallback("final_answer", {
+  const { result, modelUsed } = await callGeminiWithFallback(params.repairTask || "final_answer", {
     model: "ignored",
     contents,
     config: {

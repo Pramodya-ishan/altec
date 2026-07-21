@@ -1,0 +1,14 @@
+V32 NOTES PAGE SIMPLIFICATION — TEST RESULTS
+Date: 2026-07-21
+
+PASS  TypeScript application check (tsc --noEmit)
+PASS  TypeScript scripts check (tsc -p tsconfig.scripts.json --noEmit)
+PASS  Production repair static verification
+PASS  Removed lesson-note UI phrase scan
+PASS  Removed local SFT/ET/ICT toggle scan in NotesView
+PASS  Vite production build
+      3,297 modules transformed
+      Build completed successfully
+
+Scope note:
+This release changes only the Notes page presentation and its local note-editor state. Existing lesson-resource APIs, uploads, Paper Structure linkage, and AI behavior remain unchanged from V31.

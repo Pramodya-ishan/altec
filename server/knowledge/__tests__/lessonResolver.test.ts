@@ -19,6 +19,11 @@ assert.deepEqual(sinhala.sources.map((source) => source.id).sort(), ["fluid-note
 
 assert.equal(resolveLessonReference("Python lesson quiz")?.label, "Python");
 
+assert.equal(resolveLessonReference("electrical questions", undefined, "ET")?.label, "විදුලි තාක්ෂණය / Electrical Technology");
+assert.equal(resolveLessonReference("electrical questions", undefined, "SFT")?.label, "විද්‍යුතය / Electricity");
+assert.equal(resolveLessonReference("2024 ET electronic q31", undefined, "ET")?.label, "ඉලෙක්ට්‍රොනික තාක්ෂණය / Electronics");
+
+
 const policy = resolveAnswerPolicy("තරල පාඩමේ ප්‍රශ්න කරමු", { mode: "lesson_question_discussion" }, "SFT");
 assert.equal(policy.requireEvidence, true);
 assert.equal(policy.intent, "lesson_question_discussion");

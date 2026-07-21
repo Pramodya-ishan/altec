@@ -57,7 +57,7 @@ export async function retrieveEvidence(
     const inventory = await getSourceInventory({ uid, subject, isAdmin: false });
     const allAvailableSources = [...inventory.groups.pastPapers, ...inventory.groups.markingSchemes, ...inventory.groups.syllabus, ...inventory.groups.uploadedPdfs, ...inventory.groups.paperStructure];
     if (isLessonEvidenceMode(intent)) {
-      const lessonMatch = findLessonSources(allAvailableSources, prompt, route.entities?.lesson || activeConversationState?.activeLessonIds?.[0]);
+      const lessonMatch = findLessonSources(allAvailableSources, prompt, route.entities?.lesson || activeConversationState?.activeLessonIds?.[0], subject);
       lessonIds = lessonMatch.reference ? [lessonMatch.reference.label] : [];
       candidates = lessonMatch.sources;
       const indexedMatches = lessonMatch.sources.filter((source: any) => sourceEvidenceReadiness(source).ready);

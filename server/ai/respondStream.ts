@@ -45,6 +45,7 @@ import {
   buildContinuationInstruction,
   getModelFinishReason,
   mergeContinuationText,
+  continuationMadeMeaningfulProgress,
 } from "./answerCompleteness";
 import {
   AnswerQualityReport,
@@ -54,6 +55,9 @@ import {
 } from "./answerQuality";
 import { recordAiTelemetry } from "../observability/aiTelemetry";
 import { createAnswerPlan, plannerContext } from "./answerPlanner";
+import { assessTurnRisk, TurnRiskAssessment } from "./turnRisk";
+import { buildBoundedRequestText, enforceRequestTextBudget } from "./contextBudget";
+import { withStreamIdleTimeout } from "./streamWatchdog";
 import { buildFollowUpSuggestionPrompt, parseFollowUpSuggestions, withSuggestionTimeout } from "./followUpSuggestions";
 import { secureEvidenceText, sourceSecurityInstruction } from "./sourceContentSecurity";
 import {
@@ -97,6 +101,12 @@ interface StreamTrace {
   qualityConfidence?: number;
   qualityCoveragePercent?: number;
   qualityRepaired?: boolean;
+  riskScore?: number;
+  riskLevel?: string;
+  plannerMode?: string;
+  reviewerMode?: string;
+  contextOriginalChars?: number;
+  contextUsedChars?: number;
 }
 
 export const lastStreamTraces: StreamTrace[] = [];
@@ -127,20 +137,35 @@ async function safeCall<T>(
   fn: () => Promise<T>,
   fallback: T,
   res: any,
-  options: { critical?: boolean; publicMessage?: string } = {},
+  options: { critical?: boolean; publicMessage?: string; timeoutMs?: number } = {},
 ): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
   try {
-    return await fn();
+    const task = fn();
+    if (!options.timeoutMs || options.timeoutMs <= 0) return await task;
+    const timeout = new Promise<T>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        const error: any = new Error(`${name} exceeded ${options.timeoutMs}ms`);
+        error.code = "DEPENDENCY_TIMEOUT";
+        reject(error);
+      }, options.timeoutMs);
+      if (typeof (timer as any)?.unref === "function") (timer as any).unref();
+    });
+    return await Promise.race([task, timeout]);
   } catch (error) {
     console.error(`[STREAM_DEPENDENCY_FAILED] name=${name}`, error);
     if (options.critical) {
       const failure = new Error(options.publicMessage || "Required document evidence could not be loaded.");
-      (failure as Error & { code?: string; isPublic?: boolean }).code = "EVIDENCE_DEPENDENCY_FAILED";
+      (failure as Error & { code?: string; isPublic?: boolean }).code = (error as any)?.code === "DEPENDENCY_TIMEOUT"
+        ? "EVIDENCE_DEPENDENCY_TIMEOUT"
+        : "EVIDENCE_DEPENDENCY_FAILED";
       (failure as Error & { code?: string; isPublic?: boolean }).isPublic = true;
       throw failure;
     }
     emitSse(res, "status", { step: "warning", message: "Some optional context was unavailable." });
     return fallback;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -176,9 +201,11 @@ function answerTokenConfig(mode: string) {
   return maxOutputTokens ? { maxOutputTokens } : {};
 }
 
-function completionPassLimit() {
+function completionPassLimit(riskCap?: number) {
   const configured = Number(process.env.AI_AUTO_CONTINUATION_PASSES || 12);
-  return Math.max(1, Math.min(12, Number.isFinite(configured) ? Math.trunc(configured) : 12));
+  const globalLimit = Math.max(1, Math.min(12, Number.isFinite(configured) ? Math.trunc(configured) : 12));
+  if (!Number.isFinite(Number(riskCap))) return globalLimit;
+  return Math.max(1, Math.min(globalLimit, Math.trunc(Number(riskCap))));
 }
 
 function chooseModel(mode: string) {
@@ -523,7 +550,7 @@ ${originalPrompt}`;
             questionNo: paperIntent.questionNo,
             questionType: paperIntent.questionType
           }
-        } as any, res);
+        } as any, res, { timeoutMs: 4_500 });
 
     // [FIX 1] Force paper intent over LLM router if it looks like a paper question
     if (paperIntent.isOfficialPaperCandidate && !paperForecastPrompt) {
@@ -662,7 +689,7 @@ ${originalPrompt}`;
       if (ranked.length > 0) {
         const source = ranked[0].source;
         const sourceId = String(source.sourceId || source.id);
-        const lesson = resolveLessonReference(prompt);
+        const lesson = resolveLessonReference(prompt, undefined, catalogSubject || activeSubject);
         await updateConversationState(user.uid, {
           selectedSourceId: sourceId,
           selectedSourceTitle: source.title || source.fileName || `${requestedYear || ""} ${catalogSubject || ""} paper`,
@@ -1051,7 +1078,30 @@ ${originalPrompt}`;
           selectedSourceYear: null,
         };
     const policy = resolveAnswerPolicy(prompt, route, activeSubject, attachments);
-    const evidence = await retrieveEvidence(user.uid, prompt, route, policy, evidenceConversationState);
+    const evidenceFallback: any = {
+      intent: policy.intent || route.mode,
+      subject: route.entities?.subject || activeSubject,
+      lessonIds: [],
+      selectedSource: null,
+      selectedQuestion: null,
+      candidates: [],
+      evidenceStatus: "not_found",
+      exactTextBlocks: [],
+      allowedSourceIds: [],
+      allowAnswerGeneration: !policy.requireEvidence,
+      allowModelQuestionGeneration: policy.intent === "model_question_generation",
+    };
+    const evidence = await safeCall(
+      "retrieveEvidence",
+      () => retrieveEvidence(user.uid, prompt, route, policy, evidenceConversationState),
+      evidenceFallback,
+      res,
+      {
+        critical: policy.requireEvidence,
+        timeoutMs: policy.requireEvidence ? 12_000 : 6_500,
+        publicMessage: "The selected paper evidence took too long to load. Please retry the same question.",
+      },
+    );
     // REMOVED: Early evidence apology block (Finding 026)
     if (evidence.selectedSource) {
        route.entities.activeSourceId = evidence.selectedSource.id || evidence.selectedSource.sourceId;
@@ -1276,7 +1326,7 @@ ${originalPrompt}`;
 
     emitSse(res, "status", { step: "profile", status: "reading" });
 
-    const userContext = await safeCall("loadUserAIContext", () => loadUserAIContext(user.uid, user.email), { activeSubject } as any, res);
+    const userContext = await safeCall("loadUserAIContext", () => loadUserAIContext(user.uid, user.email), { activeSubject } as any, res, { timeoutMs: 6_000 });
     userContext.activeSubject = null;
     userContext.subjectScope = "all";
     userContext.requestedSubjectHint = activeSubject || null;
@@ -2247,7 +2297,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
     // 4. Web Search
     if (requestedMode === "web_search" || requestedMode === "deep_search" || (route.mode !== "uploaded_pdf_question_qa" && !isLessonEvidenceMode(route.mode) && route.answerHints.mustUseGoogleSearch)) {
       emitSse(res, "status", { step: "web_search", status: "searching", query: prompt });
-      const web: any = await safeCall("groundedSearch", () => groundedSearch(prompt, { language: "si" }) as Promise<any>, { sources: [], summary: "" } as any, res);
+      const web: any = await safeCall("groundedSearch", () => groundedSearch(prompt, { language: "si" }) as Promise<any>, { sources: [], summary: "" } as any, res, { timeoutMs: 12_000 });
       if (web.sources.length > 0) {
         web.sources.forEach((s: any, i: number) => {
           allSources.push({ title: s.title, url: s.url, confidence: s.confidence, badge: requestedMode === "web_search" || requestedMode === "deep_search" ? "Web Search" : "Candidate" });
@@ -2263,7 +2313,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         urls: route.entities.urls,
         question: prompt,
         subject: route.entities.subject || activeSubject
-      }) as Promise<any>, { sources: [], answer: "" } as any, res);
+      }) as Promise<any>, { sources: [], answer: "" } as any, res, { timeoutMs: 12_000 });
       uRes.sources.forEach((s: any) => {
         allSources.push({ title: s.title || s.url, url: s.url, confidence: 1, badge: "Uploaded" });
       });
@@ -2296,12 +2346,31 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       needsOcr
     };
 
-    // Final prompt setup
+    // Final prompt setup. The writer, planner, reviewer, context budget and
+    // continuation budget are selected from deterministic turn risk. Complex
+    // official/calculation/multimodal turns keep the Pro path; ordinary lesson
+    // questions avoid unnecessary planning/review calls and start streaming sooner.
     const ai = getAIClient();
-    // Every learner-facing answer uses the high-quality final writer. Greetings
-    // are handled deterministically above, so there is no reason to trade away
-    // reasoning quality on an actual study question when cost is not constrained.
-    let aiTask: AITask = image ? "image_understanding" : "final_answer";
+    const initialEvidenceContract = buildEvidenceContract(allSources);
+    const initialEvidenceContradictions = detectEvidenceContradictions(initialEvidenceContract);
+    let turnRisk: TurnRiskAssessment = assessTurnRisk({
+      prompt,
+      mode: route.mode,
+      evidenceRequired: policy.requireEvidence,
+      sourceCount: allSources.length,
+      hasImage: Boolean(image),
+      attachmentCount: Array.isArray(attachments) ? attachments.length : 0,
+      needsOcr,
+      hasExactQuestionText,
+      contradictionCount: initialEvidenceContradictions.length,
+    });
+    let aiTask: AITask = image || (Array.isArray(attachments) && attachments.length > 0)
+      ? "image_understanding"
+      : turnRisk.useProWriter
+        ? "final_answer"
+        : "normal_chat";
+    trace.riskScore = turnRisk.score;
+    trace.riskLevel = turnRisk.level;
 
     // [FIX 5] Mandatory Evidence Gate before final LLM
     if (paperIntent.isOfficialPaperCandidate && route.mode === "paper_question_qa" && !hasExactQuestionText) {
@@ -2340,11 +2409,20 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
     });
     finalSysInstruction += sourceSecurityInstruction(securedEvidence.threats.length);
 
-    // Build the parts array for the contents object
+    // Build a focused request instead of serializing the entire conversation
+    // and every repeated RAG block. Exact/selected source evidence is preserved
+    // first; duplicate and lower-priority context is removed deterministically.
     const mistakeImageSources: any[] = [];
-    const requestTextPart: any = {
-      text: `Context Blocks:\n${contextBlocksText}\n\nPrevious Chat History:\n${history?.length ? JSON.stringify(history) : 'None'}\n\nCurrent User Request:\n${prompt}\nAnswer in Sinhala-first style if appropriate.`,
-    };
+    const boundedRequest = buildBoundedRequestText({
+      contextBlocksText,
+      history,
+      prompt,
+      contextMaxChars: turnRisk.contextCharBudget,
+      historyMaxChars: turnRisk.historyCharBudget,
+    });
+    trace.contextOriginalChars = boundedRequest.context.originalChars;
+    trace.contextUsedChars = boundedRequest.context.usedChars;
+    const requestTextPart: any = { text: boundedRequest.text };
     const contentsParts: any[] = [requestTextPart];
 
     const explicitSubject = String(route.entities?.subject || paperIntent.subject || "").toUpperCase();
@@ -2367,6 +2445,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         {
           critical: policy.requireEvidence,
           publicMessage: `The authoritative ${groundingSubject} syllabus is temporarily unavailable.`,
+          timeoutMs: policy.requireEvidence ? 12_000 : 7_000,
         },
       );
       if (syllabusPdf?.gcsUri) {
@@ -2461,20 +2540,47 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       aiTask = "image_understanding"; // Use multimodal model
     }
 
+    const currentEvidenceContract = buildEvidenceContract(allSources);
+    const evidenceContradictions = detectEvidenceContradictions(currentEvidenceContract);
+    turnRisk = assessTurnRisk({
+      prompt,
+      mode: route.mode,
+      evidenceRequired: policy.requireEvidence,
+      sourceCount: allSources.length,
+      hasImage: Boolean(image) || aiTask === "image_understanding",
+      attachmentCount: Array.isArray(attachments) ? attachments.length : 0,
+      needsOcr,
+      hasExactQuestionText,
+      contradictionCount: evidenceContradictions.length,
+    });
+    if (aiTask !== "image_understanding") {
+      aiTask = turnRisk.useProWriter ? "final_answer" : "normal_chat";
+    }
+    trace.riskScore = turnRisk.score;
+    trace.riskLevel = turnRisk.level;
+    trace.plannerMode = turnRisk.useModelPlanner ? "model" : "deterministic";
+    trace.reviewerMode = turnRisk.useModelReviewer ? "model_and_deterministic" : "deterministic";
+
     emitSse(res, "status", {
       step: "answer_planning",
       status: "working",
-      message: "Planning every requested part, calculation check, and evidence dependency",
+      message: turnRisk.useModelPlanner
+        ? "Planning every requested part, calculation check, and evidence dependency"
+        : "Structuring the answer and checking requested parts",
     });
     const answerPlan = await createAnswerPlan({
       prompt,
       mode: route.mode,
       sources: allSources,
       evidenceRequired: policy.requireEvidence,
+      useModel: turnRisk.useModelPlanner,
+      plannerTask: turnRisk.level === "critical" ? "final_answer" : "fast_background",
     });
     requestTextPart.text += plannerContext(answerPlan);
-    const currentEvidenceContract = buildEvidenceContract(allSources);
-    const evidenceContradictions = detectEvidenceContradictions(currentEvidenceContract);
+    requestTextPart.text = enforceRequestTextBudget(
+      requestTextPart.text,
+      turnRisk.contextCharBudget + turnRisk.historyCharBudget + 36_000,
+    );
     const answerEvidenceStatus = classifyAnswerEvidenceStatus({ prompt, mode: route.mode, sources: allSources });
     finalSysInstruction += evidenceContractInstruction(currentEvidenceContract, evidenceContradictions);
     finalSysInstruction += `\n\nANSWER STATUS LABEL: ${answerEvidenceStatus}. Use this exact epistemic status and never upgrade it.`;
@@ -2519,7 +2625,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
     let streamFailure: any = null;
     const responseSanitizer = createAssistantStreamSanitizer();
     try {
-      for await (const chunk of stream) {
+      for await (const chunk of withStreamIdleTimeout<any>(stream, { signal, label: "answer stream" })) {
         modelFinishReason = getModelFinishReason(chunk) || modelFinishReason;
         const text = chunk.text || "";
         if (!text) continue;
@@ -2559,7 +2665,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       mode: route.mode,
     });
     let completionPasses = 0;
-    const maxCompletionPasses = completionPassLimit();
+    const maxCompletionPasses = completionPassLimit(turnRisk.maxContinuationPasses);
 
     while (
       completionAssessment.shouldContinue
@@ -2600,7 +2706,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         const continuationText = sanitizeAssistantText(continuation.result.text || "");
         const mergedText = mergeContinuationText(fullText, continuationText);
         const addedText = mergedText.startsWith(fullText) ? mergedText.slice(fullText.length) : continuationText;
-        if (!addedText.trim()) {
+        if (!addedText.trim() || !continuationMadeMeaningfulProgress(fullText, mergedText)) {
           completionAssessment = {
             ...completionAssessment,
             shouldContinue: false,
@@ -2643,6 +2749,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         mode: route.mode,
         evidenceRequired: policy.requireEvidence,
         sources: allSources,
+        useModelReview: turnRisk.useModelReviewer,
       });
       qualityReport = initialQuality.report;
 
@@ -2665,6 +2772,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
             systemInstruction: finalSysInstruction,
             contentsParts,
             maxOutputTokens: getMaxTokens(route.mode),
+            repairTask: turnRisk.useProWriter ? "final_answer" : "normal_chat",
           });
           const repairedAssessment = assessAnswerCompleteness({
             prompt,
@@ -2684,6 +2792,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
               mode: route.mode,
               evidenceRequired: policy.requireEvidence,
               sources: allSources,
+              useModelReview: turnRisk.level === "critical",
             });
             qualityReport = { ...verifiedRepair.report, repaired: true };
           }
@@ -2772,7 +2881,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
     // Track AI Usage Costs
     try {
       const { trackAIUsage } = await import("../cost/usageTracker");
-      const inputTokens = Math.round((contextBlocksText.length + prompt.length + sysInstruction.length) / 3.8) + 100;
+      const inputTokens = Math.round((requestTextPart.text.length + finalSysInstruction.length) / 3.8) + 100;
       const outputTokens = Math.round(fullText.length / 3.5);
       await trackAIUsage(user.uid, modelUsed || "gemini-2.0-flash", inputTokens, outputTokens, "normalMessages");
     } catch (trackErr) {
@@ -2824,7 +2933,7 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
 
     // Background extraction
     if (!isInterrupted && qualityReport?.passed === true && process.env.ENABLE_MEMORY_EXTRACTION !== "false") {
-      safeCall("extractStableMemoryIfUseful", () => extractStableMemoryIfUseful({ uid: user.uid, email: user.email, prompt, answer: fullText, userContext: modifiedUserContext }), null, res).catch(() => null);
+      safeCall("extractStableMemoryIfUseful", () => extractStableMemoryIfUseful({ uid: user.uid, email: user.email, prompt, answer: fullText, userContext: modifiedUserContext }), null, res, { timeoutMs: 2_500 }).catch(() => null);
     }
 
     // Suggestions are generated from the actual turn. They are optional and
@@ -2866,6 +2975,12 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
       qualityCoveragePercent: qualityReport?.coveragePercent ?? null,
       qualityRepaired: qualityReport?.repaired ?? null,
       sourceCount: allSources.length,
+      riskScore: turnRisk.score,
+      riskLevel: turnRisk.level,
+      plannerMode: trace.plannerMode || null,
+      reviewerMode: trace.reviewerMode || null,
+      contextOriginalChars: trace.contextOriginalChars ?? null,
+      contextUsedChars: trace.contextUsedChars ?? null,
     });
     emitSse(res, "done", {
       ok: !isInterrupted,
@@ -2891,6 +3006,12 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         requirementCount: answerPlan.requirements.length,
         visualNeed: answerPlan.visualNeed,
         generatedBy: answerPlan.generatedBy,
+      },
+      aiStrategy: {
+        riskLevel: turnRisk.level,
+        writer: aiTask,
+        planner: trace.plannerMode,
+        reviewer: trace.reviewerMode,
       },
     });
     trace.doneSent = true;
@@ -3048,7 +3169,7 @@ Keep the same tone and language (Sinhala-first style).
     let chunkBuffer = "";
     let modelFinishReason: string | null = null;
     const continuationSanitizer = createAssistantStreamSanitizer();
-    for await (const chunk of stream) {
+    for await (const chunk of withStreamIdleTimeout<any>(stream, { signal, label: "continuation stream" })) {
       modelFinishReason = getModelFinishReason(chunk) || modelFinishReason;
       const text = chunk.text || "";
       if (text) {

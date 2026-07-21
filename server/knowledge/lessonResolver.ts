@@ -8,15 +8,16 @@ const FILLER_WORDS = new Set([
 
 const LESSON_ALIASES = [
   { label: "තරල / Fluid mechanics", aliases: ["තරල", "ද්‍රව", "tharala", "tarala", "fluid", "fluids", "fluid mechanics"] },
-  { label: "විද්‍යුතය / Electricity", aliases: ["විද්‍යුත", "විදුලි", "vidyuth", "vidyutha", "electricity", "electrical"] },
-  { label: "ඉලෙක්ට්‍රොනික විද්‍යාව / Electronics", aliases: ["ඉලෙක්ට්‍රොනික", "electronics", "electronic"] },
+  { label: "විද්‍යුතය / Electricity", aliases: ["විද්‍යුත", "විදුලි", "vidyuth", "vidyutha", "electricity", "electrical"], subjects: ["SFT"] },
+  { label: "විදුලි තාක්ෂණය / Electrical Technology", aliases: ["electrical", "electrical technology", "power systems", "transformer", "motor", "generator", "විදුලි තාක්ෂණ", "විදුලි යන්ත්‍ර"], subjects: ["ET"] },
+  { label: "ඉලෙක්ට්‍රොනික තාක්ෂණය / Electronics", aliases: ["ඉලෙක්ට්‍රොනික", "electronics", "electronic", "semiconductor", "transistor", "amplifier"], subjects: ["ET"] },
   { label: "කෘෂි තාක්ෂණය / Agro technology", aliases: ["කෘෂි", "agro", "agriculture", "agro technology"] },
   { label: "ආහාර තාක්ෂණය / Food technology", aliases: ["ආහාර", "food", "food technology"] },
   { label: "ජෛව පද්ධති / Bio systems", aliases: ["ජෛව", "bio systems", "biosystems", "bio-systems"] },
-  { label: "Python", aliases: ["python", "පයිතන්"] },
-  { label: "Networking", aliases: ["networking", "network", "ජාල"] },
-  { label: "Civil engineering", aliases: ["civil", "සිවිල්"] },
-  { label: "Database", aliases: ["database", "databases", "දත්ත සමුදා"] },
+  { label: "Python", aliases: ["python", "පයිතන්"], subjects: ["ICT"] },
+  { label: "Networking", aliases: ["networking", "network", "ජාල"], subjects: ["ICT"] },
+  { label: "Civil engineering", aliases: ["civil", "සිවිල්"], subjects: ["ET"] },
+  { label: "Database", aliases: ["database", "databases", "දත්ත සමුදා"], subjects: ["ICT"] },
 ] as const;
 
 export function normalizeLessonText(value: unknown) {
@@ -40,9 +41,12 @@ export type LessonReference = {
   tokens: string[];
 };
 
-export function resolveLessonReference(prompt: unknown, explicitLesson?: unknown): LessonReference | null {
+export function resolveLessonReference(prompt: unknown, explicitLesson?: unknown, subject?: unknown): LessonReference | null {
   const combined = normalizeLessonText(`${explicitLesson || ""} ${prompt || ""}`);
+  const normalizedSubject = String(subject || "").trim().toUpperCase();
   for (const entry of LESSON_ALIASES) {
+    const allowedSubjects = "subjects" in entry ? [...entry.subjects] : [];
+    if (normalizedSubject && allowedSubjects.length > 0 && !allowedSubjects.includes(normalizedSubject as any)) continue;
     if (entry.aliases.some((alias) => combined.includes(normalizeLessonText(alias)))) {
       return {
         label: entry.label,
@@ -88,8 +92,8 @@ export function scoreLessonSource(source: any, reference: LessonReference) {
   return Math.min(120, score);
 }
 
-export function findLessonSources(sources: any[], prompt: unknown, explicitLesson?: unknown) {
-  const reference = resolveLessonReference(prompt, explicitLesson);
+export function findLessonSources(sources: any[], prompt: unknown, explicitLesson?: unknown, subject?: unknown) {
+  const reference = resolveLessonReference(prompt, explicitLesson, subject);
   if (!reference) return { reference: null, sources: [] as any[] };
 
   const ranked = (sources || [])

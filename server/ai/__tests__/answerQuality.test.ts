@@ -28,6 +28,15 @@ const evidenceMissing = deterministicQualityReport({
 assert.equal(evidenceMissing.passed, false);
 assert.ok(evidenceMissing.citationRisks.length > 0);
 
+
+const legacySinhala = deterministicQualityReport({
+  prompt: "සිංහලෙන් පැහැදිලි කරන්න",
+  answer: "fuu ms<s;=r ksjerÈ fkd fõ.",
+  mode: "tutor_explanation",
+});
+assert.equal(legacySinhala.passed, false);
+assert.ok(legacySinhala.factualRisks.some((item) => /legacy Sinhala|Unicode Sinhala/i.test(item)));
+
 const contract = buildAnswerContractInstruction({ prompt: "(A) explain (i) one (ii) two", mode: "paper_question_qa", evidenceRequired: true });
 assert.match(contract, /A, A\.I, A\.II/);
 assert.match(contract, /Evidence is mandatory/);

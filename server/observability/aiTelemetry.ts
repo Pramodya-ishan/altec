@@ -18,6 +18,12 @@ export type AiTelemetryEvent = {
   qualityRepaired?: boolean | null;
   sourceCount?: number | null;
   degraded?: boolean | null;
+  riskScore?: number | null;
+  riskLevel?: string | null;
+  plannerMode?: string | null;
+  reviewerMode?: string | null;
+  contextOriginalChars?: number | null;
+  contextUsedChars?: number | null;
 };
 
 const events: AiTelemetryEvent[] = [];
@@ -48,6 +54,12 @@ export async function recordAiTelemetry(input: Partial<AiTelemetryEvent> & Pick<
     qualityRepaired: input.qualityRepaired ?? null,
     sourceCount: input.sourceCount == null ? null : boundedNumber(input.sourceCount, 0, 200),
     degraded: input.degraded ?? null,
+    riskScore: input.riskScore == null ? null : boundedNumber(input.riskScore, 0, 100),
+    riskLevel: input.riskLevel ? String(input.riskLevel).slice(0, 40) : null,
+    plannerMode: input.plannerMode ? String(input.plannerMode).slice(0, 60) : null,
+    reviewerMode: input.reviewerMode ? String(input.reviewerMode).slice(0, 60) : null,
+    contextOriginalChars: input.contextOriginalChars == null ? null : boundedNumber(input.contextOriginalChars, 0, 2_000_000),
+    contextUsedChars: input.contextUsedChars == null ? null : boundedNumber(input.contextUsedChars, 0, 2_000_000),
   };
   events.unshift(event);
   if (events.length > 500) events.length = 500;

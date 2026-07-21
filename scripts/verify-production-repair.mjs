@@ -655,3 +655,56 @@ assert(
   "V30 prediction image enforcement or paper-style question spacing is incomplete",
 );
 console.log("V30 Past Papers context, Notes workspace, bulk uploads, visual questions, and formatting checks passed.");
+
+// V31 adaptive AI hardening: risk-aware model depth, bounded evidence/history,
+// model health cooldowns, continuation progress checks, and subject-aware lessons.
+const turnRiskV31 = await read("server/ai/turnRisk.ts");
+const contextBudgetV31 = await read("server/ai/contextBudget.ts");
+const modelRouterV31 = await read("server/ai/modelRouter.ts");
+const completenessV31 = await read("server/ai/answerCompleteness.ts");
+const streamWatchdogV31 = await read("server/ai/streamWatchdog.ts");
+const qualityV31 = await read("server/ai/answerQuality.ts");
+const lessonResolverV31 = await read("server/knowledge/lessonResolver.ts");
+assert(
+  turnRiskV31.includes("assessTurnRisk")
+    && turnRiskV31.includes("useModelPlanner")
+    && turnRiskV31.includes("maxContinuationPasses")
+    && respondStream.includes("turnRisk.useProWriter"),
+  "V31 adaptive AI risk/model-depth routing is incomplete",
+);
+assert(
+  contextBudgetV31.includes("compactEvidenceContext")
+    && contextBudgetV31.includes("compactChatHistory")
+    && contextBudgetV31.includes("enforceRequestTextBudget")
+    && respondStream.includes("buildBoundedRequestText"),
+  "V31 evidence/history context budgeting is incomplete",
+);
+assert(
+  modelRouterV31.includes("isModelTemporarilyUnhealthy")
+    && modelRouterV31.includes("recordModelFailure")
+    && modelRouterV31.includes("AI_MODEL_TIMEOUT")
+    && modelRouterV31.includes("streaming: true"),
+  "V31 model health cooldown, request timeout, or streaming fallback repair is incomplete",
+);
+assert(
+  completenessV31.includes("continuationMadeMeaningfulProgress")
+    && respondStream.includes("continuationMadeMeaningfulProgress")
+    && streamWatchdogV31.includes("AI_STREAM_IDLE_TIMEOUT")
+    && respondStream.includes("withStreamIdleTimeout<any>")
+    && qualityV31.includes("useModelReview?: boolean"),
+  "V31 continuation deduplication, stream watchdog, or adaptive quality review is incomplete",
+);
+assert(
+  lessonResolverV31.includes("subject?: unknown")
+    && lessonResolverV31.includes('subjects: ["ET"]')
+    && lessonResolverV31.includes('subjects: ["SFT"]')
+    && respondStream.includes("catalogSubject || activeSubject"),
+  "V31 subject-aware lesson routing is incomplete",
+);
+assert(
+  envExample.includes("AI_MODEL_REQUEST_TIMEOUT_MS=")
+    && envExample.includes("AI_STREAM_IDLE_TIMEOUT_MS=45000")
+    && envExample.includes("AI_MODEL_HEALTH_TTL_MS=45000"),
+  "V31 AI resilience environment controls are undocumented",
+);
+console.log("V31 adaptive AI hardening checks passed.");

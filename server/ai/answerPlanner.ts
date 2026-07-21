@@ -1,5 +1,5 @@
 import { getAIClient } from "./client";
-import { callGeminiWithFallback } from "./modelRouter";
+import { callGeminiWithFallback, AITask } from "./modelRouter";
 import { extractRequestedSubparts } from "./answerCompleteness";
 
 export type AnswerPlan = {
@@ -29,7 +29,7 @@ function parseJson(value: unknown) {
   }
 }
 
-function deterministicPlan(prompt: string): AnswerPlan {
+export function deterministicAnswerPlan(prompt: string): AnswerPlan {
   const labels = extractRequestedSubparts(prompt);
   const calculation = /(?:calculate|find|compute|ගණනය|සොයන්න|කොපමණද|බලය|ඝර්ෂණ|වේග|ස්කන්ධ|unit|ඒකක)/iu.test(prompt);
   const visual = /(?:figure|diagram|drawing|graph|table|රූප|සටහන|ප්‍රස්තාර|වගුව|පෙනුම|මානය)/iu.test(prompt);
@@ -50,17 +50,19 @@ export async function createAnswerPlan(params: {
   mode: unknown;
   sources?: any[];
   evidenceRequired?: boolean;
+  useModel?: boolean;
+  plannerTask?: Extract<AITask, "fast_background" | "final_answer">;
 }): Promise<AnswerPlan> {
   const prompt = String(params.prompt || "").slice(0, 30_000);
-  const fallback = deterministicPlan(prompt);
-  if (process.env.AI_PLANNER_ENABLED === "false") return fallback;
+  const fallback = deterministicAnswerPlan(prompt);
+  if (params.useModel === false || process.env.AI_PLANNER_ENABLED === "false") return fallback;
   const sourceManifest = (Array.isArray(params.sources) ? params.sources : []).slice(0, 20).map((source: any) => ({
     title: source?.title || source?.fileName || "Source",
     pageNumber: source?.pageNumber || source?.page || null,
     verified: source?.verified !== false,
   }));
   try {
-    const { result } = await callGeminiWithFallback("final_answer", {
+    const { result } = await callGeminiWithFallback(params.plannerTask || "fast_background", {
       model: "ignored",
       contents: `Create a concise execution plan for answering this student request. Do not solve it and do not provide hidden reasoning.\n\nRequest:\n${prompt}\n\nMode: ${String(params.mode || "auto")}\nEvidence required: ${params.evidenceRequired === true}\nSources: ${JSON.stringify(sourceManifest)}\n\nReturn JSON only: {"requirements":string[],"targetStructure":string[],"calculationChecks":string[],"evidenceNeeds":string[],"visualNeed":"required|helpful|none|unknown","answerLanguage":"si|en|mixed"}`,
       config: {

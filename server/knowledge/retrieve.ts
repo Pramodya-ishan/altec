@@ -39,7 +39,7 @@ export async function retrieveRelevantKnowledge({
 
   if (uid && strictLesson) {
     const inventory = await getSourceInventory({ uid, subject, isAdmin: false });
-    const lessonMatch = findLessonSources(inventory.all, query, lesson);
+    const lessonMatch = findLessonSources(inventory.all, query, lesson, subject);
     let sources = lessonMatch.sources;
 
     // Older uploads did not copy the lesson from the lesson container onto the

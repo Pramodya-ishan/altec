@@ -4,6 +4,7 @@ import {
   extractRequestedSubparts,
   getModelFinishReason,
   mergeContinuationText,
+  continuationMadeMeaningfulProgress,
 } from "../answerCompleteness";
 
 assert.deepEqual(
@@ -54,6 +55,20 @@ assert.equal(
   mergeContinuationText("පළමු කොටස අවසන්. එකම වාක්‍යය", "එකම වාක්‍යය සම්පූර්ණ වේ."),
   "පළමු කොටස අවසන්. එකම වාක්‍යය සම්පූර්ණ වේ.",
 );
+
+
+assert.deepEqual(
+  new Set(extractRequestedSubparts("i) පළමු කොටස\nii. දෙවන කොටස\n(iii) තුන්වන කොටස")),
+  new Set(["I", "II", "III"]),
+);
+
+const semanticMerge = mergeContinuationText(
+  "පළමු පියවර අවසන්.\n\nදෙවන පියවරේ සූත්‍රය යොදමු.",
+  "දෙවන පියවරේ  සූත්‍රය යොදමු!\n\nඒ අනුව අවසාන අගය 20 N වේ.",
+);
+assert.equal((semanticMerge.match(/දෙවන පියවරේ/gu) || []).length, 1);
+assert.equal(continuationMadeMeaningfulProgress("පිළිතුර අවසන්.", "පිළිතුර අවසන්."), false);
+assert.equal(continuationMadeMeaningfulProgress("පළමු කොටස.", "පළමු කොටස.\n\nදෙවන කොටස සම්පූර්ණයි."), true);
 
 assert.equal(getModelFinishReason({ candidates: [{ finishReason: "MAX_TOKENS" }] }), "MAX_TOKENS");
 

@@ -69,7 +69,7 @@ export type KnowledgeRouterResult = {
 
 function parseDeterministicIntent(prompt: string, activeSubject?: string): Partial<KnowledgeRouterResult> | null {
   const lower = prompt.toLowerCase();
-  const lessonReference = resolveLessonReference(prompt);
+  const lessonReference = resolveLessonReference(prompt, undefined, activeSubject);
 
   // PDF Inventory request check
   const asksWhichPdfCanAnswer =

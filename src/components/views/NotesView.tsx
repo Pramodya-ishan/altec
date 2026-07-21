@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   BookOpen, CheckCircle2, FileImage, FileText, Film, FolderOpen, Loader2,
-  Paperclip, PlayCircle, Search, Trash2, UploadCloud, X,
+  Paperclip, PlayCircle, Search, Trash2, UploadCloud,
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import { SYLLABUS } from "../../constants/syllabus";
@@ -65,12 +65,11 @@ function formatBytes(value?: number) {
 export default function NotesView() {
   const navigate = useNavigate();
   const {
-    currentSubject, setCurrentSubject, data, updateTopicNotes, showNotification, profile,
+    currentSubject, data, showNotification, profile,
   } = useApp();
   const lessons = useMemo(() => uniqueLessons(currentSubject), [currentSubject]);
   const [query, setQuery] = useState("");
   const [selectedLesson, setSelectedLesson] = useState(lessons[0] || "");
-  const [draft, setDraft] = useState("");
   const [resources, setResources] = useState<LessonResource[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -83,15 +82,12 @@ export default function NotesView() {
   const controlsRef = useRef<UploadTaskControls | null>(null);
 
   const filteredLessons = useMemo(() => lessons.filter((lesson) => lesson.toLocaleLowerCase().includes(query.toLocaleLowerCase().trim())), [lessons, query]);
-  const topic = data[currentSubject].topics[selectedLesson];
   const roles = new Set([profile?.role, ...(profile?.roles || [])].filter(Boolean));
   const likelyManager = ["admin", "content_editor", "teacher", "ops"].some((role) => roles.has(role));
 
   useEffect(() => {
     if (!lessons.includes(selectedLesson)) setSelectedLesson(lessons[0] || "");
   }, [lessons, selectedLesson]);
-
-  useEffect(() => setDraft(topic?.notes || ""), [currentSubject, selectedLesson, topic?.notes]);
 
   const loadResources = async () => {
     if (!selectedLesson) return;
@@ -205,20 +201,7 @@ export default function NotesView() {
   };
 
   return (
-    <div className="space-y-6 pb-8">
-      <header className="flex flex-col gap-5 border-b border-slate-200 pb-6 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-slate-400"><BookOpen className="h-4 w-4" /> Lesson workspace</div>
-          <h1 className="mt-2 text-3xl font-black tracking-tight text-slate-950">Notes</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">One organized place for lesson notes, PDFs, images, and videos. Resources use the same lesson connection as Paper Structure.</p>
-        </div>
-        <div className="inline-flex w-fit rounded-xl border border-slate-200 bg-slate-50 p-1">
-          {(["sft", "et", "ict"] as SubjectKey[]).map((subject) => (
-            <button key={subject} type="button" onClick={() => setCurrentSubject(subject)} className={`rounded-lg px-5 py-2.5 text-xs font-black uppercase tracking-wide transition ${currentSubject === subject ? "bg-white text-slate-950 shadow-sm ring-1 ring-slate-200" : "text-slate-500 hover:text-slate-900"}`}>{subject}</button>
-          ))}
-        </div>
-      </header>
-
+    <div className="pb-8" aria-label="Lesson resources">
       <div className="grid min-h-[650px] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_14px_45px_rgba(15,23,42,0.06)] lg:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="border-b border-slate-200 bg-slate-50/70 p-4 lg:border-b-0 lg:border-r">
           <div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search lessons" className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 text-sm outline-none focus:border-slate-400 focus:ring-4 focus:ring-slate-100" /></div>
@@ -238,12 +221,6 @@ export default function NotesView() {
           </div>
 
           <section className="mt-6">
-            <div className="flex items-center justify-between"><div><h3 className="text-sm font-black text-slate-900">Lesson notes</h3><p className="mt-1 text-xs text-slate-500">Saved to your subject progress and available from this lesson.</p></div><span className="text-[11px] font-medium text-slate-400">{draft.length.toLocaleString()} characters</span></div>
-            <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Write formulas, summaries, mistakes, and revision points…" className="mt-3 min-h-48 w-full resize-y rounded-2xl border border-slate-200 bg-white p-4 text-[15px] leading-7 text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100" />
-            <div className="mt-3 flex justify-end"><button type="button" disabled={!selectedLesson || draft === (topic?.notes || "")} onClick={() => updateTopicNotes(selectedLesson, draft)} className="rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400">Save notes</button></div>
-          </section>
-
-          <section className="mt-8 border-t border-slate-100 pt-7">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><h3 className="text-sm font-black text-slate-900">Lesson library</h3><p className="mt-1 text-xs text-slate-500">PDFs, question images, and videos linked to this exact lesson.</p></div>{(canManage || likelyManager) && <><input ref={inputRef} type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp,video/mp4,video/quicktime,video/webm" className="hidden" onChange={(event) => void processFiles(Array.from(event.target.files || []))} /><button type="button" onClick={() => inputRef.current?.click()} disabled={uploading} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-xs font-bold text-white hover:bg-slate-800 disabled:opacity-50"><UploadCloud className="h-4 w-4" /> {uploading ? "Uploading…" : "Upload resources"}</button></>}</div>
 
             {uploading && uploadProgress && <div className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50 p-4"><div className="flex items-center justify-between gap-3"><span className="min-w-0 truncate text-xs font-bold text-indigo-950">{uploadName}</span><span className="text-xs font-black text-indigo-700">{Math.round(uploadProgress.progress * 100)}%</span></div><div className="mt-2 h-2 overflow-hidden rounded-full bg-indigo-100"><div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${Math.max(2, uploadProgress.progress * 100)}%` }} /></div></div>}
