@@ -13,6 +13,7 @@ import ProfileView from './components/views/ProfileView.tsx';
 import PastPapersView from './components/views/PastPapersView.tsx';
 import AdmissionPredictorView from './components/views/AdmissionPredictorView.tsx';
 import CloraXView from './components/views/CloraXView.tsx';
+import NotesView from './components/views/NotesView.tsx';
 
 // Administrative and rarely used tools remain route-split.
 const AdminDashboardView = lazy(() => import('./components/views/AdminDashboardView.tsx'));
@@ -264,6 +265,7 @@ function AppContent() {
                 <Routes location={location}>
                   <Route path="/" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="/paper-structure" element={<PaperStructureView />} />
+                  <Route path="/notes" element={<NotesView />} />
                   <Route path="/question-marks" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="/paper-marks" element={<PaperMarksView />} />
                   <Route path="/lesson-marks" element={<Navigate to="/admission-predictor" replace />} />

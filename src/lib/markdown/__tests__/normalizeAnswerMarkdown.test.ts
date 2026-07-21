@@ -22,3 +22,7 @@ const spacedQuestion = normalizeAnswerMarkdown(compactQuestion);
 assert.match(spacedQuestion, /\n\n\(i\)/, "exam subparts should begin on separate paragraphs");
 assert.match(spacedQuestion, /\n\n\(ii\)/, "successive exam subparts should remain separated");
 assert.match(spacedQuestion, /\n\n\(iii\)/, "all compact subparts should be separated");
+
+const singleSubpart = normalizeAnswerMarkdown("1. ප්‍රධාන ප්‍රශ්නය මෙහි ඇත. (i) පළමු උප ප්‍රශ්නය විසඳන්න. (ලකුණු 05) (ii) දෙවන උප ප්‍රශ්නය විසඳන්න.");
+assert.match(singleSubpart, /\n\n\(i\)/, "even the first subpart should be separated from the stem");
+assert.match(singleSubpart, /\(ලකුණු 05\)\n\n\(ii\)/, "marks and the next subpart must not be glued together");

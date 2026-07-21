@@ -73,6 +73,7 @@ export function resolveLockedQuestionType(params: {
 export function extractQuestionNumberFromPrompt(value: unknown): string | null {
   const text = normalizeSourceSearchText(value);
   const direct = text.match(/(?:^|\s)(?:q|question|mcq|essay|structured)\s*(\d{1,3})(?:\s|$)/i)
+    || text.match(/(?:^|\s)(\d{1,3})\s*(?:mcq|essay|structured|question|q)(?:\s|$)/i)
     || text.match(/(?:ප්‍රශ්නය|ප්රශ්නය)\s*(\d{1,3})/u)
     || text.match(/\b(\d{1,3})\s*(?:වන|වෙනි|වැනි)\b/u);
   return direct?.[1] || null;
@@ -129,6 +130,7 @@ export function shouldUseLockedSourceForTurn(value: unknown, routeMode?: unknown
   if (!normalized || isPaperForecastPrompt(normalized)) return false;
   if (isExplicitNamedSourceRequest(normalized) || isExplicitSourceReference(normalized)) return true;
   if (/^(?:(?:q(?:uestion)?|mcq|essay|structured|ප්‍රශ්නය|ප්‍රශ්නය)\s*[-:#]?\s*)?\d{1,3}[?.!]*$/iu.test(normalized)) return true;
+  if (/^\d{1,3}\s*(?:mcq|essay|structured|question|q)[?.!]*$/iu.test(normalized)) return true;
   if (/^(?:ek\s+krmu|eka\s+karamu|එක\s+කරමු|ඒක\s+කරමු|ehem\s+krmu|next|continue)$/iu.test(normalized)) return true;
 
   // Attachment-specific routes are source-bound by construction even when the

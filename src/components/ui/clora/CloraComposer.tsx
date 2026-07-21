@@ -33,6 +33,7 @@ interface CloraComposerProps {
   setInput: (value: string) => void;
   onSubmit: (e?: React.FormEvent) => void;
   onAttachClick?: () => void;
+  onFilesAdded?: (files: File[]) => void | Promise<void>;
   onMicClick?: () => void;
   onStopClick?: () => void;
   isStreaming?: boolean;
@@ -78,6 +79,7 @@ export function CloraComposer({
   setInput,
   onSubmit,
   onAttachClick,
+  onFilesAdded,
   onMicClick,
   onStopClick,
   isStreaming,
@@ -96,6 +98,8 @@ export function CloraComposer({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const dragDepthRef = useRef(0);
   useEffect(() => {
     if (!textareaRef.current) return;
     textareaRef.current.style.height = 'auto';
@@ -136,6 +140,43 @@ export function CloraComposer({
     setShowCommandPalette(Boolean(match));
   };
 
+  const submitFiles = (files: File[]) => {
+    const usable = files.filter((file) => file && file.size > 0);
+    if (usable.length > 0 && !disabled) void onFilesAdded?.(usable);
+  };
+
+  const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const clipboardFiles = Array.from(event.clipboardData?.files || []);
+    if (clipboardFiles.length === 0) return;
+    event.preventDefault();
+    const prepared = clipboardFiles.map((file, index) => {
+      if (file.name && file.name !== 'image.png') return file;
+      const extension = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
+      return new File([file], `pasted-question-${Date.now()}-${index + 1}.${extension}`, { type: file.type || `image/${extension}` });
+    });
+    submitFiles(prepared);
+  };
+
+  const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer?.types?.includes('Files')) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDraggingFiles(true);
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDraggingFiles(false);
+  };
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDraggingFiles(false);
+    submitFiles(Array.from(event.dataTransfer?.files || []));
+  };
+
   const handleToolSelect = (tool: ToolOption) => {
     const cursor = textareaRef.current?.selectionStart || 0;
     const before = input.slice(0, cursor).replace(/@\w*$/, tool.id === 'error' ? '' : `${tool.command} `);
@@ -167,6 +208,10 @@ export function CloraComposer({
   return (
     <div
       className="relative mx-auto w-full max-w-3xl px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5 sm:pb-4"
+      onDragEnter={handleDragEnter}
+      onDragOver={(event) => { if (event.dataTransfer?.types?.includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       <CloraToolPalette
         isOpen={showCommandPalette}
@@ -177,8 +222,17 @@ export function CloraComposer({
 
       <motion.div
         layout
-        className="overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-[0_8px_30px_rgba(15,23,42,0.08)] transition focus-within:border-slate-400 focus-within:shadow-[0_12px_36px_rgba(15,23,42,0.12)]"
+        className={`relative overflow-hidden rounded-[26px] border bg-white shadow-[0_8px_30px_rgba(15,23,42,0.08)] transition focus-within:border-slate-400 focus-within:shadow-[0_12px_36px_rgba(15,23,42,0.12)] ${isDraggingFiles ? 'border-indigo-400 ring-4 ring-indigo-100' : 'border-slate-200'}`}
       >
+        {isDraggingFiles && (
+          <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center bg-white/95 backdrop-blur-sm">
+            <div className="rounded-2xl border border-indigo-200 bg-indigo-50 px-6 py-4 text-center shadow-sm">
+              <Paperclip className="mx-auto h-6 w-6 text-indigo-600" />
+              <p className="mt-2 text-sm font-bold text-indigo-950">Drop files into this chat</p>
+              <p className="mt-0.5 text-xs text-indigo-700">PDF, image, ZIP, or project files</p>
+            </div>
+          </div>
+        )}
         {replyTo && (
           <div className="flex min-w-0 items-start justify-between gap-3 border-b border-slate-100 bg-slate-50/80 px-4 py-2.5">
             <div className="min-w-0 border-l-2 border-slate-300 pl-3">
@@ -255,6 +309,7 @@ export function CloraComposer({
           value={input}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           onFocus={() => notifyFocus(true)}
           onBlur={() => window.setTimeout(() => notifyFocus(false), 120)}
           placeholder="Ask about a lesson, paper, or result"

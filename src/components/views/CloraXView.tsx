@@ -749,9 +749,7 @@ const [messages, setMessages] = useState<{
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = Array.from(e.target.files || []);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+  const handleSelectedFiles = async (selected: File[]) => {
     if (selected.length === 0) return;
 
     const availableSlots = Math.max(0, MAX_CHAT_UPLOAD_FILES - uploadedFiles.length);
@@ -766,6 +764,12 @@ const [messages, setMessages] = useState<{
     for (const file of files) {
       await processFile(file);
     }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(e.target.files || []);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    await handleSelectedFiles(selected);
   };
 
   // Implement client-side confirmation and direct proxy import flow
@@ -1445,7 +1449,10 @@ const [messages, setMessages] = useState<{
 
     await sendAIMessage({
         prompt: messagePrompt,
-        activeSubject: undefined,
+        // Keep the subject tab as explicit context. Previously this was always
+        // undefined, so short follow-ups could drift to SFT or forget the ET
+        // paper selected in the previous turn.
+        activeSubject: currentSubject.toUpperCase(),
         mode: toolMode,
         history: nextMessages.slice(-10).map(m => ({ role: m.role, text: m.content })),
         image: imagePayload,
@@ -1841,6 +1848,7 @@ const [messages, setMessages] = useState<{
               isStreaming={isStreaming}
               onStopClick={cancel}
               onAttachClick={() => fileInputRef.current?.click()}
+              onFilesAdded={handleSelectedFiles}
               onMicClick={realtimeVoiceEnabled ? () => setShowLiveVoiceModal(true) : undefined}
               attachments={uploadedFiles}
               onRemoveAttachment={(id) => {

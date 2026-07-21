@@ -56,3 +56,5 @@ assert.equal(shouldUseLockedSourceForTurn("2026 al paper ekt enna puuluwn ganak 
 assert.equal(shouldUseLockedSourceForTurn("[Uploaded PDF: test.pdf] q1", "uploaded_pdf_question_qa"), true);
 
 console.log("Source selection tests passed.");
+assert.equal(extractQuestionNumberFromPrompt("31 mcq"), "31", "reverse MCQ phrasing must be understood");
+assert.equal(shouldUseLockedSourceForTurn("31 mcq", "normal_chat"), true, "reverse MCQ follow-up must retain the selected paper");

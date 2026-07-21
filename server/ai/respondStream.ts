@@ -65,6 +65,16 @@ import {
 } from "./evidenceContract";
 import { buildPredictedPaperVisualBlocks, formatPredictedPaperForChat, generatePredictedPaper, hydratePredictedPaperImages } from "../ai-core/exam-intel/predictedPaper";
 import { inferForecastLesson, inferForecastSubject } from "../ai-core/exam-intel/forecastIntent";
+import { resolveLessonReference } from "../knowledge/lessonResolver";
+import {
+  detectExplicitPaperSubject,
+  extractRequestedPaperYear,
+  extractRequestedPaperYears,
+  isPaperCatalogListPrompt,
+  isPaperSelectionPrompt,
+  paperCatalogYears,
+  rankPaperCatalogSources,
+} from "./paperCatalogContext";
 
 interface StreamTrace {
   requestId: string;
@@ -607,6 +617,81 @@ ${originalPrompt}`;
       return;
     }
 
+    // The Past Papers tab and chat now share one inventory. Selecting a year
+    // such as “2023 krmu” locks the actual saved paper, while range questions
+    // list only papers that are truly present. This prevents the assistant
+    // from claiming that a visible paper is missing or losing the paper on the
+    // next short turn (“31 mcq”, “q1”).
+    const explicitCatalogSubject = detectExplicitPaperSubject(prompt);
+    const catalogSubject = explicitCatalogSubject
+      || (String(activeConversationState.activeSubject || activeSubject || "").toUpperCase() as any)
+      || null;
+    if (isPaperCatalogListPrompt(prompt) || isPaperSelectionPrompt(prompt)) {
+      const { getSourceInventory } = await import("../sources/sourceInventoryService");
+      const inventory = await getSourceInventory({
+        uid: user.uid,
+        subject: catalogSubject || undefined,
+        isAdmin: user.roles?.includes("admin") || user.admin === true,
+      });
+      const available = Array.isArray(inventory.all) ? inventory.all : [];
+
+      if (isPaperCatalogListPrompt(prompt)) {
+        const requestedYears = extractRequestedPaperYears(prompt);
+        const years = paperCatalogYears(available, catalogSubject, requestedYears);
+        const subjectLabel = catalogSubject || "SFT / ET / ICT";
+        const answer = years.length > 0
+          ? sanitizeAssistantText(`**${subjectLabel} Past Papers — available in your library**\n\n${years.map((year) => `- **${year}**`).join("\n")}\n\nඅවුරුද්දක් ලියලා **“2023 කරමු”** කියන්න. ඊළඟට **“31 MCQ”**, **“q1”**, හෝ **“essay 2”** ලෙස ප්‍රශ්නය තෝරන්න.`)
+          : sanitizeAssistantText(`ඔයාගේ Past Papers library එකේ ${subjectLabel} සඳහා ඉල්ලූ අවුරුදු පරාසයට ගැළපෙන paper එකක් හමු වුණේ නැහැ.`);
+        await updateConversationState(user.uid, {
+          activeSubject: catalogSubject || activeConversationState.activeSubject,
+          lastIntent: "past_paper_catalog",
+          awaitingSourceSelection: false,
+          pendingSourceChoices: [],
+        });
+        emitSse(res, "token", { text: answer });
+        const chatRes = await saveFinalChat({ uid: user.uid, email: user.email, userText: prompt, assistantText: answer, mode: "past_paper_catalog", subject: catalogSubject || undefined, sources: [] });
+        trace.completed = true;
+        trace.chatSaved = chatRes.chatSaved;
+        emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: [], finishReason: "past_paper_catalog_complete" });
+        trace.doneSent = true;
+        return;
+      }
+
+      const requestedYear = extractRequestedPaperYear(prompt);
+      const ranked = rankPaperCatalogSources(available, { subject: catalogSubject, year: requestedYear });
+      if (ranked.length > 0) {
+        const source = ranked[0].source;
+        const sourceId = String(source.sourceId || source.id);
+        const lesson = resolveLessonReference(prompt);
+        await updateConversationState(user.uid, {
+          selectedSourceId: sourceId,
+          selectedSourceTitle: source.title || source.fileName || `${requestedYear || ""} ${catalogSubject || ""} paper`,
+          selectedSourceSubject: source.subject || catalogSubject || null,
+          selectedSourceYear: source.year ? String(source.year) : requestedYear,
+          activeSubject: source.subject || catalogSubject || activeConversationState.activeSubject,
+          activeLessonIds: lesson?.label ? [lesson.label] : activeConversationState.activeLessonIds,
+          activeSourceIds: [sourceId],
+          selectedQuestionType: null,
+          currentQuestionIndex: null,
+          awaitingSourceSelection: false,
+          pendingSourceChoices: [],
+          evidenceMode: "strict",
+          allowGeneratedContent: false,
+          lastIntent: "selected_resource_discussion",
+        });
+        const lessonText = lesson?.label ? ` · ${lesson.label}` : "";
+        const answer = sanitizeAssistantText(`**${source.title || source.fileName || `${requestedYear} ${catalogSubject} paper`}** තෝරාගත්තා${lessonText}.\n\nදැන් ප්‍රශ්න අංකය ලියන්න: **31 MCQ**, **q1**, හෝ **essay 1**.`);
+        emitSse(res, "token", { text: answer });
+        const selectedSources = [{ ...source, id: sourceId, sourceId, usedInAnswer: false, badge: "Selected paper" }];
+        const chatRes = await saveFinalChat({ uid: user.uid, email: user.email, userText: prompt, assistantText: answer, mode: "selected_resource_discussion", subject: source.subject || catalogSubject || undefined, sources: selectedSources });
+        trace.completed = true;
+        trace.chatSaved = chatRes.chatSaved;
+        emitSse(res, "done", { ok: true, completed: true, requestId, messageId: chatRes.messageId || null, chatSaved: chatRes.chatSaved, sources: selectedSources, finishReason: "paper_selected_from_catalog" });
+        trace.doneSent = true;
+        return;
+      }
+    }
+
     // Resolve named model/guessing/syllabus resources directly. A request such
     // as "guessing 1 essay q1" must lock Guessing 01 Essay before any model is
     // allowed to answer.
@@ -783,6 +868,7 @@ ${originalPrompt}`;
       return;
     }
     const explicitQuestionFollowUp = normalizedFollowUp.match(/^(?:q(?:uestion)?|ප්‍රශ්නය|prashna|mcq|essay)\s*[-:#]?\s*(\d{1,3})[?.!]*$/i)
+      || normalizedFollowUp.match(/^(\d{1,3})\s*(?:mcq|essay|structured|question|q)[?.!]*$/i)
       || normalizedFollowUp.match(/^(\d{1,3})\s*(?:වන|වෙනි|වැනි|st|nd|rd|th)\s*(?:ප්‍රශ්නය|question|mcq|essay)[?.!]*$/i);
     const bareQuestionFollowUp = activeConversationState.lastIntent !== "lesson_pdf_search"
       ? normalizedFollowUp.match(/^(\d{1,3})[?.!]*$/)
@@ -2618,6 +2704,31 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
     // complete answer stays usable.
     if (qualityReport && !qualityReport.passed) {
       qualityReport = { ...qualityReport, warningOnly: true } as AnswerQualityReport;
+    }
+
+    // After the automatic continuation loop, do not show the alarming
+    // “answer stopped halfway” card for a substantial answer whose only
+    // remaining signals are punctuation heuristics or a continuation pass
+    // that made no extra progress. Concrete failures (provider length stop,
+    // missing requested subparts, open Markdown/math, empty answer or a closed
+    // transport) still remain incomplete and recoverable.
+    const hardIncompleteReasons = completionAssessment.reasons.filter((reason) => ![
+      "TRUNCATED_ENDING",
+      "CONTINUATION_MADE_NO_PROGRESS",
+      "CONTINUATION_REQUEST_FAILED",
+    ].includes(reason));
+    if (!completionAssessment.complete
+      && fullText.trim().length >= 160
+      && hardIncompleteReasons.length === 0
+      && completionAssessment.missingSubparts.length === 0
+      && !signal.aborted
+      && !res.writableEnded) {
+      completionAssessment = {
+        ...completionAssessment,
+        complete: true,
+        shouldContinue: false,
+        reasons: completionAssessment.reasons.map((reason) => `ADVISORY_${reason}`),
+      };
     }
 
     const isInterrupted = !completionAssessment.complete;

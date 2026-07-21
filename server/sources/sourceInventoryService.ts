@@ -38,12 +38,34 @@ export function inferResourceType(source: unknown): string {
   const explicit = inventoryText(record.resourceType || record.sourceType).toLowerCase();
   if (explicit) return explicit;
 
-  const text = inventoryText(`${record.title || source || ""} ${record.fileName || ""}`).toLowerCase();
+  const category = inventoryText(record.category).toLowerCase();
+  if (/marking\s*scheme|answer\s*scheme|ලකුණු|පිළිතුරු/.test(category)) return "marking_scheme";
+  if (/model\s*paper|ආදර්ශ/.test(category)) return "model_paper";
+  if (/past\s*paper|official\s*paper|පසුගිය/.test(category)) return "past_paper";
+
+  const text = inventoryText(`${record.title || source || ""} ${record.fileName || ""} ${record.category || ""}`).toLowerCase();
   if (/marking\s*scheme|answer\s*scheme|\bfull\s+sm\b|\bsm\b|පිළිතුරු/.test(text)) return "marking_scheme";
-  if (/past\s*paper|official\s*paper|model\s*paper|\bpaper\b|විභාග/.test(text)) return "past_paper";
+  if (/model\s*paper|ආදර්ශ/.test(text)) return "model_paper";
+  if (/past\s*paper|official\s*paper|\bpaper\b|විභාග/.test(text)) return "past_paper";
   if (/syllabus|curriculum/.test(text)) return "syllabus";
   if (/\.(?:png|jpe?g|webp|gif)\b/.test(text)) return "image";
   return "uploaded_pdf";
+}
+
+/**
+ * `past_papers` predates the shared-source publication fields. The Past Papers
+ * tab has always treated those rows as official unless explicitly hidden. AI
+ * retrieval must use the same rule, otherwise a paper is visible in the UI but
+ * falsely reported as missing in chat.
+ */
+export function canonicalizePastPaperSource(source: Record<string, any>) {
+  return {
+    ...source,
+    published: source.published !== false,
+    visibility: source.visibility || "official",
+    sourceScope: source.sourceScope || "past_paper",
+    resourceType: inferResourceType(source),
+  };
 }
 
 function lessonFromStoragePath(storagePath: unknown) {
@@ -95,7 +117,10 @@ export async function getSourceById(params: {
 
   const rows = [ragSnapshot, paperSnapshot, lessonSnapshot, syllabusSnapshot]
     .filter((snapshot: any) => snapshot?.exists)
-    .map((snapshot: any) => ({ id: snapshot.id, ...snapshot.data() }));
+    .map((snapshot: any) => {
+      const row = { id: snapshot.id, ...snapshot.data() };
+      return snapshot === paperSnapshot ? canonicalizePastPaperSource(row) : row;
+    });
   if (rows.length === 0) return null;
 
   const merged = rows.reduce((acc: any, row: any) => ({ ...acc, ...row }), {} as any);
@@ -308,7 +333,7 @@ export async function getSourceInventory(params: {
 
   // Process A (Past papers)
   ppDocs.forEach((doc: any) => {
-    addSource(doc);
+    addSource(canonicalizePastPaperSource(doc));
   });
 
   // Process B (RAG sources)
@@ -341,7 +366,7 @@ export async function getSourceInventory(params: {
       groups.paperStructure.push(src);
     } else if (rt === "image" || rt === "image_upload") {
       groups.images.push(src);
-    } else if (rt === "past_paper") {
+    } else if (rt === "past_paper" || rt === "model_paper") {
       groups.pastPapers.push(src);
     } else {
       groups.uploadedPdfs.push(src);

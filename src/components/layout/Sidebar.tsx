@@ -1,7 +1,7 @@
 import React from "react";
 import { motion } from "motion/react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { BookOpen, Bot, FileText, GraduationCap, Layers, LineChart, Menu, ShieldAlert, type LucideIcon } from "lucide-react";
+import { BookOpen, Bot, FileText, GraduationCap, Layers, LineChart, Menu, NotebookPen, ShieldAlert, type LucideIcon } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import { cn } from "../../lib/utils";
 import type { ViewKey } from "../../types";
@@ -9,6 +9,7 @@ import type { ViewKey } from "../../types";
 type MenuItem = { id: ViewKey; label: string; mobileLabel: string; icon: LucideIcon };
 const primaryItems: MenuItem[] = [
   { id: "paper-structure", label: "Paper structure", mobileLabel: "Paper", icon: Layers },
+  { id: "notes", label: "Notes", mobileLabel: "Notes", icon: NotebookPen },
   { id: "paper-marks", label: "Marks", mobileLabel: "Marks", icon: LineChart },
   { id: "past-papers", label: "Past papers", mobileLabel: "Papers", icon: FileText },
   { id: "admission-predictor", label: "Z-score", mobileLabel: "Z-score", icon: GraduationCap },
@@ -75,7 +76,7 @@ export function Sidebar() {
         initial={false}
         animate={{ y: hideMobileNav ? '110%' : 0, opacity: hideMobileNav ? 0 : 1 }}
         transition={{ duration: 0.2, ease: 'easeOut' }}
-        className={cn("fixed inset-x-0 bottom-0 z-40 grid h-[calc(60px+env(safe-area-inset-bottom))] grid-cols-5 border-t border-slate-200 bg-white/95 px-1 pb-[max(.4rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur lg:hidden", hideMobileNav && "pointer-events-none")}
+        className={cn("fixed inset-x-0 bottom-0 z-40 grid h-[calc(60px+env(safe-area-inset-bottom))] grid-cols-6 border-t border-slate-200 bg-white/95 px-1 pb-[max(.4rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur lg:hidden", hideMobileNav && "pointer-events-none")}
         aria-label="Mobile navigation"
       >
         {primaryItems.map((item) => {

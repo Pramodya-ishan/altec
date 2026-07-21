@@ -1,0 +1,70 @@
+ALTEC / CLORA X V30 — FINAL VERIFICATION
+Date: 2026-07-21 UTC
+
+1. TypeScript
+   Command: npm run typecheck
+   Result: PASS
+   - Application TypeScript: PASS
+   - Script TypeScript: PASS
+
+2. Full automated suite
+   Command: npm test
+   Exit code: 0
+   Result: PASS
+   Covered:
+   - Source registry and source authorization
+   - Z-score and progress regression
+   - Markdown question/subpart formatting and KaTeX Sinhala safety
+   - PDF extraction, exact-question preview, visual evidence, OCR ensemble
+   - AI response hygiene, fast conversation, completeness, quality and visual aids
+   - Image intent, Direct PDF answer formatting, Vercel API path restoration
+   - Source selection and short follow-ups such as “31 mcq”
+   - Past-paper catalog selection and legacy Past Papers visibility
+   - Forecast routing, prediction policy, indexed question selection
+   - Upload validation, project uploads and bulk actions
+   - AI circuit breaker and Direct PDF input
+   - Error Log storage/scheduling and Z-score context
+   - Legacy Sinhala, essay completeness and document intelligence
+   - Knowledge/lesson routing regressions
+   - Security, roles, content permissions and App Check configuration
+   - Secure video pipeline
+
+3. AI evaluation suite
+   Result: 600 / 600 PASS
+   - Arithmetic: 100 / 100
+   - Source security: 100 / 100
+   - Source readiness: 100 / 100
+   - Visual region: 100 / 100
+   - Calibrated forecast: 100 / 100
+   - Two-subject plan: 100 / 100
+
+4. Production repair verifier
+   Command: npm run verify:repair
+   Exit code: 0
+   Result: PASS
+   Includes V30 checks for:
+   - Unified Past Papers UI/Assistant inventory
+   - Persistent paper/year/question context
+   - Chat and Error Log bulk drag/drop/paste
+   - Notes workspace and Paper Structure linkage
+   - Visual-question enforcement and exam-style spacing
+
+5. Production deployment build
+   Command: npm run build:vercel
+   Exit code: 0
+   Result: PASS
+   - Vite: 3,297 modules transformed
+   - Frontend production bundle: PASS
+   - Self-contained Vercel runtime: PASS
+   - Runtime import verification: 49 imports
+   - Native PDF preview assets: PASS
+   - PDF.js worker: PASS
+   - Isolated pure-ESM boot: PASS
+   - JSON API smoke handling: PASS
+
+6. Static review coverage
+   - 394 source/config files
+   - 75,574 lines
+   - 21 V30 implementation/test files changed or added from V29
+
+Note: The full test chain was also run as a single background process to avoid the interactive command-window limit. It completed with exit code 0.

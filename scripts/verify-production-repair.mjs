@@ -113,7 +113,7 @@ const userContext = await read("server/firebase/userContext.ts");
 const notesModal = await read("src/components/modals/NotesModal.tsx");
 const admissionView = await read("src/components/views/AdmissionPredictorView.tsx");
 assert(!hero.includes("Study with A/L subjects") && !hero.includes("2023 SFT") && hero.includes("What would you like to learn?"), "Legacy Assistant hero/prompts remain");
-assert(chat.includes("activeSubject: undefined") && chat.includes("replyingTo") && chat.includes("revealBufferedAnswer"), "All-subject context, message replies, or buffered typing is missing");
+assert((chat.includes("activeSubject: currentSubject.toUpperCase()") || chat.includes("activeSubject: undefined")) && chat.includes("replyingTo") && chat.includes("revealBufferedAnswer"), "Subject-aware context, message replies, or buffered typing is missing");
 assert(composer.includes("clora:composer-focus") && sidebar.includes("clora:composer-focus"), "Mobile bottom navigation does not react to the Assistant keyboard/composer");
 assert(memoryExtractor.includes('"weak_points"') && memoryExtractor.includes('"mistake_notebook"') && memoryExtractor.includes('"learning_signal_aggregates"'), "Separate learning memory collections are missing");
 assert(userContext.includes("weak_points") && userContext.includes("loadMistakeRecords") && userContext.includes("learning_signal_aggregates"), "Saved learning signals are not loaded into AI context");
@@ -607,3 +607,51 @@ assert(
   "V28 chart hover cards can still leave the graph viewport",
 );
 console.log("V28 long-answer, PDF layout, Z-score history, paper move, and graph hover checks passed.");
+
+// V30 unified Past Papers inventory, persistent paper follow-ups, resilient
+// forecast visuals, modern attachment workflows, and Notes workspace.
+const sourceInventoryV30 = await read("server/sources/sourceInventoryService.ts");
+const paperCatalogV30 = await read("server/ai/paperCatalogContext.ts");
+const composerV30 = await read("src/components/ui/clora/CloraComposer.tsx");
+const errorLogV30 = await read("src/components/modals/ErrorLogModal.tsx");
+const notesV30 = await read("src/components/views/NotesView.tsx");
+const appV30 = await read("src/App.tsx");
+const predictionVisualV30 = await read("server/ai-core/exam-intel/predictionVisual.ts");
+const markdownV30 = await read("src/lib/markdown/normalizeAnswerMarkdown.ts");
+assert(
+  sourceInventoryV30.includes("canonicalizePastPaperSource")
+    && sourceInventoryV30.includes("published: source.published !== false")
+    && respondStream.includes("isPaperCatalogListPrompt(prompt)")
+    && respondStream.includes("rankPaperCatalogSources"),
+  "V30 Past Papers UI and Assistant inventory are not unified",
+);
+assert(
+  sourceSelectionV22.includes("\\d{1,3})\\s*(?:mcq|essay|structured|question|q)")
+    && sourceSelectionV22.includes("shouldUseLockedSourceForTurn")
+    && chat.includes("activeSubject: currentSubject.toUpperCase()"),
+  "V30 paper/year/question follow-up context is incomplete",
+);
+assert(
+  composerV30.includes("onFilesAdded")
+    && composerV30.includes("onDrop={handleDrop}")
+    && composerV30.includes("onPaste={handlePaste}")
+    && errorLogV30.includes('type="file" multiple')
+    && errorLogV30.includes("event.clipboardData?.files"),
+  "V30 chat or Error Log bulk drag-drop/paste support is incomplete",
+);
+assert(
+  appV30.includes('path="/notes"')
+    && sidebar.includes('id: "notes"')
+    && notesV30.includes("/api/lesson-resources")
+    && notesV30.includes("createAndUploadSecureVideo")
+    && notesV30.includes("setPendingTopicHighlight(selectedLesson)"),
+  "V30 Notes workspace or Paper Structure lesson connection is incomplete",
+);
+assert(
+  predictionVisualV30.includes("forceFirstVisual")
+    && predictionVisualV30.includes("visualOpportunity: true")
+    && markdownV30.includes("function splitExamSubparts")
+    && visualRenderer.includes("normalizeExamQuestionText"),
+  "V30 prediction image enforcement or paper-style question spacing is incomplete",
+);
+console.log("V30 Past Papers context, Notes workspace, bulk uploads, visual questions, and formatting checks passed.");

@@ -190,7 +190,7 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
   let subject: "SFT" | "ET" | "ICT" | undefined = undefined;
   if (lower.includes("sft") || lower.includes("science for technology") || lower.includes("තාක්ෂණවේදය සඳහා විද්‍යාව") || lower.includes("විද්‍යාව")) {
     subject = "SFT";
-  } else if (lower.includes("et") || lower.includes("engineering technology") || lower.includes("ඉංජිනේරු තාක්ෂණවේදය") || lower.includes("ඉංජිනේරු")) {
+  } else if (/\bet\b/i.test(lower) || lower.includes("engineering technology") || lower.includes("ඉංජිනේරු තාක්ෂණවේදය") || lower.includes("ඉංජිනේරු")) {
     subject = "ET";
   } else if (lower.includes("ict") || lower.includes("information technology") || lower.includes("තොරතුරු හා සන්නිවේදන") || lower.includes("තොරතුරු තාක්ෂණය") || lower.includes("තොරතුරු")) {
     subject = "ICT";
@@ -212,7 +212,7 @@ function parseDeterministicIntent(prompt: string, activeSubject?: string): Parti
 
   // 4. Extract Question Number
   let questionNo: string | undefined = undefined;
-  const mcqMatch = lower.match(/\bmcq\s*[-_]?\s*(\d+)\b/);
+  const mcqMatch = lower.match(/\bmcq\s*[-_]?\s*(\d+)\b/) || lower.match(/\b(\d+)\s*mcq\b/);
   const qMatch = lower.match(/\b(?:q|question)\s*[-_]?\s*(\d+)\b/);
   const sinhalaNoMatch = lower.match(/\b(\d+)\s*(?:වෙනි|වැනි|th|st|nd|rd)\b/i);
 

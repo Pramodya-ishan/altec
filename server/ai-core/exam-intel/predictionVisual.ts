@@ -92,16 +92,34 @@ export function buildPredictionFallbackVisual(question: any) {
 
 export function ensureVisualQuestionIntegrity(questions: any[], maximumImages: number) {
   let used = 0;
-  return (questions || []).map((question) => {
+  const input = questions || [];
+  const explicitlyRequested = input.some((question) => question?.requiresImage === true || (question?.visualOpportunity === true && Boolean(question?.visualSpec?.kind)));
+  return input.map((question, index) => {
     const spec = question?.visualSpec;
-    const requested = question?.requiresImage === true || (question?.visualOpportunity === true && Boolean(spec?.kind));
+    const visualText = `${question?.lesson || ""} ${question?.subtopic || ""} ${question?.text || ""}`.normalize("NFKC").toLowerCase();
+    const naturallyVisual = /graph|diagram|circuit|logic|apparatus|drawing|vernier|micrometer|table|chart|network|erd|force|ප්‍රස්තාර|රූප|පරිපථ|වගුව|උපකරණ|ඇඳීම/u.test(visualText);
+    // A one-question forecast explicitly promises a usable paper-style visual.
+    // If the model forgets the boolean flag, promote the first suitable item
+    // instead of silently returning a text-only card.
+    const forceFirstVisual = maximumImages > 0 && !explicitlyRequested && (input.length === 1 || naturallyVisual) && index === 0;
+    const requested = question?.requiresImage === true || (question?.visualOpportunity === true && Boolean(spec?.kind)) || forceFirstVisual;
     if (!requested || used >= maximumImages) return { ...question, requiresImage: false };
     used += 1;
+    const inferredKind = /graph|ප්‍රස්තාර/u.test(visualText)
+      ? "graph"
+      : /circuit|logic|පරිපථ/u.test(visualText)
+        ? "circuit"
+        : /vernier|micrometer|measurement|මිනුම්/u.test(visualText)
+          ? "measurement"
+          : /drawing|construction|ඇඳීම/u.test(visualText)
+            ? "engineering_drawing"
+            : "educational_diagram";
     return {
       ...question,
       requiresImage: true,
+      visualOpportunity: true,
       visualSpec: {
-        kind: String(spec?.kind || "educational_diagram"),
+        kind: String(spec?.kind || inferredKind),
         prompt: String(spec?.prompt || `Create an accurate exam diagram for question ${question.questionNo}.`).slice(0, 1800),
         altText: String(spec?.altText || `Diagram for question ${question.questionNo}`).slice(0, 300),
         caption: String(spec?.caption || "මෙම රූපය භාවිතයෙන් ප්‍රශ්නයට පිළිතුරු සපයන්න.").slice(0, 500),

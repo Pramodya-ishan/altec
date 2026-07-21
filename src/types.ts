@@ -105,7 +105,7 @@ export type AppData = {
 };
 
 export type SubjectKey = 'sft' | 'et' | 'ict';
-export type ViewKey = 'paper-structure' | 'paper-marks' | 'question-marks' | 'lesson-marks' | 'admission-predictor' | 'profile' | 'past-papers' | 'admin-dashboard' | 'focus-todo' | 'study-plan' | 'clora-x' | 'syllabus' | 'pdf-sources' | 'question-cache' | 'a3-war-room' | 'exam-intel' | 'prediction-papers' | 'mistake-notebook' | 'pdf-intel-admin';
+export type ViewKey = 'paper-structure' | 'notes' | 'paper-marks' | 'question-marks' | 'lesson-marks' | 'admission-predictor' | 'profile' | 'past-papers' | 'admin-dashboard' | 'focus-todo' | 'study-plan' | 'clora-x' | 'syllabus' | 'pdf-sources' | 'question-cache' | 'a3-war-room' | 'exam-intel' | 'prediction-papers' | 'mistake-notebook' | 'pdf-intel-admin';
 export type ThemeKey = 'blue' | 'emerald' | 'slate';
 
 export type SyllabusTopic = {

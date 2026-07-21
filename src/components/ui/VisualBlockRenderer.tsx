@@ -157,7 +157,8 @@ function normalizeExamQuestionText(value: unknown) {
   let text = String(value || "").normalize("NFKC").replace(/\r\n?/g, "\n").trim();
   if (!text) return "";
   const marker = "(?:[a-h]|i{1,3}|iv|v|vi{0,3}|ix|x)";
-  text = text.replace(new RegExp(`\\s+(?=\\(${marker}\\)\\s*)`, "giu"), "\n\n");
+  text = text.replace(new RegExp(`\\s*(?=\\(${marker}\\)\\s*)`, "giu"), "\n\n");
+  text = text.replace(/\s*(\((?:ලකුණු|marks?)\s*[:\-]?\s*\d{1,3}\))\s*(?=\S)/giu, " $1\n\n");
   text = text.replace(/\s+(?=(?:[①②③④⑤⑥⑦⑧⑨⑩]|[•●▪])\s*)/gu, "\n");
   return text.replace(/\n{3,}/g, "\n\n").trim();
 }
