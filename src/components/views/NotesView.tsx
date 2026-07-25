@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import {
   BookOpen, CheckCircle2, FileImage, FileText, Film, FolderOpen, Loader2,
   Paperclip, PlayCircle, Search, Trash2, UploadCloud,
@@ -10,11 +10,12 @@ import type { LessonResource, LessonResourceKind, SubjectKey } from "../../types
 import { apiFetch } from "../../lib/api";
 import { setPendingTopicHighlight } from "../../lib/navigationIntent";
 import {
-  openPrivateStoragePdf,
+  deletePrivateStorageObject,
   uploadPdfWithClientStorage,
   type UploadProgressSnapshot,
   type UploadTaskControls,
 } from "../../lib/clientStorageUpload";
+import { getPdfOpenErrorMessage, openSourcePdf } from "../../lib/sourceActions";
 import { createAndUploadSecureVideo } from "../../lib/videoUpload";
 import { SecureVideoPlayer } from "../video/SecureVideoPlayer";
 
@@ -130,6 +131,7 @@ export default function NotesView() {
     const accepted = files.filter((file) => ["pdf", "image", "video"].includes(fileKind(file))).slice(0, 12);
     if (accepted.length === 0) return showNotification("Use PDF, PNG/JPEG/WebP, MP4, MOV, or WebM files.", "error");
     setUploading(true);
+    let unregisteredStoragePath: string | null = null;
     try {
       for (const file of accepted) {
         const kind = fileKind(file);
@@ -156,6 +158,7 @@ export default function NotesView() {
             onProgress: setUploadProgress,
             onTask: (controls) => { controlsRef.current = controls; },
           });
+          unregisteredStoragePath = upload.storagePath;
           const response = await apiFetch("/api/pdf/process-uploaded", {
             method: "POST",
             body: JSON.stringify({
@@ -166,12 +169,16 @@ export default function NotesView() {
           });
           const payload = await response.json().catch(() => null);
           if (!response.ok && response.status !== 202) throw new Error(payload?.message || payload?.error || "Resource processing failed.");
+          unregisteredStoragePath = null;
         }
       }
       showNotification(`${accepted.length} lesson resource${accepted.length === 1 ? "" : "s"} uploaded.`, "success");
       await loadResources();
       window.dispatchEvent(new CustomEvent("lesson-resources:changed", { detail: { subject: currentSubject, lessonId: normalizeLessonId(selectedLesson) } }));
     } catch (error: any) {
+      if (unregisteredStoragePath) {
+        await deletePrivateStorageObject(unregisteredStoragePath).catch(() => undefined);
+      }
       if (error?.name !== "AbortError" && error?.code !== "storage/canceled") showNotification(error?.message || "Upload failed.", "error");
     } finally {
       controlsRef.current = null;
@@ -188,7 +195,19 @@ export default function NotesView() {
       setPlayer(resource);
       return;
     }
-    if (resource.storagePath) await openPrivateStoragePdf(resource.storagePath);
+    const sourceId = resource.sourceId || resource.id;
+    if (!sourceId) return showNotification("This resource is missing its secure source ID.", "error");
+    try {
+      await openSourcePdf({
+        id: sourceId,
+        sourceId,
+        storagePath: resource.storagePath,
+        title: resource.title,
+        apiUrl: `/api/rag/sources/${encodeURIComponent(sourceId)}/download`,
+      });
+    } catch (error) {
+      showNotification(getPdfOpenErrorMessage(error), "error");
+    }
   };
 
   const deleteResource = async (resource: LessonResource) => {

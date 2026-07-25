@@ -1,6 +1,7 @@
 node_modules/
 build/
 dist/
+vercel-runtime/
 coverage/
 public/pdf.worker.min.js
 public/pdf.worker.min.mjs

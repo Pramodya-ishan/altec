@@ -5,6 +5,7 @@ import { ref, getDownloadURL } from 'firebase/storage';
 import { apiUrl } from '../../lib/apiBase';
 import { useAIWorkflowStream } from '../../hooks/useAIWorkflowStream';
 import { apiFetch } from "../../lib/api";
+import { useApp } from '../../context/AppContext';
 
 interface LiveVoiceChatModalProps {
 
@@ -16,6 +17,7 @@ interface LiveVoiceChatModalProps {
 }
 
 export function LiveVoiceChatModal({ isOpen, onClose, currentSubject, activeSourceId, recentAttachmentIds }: LiveVoiceChatModalProps) {
+  const { showNotification } = useApp();
   const [isMuted, setIsMuted] = useState(false);
   const [status, setStatus] = useState<'idle' | 'listening' | 'processing' | 'speaking' | 'permission_denied' | 'ready'>('ready');
   const [transcript, setTranscript] = useState<{role: 'user' | 'assistant', text: string, sources?: any[]}[]>([]);
@@ -43,7 +45,7 @@ export function LiveVoiceChatModal({ isOpen, onClose, currentSubject, activeSour
     if (status === 'permission_denied') return;
 
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      alert("Speech recognition is not supported in this browser.");
+      showNotification("Speech recognition is not supported in this browser.", "error");
       return;
     }
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;

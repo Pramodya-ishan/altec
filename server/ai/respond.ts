@@ -5,7 +5,7 @@ import { getCloraSystemPrompt } from "./prompts";
 import { loadUserAIContext } from "../firebase/userContext";
 import { retrieveRelevantKnowledge } from "../rag/retrieve";
 import { getAdminDb } from "../firebase/admin";
-import { isSimpleGreeting, sanitizeAssistantText, simpleGreetingReply } from "./responseHygiene";
+import { sanitizeAssistantText } from "./responseHygiene";
 import { assessAnswerCompleteness, buildContinuationInstruction, getModelFinishReason, mergeContinuationText } from "./answerCompleteness";
 import { createAnswerPlan, plannerContext } from "./answerPlanner";
 import { createQualityRepairedAnswer, reviewAnswerQuality } from "./answerQuality";
@@ -16,12 +16,6 @@ export async function processAIRequest(req: any) {
     const uid = req.user.uid;
 
     if (!prompt) throw new Error("Prompt is required");
-
-    if (isSimpleGreeting(prompt)) {
-      const greeting = simpleGreetingReply(prompt);
-      void saveChatToHistory(uid, prompt, greeting, "normal_chat", activeSubject);
-      return { ok: true, text: greeting, response: greeting, mode: "normal_chat", model: "deterministic", sources: [] };
-    }
 
     // 1. Load context
     const contextData = await loadUserAIContext(uid, req.user?.email);

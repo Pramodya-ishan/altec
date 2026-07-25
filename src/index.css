@@ -157,9 +157,11 @@
   }
 }
 
-/* Universal active click focus outline */
+/* Keep a visible keyboard focus indicator even when components add their own
+   focus ring. Pointer clicks do not trigger :focus-visible. */
 :where(button,a,input,textarea,select,[role="button"],[tabindex]:not([tabindex="-1"])):focus-visible {
-  outline: none;
+  outline: 3px solid rgba(79, 70, 229, 0.72);
+  outline-offset: 2px;
 }
 
 .recharts-wrapper svg:focus,

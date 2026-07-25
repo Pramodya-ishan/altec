@@ -114,20 +114,3 @@ export function createAssistantStreamSanitizer() {
     },
   };
 }
-
-export function isSimpleGreeting(value: unknown) {
-  const normalized = String(value || "")
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[.!?,\s]+/g, " ")
-    .trim();
-  return /^(?:hi+|hello+|hey+|yo|හායි|හෙලෝ|ආයුබෝවන්)$/.test(normalized);
-}
-
-export function simpleGreetingReply(value: unknown) {
-  const normalized = String(value || "").toLowerCase();
-  if (/hello|hey|\bhi\b/.test(normalized)) {
-    return "Hi! අද බලන්න ඕනේ පාඩම හෝ ප්‍රශ්නය මොකක්ද?";
-  }
-  return "ආයුබෝවන්! අද බලන්න ඕනේ පාඩම හෝ ප්‍රශ්නය මොකක්ද?";
-}

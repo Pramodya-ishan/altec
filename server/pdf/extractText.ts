@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { resolveProjectFile, resolveRuntimeAdjacentFile } from "../utils/runtimePaths";
 import { normalizeSinhalaExtractedText } from "./legacySinhala";
 
 if (typeof globalThis !== "undefined") {
@@ -58,13 +58,13 @@ export async function extractPdfText(pdfBuffer: Buffer): Promise<{
   try {
     pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
     if (pdfjsLib.GlobalWorkerOptions) {
-      const bundledWorker = new URL("./pdf.worker.mjs", import.meta.url);
-      const sourceWorker = resolve(process.cwd(), "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs");
-      pdfjsLib.GlobalWorkerOptions.workerSrc = existsSync(fileURLToPath(bundledWorker))
-        ? bundledWorker.toString()
+      const runtimeWorker = resolveRuntimeAdjacentFile("./pdf.worker.mjs");
+      const sourceWorker = resolveProjectFile("node_modules", "pdfjs-dist", "legacy", "build", "pdf.worker.mjs");
+      pdfjsLib.GlobalWorkerOptions.workerSrc = runtimeWorker && existsSync(runtimeWorker)
+        ? pathToFileURL(runtimeWorker).toString()
         : existsSync(sourceWorker)
           ? pathToFileURL(sourceWorker).toString()
-          : bundledWorker.toString();
+          : pathToFileURL(runtimeWorker || sourceWorker).toString();
     }
   } catch (error: any) {
     console.error("Failed to load pdfjs-dist:", error?.message || error);

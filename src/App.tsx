@@ -1,21 +1,19 @@
 import React, { useEffect, Suspense, lazy } from 'react';
-import { Routes, Route, useLocation, Navigate } from 'react-router-dom';
+import { Routes, Route, useLocation, Navigate } from 'react-router';
 import { AppProvider, useApp } from './context/AppContext';
 
 import { TopNav } from './components/layout/TopNav';
 import { Sidebar } from './components/layout/Sidebar';
 
-// Core routes stay in the main bundle so tab switching never replaces the
-// existing workspace with a network-dependent full-page loader.
-import PaperStructureView from './components/views/PaperStructureView.tsx';
-import PaperMarksView from './components/views/PaperMarksView.tsx';
-import ProfileView from './components/views/ProfileView.tsx';
-import PastPapersView from './components/views/PastPapersView.tsx';
-import AdmissionPredictorView from './components/views/AdmissionPredictorView.tsx';
-import CloraXView from './components/views/CloraXView.tsx';
-import NotesView from './components/views/NotesView.tsx';
-
-// Administrative and rarely used tools remain route-split.
+// Each workspace is route-split. Students should not download PDF, chart,
+// admission, assistant, and admin code before opening those tools.
+const PaperStructureView = lazy(() => import('./components/views/PaperStructureView.tsx'));
+const PaperMarksView = lazy(() => import('./components/views/PaperMarksView.tsx'));
+const ProfileView = lazy(() => import('./components/views/ProfileView.tsx'));
+const PastPapersView = lazy(() => import('./components/views/PastPapersView.tsx'));
+const AdmissionPredictorView = lazy(() => import('./components/views/AdmissionPredictorView.tsx'));
+const CloraXView = lazy(() => import('./components/views/CloraXView.tsx'));
+const NotesView = lazy(() => import('./components/views/NotesView.tsx'));
 const AdminDashboardView = lazy(() => import('./components/views/AdminDashboardView.tsx'));
 const SyllabusLibraryView = lazy(() => import('./components/views/SyllabusLibraryView.tsx'));
 const PdfSourcesPage = lazy(() => import('./pages/PdfSourcesPage.tsx'));
@@ -132,6 +130,23 @@ function NotFoundView() {
       </div>
     </section>
   );
+}
+
+function RoleRoute({
+  allow,
+  children,
+}: {
+  allow: string[];
+  children: React.ReactNode;
+}) {
+  const { profile, isAuthLoading } = useApp();
+  if (isAuthLoading || !profile) return <PageSkeleton pathname="restricted" />;
+
+  const roles = new Set([profile.role, ...(profile.roles || [])].filter(Boolean));
+  if (!allow.some((role) => roles.has(role))) {
+    return <Navigate to="/paper-structure" replace />;
+  }
+  return children;
 }
 
 function AuthOverlay() {
@@ -274,15 +289,15 @@ function AppContent() {
                   <Route path="/ai-chat" element={<Navigate to="/clora-x" replace />} />
                   <Route path="/profile" element={<ProfileView />} />
                   <Route path="/past-papers" element={<PastPapersView />} />
-                  <Route path="/admin-dashboard" element={<AdminDashboardView />} />
-                  <Route path="/syllabus" element={<SyllabusLibraryView />} />
-                  <Route path="/pdf-sources" element={<PdfSourcesPage />} />
-                  <Route path="/question-cache" element={<QuestionCachePage />} />
+                  <Route path="/admin-dashboard" element={<RoleRoute allow={["admin"]}><AdminDashboardView /></RoleRoute>} />
+                  <Route path="/syllabus" element={<RoleRoute allow={["admin", "content_editor", "teacher", "ops"]}><SyllabusLibraryView /></RoleRoute>} />
+                  <Route path="/pdf-sources" element={<RoleRoute allow={["admin"]}><PdfSourcesPage /></RoleRoute>} />
+                  <Route path="/question-cache" element={<RoleRoute allow={["admin"]}><QuestionCachePage /></RoleRoute>} />
                   <Route path="/a3-war-room" element={<A3WarRoom />} />
                   <Route path="/exam-intel" element={<ExamIntelligence />} />
                   <Route path="/prediction-papers" element={<PredictionPapers />} />
                   <Route path="/mistake-notebook" element={<MistakeNotebook />} />
-                  <Route path="/pdf-intel-admin" element={<PdfIntelAdmin />} />
+                  <Route path="/pdf-intel-admin" element={<RoleRoute allow={["admin"]}><PdfIntelAdmin /></RoleRoute>} />
                   
                   <Route path="/focus-todo" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="*" element={<NotFoundView />} />

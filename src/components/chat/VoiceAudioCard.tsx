@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Download, ExternalLink, Link2, PlayCircle, Loader2 } from 'lucide-react';
 import { storage } from '../../lib/firebase';
 import { ref, getDownloadURL } from 'firebase/storage';
+import { useApp } from '../../context/AppContext';
 
 interface VoiceAudioCardProps {
   storagePath?: string;
@@ -12,6 +13,7 @@ interface VoiceAudioCardProps {
 }
 
 export function VoiceAudioCard({ storagePath, audioUrl: initialAudioUrl, provider, voiceName, chars }: VoiceAudioCardProps) {
+  const { showNotification } = useApp();
   const [audioUrl, setAudioUrl] = useState(initialAudioUrl || '');
   const [loading, setLoading] = useState(!initialAudioUrl && !!storagePath);
 
@@ -47,7 +49,7 @@ export function VoiceAudioCard({ storagePath, audioUrl: initialAudioUrl, provide
             <PlayCircle className="w-4 h-4 text-indigo-500" /> Generated Voice
           </div>
           {(provider || voiceName || chars) && (
-            <div className="text-[10px] text-slate-500 mt-1 uppercase font-semibold">
+            <div className="mt-1 text-xs font-semibold uppercase text-slate-500">
               {provider} • {voiceName} • {chars ? `${chars} chars` : ''}
             </div>
           )}
@@ -55,16 +57,20 @@ export function VoiceAudioCard({ storagePath, audioUrl: initialAudioUrl, provide
       </div>
       <audio controls src={audioUrl} className="w-full h-10" />
       <div className="flex items-center gap-2 mt-3 justify-end">
-        <a href={audioUrl} target="_blank" rel="noreferrer" className="p-2 hover:bg-slate-200 text-slate-500 hover:text-slate-700 rounded-full cursor-pointer transition-colors" title="Open in new tab">
+        <a href={audioUrl} target="_blank" rel="noreferrer" className="grid h-10 w-10 place-items-center rounded-full text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700" title="Open in new tab" aria-label="Open voice audio in a new tab">
           <ExternalLink className="w-4 h-4" />
         </a>
-        <button type="button" onClick={() => {
-          navigator.clipboard.writeText(audioUrl);
-          alert("Link copied!");
-        }} className="p-2 hover:bg-slate-200 text-slate-500 hover:text-slate-700 rounded-full cursor-pointer transition-colors" title="Copy link">
+        <button type="button" onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(audioUrl);
+            showNotification("Voice link copied.", "success");
+          } catch {
+            showNotification("The voice link could not be copied.", "error");
+          }
+        }} className="grid h-10 w-10 place-items-center rounded-full text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700" title="Copy link" aria-label="Copy voice audio link">
           <Link2 className="w-4 h-4" />
         </button>
-        <a href={audioUrl} download="voice.mp3" className="p-2 hover:bg-slate-200 text-slate-500 hover:text-slate-700 rounded-full cursor-pointer transition-colors" title="Download MP3">
+        <a href={audioUrl} download="voice.mp3" className="grid h-10 w-10 place-items-center rounded-full text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700" title="Download MP3" aria-label="Download voice audio">
           <Download className="w-4 h-4" />
         </a>
       </div>

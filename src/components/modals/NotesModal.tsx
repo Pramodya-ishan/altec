@@ -6,11 +6,12 @@ import type { LessonResource, LessonResourceKind } from "../../types";
 import { auth } from "../../lib/firebase";
 import { apiFetch } from "../../lib/api";
 import {
-  openPrivateStoragePdf,
+  deletePrivateStorageObject,
   uploadPdfWithClientStorage,
   type UploadProgressSnapshot,
   type UploadTaskControls,
 } from "../../lib/clientStorageUpload";
+import { getPdfOpenErrorMessage, openSourcePdf } from "../../lib/sourceActions";
 import { createAndUploadSecureVideo } from "../../lib/videoUpload";
 import { SecureVideoPlayer } from "../video/SecureVideoPlayer";
 
@@ -206,6 +207,7 @@ export function NotesModal() {
     setIsPaused(false);
     uploadStartedAtRef.current = performance.now();
     updateProgress(file.name)({ bytesTransferred: 0, totalBytes: file.size, progress: 0, state: "running" });
+    let unregisteredStoragePath: string | null = null;
 
     try {
       if (mediaKind === "video") {
@@ -233,6 +235,7 @@ export function NotesModal() {
           onProgress: updateProgress(file.name),
           onTask: (controls) => { controlsRef.current = controls; },
         });
+        unregisteredStoragePath = upload.storagePath;
         const response = await apiFetch("/api/pdf/process-uploaded", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -253,6 +256,7 @@ export function NotesModal() {
         if (!response.ok && response.status !== 202) {
           throw new Error(payload?.message || payload?.error || "Resource processing failed.");
         }
+        unregisteredStoragePath = null;
         showNotification(response.status === 202 ? "The scanned document is being processed." : "Lesson resource uploaded successfully.", "success");
       }
       await loadResources();
@@ -260,6 +264,9 @@ export function NotesModal() {
       window.setTimeout(() => void loadResources(), 1200);
       window.setTimeout(() => void loadResources(), 3500);
     } catch (error: any) {
+      if (unregisteredStoragePath) {
+        await deletePrivateStorageObject(unregisteredStoragePath).catch(() => undefined);
+      }
       if (error?.name !== "AbortError" && error?.code !== "storage/canceled") {
         showNotification(error?.message || "The file could not be uploaded.", "error");
       }
@@ -280,7 +287,22 @@ export function NotesModal() {
       setPlayerResource(resource);
       return;
     }
-    if (resource.storagePath) await openPrivateStoragePdf(resource.storagePath);
+    const sourceId = resource.sourceId || resource.id;
+    if (!sourceId) {
+      showNotification("This resource is missing its secure source ID.", "error");
+      return;
+    }
+    try {
+      await openSourcePdf({
+        id: sourceId,
+        sourceId,
+        storagePath: resource.storagePath,
+        title: resource.title,
+        apiUrl: `/api/rag/sources/${encodeURIComponent(sourceId)}/download`,
+      });
+    } catch (error) {
+      showNotification(getPdfOpenErrorMessage(error), "error");
+    }
   };
 
   const updateResourcePriority = async (resource: LessonResource, displayPriority: number) => {

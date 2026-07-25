@@ -58,7 +58,6 @@ import { VoiceAudioCard } from '../chat/VoiceAudioCard';
 import { parseChatCommand } from '../../lib/chatCommandParser';
 import { isClientImageGenerationIntent, isClientVisualExplanationIntent } from '../../lib/ai/imageIntent';
 import { buildProjectFileContext, isProjectArchiveFile, isProjectTextFile, MAX_CHAT_UPLOAD_FILES, readProjectArchive, readProjectTextFile } from '../../lib/projectFileUpload';
-import { buildTutorPersonalizationContext } from '../../lib/personalization';
 
 
 type ChatUpload = {
@@ -151,8 +150,6 @@ function mergeMessages(existing: any[], incoming: any[]) {
   // Sort by createdAt if available
   const result = Array.from(map.values());
   result.sort((a, b) => {
-    if (a.id === 'welcome') return -1;
-    if (b.id === 'welcome') return 1;
     const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
     const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
     return dateA - dateB;
@@ -181,7 +178,6 @@ const [messages, setMessages] = useState<{
     createdAt?: string,
     webCandidates?: any[],
     visualBlocks?: any[],
-    suggestions?: string[],
     paperInfo?: any,
     errorCode?: string,
     audioUrl?: string,
@@ -195,13 +191,7 @@ const [messages, setMessages] = useState<{
     answerStatus?: 'official' | 'ai_solved' | 'predicted' | 'model_question' | 'general',
     sourceMode?: 'locked_pdf' | 'general_ai',
     evidenceContradictions?: any[]
-  }[]>([
-    {
-      role: 'assistant',
-      content: 'Ask about a lesson, paper, question, or result.',
-      id: 'welcome'
-    }
-  ]);
+  }[]>([]);
   const [input, setInput] = useState('');
   const [replyingTo, setReplyingTo] = useState<{ id: string; role: string; content: string } | null>(null);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -1455,10 +1445,6 @@ ${parsedCommand.text || "Review my recent lesson context and teach the next usef
 
     const projectFileContext = buildProjectFileContext(currentUploads);
     if (projectFileContext) messagePrompt += projectFileContext;
-    messagePrompt += `
-
-${buildTutorPersonalizationContext(currentSubject)}`;
-
     const attachmentsPayload = currentUploads
       .filter((file) => file.storagePath && file.mimeType && file.id !== inlineImage?.id)
       .map((file) => ({
@@ -1545,16 +1531,6 @@ ${buildTutorPersonalizationContext(currentSubject)}`;
             )
           );
         },
-        onSuggestions: (suggestions) => {
-          if (activeStreamIdRef.current !== streamId) return;
-          setMessages(prev =>
-            prev.map(m =>
-              m.id === assistantMsgId
-                ? { ...m, suggestions: suggestions }
-                : m
-            )
-          );
-        },
         onError: (errObj) => {
           if (activeStreamIdRef.current !== streamId) return;
           setMessages(prev =>
@@ -1625,7 +1601,7 @@ ${buildTutorPersonalizationContext(currentSubject)}`;
      }
      recognitionRef.current?.stop?.();
      stopSpeaking();
-     setMessages([{ role: 'assistant', content: 'Ask about a lesson, paper, question, or result.', id: 'welcome' }]);
+     setMessages([]);
      setInput('');
      setReplyingTo(null);
      setUploadedFiles([]);
@@ -1683,7 +1659,7 @@ ${buildTutorPersonalizationContext(currentSubject)}`;
     };
   }, [handleClearChat, handleNewChat, loadChatHistory]);
 
-  const isEmptyChat = messages.length <= 1 && !isStreaming;
+  const isEmptyChat = messages.length === 0 && !isStreaming;
 
   const handleComposerSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -1782,7 +1758,7 @@ ${buildTutorPersonalizationContext(currentSubject)}`;
                             key={item.id || item.requestId || index}
                             onClick={() => {
                               const restored = flattenSavedHistory(savedChatHistory.slice(0, index + 1));
-                              setMessages([{ role: 'assistant', content: 'Ask about a lesson, paper, question, or result.', id: 'welcome' }, ...restored]);
+                              setMessages(restored);
                               setShowChatHistory(false);
                             }}
                             className="w-full rounded-xl border border-slate-200 p-3 text-left transition hover:border-slate-300 hover:bg-slate-50"
@@ -1807,14 +1783,12 @@ ${buildTutorPersonalizationContext(currentSubject)}`;
               <div className="mx-auto w-full min-w-0 max-w-3xl px-4 pb-6 pt-5 sm:px-6 sm:pt-8">
                 <AnimatePresence initial={false}>
                 {messages.map((msg, idx) => {
-                  if (msg.id === 'welcome' && messages.length > 1) return null; // hide welcome if there are other messages
                   return (
                     <CloraMessageBubble
                       key={msg.id || idx}
                       message={msg}
                       isStreaming={(msg.status === 'streaming' || msg.status === 'typing') && idx === messages.length - 1}
                       onReply={(message) => setReplyingTo({ id: message.id, role: message.role, content: String(message.content || '').slice(0, 1200) })}
-                      onSuggestionClick={(suggestion) => setInput(suggestion)}
                       onRetryImage={(prompt) => { setInput(prompt); requestAnimationFrame(() => document.getElementById('clora-form')?.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }))); }}
                       onContinue={msg.status === 'incomplete' ? handleContinue : undefined}
                       onToolClick={(tool) => {

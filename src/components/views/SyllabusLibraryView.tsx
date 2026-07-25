@@ -5,7 +5,10 @@ import { getRecommendedUploadMode } from '../../lib/uploadMode';
 import { Loader2, Trash2, FileText, Upload, Layers, BookOpen, FileCheck, Plus, AlertCircle, Shield, CheckCircle2 } from 'lucide-react';
 import { auth } from '../../lib/firebase';
 import { motion, AnimatePresence } from 'motion/react';
-import { uploadPdfWithClientStorage, openPrivateStoragePdf } from '../../lib/clientStorageUpload';
+import {
+  deletePrivateStorageObject,
+  uploadPdfWithClientStorage,
+} from '../../lib/clientStorageUpload';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { Badge } from '../ui/Badge';
@@ -33,7 +36,7 @@ export default function SyllabusLibraryView() {
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pdfTitle, setPdfTitle] = useState("");
 
-  const { user } = useApp();
+  const { user, showNotification } = useApp();
 
   useEffect(() => {
     let active = true;
@@ -77,9 +80,10 @@ export default function SyllabusLibraryView() {
     setUploading(true);
     setUploadResult(null);
     setUploadError(null);
+    let uploaded: Awaited<ReturnType<typeof uploadPdfWithClientStorage>> | null = null;
     try {
       // Always use client storage upload
-      const uploaded = await uploadPdfWithClientStorage({
+      uploaded = await uploadPdfWithClientStorage({
         file,
         subject: form.subject,
         lesson: form.lesson,
@@ -107,12 +111,10 @@ export default function SyllabusLibraryView() {
         })
       });
 
-      let finalData = await ingestRes.json().catch(() => null);
+      const finalData = await ingestRes.json().catch(() => null);
 
       if (!ingestRes.ok || !finalData?.ok) {
-        setUploadError(finalData?.message || finalData?.error || finalData?.code || ingestRes.statusText || "Upload ingest failed");
-        setUploading(false);
-        return;
+        throw new Error(finalData?.message || finalData?.error || finalData?.code || ingestRes.statusText || "Upload ingest failed");
       }
 
       setUploadResult({
@@ -125,11 +127,16 @@ export default function SyllabusLibraryView() {
 
       // Reset non-static parts of the form
       setForm(prev => ({ ...prev, title: '', lesson: '', year: '' }));
-      fetchResources();
-      setUploading(false);
+      await fetchResources();
     } catch (err: any) {
       console.error(err);
-      setUploadError(err.message || "Upload failed");
+      if (uploaded?.storagePath) {
+        await deletePrivateStorageObject(uploaded.storagePath).catch((cleanupError) => {
+          console.warn("Failed to remove unregistered syllabus upload:", cleanupError);
+        });
+      }
+      setUploadError(err?.message || "Upload failed");
+    } finally {
       setUploading(false);
     }
   };
@@ -144,10 +151,10 @@ export default function SyllabusLibraryView() {
       if (res.ok && data?.ok) {
         setResources(r => r.filter(x => x.id !== id));
       } else {
-        alert("Delete failed: " + (data?.error || "Unknown error"));
+        showNotification("Delete failed: " + (data?.error || "Unknown error"), "error");
       }
     } catch (e: any) {
-      alert("Delete failed: " + e.message);
+      showNotification("Delete failed: " + e.message, "error");
     }
   };
 
@@ -431,20 +438,21 @@ export default function SyllabusLibraryView() {
                             <BookOpen className="w-5 h-5 text-[var(--brand-600)]" />
                           </div>
                           <div className="min-w-0">
-                            <p
+                            <button
+                              type="button"
                               onClick={() => {
                                 getPdfUrl({ storagePath: r.storagePath, id: r.id, sourceId: r.sourceId || r.id, title: r.title, url: `/api/rag/sources/${r.sourceId || r.id}/download` }).then(url => { setPdfUrl(url); setPdfTitle(r.title || 'Document'); setPdfModalOpen(true); }).catch((error: unknown) => {
                                   console.warn('Secure PDF preview failed:', error);
-                                  alert(getPdfOpenErrorMessage(error));
+                                  showNotification(getPdfOpenErrorMessage(error), "error");
                                 });
                               }}
                               className={cn(
-                                "font-bold text-slate-800 truncate text-[14px]",
-                                r.storagePath ? "hover:text-primary-600 hover:underline cursor-pointer" : ""
+                                "block max-w-full truncate text-left text-[14px] font-bold text-slate-800",
+                                (r.storagePath || r.id) ? "cursor-pointer hover:text-primary-600 hover:underline" : ""
                               )}
                             >
                               {r.title}
-                            </p>
+                            </button>
                             <p className="text-[11px] font-semibold text-slate-400">
                               {r.medium || 'Sinhala'} • {r.year ? `${r.year} Examination` : 'Curriculum File'}
                             </p>

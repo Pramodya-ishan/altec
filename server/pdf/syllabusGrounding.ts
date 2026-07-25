@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { getAdminDb } from "../firebase/admin";
 import { isVertexAiEnabled } from "../ai/client";
+import { resolveProjectFile, resolveRuntimeAdjacentFile } from "../utils/runtimePaths";
 import { loadPdfSourceBuffer, storageGsUri, storageObjectPath, validatedPdfDownloadUrl } from "./sourceBuffer";
 
 type GroundingPdf = { buffer?: Buffer | null; gcsUri?: string; sourceId: string; method: string };
@@ -26,11 +27,10 @@ function configuredSyllabusPath(subject: SupportedSubject) {
 }
 
 async function loadBundledSftSyllabus(): Promise<GroundingPdf | null> {
-  const runtimeBase = (globalThis as any).__ALTEC_RUNTIME_URL__ || import.meta.url;
   const candidates = [
-    new URL("./authoritative/sft/sALSyl_SFT.pdf", runtimeBase),
-    new URL("../../assets/authoritative/sft/sALSyl_SFT.pdf", import.meta.url),
-  ];
+    resolveRuntimeAdjacentFile("./authoritative/sft/sALSyl_SFT.pdf"),
+    resolveProjectFile("assets", "authoritative", "sft", "sALSyl_SFT.pdf"),
+  ].filter((candidate): candidate is string => Boolean(candidate));
   for (const candidate of candidates) {
     try {
       const buffer = await readFile(candidate);

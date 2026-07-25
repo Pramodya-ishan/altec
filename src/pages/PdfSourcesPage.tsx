@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { motion } from 'motion/react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { runWithConcurrency } from '../lib/bulkActionQueue';
 
 interface Source {

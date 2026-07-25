@@ -6,7 +6,7 @@ import { getAIClient } from "../ai/client";
 import { callGeminiWithFallback } from "../ai/modelRouter";
 import crypto from "crypto";
 import { APP_ASSISTANT_RESPONSE_GUIDE } from "../ai/assistantBehavior";
-import { isSimpleGreeting, sanitizeAssistantText, simpleGreetingReply } from "../ai/responseHygiene";
+import { sanitizeAssistantText } from "../ai/responseHygiene";
 import { requireFirebaseUser } from "../firebase/authMiddleware";
 
 import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
@@ -75,35 +75,31 @@ voiceRoutes.post("/live-turn", async (req, res) => {
       }
     }
 
-    if (isSimpleGreeting(transcript) && mode === "live_normal_answer") {
-      answerText = simpleGreetingReply(transcript);
-    } else {
-      // Generate a grounded answer using the same application response contract
-      // as the text Assistant. Voice output must not expose internal prompts or
-      // machine directives either.
-      let systemInstruction = `You are the Tec A/L study assistant for Sri Lankan students.
+    // Generate a grounded answer using the same application response contract
+    // as the text Assistant. Voice output must not expose internal prompts or
+    // machine directives either.
+    let systemInstruction = `You are the Tec A/L study assistant for Sri Lankan students.
 ${APP_ASSISTANT_RESPONSE_GUIDE}`;
-      let aiTask: "normal_chat" | "direct_pdf_solve" = "normal_chat";
+    let aiTask: "normal_chat" | "direct_pdf_solve" = "normal_chat";
 
-      if (mode === "live_pdf_answer") {
-        systemInstruction += " Use only the provided PDF context. If the evidence is missing, say that the selected PDF could not verify the answer; do not guess.";
-        aiTask = "direct_pdf_solve";
-      }
+    if (mode === "live_pdf_answer") {
+      systemInstruction += " Use only the provided PDF context. If the evidence is missing, say that the selected PDF could not verify the answer; do not guess.";
+      aiTask = "direct_pdf_solve";
+    }
 
-      const aiRes = await callGeminiWithFallback(aiTask, {
-        model: "gemini-2.5-flash",
-        contents: promptContext ? `Context:
+    const aiRes = await callGeminiWithFallback(aiTask, {
+      model: "gemini-2.5-flash",
+      contents: promptContext ? `Context:
 ${promptContext}
 
 Question: ${transcript}` : transcript,
-        config: {
-          systemInstruction,
-          temperature: 0.3,
-        },
-      });
+      config: {
+        systemInstruction,
+        temperature: 0.3,
+      },
+    });
 
-      answerText = sanitizeAssistantText(aiRes.result.text || "මට ප්‍රශ්නය තේරුණේ නැහැ. කරුණාකර නැවත කියන්න.");
-    }
+    answerText = sanitizeAssistantText(aiRes.result.text || "මට ප්‍රශ්නය තේරුණේ නැහැ. කරුණාකර නැවත කියන්න.");
 
     // Generate TTS (using internal fetch to /api/tts/generate or calling it directly)
     const { generateGoogleTts } = await import("../tts/googleTts");

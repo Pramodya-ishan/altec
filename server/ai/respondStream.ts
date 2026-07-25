@@ -21,7 +21,7 @@ import { generateContentStreamWithFallback, callGeminiWithFallback, AITask } fro
 import { resolveAnswerPolicy } from "./answerPolicy";
 import { scoreSource } from "../sources/sourceScoring";
 import { isLessonEvidenceMode } from "../knowledge/lessonResolver";
-import { createAssistantStreamSanitizer, isSimpleGreeting, sanitizeAssistantText, simpleGreetingReply } from "./responseHygiene";
+import { createAssistantStreamSanitizer, sanitizeAssistantText } from "./responseHygiene";
 import { deriveEducationalVisualBlocks } from "./visualAidBuilder";
 import { buildImageReferenceText, isImageGenerationIntent } from "./imageIntent";
 import { getSubjectSyllabusGroundingPdf } from "../pdf/syllabusGrounding";
@@ -37,7 +37,6 @@ import {
   shouldUseLockedSourceForTurn,
   toPendingSourceChoice,
 } from "./sourceSelection";
-import { resolveFastConversation } from "./fastConversation";
 import { isMistakeReviewIntent, selectMistakeRecordForPrompt } from "../firebase/mistakeStore";
 import { detectSinhalaTextEncoding, normalizeSinhalaExtractedText } from "../pdf/legacySinhala";
 import {
@@ -58,7 +57,6 @@ import { createAnswerPlan, plannerContext } from "./answerPlanner";
 import { assessTurnRisk, TurnRiskAssessment } from "./turnRisk";
 import { buildBoundedRequestText, enforceRequestTextBudget } from "./contextBudget";
 import { withStreamIdleTimeout } from "./streamWatchdog";
-import { buildFollowUpSuggestionPrompt, parseFollowUpSuggestions, withSuggestionTimeout } from "./followUpSuggestions";
 import { secureEvidenceText, sourceSecurityInstruction } from "./sourceContentSecurity";
 import {
   attachEvidenceContractToSources,
@@ -331,68 +329,6 @@ ${originalPrompt}`;
     }
 
     let allSources: any[] = [];
-
-    if (isSimpleGreeting(prompt) && !image && (!attachments || attachments.length === 0)) {
-      const answer = simpleGreetingReply(prompt);
-      emitSse(res, "token", { text: answer });
-      const chatRes = await saveFinalChat({
-        uid: user.uid,
-        email: user.email,
-        userText: prompt,
-        assistantText: answer,
-        mode: "normal_chat",
-        subject: activeSubject,
-        sources: [],
-      });
-      trace.chatSaved = chatRes.chatSaved;
-      trace.messageId = chatRes.messageId;
-      trace.completed = true;
-      emitSse(res, "done", {
-        ok: true,
-        completed: true,
-        requestId,
-        messageId: chatRes.messageId || null,
-        chatSaved: chatRes.chatSaved,
-        sources: [],
-        finishReason: "simple_greeting",
-      });
-      trace.doneSent = true;
-      return;
-    }
-
-    const fastConversation = !image && (!attachments || attachments.length === 0)
-      ? resolveFastConversation(prompt)
-      : null;
-    if (fastConversation) {
-      emitSse(res, "token", { text: fastConversation.answer });
-      const chatRes = await saveFinalChat({
-        uid: user.uid,
-        email: user.email,
-        userText: prompt,
-        assistantText: fastConversation.answer,
-        mode: "normal_chat",
-        subject: activeSubject,
-        sources: [],
-      });
-      trace.chatSaved = chatRes.chatSaved;
-      trace.messageId = chatRes.messageId;
-      trace.completed = true;
-      emitSse(res, "done", {
-        ok: true,
-        completed: true,
-        requestId,
-        messageId: chatRes.messageId || null,
-        chatSaved: chatRes.chatSaved,
-        sources: [],
-        suggestions: [],
-        fastPath: true,
-        answerStatus: "general",
-        sourceMode: "general_ai",
-        finishReason: `fast_conversation_${fastConversation.intent}`,
-      });
-      trace.doneSent = true;
-      return;
-    }
 
     if (isImageGenerationIntent(prompt, Boolean(image))) {
       emitSse(res, "status", {
@@ -1044,11 +980,6 @@ ${originalPrompt}`;
           completion: { completed: true, finishReason: "prediction_complete", completionPasses: 1, missingSubparts: [], reasons: [] },
         });
         await updateConversationState(user.uid, { lastIntent: "evidence_calibrated_prediction", activeSubject: forecastSubject });
-        emitSse(res, "suggestions", { suggestions: [
-          "මේ paper එකේ marking scheme එක exam answer ලෙස පෙන්වන්න",
-          "ඉහළම priority topic එකෙන් රූපයක් සමඟ තවත් ප්‍රශ්නයක් දෙන්න",
-          "මගේ Error Log දුර්වලතා අනුව අලුත් revision paper එකක් හදන්න",
-        ] });
         trace.completed = true;
         trace.chatSaved = chatRes.chatSaved;
         trace.messageId = chatRes.messageId;
@@ -2934,24 +2865,6 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
     // Background extraction
     if (!isInterrupted && qualityReport?.passed === true && process.env.ENABLE_MEMORY_EXTRACTION !== "false") {
       safeCall("extractStableMemoryIfUseful", () => extractStableMemoryIfUseful({ uid: user.uid, email: user.email, prompt, answer: fullText, userContext: modifiedUserContext }), null, res, { timeoutMs: 2_500 }).catch(() => null);
-    }
-
-    // Suggestions are generated from the actual turn. They are optional and
-    // time-bounded so they never delay delivery of the completed answer.
-    if (!isInterrupted && fullText.length > 0) {
-      try {
-        const task = callGeminiWithFallback("fast_background", {
-          model: "ignored",
-          contents: buildFollowUpSuggestionPrompt(prompt, fullText),
-          config: { temperature: 0.55, maxOutputTokens: 220, responseMimeType: "application/json" },
-        }, getAIClient()).then(({ result }) => parseFollowUpSuggestions(result.text || ""));
-        const suggestions = await withSuggestionTimeout(task, 1_800);
-        if (Array.isArray(suggestions) && suggestions.length === 3) {
-          emitSse(res, "suggestions", { suggestions });
-        }
-      } catch (err) {
-        console.warn("Contextual suggestions unavailable", err);
-      }
     }
 
     // Internal routing, retrieval and validation details are deliberately not

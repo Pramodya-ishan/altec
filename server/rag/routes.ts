@@ -18,7 +18,27 @@ import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
 
 export const ragRoutes = Router();
 ragRoutes.use(requireNonAnonymousUser, requireFirebaseAppCheck);
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024, files: 1, fields: 20, parts: 24 },
+  fileFilter: (_req, file, callback) => {
+    const pdf = file.mimetype === "application/pdf" || file.originalname.toLowerCase().endsWith(".pdf");
+    if (pdf) callback(null, true);
+    else callback(new multer.MulterError("LIMIT_UNEXPECTED_FILE", file.fieldname));
+  },
+});
+
+function singlePdfUpload(req: any, res: any, next: any) {
+  upload.single("file")(req, res, (error: any) => {
+    if (!error) return next();
+    const tooLarge = error?.code === "LIMIT_FILE_SIZE";
+    return res.status(tooLarge ? 413 : 415).json({
+      ok: false,
+      code: tooLarge ? "PDF_TOO_LARGE" : "PDF_FILE_REQUIRED",
+      message: tooLarge ? "PDF files must be 50 MB or smaller." : "Only one PDF file is allowed.",
+    });
+  });
+}
 
 export function normalizeSubject(sub: string): string {
   const s = (sub || "").trim().toUpperCase();
@@ -254,7 +274,7 @@ ragRoutes.get("/sources/:sourceId/download", requireFirebaseUser, async (req: an
 });
 
 // 2. Upload and chunk RAG sources
-ragRoutes.post("/upload", upload.single("file"), requireNonAnonymousUser, async (req: any, res) => {
+ragRoutes.post("/upload", singlePdfUpload, requireNonAnonymousUser, async (req: any, res) => {
   return res.status(400).json({
     ok: false,
     code: "USE_CLIENT_STORAGE_UPLOAD",
@@ -719,7 +739,7 @@ ragRoutes.delete("/sources/:sourceId", requireNonAnonymousUser, async (req: any,
 });
 
 // 6. OCR client reindexing endpoint
-ragRoutes.post("/reindex-uploaded", upload.single("file"), requireNonAnonymousUser, async (req: any, res) => {
+ragRoutes.post("/reindex-uploaded", singlePdfUpload, requireNonAnonymousUser, async (req: any, res) => {
   try {
     const user = req.user;
     const { sourceId, pages, mode = "auto" } = req.body;

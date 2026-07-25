@@ -1,0 +1,29 @@
+ALTEC PRODUCTION REPAIR V34
+Date: 2026-07-25
+
+PASS  npm run typecheck
+PASS  npm test
+      - source/registry/format/security regression suites passed
+      - knowledge routing suites passed
+      - secure video suites passed
+      - AI evaluations: 600 passed, 0 failed
+PASS  npm audit --audit-level=low
+      - 0 vulnerabilities
+PASS  npm run build
+      - Vite client production build
+      - Express CommonJS server bundle
+      - no server import.meta CommonJS warnings
+PASS  npm run build:vercel
+      - self-contained runtime verified (49 imports)
+      - isolated pure-ESM boot and JSON API handling passed
+      - no authoritative PDF embedded in vercel-runtime
+PASS  npm run verify:repair
+      - V10 through V34 production repair assertions passed
+SKIP  node scripts/run-browser-e2e.mjs
+      - /usr/bin/chromium is not installed in this build environment
+      - the test remains available for deployment CI
+
+Final bundle observations:
+- main application entry: approximately 297 KB uncompressed
+- Clora workspace is lazy-loaded
+- Firebase and Shaka remain separate vendor chunks

@@ -1,17 +1,9 @@
 import assert from "node:assert/strict";
-import "./followUpSuggestions.test";
 import {
   createAssistantStreamSanitizer,
-  isSimpleGreeting,
   normalizeSinhalaUnicode,
   sanitizeAssistantText,
-  simpleGreetingReply,
 } from "../responseHygiene";
-
-assert.equal(isSimpleGreeting("hi"), true);
-assert.equal(isSimpleGreeting("Hello!"), true);
-assert.equal(isSimpleGreeting("hi 2025 paper"), false);
-assert.match(simpleGreetingReply("hi"), /^Hi!/);
 
 assert.equal(normalizeSinhalaUnicode("ප්රගතිය"), "ප්‍රගතිය");
 assert.equal(normalizeSinhalaUnicode("අධ්යයනය"), "අධ්‍යයනය");

@@ -1,6 +1,6 @@
 import React from "react";
 import { motion } from "motion/react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router";
 import { BookOpen, Bot, FileText, GraduationCap, Layers, LineChart, Menu, NotebookPen, ShieldAlert, type LucideIcon } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import { cn } from "../../lib/utils";

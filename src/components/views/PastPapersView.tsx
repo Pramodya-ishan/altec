@@ -4,7 +4,7 @@ import { auth } from "../../lib/firebase";
 import { apiFetch } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { getPdfOpenErrorMessage, openSourcePdf } from "../../lib/sourceActions";
-import { uploadPdfWithClientStorage, type UploadProgressSnapshot, type UploadTaskControls } from "../../lib/clientStorageUpload";
+import { deletePrivateStorageObject, uploadPdfWithClientStorage, type UploadProgressSnapshot, type UploadTaskControls } from "../../lib/clientStorageUpload";
 import { inferPaperMetadata, type InferredPaperMetadata, type PaperCollection } from "../../shared/paperMetadata";
 import { useApp } from "../../context/AppContext";
 
@@ -214,25 +214,31 @@ export default function PastPapersView() {
     });
 
     setUploadTelemetry((current) => current ? { ...current, progress: 1, remainingBytes: 0, etaSeconds: 0, phase: "indexing" } : null);
-    const ingestResponse = await apiFetch("/api/pdf/process-uploaded", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sourceId: uploaded.sourceId,
-        storagePath: uploaded.storagePath,
-        title: preliminary.title,
-        fileName: file.name,
-        subject: preliminary.subject,
-        year: preliminary.year,
-        resourceType: preliminary.resourceType,
-        sourceType: preliminary.resourceType,
-        sourceScope: "past_paper",
-        medium: preliminary.medium,
-        deferProcessing: file.size <= MAX_INLINE_REINDEX_BYTES,
-      }),
-    });
-    const ingest = await ingestResponse.json().catch(() => null);
-    if (!ingestResponse.ok || !ingest?.ok) throw new Error(ingest?.message || ingest?.code || "PDF indexing could not start.");
+    let ingest: any;
+    try {
+      const ingestResponse = await apiFetch("/api/pdf/process-uploaded", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceId: uploaded.sourceId,
+          storagePath: uploaded.storagePath,
+          title: preliminary.title,
+          fileName: file.name,
+          subject: preliminary.subject,
+          year: preliminary.year,
+          resourceType: preliminary.resourceType,
+          sourceType: preliminary.resourceType,
+          sourceScope: "past_paper",
+          medium: preliminary.medium,
+          deferProcessing: file.size <= MAX_INLINE_REINDEX_BYTES,
+        }),
+      });
+      ingest = await ingestResponse.json().catch(() => null);
+      if (!ingestResponse.ok || !ingest?.ok) throw new Error(ingest?.message || ingest?.code || "PDF indexing could not start.");
+    } catch (error) {
+      await deletePrivateStorageObject(uploaded.storagePath).catch(() => undefined);
+      throw error;
+    }
 
     let indexingData = ingest;
     if (file.size <= MAX_INLINE_REINDEX_BYTES) {

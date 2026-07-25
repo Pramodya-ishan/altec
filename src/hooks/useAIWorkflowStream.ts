@@ -57,7 +57,6 @@ export function useAIWorkflowStream() {
     onError?: (err: { error: string; recoverable?: boolean }) => void;
     onDone?: (data: any) => void;
     onVisualBlocks?: (blocks: any[]) => void;
-    onSuggestions?: (suggestions: string[]) => void;
     onQualityReport?: (report: any) => void;
     onAnswerStatus?: (status: { answerStatus?: string; sourceMode?: string; lockedSourceActive?: boolean; sourceTitle?: string | null; contradictions?: any[] }) => void;
   }) {
@@ -88,7 +87,6 @@ export function useAIWorkflowStream() {
       onError,
       onDone,
       onVisualBlocks,
-      onSuggestions,
       onQualityReport,
       onAnswerStatus,
     } = params;
@@ -527,10 +525,6 @@ export function useAIWorkflowStream() {
           if (eventName === "visual_blocks") {
             const blocks = data.blocks || [];
             onVisualBlocks?.(blocks);
-          }
-          if (eventName === "suggestions") {
-            const suggestions = data.suggestions || [];
-            onSuggestions?.(suggestions);
           }
           if (eventName === "answer_status") {
             onAnswerStatus?.({

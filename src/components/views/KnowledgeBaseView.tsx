@@ -2,7 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { BookOpen, Upload, Trash2, FileText, Activity } from 'lucide-react';
 import { apiFetch } from '../../lib/api';
-import { uploadPdfWithClientStorage } from '../../lib/clientStorageUpload';
+import {
+  deletePrivateStorageObject,
+  uploadPdfWithClientStorage,
+} from '../../lib/clientStorageUpload';
 
 export function KnowledgeBaseView() {
   const { user, showNotification } = useApp();
@@ -78,84 +81,54 @@ export function KnowledgeBaseView() {
     setUploading(true);
     showNotification('Processing PDF... This may take a minute.', 'info');
     
+    let uploaded: Awaited<ReturnType<typeof uploadPdfWithClientStorage>> | null = null;
     try {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64 = (reader.result as string).split(',')[1];
-        
-        const res = await apiFetch('/api/rag/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title,
-            subject,
-            sourceType,
-            year: year || undefined,
-            fileName: file.name,
-            pdfBase64: base64
-          })
-        });
-        
-        let data = await res.json().catch(() => null);
-        let isFallback = false;
+      // The browser already has an authenticated, resumable Storage channel.
+      // Sending a full base64 copy to the disabled backend upload first doubled
+      // bandwidth, memory, latency, and the number of failure points.
+      uploaded = await uploadPdfWithClientStorage({
+        file,
+        subject,
+        year: year || undefined,
+        resourceType: sourceType,
+        sourceType,
+        sourceScope: "owner_knowledge",
+      });
 
-        if (!res.ok || data?.code === "GOOGLE_AUTH_TOKEN_FETCH_FAILED" || data?.code === "UPLOAD_STORAGE_FAILED" || (data?.message && (data.message.includes("oauth2") || data.message.includes("Premature close")))) {
-          console.warn("Backend upload failed. Trying client fallback upload...");
-          isFallback = true;
-        }
+      const ingestRes = await apiFetch("/api/pdf/process-uploaded", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceId: uploaded.sourceId,
+          storagePath: uploaded.storagePath,
+          title: title || file.name,
+          fileName: file.name,
+          subject,
+          resourceType: sourceType,
+          sourceType,
+          sourceScope: "owner_knowledge",
+          year: year || "",
+          medium: "Sinhala",
+        }),
+      });
+      const data = await ingestRes.json().catch(() => null);
+      if (!ingestRes.ok || !data?.ok) {
+        throw new Error(data?.message || data?.error || "Upload ingest failed");
+      }
 
-        if (isFallback) {
-          const uploaded = await uploadPdfWithClientStorage({
-            file,
-            subject: subject,
-            year: year || undefined,
-            resourceType: sourceType,
-            sourceScope: "owner_syllabus"
-          });
-
-          const payload = {
-            sourceId: uploaded.sourceId,
-            storagePath: uploaded.storagePath,
-            title: title || file.name,
-            fileName: file.name,
-            subject: subject,
-            resourceType: sourceType,
-            sourceType: sourceType,
-            sourceScope: "owner_syllabus",
-            year: year || "",
-            medium: "Sinhala"
-          };
-
-          const ingestRes = await apiFetch("/api/pdf/process-uploaded", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-          });
-
-          data = await ingestRes.json().catch(() => null);
-          if (!ingestRes.ok || !data?.ok) {
-            showNotification(data?.message || data?.error || "Upload ingest failed", "error");
-            setUploading(false);
-            return;
-          }
-        } else {
-          if (!res.ok || !data?.ok) {
-            showNotification(data?.error || data?.message || 'Upload failed', 'error');
-            setUploading(false);
-            return;
-          }
-        }
-
-        showNotification(`Successfully uploaded and chunked ${data.chunkCount} parts.`, 'success');
-        setFile(null);
-        setTitle('');
-        setYear('');
-        fetchData();
-        setUploading(false);
-      };
-      reader.readAsDataURL(file);
+      showNotification(`Successfully uploaded and chunked ${data.chunkCount} parts.`, 'success');
+      setFile(null);
+      setTitle('');
+      setYear('');
+      await fetchData();
     } catch (e: any) {
-      showNotification(e.message, 'error');
+      if (uploaded?.storagePath) {
+        await deletePrivateStorageObject(uploaded.storagePath).catch((cleanupError) => {
+          console.warn("Failed to remove unregistered knowledge upload:", cleanupError);
+        });
+      }
+      showNotification(e?.message || "Upload failed.", 'error');
+    } finally {
       setUploading(false);
     }
   };

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { isVertexAiEnabled } from "../ai/client";
+import { resolveProjectFile, resolveRuntimeAdjacentFile } from "../utils/runtimePaths";
 import { storageGsUri } from "./sourceBuffer";
 
 export type SftReferenceDomain = "physics" | "chemistry" | "biology" | "mathematics" | "general";
@@ -70,16 +71,14 @@ export function inferSftReferenceDomains(text: unknown): SftReferenceDomain[] {
 }
 
 async function loadBundled(reference: SftGroundingReference) {
-  const runtimeBase = (globalThis as any).__ALTEC_RUNTIME_URL__ || import.meta.url;
-  const encodedName = reference.bundledName.split("/").map(encodeURIComponent).join("/");
   const candidates = [
-    new URL(`./authoritative/sft/${encodedName}`, runtimeBase),
-    new URL(`../../assets/authoritative/sft/${encodedName}`, import.meta.url),
-    new URL(`../../seed/sft-reference-library/${encodedName}`, import.meta.url),
-  ];
-  for (const url of candidates) {
+    resolveRuntimeAdjacentFile(`./authoritative/sft/${reference.bundledName}`),
+    resolveProjectFile("assets", "authoritative", "sft", reference.bundledName),
+    resolveProjectFile("seed", "sft-reference-library", reference.bundledName),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  for (const filePath of candidates) {
     try {
-      const buffer = await readFile(url);
+      const buffer = await readFile(filePath);
       if (buffer.length > 10_000 && buffer.subarray(0, 5).toString("ascii") === "%PDF-") return buffer;
     } catch {
       // Try the next location.

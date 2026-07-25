@@ -14,9 +14,8 @@ const nativeCanvasLinuxSource = new URL("../node_modules/@napi-rs/canvas-linux-x
 const nativeCanvasLinuxTarget = new URL("node_modules/@napi-rs/canvas-linux-x64-gnu/", outputDirectory);
 
 console.log("[runtime] preparing output directory");
+await rm(outputDirectory, { recursive: true, force: true });
 await mkdir(outputDirectory, { recursive: true });
-await rm(protoOutputDirectory, { recursive: true, force: true });
-await rm(new URL("node_modules/", outputDirectory), { recursive: true, force: true });
 
 const googleGaxProtoPathPlugin = {
   name: "google-gax-proto-path",

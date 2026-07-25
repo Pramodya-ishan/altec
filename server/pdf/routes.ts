@@ -21,7 +21,27 @@ import { requireFirebaseAppCheck } from "../firebase/appCheckMiddleware";
 
 export const pdfRoutes = Router();
 pdfRoutes.use(requireFirebaseUser, requireFirebaseAppCheck);
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024, files: 1, fields: 20, parts: 24 },
+  fileFilter: (_req, file, callback) => {
+    const pdf = file.mimetype === "application/pdf" || file.originalname.toLowerCase().endsWith(".pdf");
+    if (pdf) callback(null, true);
+    else callback(new multer.MulterError("LIMIT_UNEXPECTED_FILE", file.fieldname));
+  },
+});
+
+function singlePdfUpload(req: any, res: any, next: any) {
+  upload.single("file")(req, res, (error: any) => {
+    if (!error) return next();
+    const tooLarge = error?.code === "LIMIT_FILE_SIZE";
+    return res.status(tooLarge ? 413 : 415).json({
+      ok: false,
+      code: tooLarge ? "PDF_TOO_LARGE" : "PDF_FILE_REQUIRED",
+      message: tooLarge ? "PDF files must be 50 MB or smaller." : "Only one PDF file is allowed.",
+    });
+  });
+}
 
 import { isAiBillingCircuitOpen, getAiBillingState } from "../ai/aiCircuitBreaker";
 import { isVertexAiEnabled } from "../ai/client";
@@ -281,7 +301,7 @@ pdfRoutes.post("/process-uploaded", requireFirebaseUser, express.json(), async (
 });
 
 // 2. Reprocess OCR or Legacy Convert for a source
-pdfRoutes.post("/reprocess/:sourceId", requireFirebaseUser, upload.single("file"), async (req: any, res) => {
+pdfRoutes.post("/reprocess/:sourceId", requireFirebaseUser, singlePdfUpload, async (req: any, res) => {
   try {
     const user = req.user;
     const { sourceId } = req.params;
@@ -609,7 +629,7 @@ pdfRoutes.get("/ocr-text/:sourceId", requireFirebaseUser, async (req: any, res) 
 const inFlightDirectQa = new Map<string, Promise<any>>();
 const failedDirectQaCooldown = new Map<string, number>();
 
-pdfRoutes.post("/direct-qa-file", requireFirebaseUser, upload.single("file"), async (req: any, res) => {
+pdfRoutes.post("/direct-qa-file", requireFirebaseUser, singlePdfUpload, async (req: any, res) => {
   try {
     const { sourceId, storagePath, prompt, questionId, questionNo, questionType, subject, year } = req.body;
     let visualEvidenceRequested = asksForPdfVisual(prompt);

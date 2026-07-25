@@ -278,7 +278,7 @@ MODE: General Chat / Contextual Chat
 - Anonymized common learning signals may help identify common exam traps, but never expose another student’s content or identity.
 - Reference progress, saved mistakes, and weak points naturally without repeating private profile details.
 - When the user asks for an image, do not claim image generation is impossible; the image route handles it before text generation.
-- End with useful contextual follow-up suggestions rather than a generic menu.
+- Finish the requested answer directly; do not append canned prompts, menus, or suggestion chips.
 `;
   }
 })()}

@@ -7,6 +7,7 @@ import { apiFetch } from '../../lib/api';
 import { auth } from '../../lib/firebase';
 import { getPdfOpenErrorMessage, openSourcePdf } from '../../lib/sourceActions';
 import { cn } from '../../lib/utils';
+import { useApp } from '../../context/AppContext';
 
 export interface SourceCardProps {
   id: string;
@@ -39,6 +40,7 @@ export const SourceCard: React.FC<SourceCardProps> = ({
   onAskClick,
   compact = false
 }) => {
+  const { showNotification } = useApp();
   const getReliabilityBadge = () => {
     if (sourceType === 'estimated') {
       return { text: 'Estimated', icon: <AlertTriangle className="w-3 h-3" />, colorClass: 'bg-amber-50 text-amber-700 border-amber-200' };
@@ -59,7 +61,7 @@ export const SourceCard: React.FC<SourceCardProps> = ({
       await openSourcePdf({ storagePath, id, sourceId: id, title, url: `/api/rag/sources/${id}/download` });
     } catch (error: unknown) {
       console.warn('Secure PDF open failed:', error);
-      alert(getPdfOpenErrorMessage(error));
+      showNotification(getPdfOpenErrorMessage(error), "error");
     }
   };
 
@@ -78,7 +80,7 @@ export const SourceCard: React.FC<SourceCardProps> = ({
               </span>
               {confidence !== undefined && (
                 <span className={cn(
-                  "inline-block shrink-0 px-1.5 py-0.5 text-[9px] font-bold border rounded-full",
+                  "inline-block shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-bold",
                   confidence > 0.85 ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
                   confidence > 0.6 ? "bg-amber-50 text-amber-700 border-amber-200" :
                   "bg-rose-50 text-rose-700 border-rose-200"
@@ -87,8 +89,8 @@ export const SourceCard: React.FC<SourceCardProps> = ({
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2 text-[10px] text-slate-500 font-semibold">
-              <span className={cn("flex items-center gap-1 px-1.5 py-0.5 rounded-full border font-black uppercase text-[8px]", badgeInfo.colorClass)}>
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+              <span className={cn("flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-black uppercase", badgeInfo.colorClass)}>
                 {badgeInfo.icon}
                 {badgeInfo.text}
               </span>

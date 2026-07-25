@@ -26,7 +26,11 @@ assert(sidebar.includes("h-[calc(60px+env(safe-area-inset-bottom))]"), "Mobile n
 assert(!sidebar.includes("Study assistant") && !sidebar.includes("Z-score analytics"), "Legacy navigation labels remain");
 assert(!topNav.includes('aria-label="Open navigation"') && sidebar.includes('lg:flex') && sidebar.includes('hidden h-[100dvh]'), "Mobile sidebar or hamburger must be removed");
 assert(topNav.includes('aria-label="New chat"') && !topNav.includes("/> New chat"), "New chat must be icon-only");
-assert(chat.includes("Ask about a lesson, paper, question, or result."), "English welcome message is missing");
+assert(
+  chat.includes("const [messages, setMessages] = useState<") && chat.includes("}[]>([])")
+    && !chat.includes("Ask about a lesson, paper, question, or result."),
+  "Assistant must start as an empty conversation without a canned welcome message",
+);
 assert(chat.includes('aria-label="Jump to latest answer"') && !chat.includes("අලුත් පිළිතුර"), "Latest-answer button was not repaired");
 assert(chat.includes('accept="') && chat.includes('application/pdf') && chat.includes('application/zip') && chat.includes('.zip') && chat.includes('image/png'), "Assistant attachment input must support validated PDFs, images, and project ZIP files");
 assert(bubble.includes("Thinking") && bubble.includes("Copy answer") && bubble.includes("Reply"), "Assistant thinking/message actions are incomplete");
@@ -708,3 +712,66 @@ assert(
   "V31 AI resilience environment controls are undocumented",
 );
 console.log("V31 adaptive AI hardening checks passed.");
+
+// V34 production repair: no AI templates, bounded uploads, protected shared
+// resources, role-gated administration, accessible focus, and local icons.
+const appV34 = await read("src/App.tsx");
+const notesV34 = await read("src/components/views/NotesView.tsx");
+const knowledgeV34 = await read("src/components/views/KnowledgeBaseView.tsx");
+const storageRulesV34 = await read("storage.rules");
+const cssV34 = await read("src/index.css");
+const indexV34 = await read("index.html");
+const voiceV34 = await read("server/voice/routes.ts");
+const nonStreamingV34 = await read("server/ai/respond.ts");
+const runtimePathsV34 = await read("server/utils/runtimePaths.ts");
+const adminDashboardV34 = await read("src/components/views/AdminDashboardView.tsx");
+assert(
+  !respondStream.includes("simpleGreetingReply")
+    && !respondStream.includes('emitSse(res, "suggestions"')
+    && !nonStreamingV34.includes("simpleGreetingReply")
+    && !voiceV34.includes("simpleGreetingReply"),
+  "Canned AI greetings or follow-up suggestion events remain",
+);
+assert(
+  notesV34.includes("/api/rag/sources/")
+    && notesV34.includes("deletePrivateStorageObject")
+    && knowledgeV34.includes('sourceScope: "owner_knowledge"')
+    && !knowledgeV34.includes("FileReader"),
+  "Protected PDF opening or reliable client Storage ingestion cleanup is incomplete",
+);
+assert(
+  ragRoutes.includes("fileSize: 50 * 1024 * 1024")
+    && pdfRoutes.includes("fileSize: 50 * 1024 * 1024")
+    && ragRoutes.includes("Only one PDF file is allowed.")
+    && pdfRoutes.includes("Only one PDF file is allowed."),
+  "Server PDF uploads are not bounded and type-restricted",
+);
+assert(
+  appV34.includes('path="/admin-dashboard"') && appV34.includes('RoleRoute allow={["admin"]}')
+    && appV34.includes('path="/pdf-sources"') && appV34.includes('path="/question-cache"'),
+  "Administrator workspaces lack client-side role guards",
+);
+assert(
+  adminDashboardV34.includes("setAdminTargetEmail")
+    && adminDashboardV34.includes("saveData(parsed as AppData)")
+    && !adminDashboardV34.includes("firebase/firestore")
+    && !adminDashboardV34.includes("getDocs(collection"),
+  "Admin support bypasses the audited server workflow or enumerates users from the browser",
+);
+assert(
+  storageRulesV34.includes("match /users/{uid}/knowledge/{allPaths=**}")
+    && storageRulesV34.includes("match /users/{uid}/tts/{allPaths=**}"),
+  "Knowledge Base or text-to-speech Storage ownership rules are missing",
+);
+assert(
+  cssV34.includes(":focus-visible") && cssV34.includes("outline: 3px solid")
+    && !indexV34.includes("cdnjs.cloudflare.com/ajax/libs/font-awesome"),
+  "Keyboard focus visibility or local icon delivery is incomplete",
+);
+assert(
+  !syllabusGrounding.includes("import.meta.url")
+    && !sftReferencesV10.includes("import.meta.url")
+    && runtimePathsV34.includes("resolveRuntimeAdjacentFile"),
+  "CommonJS server build still relies on import.meta.url",
+);
+console.log("V34 production storage, AI, security, accessibility, and runtime checks passed.");

@@ -55,6 +55,20 @@ service firebase.storage {
       allow delete: if isOwner(uid);
     }
 
+    match /users/{uid}/knowledge/{allPaths=**} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid) && isAllowedPersonalAttachment();
+      allow delete: if isOwner(uid);
+    }
+
+    // TTS objects are written by the authenticated server. The owner may read
+    // the generated audio through the Firebase client, but client writes stay
+    // disabled so arbitrary audio cannot be placed in this namespace.
+    match /users/{uid}/tts/{allPaths=**} {
+      allow read: if isOwner(uid);
+      allow write: if false;
+    }
+
     // Shared files are never read directly with the Firebase client SDK. The
     // authenticated API checks publication/audience metadata and returns a
     // short-lived signed URL or secure stream.

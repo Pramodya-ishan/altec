@@ -10,7 +10,6 @@ interface CloraMessageBubbleProps {
   isStreaming: boolean;
   onToolClick?: (tool: string) => void;
   onReply?: (message: any) => void;
-  onSuggestionClick?: (suggestion: string) => void;
   onRetryImage?: (prompt: string) => void;
   onContinue?: () => void;
 }
@@ -49,7 +48,6 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
   isStreaming,
   onToolClick,
   onReply,
-  onSuggestionClick,
   onRetryImage,
   onContinue,
 }: CloraMessageBubbleProps) {
@@ -188,16 +186,6 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
             </div>
           )}
 
-          {!isStreaming && Array.isArray(message.suggestions) && message.suggestions.length > 0 && (
-            <div className="flex flex-wrap gap-2 pt-1">
-              {message.suggestions.slice(0, 3).map((suggestion: string) => (
-                <button key={suggestion} type="button" onClick={() => onSuggestionClick?.(suggestion)} className="min-h-10 rounded-full border border-slate-200 bg-white px-3 py-2 text-left text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900">
-                  {suggestion}
-                </button>
-              ))}
-            </div>
-          )}
-
           {!isStreaming && (message.content || answerSources.length > 0 || generatedImage?.url) && (
             <div className="flex items-center gap-1 pt-1 text-slate-400 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
               {message.content && <button type="button" onClick={copyMessage} className="rounded-lg p-2 hover:bg-slate-100 hover:text-slate-700" aria-label="Copy answer" title="Copy answer">{copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}</button>}
@@ -218,7 +206,6 @@ export const CloraMessageBubble = React.memo(function CloraMessageBubble({
   && previous.message.thinkingStatus === next.message.thinkingStatus
   && previous.message.sources?.length === next.message.sources?.length
   && previous.message.visualBlocks === next.message.visualBlocks
-  && previous.message.suggestions?.join('|') === next.message.suggestions?.join('|')
   && previous.message.generatedImage?.url === next.message.generatedImage?.url
   && previous.message.answerStatus === next.message.answerStatus
   && previous.message.evidenceContradictions?.length === next.message.evidenceContradictions?.length

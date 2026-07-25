@@ -1,7 +1,7 @@
 import { Menu, Search, Bell, X, LogOut, User, ChevronRight, XCircle, Book, Clock, Cloud, RefreshCw, HardDrive, Plus, History, Trash2 } from "lucide-react";
 import { setPendingTopicHighlight } from "../../lib/navigationIntent";
 import React, { useEffect, useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useApp } from '../../context/AppContext';
 import { cn, calculateCurrentGradeFromData } from '../../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
