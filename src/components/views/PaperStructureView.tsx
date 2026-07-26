@@ -458,13 +458,11 @@ export default function PaperStructureView() {
  return false;
  });
 
- const hasNotes = subjectData.topics[topic]?.notes?.trim() || (subjectData.topics[topic]?.videos?.length || 0) > 0;
-
  return (
  <span
  onClick={() => openPlaylist(topic)}
  className="text-sm font-semibold text-slate-700 cursor-pointer hover:text-primary-600 transition-all flex items-start gap-1.5 text-left leading-tight group"
- title="Open lesson notes and files"
+ title="Open lesson resources"
  >
  <span className="line-clamp-2 group-hover:underline">{topic}</span>
  

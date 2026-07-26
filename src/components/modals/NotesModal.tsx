@@ -327,7 +327,10 @@ export function NotesModal() {
   const deleteResource = async (resource: LessonResource) => {
     if (!canManageLessonResources || !resource.id || !confirm(`Delete “${resource.title}”?`)) return;
     try {
-      const response = await apiFetch(`/api/lesson-resources/${resource.id}`, { method: "DELETE" });
+      const endpoint = resource.mediaKind === "video" && resource.videoId
+        ? `/api/admin/videos/${encodeURIComponent(resource.videoId)}`
+        : `/api/lesson-resources/${encodeURIComponent(resource.id)}`;
+      const response = await apiFetch(endpoint, { method: "DELETE" });
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(payload?.message || "The resource could not be deleted.");
       setResources((current) => current.filter((item) => item.id !== resource.id));

@@ -1,8 +1,26 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, BookOpen, Brain, CheckCircle2, Clock3, ImageIcon, RefreshCw, Search } from "lucide-react";
+import { useNavigate } from "react-router";
+import {
+  AlertCircle,
+  ArrowRight,
+  BookOpenCheck,
+  Brain,
+  Check,
+  CircleAlert,
+  Clock3,
+  ImageIcon,
+  ImagePlus,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  Target,
+} from "lucide-react";
 import { apiFetch } from "../lib/api";
+import { setPendingStudyPrompt } from "../lib/navigationIntent";
 import { Skeleton } from "../components/ui/Skeleton";
 import { useAuthenticatedImage } from "../hooks/useAuthenticatedImage";
+import { ErrorLogModal } from "../components/modals/ErrorLogModal";
+import { cn } from "../lib/utils";
 
 type MistakeRecord = {
   id: string;
@@ -10,7 +28,6 @@ type MistakeRecord = {
   lesson?: string;
   errorText?: string;
   questionText?: string;
-  imageUrl?: string | null;
   imageEndpoint?: string | null;
   hasImage?: boolean;
   imageFileName?: string | null;
@@ -34,20 +51,46 @@ function summarizeMistakes(records: MistakeRecord[]): ReviewSummary {
       return !Number.isFinite(reviewTime) || reviewTime <= now;
     }).length,
     masteredCount: records.filter((record) => record.mastered === true).length,
-    averageMastery: records.length > 0
+    averageMastery: records.length
       ? Math.round(records.reduce((total, record) => total + Number(record.masteryScore || 0), 0) / records.length)
       : 0,
   };
 }
 
-function SavedMistakeImage({ mistake }: { mistake: MistakeRecord }) {
-  const { url, failed } = useAuthenticatedImage(mistake.imageEndpoint);
-  if (failed) return <div className="grid h-32 place-items-center bg-slate-50 text-xs font-semibold text-slate-400">Saved image unavailable</div>;
-  if (!url) return <Skeleton className="h-48 w-full rounded-none" />;
-  return <img src={url} alt={mistake.imageFileName || `Saved ${mistake.lesson || "error"}`} className="max-h-72 w-full bg-slate-50 object-contain" loading="lazy" />;
+function isDue(record: MistakeRecord) {
+  if (record.mastered) return false;
+  const time = Date.parse(String(record.nextReviewAt || ""));
+  return !Number.isFinite(time) || time <= Date.now();
 }
 
+function SavedMistakeImage({ mistake }: { mistake: MistakeRecord }) {
+  const { url, failed } = useAuthenticatedImage(mistake.imageEndpoint);
+  if (failed) {
+    return (
+      <div className="error-card__image-state">
+        <ImageIcon className="h-5 w-5" />
+        <span>Saved image unavailable</span>
+      </div>
+    );
+  }
+  if (!url) return <Skeleton className="h-52 w-full rounded-none" />;
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="error-card__image-link" aria-label={`Open saved image for ${mistake.lesson || "error"}`}>
+      <img src={url} alt={mistake.imageFileName || `Saved ${mistake.lesson || "error"}`} loading="lazy" />
+      <span><ImageIcon className="h-4 w-4" /> Open image</span>
+    </a>
+  );
+}
+
+const metricDefinitions = [
+  { key: "total", label: "Saved records", icon: BookOpenCheck, tone: "blue", suffix: "" },
+  { key: "dueCount", label: "Ready to review", icon: Clock3, tone: "amber", suffix: "" },
+  { key: "masteredCount", label: "Mastered", icon: Check, tone: "green", suffix: "" },
+  { key: "averageMastery", label: "Average mastery", icon: Target, tone: "ink", suffix: "%" },
+] as const;
+
 export default function MistakeNotebook() {
+  const navigate = useNavigate();
   const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -55,6 +98,7 @@ export default function MistakeNotebook() {
   const [search, setSearch] = useState("");
   const [summary, setSummary] = useState<ReviewSummary>({ total: 0, dueCount: 0, masteredCount: 0, averageMastery: 0 });
   const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [showAddError, setShowAddError] = useState(false);
 
   const loadMistakes = useCallback(async () => {
     setLoading(true);
@@ -63,8 +107,9 @@ export default function MistakeNotebook() {
       const response = await apiFetch("/api/student/mistakes");
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Could not load your error log.");
-      setMistakes(Array.isArray(payload.mistakes) ? payload.mistakes : []);
-      if (payload.reviewSummary) setSummary(payload.reviewSummary);
+      const records = Array.isArray(payload.mistakes) ? payload.mistakes : [];
+      setMistakes(records);
+      setSummary(payload.reviewSummary || summarizeMistakes(records));
     } catch (loadError: any) {
       setError(loadError?.message || "Could not load your error log.");
     } finally {
@@ -76,6 +121,7 @@ export default function MistakeNotebook() {
 
   const saveReview = useCallback(async (mistakeId: string, quality: number) => {
     setReviewingId(mistakeId);
+    setError("");
     try {
       const response = await apiFetch(`/api/student/mistakes/${encodeURIComponent(mistakeId)}/review`, {
         method: "PATCH",
@@ -84,9 +130,9 @@ export default function MistakeNotebook() {
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Review result could not be saved.");
-      const updatedMistakes = mistakes.map((mistake) => mistake.id === mistakeId ? { ...mistake, ...payload.review } : mistake);
-      setMistakes(updatedMistakes);
-      setSummary(summarizeMistakes(updatedMistakes));
+      const updated = mistakes.map((mistake) => mistake.id === mistakeId ? { ...mistake, ...payload.review } : mistake);
+      setMistakes(updated);
+      setSummary(summarizeMistakes(updated));
     } catch (reviewError: any) {
       setError(reviewError?.message || "Review result could not be saved.");
     } finally {
@@ -97,71 +143,129 @@ export default function MistakeNotebook() {
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     return mistakes.filter((mistake) => {
-      if (subject !== "All" && mistake.subject !== subject) return false;
+      if (subject !== "All" && String(mistake.subject || "").toUpperCase() !== subject) return false;
       if (!term) return true;
       return `${mistake.lesson || ""} ${mistake.errorText || mistake.questionText || ""}`.toLowerCase().includes(term);
     });
   }, [mistakes, search, subject]);
 
-  return (
-    <section className="mx-auto w-full max-w-5xl space-y-5 pb-12">
-      <header className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <span className="grid h-11 w-11 place-items-center rounded-2xl bg-rose-50 text-rose-600"><BookOpen className="h-5 w-5" /></span>
-            <div><h1 className="text-xl font-bold text-slate-950">Error log</h1><p className="text-sm text-slate-500">Your saved text and images for AI revision.</p></div>
-          </div>
-          <button type="button" onClick={() => void loadMistakes()} disabled={loading} className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
-          </button>
-        </div>
-        <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_150px]">
-          <label className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input aria-label="Search errors" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search lesson or error text" className="w-full rounded-xl border border-slate-200 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-slate-400 focus:ring-4 focus:ring-slate-100" /></label>
-          <select aria-label="Filter errors by subject" value={subject} onChange={(event) => setSubject(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 outline-none focus:border-slate-400">
-            <option>All</option><option>SFT</option><option>ET</option><option>ICT</option>
-          </select>
-        </div>
-        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="rounded-2xl bg-slate-50 p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Saved</p><p className="mt-1 text-xl font-black text-slate-900">{summary.total}</p></div>
-          <div className="rounded-2xl bg-amber-50 p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-amber-600">Due now</p><p className="mt-1 text-xl font-black text-amber-900">{summary.dueCount}</p></div>
-          <div className="rounded-2xl bg-emerald-50 p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-emerald-600">Mastered</p><p className="mt-1 text-xl font-black text-emerald-900">{summary.masteredCount}</p></div>
-          <div className="rounded-2xl bg-indigo-50 p-3"><p className="text-[10px] font-bold uppercase tracking-wide text-indigo-600">Mastery</p><p className="mt-1 text-xl font-black text-indigo-900">{summary.averageMastery}%</p></div>
-        </div>
-      </header>
+  const discussMistake = (mistake: MistakeRecord) => {
+    setPendingStudyPrompt(
+      `Review my Error Log record ${mistake.id}. Subject ${mistake.subject || "unknown"}, lesson ${mistake.lesson || "unknown"}. Read its saved image if present and explain the exact question, my likely error, the correct method, checked answer, and one similar practice question.`,
+    );
+    navigate("/clora-x");
+  };
 
-      {loading ? (
-        <div className="grid gap-4 sm:grid-cols-2">{[0, 1, 2, 3].map((item) => <div key={item} className="rounded-3xl border border-slate-200 bg-white p-5"><Skeleton className="h-5 w-32" /><Skeleton className="mt-4 h-16 w-full" /><Skeleton className="mt-4 h-40 w-full rounded-2xl" /></div>)}</div>
-      ) : error ? (
-        <div className="rounded-3xl border border-rose-200 bg-white p-6 text-center"><AlertCircle className="mx-auto h-7 w-7 text-rose-500" /><p className="mt-3 text-sm font-semibold text-slate-800">{error}</p></div>
-      ) : filtered.length === 0 ? (
-        <div className="rounded-3xl border border-slate-200 bg-white p-12 text-center"><BookOpen className="mx-auto h-9 w-9 text-slate-300" /><h2 className="mt-3 font-bold text-slate-800">No saved errors found</h2><p className="mt-1 text-sm text-slate-500">Add text or an image from the AI tools menu.</p></div>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
-          {filtered.map((mistake) => (
-            <article key={mistake.id} className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-              {mistake.hasImage && mistake.imageEndpoint ? <SavedMistakeImage mistake={mistake} /> : null}
-              <div className="p-5">
-                <div className="flex items-center gap-2"><span className="rounded-full bg-slate-900 px-2.5 py-1 text-[10px] font-bold text-white">{mistake.subject || "Subject"}</span><span className="truncate text-xs font-semibold text-slate-500">{mistake.lesson || "Lesson"}</span>{mistake.hasImage ? <ImageIcon className="ml-auto h-4 w-4 text-slate-400" /> : null}</div>
-                <p className="mt-4 whitespace-pre-wrap text-sm leading-6 text-slate-800">{mistake.errorText || mistake.questionText || "Image-only error record"}</p>
-                <div className="mt-4 space-y-2">
-                  <div className="flex items-center justify-between text-[11px] font-semibold text-slate-500"><span className="inline-flex items-center gap-1"><Brain className="h-3.5 w-3.5" /> Mastery</span><span>{Math.round(mistake.masteryScore || 0)}%</span></div>
-                  <div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-indigo-500 transition-[width]" style={{ width: `${Math.max(2, Math.min(100, mistake.masteryScore || 0))}%` }} /></div>
-                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                    <span className="inline-flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" /> streak {mistake.correctStreak || 0}</span>
-                    {mistake.nextReviewAt ? <span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> {new Date(mistake.nextReviewAt).toLocaleDateString()}</span> : null}
-                    {mistake.errorCategory ? <span className="rounded-full bg-slate-100 px-2 py-0.5">{mistake.errorCategory}</span> : null}
-                  </div>
-                </div>
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  <button type="button" disabled={reviewingId === mistake.id} onClick={() => void saveReview(mistake.id, 2)} className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-100 disabled:opacity-50">Need practice</button>
-                  <button type="button" disabled={reviewingId === mistake.id} onClick={() => void saveReview(mistake.id, 5)} className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50">Got it</button>
-                </div>
-                {mistake.createdAt ? <time className="mt-4 block text-[11px] text-slate-400">{new Date(mistake.createdAt).toLocaleString()}</time> : null}
-              </div>
-            </article>
-          ))}
+  return (
+    <>
+      <section className="error-log-page">
+        <header className="error-log-hero" data-reveal>
+          <div className="error-log-hero__copy">
+            <p className="product-eyebrow">Revision memory</p>
+            <h2>Turn every mistake into progress.</h2>
+            <p>Save the question, keep its image, and schedule the next review from one focused workspace.</p>
+          </div>
+          <div className="error-log-hero__actions">
+            <button type="button" onClick={() => setShowAddError(true)} className="premium-button">
+              <ImagePlus className="h-4 w-4" /> Add error
+            </button>
+            <button type="button" onClick={() => void loadMistakes()} disabled={loading} className="premium-button premium-button--secondary">
+              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} /> Refresh
+            </button>
+          </div>
+        </header>
+
+        <div className="error-log-metrics" data-reveal>
+          {metricDefinitions.map((metric) => {
+            const Icon = metric.icon;
+            return (
+              <article key={metric.key} className={`error-metric error-metric--${metric.tone}`}>
+                <span className="error-metric__icon"><Icon className="h-5 w-5" /></span>
+                <span><small>{metric.label}</small><strong>{summary[metric.key]}{metric.suffix || ""}</strong></span>
+              </article>
+            );
+          })}
         </div>
-      )}
-    </section>
+
+        <section className="error-log-toolbar" data-reveal aria-label="Error log filters">
+          <label className="product-search">
+            <Search className="h-4 w-4" />
+            <input aria-label="Search errors" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search a lesson or saved note" />
+          </label>
+          <label className="product-select">
+            <SlidersHorizontal className="h-4 w-4" />
+            <span className="sr-only">Subject</span>
+            <select aria-label="Filter errors by subject" value={subject} onChange={(event) => setSubject(event.target.value)}>
+              <option value="All">All subjects</option>
+              <option value="SFT">SFT</option>
+              <option value="ET">ET</option>
+              <option value="ICT">ICT</option>
+            </select>
+          </label>
+          <span className="error-log-toolbar__count">{filtered.length} shown</span>
+        </section>
+
+        {error && (
+          <div className="error-banner" role="alert">
+            <AlertCircle className="h-5 w-5" /><span>{error}</span>
+            <button type="button" onClick={() => setError("")} aria-label="Dismiss error">Dismiss</button>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="error-card-grid">
+            {[0, 1, 2, 3].map((item) => <Skeleton key={item} className="h-[390px] rounded-2xl" />)}
+          </div>
+        ) : filtered.length === 0 ? (
+          <section className="product-empty" data-reveal>
+            <CircleAlert className="h-8 w-8" />
+            <h3>{mistakes.length ? "No records match these filters" : "Your Error Log is ready"}</h3>
+            <p>{mistakes.length ? "Try another subject or search phrase." : "Save a question image or note to begin a focused revision cycle."}</p>
+            {!mistakes.length && <button type="button" onClick={() => setShowAddError(true)} className="premium-button"><ImagePlus className="h-4 w-4" /> Add first error</button>}
+          </section>
+        ) : (
+          <div className="error-card-grid">
+            {filtered.map((mistake) => {
+              const due = isDue(mistake);
+              const mastery = Math.round(mistake.masteryScore || 0);
+              return (
+                <article key={mistake.id} className="error-card" data-reveal>
+                  {mistake.hasImage && mistake.imageEndpoint ? <SavedMistakeImage mistake={mistake} /> : (
+                    <div className="error-card__no-image"><BookOpenCheck className="h-6 w-6" /><span>Text record</span></div>
+                  )}
+                  <div className="error-card__body">
+                    <div className="error-card__meta">
+                      <span className="subject-badge">{mistake.subject || "Subject"}</span>
+                      <span className={cn("review-badge", due ? "is-due" : "is-scheduled")}>{due ? "Review now" : "Scheduled"}</span>
+                    </div>
+                    <h3>{mistake.lesson || "Lesson not specified"}</h3>
+                    <p className="error-card__note">{mistake.errorText || mistake.questionText || "Image-only saved mistake"}</p>
+
+                    <div className="mastery-row">
+                      <span><Brain className="h-4 w-4" /> Mastery</span><strong>{mastery}%</strong>
+                    </div>
+                    <div className="mastery-track"><span style={{ width: `${Math.max(2, Math.min(100, mastery))}%` }} /></div>
+                    <div className="error-card__facts">
+                      <span><Check className="h-3.5 w-3.5" /> Streak {mistake.correctStreak || 0}</span>
+                      {mistake.nextReviewAt && <span><Clock3 className="h-3.5 w-3.5" /> {new Date(mistake.nextReviewAt).toLocaleDateString()}</span>}
+                      {mistake.errorCategory && <span>{mistake.errorCategory}</span>}
+                    </div>
+
+                    <button type="button" onClick={() => discussMistake(mistake)} className="review-record-button">
+                      Review at Study Desk <ArrowRight className="h-4 w-4" />
+                    </button>
+                    <div className="review-outcome">
+                      <button type="button" disabled={reviewingId === mistake.id} onClick={() => void saveReview(mistake.id, 2)}>Need practice</button>
+                      <button type="button" disabled={reviewingId === mistake.id} onClick={() => void saveReview(mistake.id, 5)}>Understood</button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+      <ErrorLogModal isOpen={showAddError} onClose={() => setShowAddError(false)} onLogged={loadMistakes} />
+    </>
   );
 }

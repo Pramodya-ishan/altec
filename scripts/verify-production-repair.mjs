@@ -7,6 +7,7 @@ const assert = (condition, message) => {
 
 const sidebar = await read("src/components/layout/Sidebar.tsx");
 const topNav = await read("src/components/layout/TopNav.tsx");
+const indexCss = await read("src/index.css");
 const chat = await read("src/components/views/CloraXView.tsx");
 const bubble = await read("src/components/ui/clora/CloraMessageBubble.tsx");
 const chartShell = await read("src/components/ui/ResponsiveChartShell.tsx");
@@ -19,12 +20,16 @@ const npmrc = await read(".npmrc");
 const packageLock = await read("package-lock.json");
 const packageJson = JSON.parse(await read("package.json"));
 
-for (const label of ["Paper", "Marks", "Papers", "Z-score", "Assistant"]) {
+for (const routeId of ["paper-structure", "notes", "paper-marks", "past-papers", "admission-predictor", "clora-x"]) {
+  assert(sidebar.includes(`id: "${routeId}"`), `Missing navigation route: ${routeId}`);
+}
+for (const label of ["Plan", "Errors", "Marks", "Papers", "Z-score", "Study"]) {
   assert(sidebar.includes(`mobileLabel: "${label}"`), `Missing mobile label: ${label}`);
 }
-assert(sidebar.includes("h-[calc(60px+env(safe-area-inset-bottom))]"), "Mobile navigation height is not safe-area aware");
+assert(sidebar.includes("mobilePrimary") && sidebar.includes("More navigation"), "Five-target mobile navigation is incomplete");
+assert(indexCss.includes("height: calc(72px + env(safe-area-inset-bottom))"), "Mobile navigation height is not safe-area aware");
 assert(!sidebar.includes("Study assistant") && !sidebar.includes("Z-score analytics"), "Legacy navigation labels remain");
-assert(!topNav.includes('aria-label="Open navigation"') && sidebar.includes('lg:flex') && sidebar.includes('hidden h-[100dvh]'), "Mobile sidebar or hamburger must be removed");
+assert(!topNav.includes('aria-label="Open navigation"') && sidebar.includes("desktop-sidebar") && sidebar.includes("mobile-nav"), "Responsive navigation shell is incomplete");
 assert(topNav.includes('aria-label="New chat"') && !topNav.includes("/> New chat"), "New chat must be icon-only");
 assert(
   chat.includes("const [messages, setMessages] = useState<") && chat.includes("}[]>([])")
@@ -116,7 +121,13 @@ const memoryExtractor = await read("server/ai/memoryExtractor.ts");
 const userContext = await read("server/firebase/userContext.ts");
 const notesModal = await read("src/components/modals/NotesModal.tsx");
 const admissionView = await read("src/components/views/AdmissionPredictorView.tsx");
-assert(!hero.includes("Study with A/L subjects") && !hero.includes("2023 SFT") && hero.includes("What would you like to learn?"), "Legacy Assistant hero/prompts remain");
+assert(
+  !hero.includes("Study with A/L subjects")
+    && !hero.includes("2023 SFT")
+    && !hero.includes("AI Assistant")
+    && hero.includes("Ask. Solve. Remember."),
+  "Legacy Assistant hero/prompts remain",
+);
 assert((chat.includes("activeSubject: currentSubject.toUpperCase()") || chat.includes("activeSubject: undefined")) && chat.includes("replyingTo") && chat.includes("revealBufferedAnswer"), "Subject-aware context, message replies, or buffered typing is missing");
 assert(composer.includes("clora:composer-focus") && sidebar.includes("clora:composer-focus"), "Mobile bottom navigation does not react to the Assistant keyboard/composer");
 assert(memoryExtractor.includes('"weak_points"') && memoryExtractor.includes('"mistake_notebook"') && memoryExtractor.includes('"learning_signal_aggregates"'), "Separate learning memory collections are missing");
@@ -155,7 +166,12 @@ assert(
     && syllabusCorpusV26.includes("getSubjectSyllabusGroundingPdf"),
   "Prediction engine is not grounded in indexed papers and the authoritative syllabus corpus",
 );
-assert(cloraHeroV10.includes("Made by Pramodya Ishan") && !cloraHeroV10.includes("Clora X"), "V18 creator attribution or removed product label is incorrect");
+assert(
+  !cloraHeroV10.includes("Clora X")
+    && !cloraHeroV10.includes("AI Assistant")
+    && cloraHeroV10.includes("Your study desk"),
+  "Study Desk naming or removed AI product label is incorrect",
+);
 
 const sourceSelectionV10 = await readFile("server/ai/sourceSelection.ts", "utf8");
 const conversationStateV10 = await readFile("server/knowledge/conversationState.ts", "utf8");
@@ -381,9 +397,9 @@ const mathRendererV17 = await read("src/components/chat/MathMarkdown.tsx");
 const inventoryV17 = await read("server/sources/sourceInventoryService.ts");
 const aiRoutesV17 = await read("server/ai/routes.ts");
 
-assert(topNav.includes("Clear chat") && cloraV17.includes("/api/ai/chat-history/clear") && cloraV17.includes("bufferedAnswerRef.current.clear()"), "V18 clear-chat action or stream cleanup is incomplete");
+assert(topNav.includes("clora:clear-chat") && topNav.includes("Clear conversation") && cloraV17.includes("/api/ai/chat-history/clear") && cloraV17.includes("bufferedAnswerRef.current.clear()"), "V18 clear-chat action or stream cleanup is incomplete");
 assert(aiRoutesV17.includes('chat-history/clear') && aiRoutesV17.includes('collection("chat_context")') && aiRoutesV17.includes('collection("state")'), "V17 server chat-history cleanup is incomplete");
-assert(composerV17.includes("Upload project files") && projectUploadV17.includes("readProjectArchive") && projectUploadV17.includes("node_modules") && projectUploadV17.includes("safeArchivePath") && projectUploadV17.includes('part === ".."'), "V17 project ZIP upload protection is incomplete");
+assert(composerV17.includes('aria-label="Upload files"') && projectUploadV17.includes("readProjectArchive") && projectUploadV17.includes("node_modules") && projectUploadV17.includes("safeArchivePath") && projectUploadV17.includes('part === ".."'), "V17 project ZIP upload protection is incomplete");
 assert(pdfSourcesV17.includes("Repair all") && pdfSourcesV17.includes("Re-index all") && pdfSourcesV17.includes("OCR required") && pdfSourcesV17.includes("OCR all"), "V17 bulk PDF maintenance controls are incomplete");
 assert(ragRoutesV17.includes("processUploadedPdf") && ragRoutesV17.includes('forceOcr: mode === "ocr"'), "V17 re-index/OCR actions do not use the production PDF pipeline");
 assert(inventoryV17.includes('key.endsWith(":admin")'), "V17 PDF inventory cache does not invalidate administrator views");
@@ -618,7 +634,7 @@ const sourceInventoryV30 = await read("server/sources/sourceInventoryService.ts"
 const paperCatalogV30 = await read("server/ai/paperCatalogContext.ts");
 const composerV30 = await read("src/components/ui/clora/CloraComposer.tsx");
 const errorLogV30 = await read("src/components/modals/ErrorLogModal.tsx");
-const notesV30 = await read("src/components/views/NotesView.tsx");
+const errorLogPageV30 = await read("src/pages/MistakeNotebook.tsx");
 const appV30 = await read("src/App.tsx");
 const predictionVisualV30 = await read("server/ai-core/exam-intel/predictionVisual.ts");
 const markdownV30 = await read("src/lib/markdown/normalizeAnswerMarkdown.ts");
@@ -645,11 +661,13 @@ assert(
 );
 assert(
   appV30.includes('path="/notes"')
+    && appV30.includes("<MistakeNotebook />")
     && sidebar.includes('id: "notes"')
-    && notesV30.includes("/api/lesson-resources")
-    && notesV30.includes("createAndUploadSecureVideo")
-    && notesV30.includes("setPendingTopicHighlight(selectedLesson)"),
-  "V30 Notes workspace or Paper Structure lesson connection is incomplete",
+    && notesModal.includes("/api/lesson-resources")
+    && notesModal.includes("createAndUploadSecureVideo")
+    && errorLogPageV30.includes("<ErrorLogModal")
+    && errorLogV30.includes("Paper Structure lesson"),
+  "V30 Error Log workspace or Paper Structure lesson connection is incomplete",
 );
 assert(
   predictionVisualV30.includes("forceFirstVisual")
@@ -716,7 +734,6 @@ console.log("V31 adaptive AI hardening checks passed.");
 // V34 production repair: no AI templates, bounded uploads, protected shared
 // resources, role-gated administration, accessible focus, and local icons.
 const appV34 = await read("src/App.tsx");
-const notesV34 = await read("src/components/views/NotesView.tsx");
 const knowledgeV34 = await read("src/components/views/KnowledgeBaseView.tsx");
 const storageRulesV34 = await read("storage.rules");
 const cssV34 = await read("src/index.css");
@@ -733,8 +750,8 @@ assert(
   "Canned AI greetings or follow-up suggestion events remain",
 );
 assert(
-  notesV34.includes("/api/rag/sources/")
-    && notesV34.includes("deletePrivateStorageObject")
+  notesModal.includes("/api/rag/sources/")
+    && notesModal.includes("deletePrivateStorageObject")
     && knowledgeV34.includes('sourceScope: "owner_knowledge"')
     && !knowledgeV34.includes("FileReader"),
   "Protected PDF opening or reliable client Storage ingestion cleanup is incomplete",
@@ -775,3 +792,42 @@ assert(
   "CommonJS server build still relies on import.meta.url",
 );
 console.log("V34 production storage, AI, security, accessibility, and runtime checks passed.");
+
+// V35 Error Log consolidation, legacy video deletion compatibility, simplified
+// Assistant controls, and bounded bulk notification delivery.
+const lessonResourcesV35 = await read("server/lessonResources/routes.ts");
+const serverV35 = await read("server.ts");
+const adminDashboardV35 = await read("src/components/views/AdminDashboardView.tsx");
+const appContextV35 = await read("src/context/AppContext.tsx");
+assert(
+  sidebar.includes('label: "Error log"')
+    && appV34.includes('path="/notes" element={<MistakeNotebook />}')
+    && appV34.includes('path="/mistake-notebook" element={<Navigate to="/notes" replace />}')
+    && errorLogPageV30.includes("Add error")
+    && errorLogPageV30.includes("setShowAddError(true)"),
+  "V35 Notes-to-Error-Log routing is incomplete",
+);
+assert(
+  notesModal.includes('/api/admin/videos/${encodeURIComponent(resource.videoId)}')
+    && lessonResourcesV35.includes('requestedResourceId.startsWith("video-")')
+    && lessonResourcesV35.includes("archived: true, videoId"),
+  "V35 synthesized video resource deletion compatibility is incomplete",
+);
+assert(
+  !composerV30.includes("CloraToolPalette")
+    && !composerV30.includes(">Tools<")
+    && !composerV30.includes("Open AI tools")
+    && !chat.includes("General AI mode")
+    && !chat.includes("ErrorLogModal"),
+  "V35 Assistant mode or Tools containers remain visible",
+);
+assert(
+  serverV35.includes("targetEmails")
+    && serverV35.includes("RECIPIENT_LIMIT_EXCEEDED")
+    && serverV35.includes("resolvedUids.size")
+    && adminDashboardV35.includes("Bulk notification")
+    && appContextV35.includes("markAllPushNotificationsAsRead")
+    && topNav.includes('aria-label="Notification inbox"'),
+  "V35 bulk notification handler or notification inbox is incomplete",
+);
+console.log("V35 Error Log, video deletion, Assistant simplification, and notification checks passed.");

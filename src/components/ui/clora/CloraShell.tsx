@@ -10,10 +10,10 @@ interface CloraShellProps {
 
 export function CloraShell({ sidebar, main, drawer, isDrawerOpen = false }: CloraShellProps) {
   return (
-    <div className="flex h-full min-h-0 w-full overflow-hidden bg-white font-sans text-slate-900">
+    <div className="flex h-full min-h-0 w-full overflow-hidden bg-[#f6f7f9] font-sans text-slate-900">
       {sidebar && <aside className="hidden w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white md:flex">{sidebar}</aside>}
 
-      <main className="relative z-10 flex min-w-0 flex-1 flex-col bg-white">
+      <main className="relative z-10 flex min-w-0 flex-1 flex-col bg-[#f6f7f9]">
         <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden">{main}</div>
       </main>
 

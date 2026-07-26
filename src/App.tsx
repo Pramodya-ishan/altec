@@ -13,7 +13,6 @@ const ProfileView = lazy(() => import('./components/views/ProfileView.tsx'));
 const PastPapersView = lazy(() => import('./components/views/PastPapersView.tsx'));
 const AdmissionPredictorView = lazy(() => import('./components/views/AdmissionPredictorView.tsx'));
 const CloraXView = lazy(() => import('./components/views/CloraXView.tsx'));
-const NotesView = lazy(() => import('./components/views/NotesView.tsx'));
 const AdminDashboardView = lazy(() => import('./components/views/AdminDashboardView.tsx'));
 const SyllabusLibraryView = lazy(() => import('./components/views/SyllabusLibraryView.tsx'));
 const PdfSourcesPage = lazy(() => import('./pages/PdfSourcesPage.tsx'));
@@ -31,6 +30,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { cn } from './lib/utils';
 import { CheckCircle2, XCircle, Info, X, CloudOff, GraduationCap, Loader2 } from 'lucide-react';
 import { PageSkeleton } from './components/ui/PageSkeleton';
+import { PageTransition } from './components/layout/PageTransition';
 
 function ToastNotification() {
   const { notifications, removeNotification } = useApp();
@@ -249,30 +249,22 @@ function AppContent() {
   }, [location.pathname, setCurrentView]);
 
   return (
-    <div className="min-h-[100dvh] overflow-x-hidden bg-white font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900 relative">
+    <div className="app-shell min-h-[100dvh] overflow-x-hidden font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-950">
       <OnlineStatus />
       <ToastNotification />
       <AuthOverlay />
       <Sidebar />
-      <div className={cn("flex flex-col transition-all duration-300", isChatRoute ? "h-[100dvh] overflow-hidden bg-white" : "min-h-[100dvh] bg-white", isSidebarOpen ? "lg:pl-72" : "lg:pl-[72px] pl-0")}>
+      <div className={cn("flex flex-col transition-[padding] duration-300", isChatRoute ? "h-[100dvh] overflow-hidden" : "min-h-[100dvh]", isSidebarOpen ? "lg:pl-[272px]" : "lg:pl-[84px] pl-0")}>
         <TopNav />
         <main
           className={cn(
             "relative w-full flex-1 flex flex-col min-h-0",
             isChatRoute
-              ? "max-w-none overflow-hidden p-0 pb-[calc(60px+env(safe-area-inset-bottom))] lg:pb-0"
-              : "max-w-7xl mx-auto px-4 pb-24 pt-6 sm:px-6 sm:py-8 lg:px-8"
+              ? "max-w-none overflow-hidden p-0 pb-[calc(72px+env(safe-area-inset-bottom))] lg:pb-0"
+              : "product-content mx-auto max-w-[1440px] px-4 pb-28 pt-5 sm:px-6 sm:py-7 lg:px-8"
           )}
         >
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={location.pathname}
-              initial={{ opacity: 0, y: 7 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -5 }}
-              transition={{ duration: 0.18, ease: 'easeOut' }}
-              className="relative flex h-full min-h-0 w-full flex-1 flex-col"
-            >
+          <PageTransition routeKey={location.pathname}>
               <Suspense fallback={<PageSkeleton pathname={location.pathname} />}>
                 {user && !hasHydratedUserData ? (
                   <PageSkeleton pathname={location.pathname} />
@@ -280,7 +272,7 @@ function AppContent() {
                 <Routes location={location}>
                   <Route path="/" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="/paper-structure" element={<PaperStructureView />} />
-                  <Route path="/notes" element={<NotesView />} />
+                  <Route path="/notes" element={<MistakeNotebook />} />
                   <Route path="/question-marks" element={<Navigate to="/paper-structure" replace />} />
                   <Route path="/paper-marks" element={<PaperMarksView />} />
                   <Route path="/lesson-marks" element={<Navigate to="/admission-predictor" replace />} />
@@ -296,7 +288,7 @@ function AppContent() {
                   <Route path="/a3-war-room" element={<A3WarRoom />} />
                   <Route path="/exam-intel" element={<ExamIntelligence />} />
                   <Route path="/prediction-papers" element={<PredictionPapers />} />
-                  <Route path="/mistake-notebook" element={<MistakeNotebook />} />
+                  <Route path="/mistake-notebook" element={<Navigate to="/notes" replace />} />
                   <Route path="/pdf-intel-admin" element={<RoleRoute allow={["admin"]}><PdfIntelAdmin /></RoleRoute>} />
                   
                   <Route path="/focus-todo" element={<Navigate to="/paper-structure" replace />} />
@@ -304,8 +296,7 @@ function AppContent() {
                 </Routes>
                 )}
               </Suspense>
-            </motion.div>
-          </AnimatePresence>
+          </PageTransition>
         </main>
       </div>
 

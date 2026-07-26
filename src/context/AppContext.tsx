@@ -104,6 +104,7 @@ type AppContextType = {
   saveProfile: (profile: UserProfile) => Promise<void>;
   pushNotifications: PushNotification[];
   markPushNotificationAsRead: (id: string) => Promise<void>;
+  markAllPushNotificationsAsRead: () => Promise<void>;
   adminTargetEmail: string | null;
   setAdminTargetEmail: (email: string | null) => Promise<void>;
 };
@@ -133,6 +134,38 @@ async function readJson<T>(response: Response): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+function normalizePushNotifications(value: unknown): PushNotification[] {
+  if (!Array.isArray(value)) return [];
+  const byId = new Map<string, PushNotification>();
+  value.forEach((item: any) => {
+    const id = String(item?.id || "").trim();
+    const title = normalizeSinhalaDisplayText(String(item?.title || "")).trim();
+    const message = normalizeSinhalaDisplayText(String(item?.message || "")).trim();
+    if (!id || !title || !message || byId.has(id)) return;
+    const seconds = Number(item?.timestamp?._seconds ?? item?.timestamp?.seconds);
+    const rawTimestamp = typeof item?.timestamp === "string"
+      ? item.timestamp
+      : Number.isFinite(seconds)
+        ? new Date(seconds * 1000).toISOString()
+        : new Date().toISOString();
+    byId.set(id, {
+      id,
+      title: title.slice(0, 140),
+      message: message.slice(0, 4000),
+      type: ["message", "friend_request", "announcement"].includes(item?.type)
+        ? item.type
+        : "announcement",
+      senderEmail: item?.senderEmail ? String(item.senderEmail).slice(0, 254) : undefined,
+      senderName: item?.senderName ? String(item.senderName).slice(0, 140) : undefined,
+      read: item?.read === true,
+      timestamp: Number.isFinite(Date.parse(rawTimestamp)) ? rawTimestamp : new Date().toISOString(),
+    });
+  });
+  return [...byId.values()]
+    .sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp))
+    .slice(0, 50);
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -212,8 +245,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const response = await apiFetch("/api/notifications");
     if (!response.ok) return;
     const payload = await readJson<{ notifications?: PushNotification[] }>(response);
-    setPushNotifications(Array.isArray(payload?.notifications) ? payload.notifications : []);
+    setPushNotifications(normalizePushNotifications(payload?.notifications));
   }, []);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const refresh = () => {
+      if (document.visibilityState === "visible") void loadNotifications();
+    };
+    const timer = window.setInterval(refresh, 60_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [loadNotifications, user?.uid]);
 
   const loadOwnData = useCallback(async () => {
     if (loadInFlightRef.current) return;
@@ -615,6 +663,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!response.ok) await loadNotifications();
   }, [loadNotifications]);
 
+  const markAllPushNotificationsAsRead = useCallback(async () => {
+    setPushNotifications((items) => items.map((item) => ({ ...item, read: true })));
+    const response = await apiFetch("/api/notifications/read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ readAll: true }),
+    });
+    if (!response.ok) await loadNotifications();
+  }, [loadNotifications]);
+
   const setAdminTargetEmail = useCallback(async (email: string | null) => {
     const normalized = email?.trim().toLowerCase() || null;
     if (!normalized) {
@@ -683,6 +741,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     saveProfile,
     pushNotifications,
     markPushNotificationAsRead,
+    markAllPushNotificationsAsRead,
     adminTargetEmail,
     setAdminTargetEmail,
   }), [
@@ -698,6 +757,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     isUserDataLoading,
     loginWithGoogle,
     logout,
+    markAllPushNotificationsAsRead,
     markPushNotificationAsRead,
     modals,
     notifications,

@@ -37,7 +37,13 @@ import {
   shouldUseLockedSourceForTurn,
   toPendingSourceChoice,
 } from "./sourceSelection";
-import { isMistakeReviewIntent, selectMistakeRecordForPrompt } from "../firebase/mistakeStore";
+import {
+  inferMistakeImageMime,
+  isMistakeImageFollowUp,
+  isMistakeReviewIntent,
+  loadMistakeRecords,
+  selectMistakeRecordForPrompt,
+} from "../firebase/mistakeStore";
 import { detectSinhalaTextEncoding, normalizeSinhalaExtractedText } from "../pdf/legacySinhala";
 import {
   assessAnswerCompleteness,
@@ -515,6 +521,74 @@ ${originalPrompt}`;
     const pendingMistakeIds = Array.isArray(activeConversationState.pendingMistakeChoices)
       ? activeConversationState.pendingMistakeChoices
       : [];
+
+    // "With images" is a display command for the records we just listed, not
+    // a new model question. Render the authenticated saved images directly so
+    // the assistant can never claim that they need to be uploaded again.
+    const isActiveMistakeList = activeConversationState.awaitingMistakeSelection
+      || activeConversationState.lastIntent === "mistake_notebook";
+    if (isActiveMistakeList && isMistakeImageFollowUp(prompt)) {
+      emitSse(res, "status", { step: "mistake_notebook", status: "reading", message: "Opening saved Error Log images…" });
+      const allMistakes = await loadMistakeRecords(user.uid, user.email, 100);
+      const byKey = new Map(allMistakes.map((record: any) => [`${record.ownerPath || "uid"}:${record.id}`, record]));
+      const listedMistakes = pendingMistakeIds.length > 0
+        ? pendingMistakeIds.map((key: string) => byKey.get(String(key))).filter(Boolean)
+        : allMistakes.slice(0, 12);
+      const imageMistakes = listedMistakes.filter((record: any) => Boolean(record.imageStoragePath));
+      const imageSources = imageMistakes.map((record: any) => ({
+        id: record.id,
+        sourceId: record.id,
+        title: record.imageFileName || `${record.subject || "Subject"} · ${record.lesson || "Saved error"}`,
+        sourceType: "mistake_image",
+        badge: "Saved error image",
+        mimeType: inferMistakeImageMime(record),
+        lesson: record.lesson,
+        ownerPath: record.ownerPath || "uid",
+      }));
+      const visualBlocks = imageSources.map((source: any) => ({
+        type: "mistake_image_preview",
+        title: source.title,
+        mistakeId: source.id,
+        ownerPath: source.ownerPath,
+        caption: `${source.lesson || "Error Log"} · saved image`,
+      }));
+      const answerText = imageMistakes.length > 0
+        ? `### Saved Error Log images\n\nසුරැකි image record **${imageMistakes.length}ක්** පහතින් විවෘත කළා. ඒවා නැවත upload කරන්න අවශ්‍ය නැහැ.\n\nවිශ්ලේෂණය කරන්න ඕන record අංකය දෙන්න. මම saved image එක කියවා ප්‍රශ්නය, වැරදුණු හේතුව, නිවැරදි ක්‍රමය සහ පුහුණු ප්‍රශ්නයක් දෙන්නම්.`
+        : "### Saved Error Log images\n\nදැනට ලැයිස්තුගත Error Log records අතර saved image එකක් නැහැ. Text record එකක් විශ්ලේෂණය කරන්න එහි අංකය දෙන්න.";
+
+      if (imageSources.length > 0) emitSse(res, "sources", { sources: imageSources });
+      emitSse(res, "token", { text: answerText });
+      if (visualBlocks.length > 0) emitSse(res, "visual_blocks", { blocks: visualBlocks });
+      const chatRes = await saveFinalChat({
+        uid: user.uid,
+        email: user.email,
+        userText: prompt,
+        assistantText: answerText,
+        mode: "mistake_notebook",
+        subject: activeSubject,
+        sources: imageSources,
+        visualBlocks,
+      });
+      if (chatRes?.chatSaved) {
+        trace.chatSaved = true;
+        trace.messageId = chatRes.messageId;
+      }
+      trace.completed = true;
+      emitSse(res, "done", {
+        ok: true,
+        completed: true,
+        requestId,
+        messageId: chatRes?.messageId || null,
+        chatSaved: trace.chatSaved,
+        sources: imageSources,
+        visualBlocks,
+        finishReason: imageMistakes.length > 0 ? "mistake_images_loaded" : "mistake_images_empty",
+      });
+      trace.doneSent = true;
+      trace.lastEvent = "done";
+      return;
+    }
+
     const mistakeChoiceMatch = activeConversationState.awaitingMistakeSelection
       ? String(prompt || "").trim().match(/^(\d{1,3})[.)]?[?.!]*$/u)
       : null;
@@ -522,7 +596,6 @@ ${originalPrompt}`;
       const mistakeChoiceIndex = Number(mistakeChoiceMatch[1]) - 1;
       const selectedMistakeKey = pendingMistakeIds[mistakeChoiceIndex];
       if (selectedMistakeKey) {
-        const { loadMistakeRecords } = await import("../firebase/mistakeStore");
         const records = await loadMistakeRecords(user.uid, user.email, 100);
         const keyMatch = String(selectedMistakeKey).match(/^(uid|legacy_email):(.*)$/u);
         const selectedOwner = keyMatch?.[1] || "";
@@ -1334,6 +1407,25 @@ ${originalPrompt}`;
       }
       if (!selectedMistakeRecord) {
       let answerText = `### Error Log\n\n`;
+      const includeSavedImages = isMistakeImageFollowUp(prompt);
+      const imageRecords = includeSavedImages ? records.filter((record: any) => Boolean(record.imageStoragePath)) : [];
+      const imageSources = imageRecords.map((record: any) => ({
+        id: record.id,
+        sourceId: record.id,
+        title: record.imageFileName || `${record.subject || "Subject"} · ${record.lesson || "Saved error"}`,
+        sourceType: "mistake_image",
+        badge: "Saved error image",
+        mimeType: inferMistakeImageMime(record),
+        lesson: record.lesson,
+        ownerPath: record.ownerPath || "uid",
+      }));
+      const visualBlocks = imageSources.map((source: any) => ({
+        type: "mistake_image_preview",
+        title: source.title,
+        mistakeId: source.id,
+        ownerPath: source.ownerPath,
+        caption: `${source.lesson || "Error Log"} · saved image`,
+      }));
       if (records.length === 0) {
         answerText += "ඔයාගේ current account UID path එකත් පැරණි email-based path එකත් දෙකම පරීක්ෂා කළා. මේ account එකට සුරැකි Error Log record එකක් හමු වුණේ නැහැ.";
       } else {
@@ -1346,7 +1438,9 @@ ${originalPrompt}`;
           const repeatNote = Number(record.repeatCount || 0) > 1 ? ` · වර ${Number(record.repeatCount)}ක් වැරදී ඇත` : "";
           return `**${index + 1}. ${subject} — ${lesson}**${imageNote}${repeatNote}\n\n${detail}`;
         }).join("\n\n");
-        answerText += "\n\nසාකච්ඡා කරන්න ඕන record අංකය දෙන්න. මම ඒ saved record එකේ ප්‍රශ්නය, වැරදුණු හේතුව, නිවැරදි ක්‍රමය සහ නැවත පුහුණු ප්‍රශ්නය දෙන්නම්.";
+        answerText += includeSavedImages && imageRecords.length > 0
+          ? `\n\nSaved image record **${imageRecords.length}ක්** පහතින් විවෘත කර ඇත. ඒවා නැවත upload කරන්න අවශ්‍ය නැහැ. සාකච්ඡා කරන්න ඕන record අංකය දෙන්න.`
+          : "\n\nසාකච්ඡා කරන්න ඕන record අංකය දෙන්න. මම ඒ saved record එකේ ප්‍රශ්නය, වැරදුණු හේතුව, නිවැරදි ක්‍රමය සහ නැවත පුහුණු ප්‍රශ්නය දෙන්නම්.";
         await updateConversationState(user.uid, {
           pendingMistakeChoices: records.map((record: any) => `${record.ownerPath || "uid"}:${record.id}`),
           awaitingMistakeSelection: true,
@@ -1354,7 +1448,9 @@ ${originalPrompt}`;
           lastIntent: "mistake_notebook",
         });
       }
+      if (imageSources.length > 0) emitSse(res, "sources", { sources: imageSources });
       emitSse(res, "token", { text: answerText });
+      if (visualBlocks.length > 0) emitSse(res, "visual_blocks", { blocks: visualBlocks });
       trace.lastEvent = "token";
       const chatRes = await saveFinalChat({
         uid: user.uid,
@@ -1363,6 +1459,8 @@ ${originalPrompt}`;
         assistantText: answerText,
         mode: "mistake_notebook",
         subject: activeSubject,
+        sources: imageSources,
+        visualBlocks,
       });
       if (chatRes?.chatSaved) {
         trace.chatSaved = true;
@@ -1375,7 +1473,8 @@ ${originalPrompt}`;
         requestId,
         messageId: chatRes?.messageId || null,
         chatSaved: trace.chatSaved,
-        sources: [],
+        sources: imageSources,
+        visualBlocks,
         finishReason: records.length > 0 ? "mistake_log_loaded" : "mistake_log_empty",
       });
       trace.doneSent = true;
@@ -2410,29 +2509,30 @@ Explain ${lessonName} only with established Sri Lankan G.C.E. A/L Technology syl
         : "These are the user's real saved Error Log records. Summarize only what was requested and use mastery/due-date data for a grounded revision quiz."}\nNever say the Error Log is empty when this list contains records. If a saved image is attached below, inspect that actual image. Do not ask the user to upload it again. Never replace unreadable or missing details with generic likely mistakes; say exactly what cannot be read.`;
       const bucket = getAdminBucket();
       for (const mistake of recentMistakes.slice(0, 3)) {
-        if (!mistake.imageStoragePath || !mistake.imageMimeType) continue;
+        if (!mistake.imageStoragePath) continue;
+        const imageMimeType = inferMistakeImageMime(mistake);
+        const source = {
+          id: mistake.id,
+          sourceId: mistake.id,
+          title: mistake.imageFileName || `${mistake.subject || "Subject"} - ${mistake.lesson || "lesson"}`,
+          sourceType: "mistake_image",
+          badge: "Saved error image",
+          mimeType: imageMimeType,
+          lesson: mistake.lesson,
+          ownerPath: mistake.ownerPath || "uid",
+        };
+        mistakeImageSources.push(source);
+        allSources.push(source);
         try {
           const [imageBytes] = await bucket.file(String(mistake.imageStoragePath)).download();
           if (!imageBytes?.length || imageBytes.length > 12 * 1024 * 1024) throw new Error("Saved image is empty or too large.");
           contentsParts.push({
             inlineData: {
               data: imageBytes.toString("base64"),
-              mimeType: mistake.imageMimeType,
+              mimeType: imageMimeType,
             },
           });
           contentsParts.push({ text: `Saved Error Log image for ${mistake.subject || "subject"} / ${mistake.lesson || "lesson"}. This is the actual selected evidence; inspect it before answering.` });
-          const source = {
-            id: mistake.id,
-            sourceId: mistake.id,
-            title: mistake.imageFileName || `${mistake.subject || "Subject"} - ${mistake.lesson || "lesson"}`,
-            sourceType: "mistake_image",
-            badge: "Saved error image",
-            mimeType: mistake.imageMimeType,
-            lesson: mistake.lesson,
-            ownerPath: mistake.ownerPath || "uid",
-          };
-          mistakeImageSources.push(source);
-          allSources.push(source);
         } catch (error) {
           console.warn("[MistakeNotebook] Could not load saved image", { mistakeId: mistake.id, error: String(error) });
         }

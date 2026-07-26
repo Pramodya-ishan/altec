@@ -177,9 +177,52 @@ lessonResourceRoutes.delete("/lesson-resources/:resourceId", requireFirebaseUser
   try {
     assertContentManager(req.user);
     const db = getAdminDb();
-    const resourceRef = db.collection("lesson_resources").doc(req.params.resourceId);
+    const requestedResourceId = String(req.params.resourceId || "");
+    const resourceRef = db.collection("lesson_resources").doc(requestedResourceId);
     const snapshot = await resourceRef.get();
-    if (!snapshot.exists) return res.status(404).json({ ok: false, code: "LESSON_RESOURCE_NOT_FOUND" });
+    if (!snapshot.exists) {
+      // Older clients received synthesized IDs for videos that only existed in
+      // the videos collection. Keep that contract so `video-{videoId}` archives
+      // the real record instead of returning a misleading 404.
+      if (!requestedResourceId.startsWith("video-")) {
+        return res.status(404).json({ ok: false, code: "LESSON_RESOURCE_NOT_FOUND" });
+      }
+      const videoId = requestedResourceId.slice("video-".length);
+      if (!videoId) return res.status(404).json({ ok: false, code: "LESSON_RESOURCE_NOT_FOUND" });
+      const videoRef = db.collection("videos").doc(videoId);
+      const videoSnapshot = await videoRef.get();
+      if (!videoSnapshot.exists) return res.status(404).json({ ok: false, code: "LESSON_RESOURCE_NOT_FOUND" });
+
+      const video = videoSnapshot.data() || {};
+      const now = new Date().toISOString();
+      const batch = db.batch();
+      batch.set(videoRef, {
+        status: "archived",
+        isPublished: false,
+        allowPlayback: false,
+        updatedAt: now,
+      }, { merge: true });
+      const sourceId = String(video.sourceId || "").trim();
+      if (sourceId) {
+        batch.set(db.collection("sources").doc(sourceId), {
+          processingStatus: "deleted",
+          deletedAt: now,
+          updatedAt: now,
+        }, { merge: true });
+        const canonicalResource = db.collection("lesson_resources").doc(sourceId);
+        const canonicalSnapshot = await canonicalResource.get();
+        if (canonicalSnapshot.exists) {
+          batch.set(canonicalResource, {
+            processingStatus: "archived",
+            published: false,
+            updatedAt: now,
+          }, { merge: true });
+        }
+      }
+      await batch.commit();
+      invalidateInventoryCache(req.user.uid);
+      return res.json({ ok: true, archived: true, videoId });
+    }
     const resource = snapshot.data() || {};
 
     if (resource.videoId) {

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { Loader2, Lock, Save, Search, Server, ShieldCheck, UserRound, X } from "lucide-react";
+import { BellRing, Loader2, Lock, Save, Search, Send, Server, ShieldCheck, UserRound, X } from "lucide-react";
 import { useApp } from "../../context/AppContext";
+import { apiFetch } from "../../lib/api";
 import type { AppData } from "../../types";
 
 export default function AdminDashboardView() {
@@ -15,6 +16,10 @@ export default function AdminDashboardView() {
   const [emailInput, setEmailInput] = useState("");
   const [jsonInput, setJsonInput] = useState("");
   const [loadingUser, setLoadingUser] = useState(false);
+  const [recipientInput, setRecipientInput] = useState("");
+  const [notificationTitle, setNotificationTitle] = useState("");
+  const [notificationMessage, setNotificationMessage] = useState("");
+  const [sendingNotification, setSendingNotification] = useState(false);
 
   const isAdmin = profile?.role === "admin" || profile?.roles?.includes("admin");
 
@@ -61,6 +66,54 @@ export default function AdminDashboardView() {
     }
   };
 
+  const handleSendNotification = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const recipients = [...new Set(
+      recipientInput
+        .split(/[\s,;]+/)
+        .map((email) => email.trim().toLowerCase())
+        .filter(Boolean),
+    )];
+    if (recipients.length === 0 || recipients.some((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+      showNotification("Enter valid recipient email addresses.", "error");
+      return;
+    }
+    if (recipients.length > 100) {
+      showNotification("Send to at most 100 recipients at a time.", "error");
+      return;
+    }
+    if (!notificationTitle.trim() || !notificationMessage.trim()) {
+      showNotification("Add both a title and a message.", "error");
+      return;
+    }
+
+    setSendingNotification(true);
+    try {
+      const response = await apiFetch("/api/notifications/trigger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetEmails: recipients,
+          notification: {
+            title: notificationTitle.trim(),
+            message: notificationMessage.trim(),
+            type: "announcement",
+          },
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) throw new Error(payload?.message || "Notifications could not be sent.");
+      const missingText = Number(payload.missing || 0) > 0 ? ` ${payload.missing} recipient(s) were not found.` : "";
+      showNotification(`Notification delivered to ${payload.delivered} recipient(s).${missingText}`, "success");
+      setNotificationTitle("");
+      setNotificationMessage("");
+    } catch (error: any) {
+      showNotification(error?.message || "Notifications could not be sent.", "error");
+    } finally {
+      setSendingNotification(false);
+    }
+  };
+
   if (!isAdmin) {
     return (
       <section className="mx-auto mt-20 flex h-full max-w-lg flex-col items-center justify-center p-12 text-center">
@@ -86,7 +139,7 @@ export default function AdminDashboardView() {
       </header>
 
       <section className="grid gap-6 lg:grid-cols-[minmax(280px,0.8fr)_minmax(0,2fr)]">
-        <div>
+        <div className="space-y-6">
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="mb-4 flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-indigo-600" aria-hidden="true" />
@@ -113,6 +166,51 @@ export default function AdminDashboardView() {
               >
                 {loadingUser ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Search className="h-4 w-4" aria-hidden="true" />}
                 Open audited support mode
+              </button>
+            </form>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="mb-4 flex items-center gap-2">
+              <BellRing className="h-5 w-5 text-indigo-600" aria-hidden="true" />
+              <h2 className="text-sm font-black uppercase tracking-widest text-slate-600">Bulk notification</h2>
+            </div>
+            <p className="mb-4 text-sm leading-6 text-slate-600">
+              Send one announcement to up to 100 verified accounts. Separate email addresses with commas, spaces, or new lines.
+            </p>
+            <form className="space-y-3" onSubmit={handleSendNotification}>
+              <label className="block text-sm font-bold text-slate-800" htmlFor="notification-recipients">Recipient emails</label>
+              <textarea
+                id="notification-recipients"
+                value={recipientInput}
+                onChange={(event) => setRecipientInput(event.target.value)}
+                placeholder={"student1@example.com\nstudent2@example.com"}
+                className="min-h-24 w-full resize-y rounded-xl border border-slate-300 p-3 text-sm text-slate-900"
+                spellCheck={false}
+              />
+              <label className="block text-sm font-bold text-slate-800" htmlFor="notification-title">Title</label>
+              <input
+                id="notification-title"
+                value={notificationTitle}
+                onChange={(event) => setNotificationTitle(event.target.value)}
+                maxLength={140}
+                className="min-h-11 w-full rounded-xl border border-slate-300 px-3 text-sm text-slate-900"
+              />
+              <label className="block text-sm font-bold text-slate-800" htmlFor="notification-message">Message</label>
+              <textarea
+                id="notification-message"
+                value={notificationMessage}
+                onChange={(event) => setNotificationMessage(event.target.value)}
+                maxLength={4000}
+                className="min-h-28 w-full resize-y rounded-xl border border-slate-300 p-3 text-sm text-slate-900"
+              />
+              <button
+                type="submit"
+                disabled={sendingNotification}
+                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {sendingNotification ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Send className="h-4 w-4" aria-hidden="true" />}
+                Send notification
               </button>
             </form>
           </div>

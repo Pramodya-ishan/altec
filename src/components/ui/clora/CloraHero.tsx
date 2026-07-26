@@ -1,25 +1,51 @@
-import React from 'react';
-import { motion } from 'motion/react';
+import type { ReactNode } from "react";
+import { ArrowUpRight, BookOpenCheck, CircleAlert, FileQuestion } from "lucide-react";
 
 interface CloraHeroProps {
   onSelectPrompt?: (prompt: string) => void;
-  prompts?: { title: string; prompt: string; icon: React.ReactNode; color?: string }[];
+  prompts?: { title: string; prompt: string; icon: ReactNode; color?: string }[];
 }
 
-export function CloraHero(_: CloraHeroProps) {
+const defaultPrompts = [
+  {
+    title: "Review my Error Log",
+    description: "Open saved mistakes, including their images.",
+    prompt: "Give my Error Log with images",
+    icon: <CircleAlert className="h-5 w-5" />,
+  },
+  {
+    title: "Solve a paper question",
+    description: "Use a year, subject, and question number.",
+    prompt: "Help me solve an official past paper question step by step",
+    icon: <FileQuestion className="h-5 w-5" />,
+  },
+  {
+    title: "Plan today’s revision",
+    description: "Prioritise weak lessons and due work.",
+    prompt: "Build a focused revision plan for today from my saved progress",
+    icon: <BookOpenCheck className="h-5 w-5" />,
+  },
+];
+
+export function CloraHero({ onSelectPrompt, prompts }: CloraHeroProps) {
+  const items = prompts?.map((item) => ({ ...item, description: item.prompt })) || defaultPrompts;
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center px-5 py-10 sm:px-8">
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
-        <h1 className="max-w-xl text-3xl font-semibold tracking-[-0.035em] text-slate-950 sm:text-4xl">
-          What would you like to learn?
-        </h1>
-        <p className="mt-3 max-w-xl text-sm leading-6 text-slate-500 sm:text-base">
-          Ask a question in Sinhala or English.
-        </p>
-        <p className="mt-5 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-          AI Assistant · Made by Pramodya Ishan
-        </p>
-      </motion.div>
-    </div>
+    <section className="study-hero">
+      <div className="study-hero__intro" data-reveal>
+        <p className="product-eyebrow">Your study desk</p>
+        <h2>Ask. Solve. Remember.</h2>
+        <p>Work from your saved errors, syllabus, and past papers in Sinhala or English.</p>
+      </div>
+      <div className="study-prompt-grid" data-reveal>
+        {items.map((item) => (
+          <button key={item.title} type="button" onClick={() => onSelectPrompt?.(item.prompt)} className="study-prompt">
+            <span className="study-prompt__icon">{item.icon}</span>
+            <span className="min-w-0 flex-1"><strong>{item.title}</strong><small>{item.description}</small></span>
+            <ArrowUpRight className="h-4 w-4" />
+          </button>
+        ))}
+      </div>
+      <p className="study-hero__note">Answers can use saved records and approved sources. Check official exam details before relying on them.</p>
+    </section>
   );
 }

@@ -13,10 +13,8 @@ import { CloraShell } from '../ui/clora/CloraShell';
 import { CloraHero } from '../ui/clora/CloraHero';
 import { CloraComposer, type UploadTelemetry } from '../ui/clora/CloraComposer';
 import { CloraMessageBubble } from '../ui/clora/CloraMessageBubble';
-import { CloraToolPalette } from '../ui/clora/CloraToolPalette';
 import { CloraSourceDrawer } from '../ui/clora/CloraSourceDrawer';
 import { openSourcePdf } from '../../lib/sourceActions';
-import { ErrorLogModal } from '../modals/ErrorLogModal';
 const PdfViewerModal = React.lazy(() => import('../PdfViewerModal').then(m => ({ default: m.PdfViewerModal })));
 import {
   Paperclip,
@@ -31,7 +29,6 @@ import {
   ChevronDown,
   X,
   Sparkle,
-  Globe,
   Database,
   ArrowUpRight,
   ThumbsDown,
@@ -51,13 +48,13 @@ import { extractVisualBlocks } from '../../lib/visualBlockExtractor';
 import { useAutosizeTextarea } from '../../hooks/useAutosizeTextarea';
 import { useNearBottomAutoScroll } from '../../hooks/useNearBottomAutoScroll';
 import { AudioPlayer } from '../AudioPlayer';
-import { ToolCommandPalette, CommandOption } from '../chat/ToolCommandPalette';
 import { TtsComposerModal } from '../chat/TtsComposerModal';
 import { RealtimeLiveCallPanel } from '../ui/clora/RealtimeLiveCallPanel';
 import { VoiceAudioCard } from '../chat/VoiceAudioCard';
 import { parseChatCommand } from '../../lib/chatCommandParser';
 import { isClientImageGenerationIntent, isClientVisualExplanationIntent } from '../../lib/ai/imageIntent';
 import { buildProjectFileContext, isProjectArchiveFile, isProjectTextFile, MAX_CHAT_UPLOAD_FILES, readProjectArchive, readProjectTextFile } from '../../lib/projectFileUpload';
+import { consumePendingStudyPrompt } from '../../lib/navigationIntent';
 
 
 type ChatUpload = {
@@ -194,11 +191,8 @@ const [messages, setMessages] = useState<{
   }[]>([]);
   const [input, setInput] = useState('');
   const [replyingTo, setReplyingTo] = useState<{ id: string; role: string; content: string } | null>(null);
-  const [showCommandPalette, setShowCommandPalette] = useState(false);
-  const [commandSearchQuery, setCommandSearchQuery] = useState('');
   const [showTtsModal, setShowTtsModal] = useState(false);
   const [showLiveVoiceModal, setShowLiveVoiceModal] = useState(false);
-  const [showErrorLogModal, setShowErrorLogModal] = useState(false);
   const [realtimeVoiceEnabled, setRealtimeVoiceEnabled] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<ChatUpload[]>([]);
@@ -211,6 +205,11 @@ const [messages, setMessages] = useState<{
   const [isLoadingChatHistory, setIsLoadingChatHistory] = useState(false);
   const [sourceMode, setSourceMode] = useState<{ mode: 'locked_pdf' | 'general_ai'; title: string | null }>({ mode: 'general_ai', title: null });
   const chatSessionIdRef = useRef(`chat_${generateUUID()}`);
+
+  useEffect(() => {
+    const pendingPrompt = consumePendingStudyPrompt();
+    if (pendingPrompt) setInput(pendingPrompt);
+  }, []);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -240,7 +239,7 @@ const [messages, setMessages] = useState<{
       const response = await apiFetch('/api/ai/conversation/source-unlock', { method: 'POST' });
       if (!response.ok) throw new Error('Source unlock failed');
       setSourceMode({ mode: 'general_ai', title: null });
-      showNotification('PDF source unlocked. General AI mode is active.', 'success');
+      showNotification('PDF source unlocked.', 'success');
     } catch {
       showNotification('The PDF source could not be unlocked.', 'error');
     }
@@ -1755,7 +1754,7 @@ ${parsedCommand.text || "Review my recent lesson context and teach the next usef
                         {savedChatHistory.map((item, index) => (
                           <button
                             type="button"
-                            key={item.id || item.requestId || index}
+                            key={item.id || item.requestId || `${item.createdAt || "saved"}-${item.userPrompt || item.text || item.content || index}`}
                             onClick={() => {
                               const restored = flattenSavedHistory(savedChatHistory.slice(0, index + 1));
                               setMessages(restored);
@@ -1776,16 +1775,16 @@ ${parsedCommand.text || "Review my recent lesson context and teach the next usef
             )}
           </AnimatePresence>
 
-          <div className="clora-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-white" ref={scrollRef}>
+          <div className="clora-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-[#f6f7f9]" ref={scrollRef}>
             {isEmptyChat ? (
-              <CloraHero />
+              <CloraHero onSelectPrompt={setInput} />
             ) : (
               <div className="mx-auto w-full min-w-0 max-w-3xl px-4 pb-6 pt-5 sm:px-6 sm:pt-8">
                 <AnimatePresence initial={false}>
                 {messages.map((msg, idx) => {
                   return (
                     <CloraMessageBubble
-                      key={msg.id || idx}
+                      key={msg.id || `${msg.role}-${msg.createdAt || "message"}-${String(msg.content || "").slice(0, 32)}`}
                       message={msg}
                       isStreaming={(msg.status === 'streaming' || msg.status === 'typing') && idx === messages.length - 1}
                       onReply={(message) => setReplyingTo({ id: message.id, role: message.role, content: String(message.content || '').slice(0, 1200) })}
@@ -1822,18 +1821,18 @@ ${parsedCommand.text || "Review my recent lesson context and teach the next usef
             )}
           </AnimatePresence>
 
-          <div className="relative shrink-0 bg-white/95 pt-2 backdrop-blur">
-            <div className="mx-auto mb-2 flex w-full max-w-3xl items-center justify-between gap-3 px-4 sm:px-6" aria-live="polite">
-              <div className={`inline-flex min-w-0 items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ${sourceMode.mode === 'locked_pdf' ? 'bg-indigo-50 text-indigo-700 ring-indigo-200' : 'bg-slate-50 text-slate-600 ring-slate-200'}`}>
-                {sourceMode.mode === 'locked_pdf' ? <Lock className="h-3.5 w-3.5 shrink-0" /> : <Globe className="h-3.5 w-3.5 shrink-0" />}
-                <span className="truncate">{sourceMode.mode === 'locked_pdf' ? `Source locked${sourceMode.title ? ` · ${sourceMode.title}` : ''}` : 'General AI mode'}</span>
-              </div>
-              {sourceMode.mode === 'locked_pdf' && (
+          <div className="relative shrink-0 border-t border-slate-200/70 bg-[#f6f7f9]/95 pt-2 backdrop-blur">
+            {sourceMode.mode === 'locked_pdf' && (
+              <div className="mx-auto mb-2 flex w-full max-w-3xl items-center justify-between gap-3 px-4 sm:px-6" aria-live="polite">
+                <div className="inline-flex min-w-0 items-center gap-2 rounded-full bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-200">
+                  <Lock className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">Source locked{sourceMode.title ? ` · ${sourceMode.title}` : ''}</span>
+                </div>
                 <button type="button" onClick={() => void unlockPdfSource()} className="shrink-0 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 hover:text-slate-900">
                   Unlock PDF
                 </button>
-              )}
-            </div>
+              </div>
+            )}
             <CloraComposer
               input={input}
               setInput={setInput}
@@ -1852,7 +1851,6 @@ ${parsedCommand.text || "Review my recent lesson context and teach the next usef
                 if (uploadedFiles.length <= 1) setUploadTelemetry(null);
               }}
               disabled={uploading || isStreaming}
-              onErrorLogSelect={() => setShowErrorLogModal(true)}
               uploadTelemetry={uploadTelemetry}
               uploadError={uploadError}
               indexingFailed={indexingFailed}
@@ -1870,10 +1868,6 @@ ${parsedCommand.text || "Review my recent lesson context and teach the next usef
             accept="application/pdf,application/zip,application/x-zip-compressed,image/png,image/jpeg,image/webp,text/*,.zip,.md,.markdown,.csv,.json,.jsonl,.js,.jsx,.mjs,.cjs,.ts,.tsx,.html,.htm,.css,.scss,.sass,.less,.xml,.yaml,.yml,.py,.java,.c,.h,.cpp,.hpp,.cs,.go,.rs,.php,.rb,.sh,.sql,.env,.ini,.toml,.log"
           />
 
-          <ErrorLogModal
-            isOpen={showErrorLogModal}
-            onClose={() => setShowErrorLogModal(false)}
-          />
         </>
       }
     />

@@ -176,6 +176,40 @@ export function isMistakeReviewIntent(prompt: string): boolean {
   ].some((pattern) => pattern.test(normalized) || pattern.test(compact));
 }
 
+/**
+ * A short follow-up such as "with images" only has meaning when the active
+ * conversation is already showing Error Log records. Keep this intentionally
+ * separate from isMistakeReviewIntent so unrelated image requests are not
+ * captured by the Error Log flow.
+ */
+export function isMistakeImageFollowUp(prompt: string): boolean {
+  const normalized = String(prompt || "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized || normalized.length > 120) return false;
+
+  const asksToShow = /^(?:with|show|include|display|open|view|see|and|also|can i see|let me see|give me|send)(?:\s+(?:the|those|saved|actual|all|them|it|records?))*\s+(?:images?|photos?|pictures?|screenshots?)\b/i.test(normalized)
+    || /\b(?:with|including)\s+(?:(?:the|those|saved|actual|all)\s+)*(?:images?|photos?|pictures?|screenshots?)\b/i.test(normalized)
+    || /\b(?:images?|photos?|pictures?|screenshots?)\s+(?:too|also|please|pls|plz|එක්ක|සමඟ|පෙන්වන්න|දෙන්න)\b/iu.test(normalized)
+    || /(?:රූප|පින්තූර|ෆොටෝ|ඡායාරූප)(?:\s*(?:ටික|සමඟ|එක්ක|පෙන්වන්න|පෙන්නන්න|දෙන්න|ඕන|බලන්න))+/u.test(normalized)
+    || /(?:image|photo|pic)(?:s)?\s*(?:ekka|samaga|pennanna|balanna|tikath|tika)/i.test(normalized);
+  return asksToShow;
+}
+
+export function inferMistakeImageMime(record: Partial<MistakeRecord>): string {
+  const supplied = String(record.imageMimeType || "").trim().toLowerCase();
+  if (/^image\/(?:jpeg|png|webp|gif)$/u.test(supplied)) return supplied;
+
+  const candidate = `${record.imageFileName || ""} ${record.imageStoragePath || ""}`.toLowerCase();
+  if (/\.png(?:\?|#|\s|$)/u.test(candidate)) return "image/png";
+  if (/\.webp(?:\?|#|\s|$)/u.test(candidate)) return "image/webp";
+  if (/\.gif(?:\?|#|\s|$)/u.test(candidate)) return "image/gif";
+  return "image/jpeg";
+}
+
 function normalizeMistakeSearch(value: unknown) {
   return String(value || "")
     .normalize("NFKC")
@@ -198,6 +232,11 @@ const LESSON_ALIAS_GROUPS = [
 export function selectMistakeRecordForPrompt(records: MistakeRecord[], prompt: string): MistakeRecord | null {
   const query = normalizeMistakeSearch(prompt);
   if (!query) return null;
+  const directIdMatch = records.find((record) => {
+    const normalizedId = normalizeMistakeSearch(record.id);
+    return normalizedId.length >= 6 && query.includes(normalizedId);
+  });
+  if (directIdMatch) return directIdMatch;
   const expandedQuery = new Set(query.split(" ").filter((token) => token.length > 2));
   for (const aliases of LESSON_ALIAS_GROUPS) {
     if (aliases.some((alias) => query.includes(normalizeMistakeSearch(alias)))) {

@@ -195,38 +195,101 @@ app.get("/api/notifications", requireFirebaseUser, async (req: any, res) => {
     const notifications = snap.docs.map((doc: any) => ({ id: doc.id, ...doc.data() }));
     res.json({ ok: true, notifications });
   } catch (error: any) {
-    res.status(500).json({ ok: false, code: "NOTIFICATIONS_FETCH_FAILED", message: error.message });
+    console.error("[NOTIFICATIONS_FETCH_FAILED]", { requestId: req.requestId, code: error?.code });
+    res.status(500).json({ ok: false, code: "NOTIFICATIONS_FETCH_FAILED", message: "Notifications could not be loaded." });
   }
 });
 
 app.post("/api/notifications/trigger", requireFirebaseUser, requireRole("admin", "ops"), async (req: any, res) => {
   try {
     const user = req.user;
-    const { notification, targetUid } = req.body;
-    if (!notification || !notification.title || !notification.message || !targetUid) {
-      return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "Missing targetUid, title, or message" });
+    const body = req.body || {};
+    const notification = body.notification || {};
+    const title = String(notification.title || "").trim();
+    const message = String(notification.message || "").trim();
+    const type = ["message", "friend_request", "announcement"].includes(notification.type)
+      ? notification.type
+      : "announcement";
+    if (!title || title.length > 140 || !message || message.length > 4000) {
+      return res.status(400).json({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        message: "Provide a title up to 140 characters and a message up to 4,000 characters.",
+      });
     }
+
+    const explicitUids: string[] = [
+      body.targetUid,
+      ...(Array.isArray(body.targetUids) ? body.targetUids : []),
+    ].map((value) => String(value || "").trim()).filter(Boolean) as string[];
+    const targetEmails: string[] = (Array.isArray(body.targetEmails) ? body.targetEmails : [])
+      .map((value: unknown) => String(value || "").trim().toLowerCase())
+      .filter(Boolean) as string[];
+    const uniqueUids = [...new Set(explicitUids)];
+    const uniqueEmails = [...new Set(targetEmails)];
+    if (uniqueUids.length + uniqueEmails.length === 0) {
+      return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "Add at least one recipient." });
+    }
+    if (uniqueUids.length + uniqueEmails.length > 100) {
+      return res.status(413).json({ ok: false, code: "RECIPIENT_LIMIT_EXCEEDED", message: "A bulk notification can contain at most 100 recipients." });
+    }
+    if (uniqueUids.some((uid) => !/^[A-Za-z0-9:_-]{1,128}$/.test(uid))
+      || uniqueEmails.some((email) => email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) {
+      return res.status(400).json({ ok: false, code: "RECIPIENT_INVALID", message: "One or more recipients are invalid." });
+    }
+
     const db = getAdminDb();
-    const targetRef = db.collection("users").doc(String(targetUid));
-    const target = await targetRef.get();
-    if (!target.exists) {
-      return res.status(404).json({ ok: false, code: "USER_NOT_FOUND", message: "The target user was not found." });
+    const resolvedUids = new Set<string>();
+    let missing = 0;
+
+    if (uniqueUids.length > 0) {
+      const snapshots = await db.getAll(...uniqueUids.map((uid) => db.collection("users").doc(uid)));
+      snapshots.forEach((snapshot: any, index: number) => {
+        if (snapshot.exists) resolvedUids.add(uniqueUids[index]);
+        else missing += 1;
+      });
     }
-    const id = notification.id || targetRef.collection("notifications").doc().id;
+
+    if (uniqueEmails.length > 0) {
+      const lookups = await Promise.allSettled(uniqueEmails.map((email) => getAdminAuth().getUserByEmail(email)));
+      lookups.forEach((lookup) => {
+        if (lookup.status === "fulfilled") resolvedUids.add(lookup.value.uid);
+        else missing += 1;
+      });
+    }
+
+    if (resolvedUids.size === 0) {
+      return res.status(404).json({ ok: false, code: "USER_NOT_FOUND", message: "No matching recipients were found." });
+    }
+
+    const requestedId = String(notification.id || "").trim();
+    const id = /^[A-Za-z0-9_-]{1,128}$/.test(requestedId) ? requestedId : crypto.randomUUID();
     const newNotif = {
       id,
-      title: notification.title,
-      message: notification.message,
-      type: notification.type || "announcement",
-      senderEmail: notification.senderEmail || user.email || "system@alblueprint.com",
-      senderName: notification.senderName || user.name || "System Admin",
+      title,
+      message,
+      type,
+      senderEmail: user.email || "system@alblueprint.com",
+      senderName: user.name || "System Admin",
       read: false,
-      timestamp: notification.timestamp || new Date().toISOString()
+      timestamp: new Date().toISOString(),
     };
-    await db.collection("users").doc(String(targetUid)).collection("notifications").doc(id).set(newNotif, { merge: false });
-    res.json({ ok: true, success: true, notification: newNotif });
+
+    const batch = db.batch();
+    resolvedUids.forEach((uid) => {
+      batch.set(db.collection("users").doc(uid).collection("notifications").doc(id), newNotif, { merge: false });
+    });
+    await batch.commit();
+    res.json({
+      ok: true,
+      success: true,
+      notificationId: id,
+      delivered: resolvedUids.size,
+      missing,
+    });
   } catch (error: any) {
-    res.status(500).json({ ok: false, code: "NOTIFICATIONS_TRIGGER_FAILED", message: error.message });
+    console.error("[NOTIFICATIONS_TRIGGER_FAILED]", { requestId: req.requestId, code: error?.code });
+    res.status(500).json({ ok: false, code: "NOTIFICATIONS_TRIGGER_FAILED", message: "Notifications could not be delivered." });
   }
 });
 
@@ -239,13 +302,15 @@ app.post("/api/notifications/read", requireFirebaseUser, async (req: any, res) =
 
     if (readAll) {
       const snap = await coll.where("read", "==", false).get();
-      const batch = db.batch();
-      snap.docs.forEach((doc: any) => {
-        batch.update(doc.ref, { read: true });
-      });
-      await batch.commit();
-    } else if (notificationId) {
-      await coll.doc(notificationId).update({ read: true });
+      for (let offset = 0; offset < snap.docs.length; offset += 400) {
+        const batch = db.batch();
+        snap.docs.slice(offset, offset + 400).forEach((doc: any) => {
+          batch.update(doc.ref, { read: true });
+        });
+        await batch.commit();
+      }
+    } else if (notificationId && /^[A-Za-z0-9_-]{1,128}$/.test(String(notificationId))) {
+      await coll.doc(String(notificationId)).update({ read: true });
     } else {
       return res.status(400).json({ ok: false, code: "VALIDATION_FAILED", message: "Missing notificationId or readAll flag" });
     }

@@ -1,0 +1,23 @@
+ALTEC PRODUCTION REPAIR V35
+Date: 2026-07-26
+
+PASS  npm run typecheck
+      - application and scripts TypeScript checks passed
+PASS  npm test
+      - source and regression suites passed
+      - knowledge routing suites passed
+      - security and capability suites passed
+      - secure video suites passed
+      - AI evaluations: 600 passed, 0 failed
+PASS  npm audit --audit-level=low
+      - 0 vulnerabilities
+PASS  npm run verify:repair
+      - V10 through V35 production repair assertions passed
+PASS  npm run build
+      - Vite client production build
+      - Express CommonJS server bundle
+PASS  npm run build:vercel
+      - self-contained runtime verified (49 imports)
+      - isolated pure-ESM boot and JSON API handling passed
+SKIP  node scripts/run-browser-e2e.mjs
+      - /usr/bin/chromium is not installed in this build environment

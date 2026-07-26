@@ -14,9 +14,7 @@ import {
   RotateCcw,
   Square,
   X,
-  Wrench,
 } from 'lucide-react';
-import { CloraToolPalette, type ToolOption } from './CloraToolPalette';
 
 export type UploadTelemetry = {
   fileName: string;
@@ -41,7 +39,6 @@ interface CloraComposerProps {
   disabled?: boolean;
   attachments?: any[];
   onRemoveAttachment?: (id: string | number) => void;
-  onErrorLogSelect?: () => void;
   uploadTelemetry?: UploadTelemetry | null;
   uploadError?: string | null;
   indexingFailed?: boolean;
@@ -87,7 +84,6 @@ export function CloraComposer({
   disabled,
   attachments = [],
   onRemoveAttachment,
-  onErrorLogSelect,
   uploadTelemetry,
   uploadError,
   indexingFailed,
@@ -97,8 +93,6 @@ export function CloraComposer({
   onFocusChange,
 }: CloraComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [showCommandPalette, setShowCommandPalette] = useState(false);
-  const [commandQuery, setCommandQuery] = useState('');
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const dragDepthRef = useRef(0);
   useEffect(() => {
@@ -134,11 +128,7 @@ export function CloraComposer({
   };
 
   const handleInput = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = event.target.value;
-    setInput(value);
-    const match = value.slice(0, event.target.selectionStart || 0).match(/@(\w*)$/);
-    setCommandQuery(match?.[1] || '');
-    setShowCommandPalette(Boolean(match));
+    setInput(event.target.value);
   };
 
   const submitFiles = (files: File[]) => {
@@ -178,20 +168,6 @@ export function CloraComposer({
     submitFiles(Array.from(event.dataTransfer?.files || []));
   };
 
-  const handleToolSelect = (tool: ToolOption) => {
-    const cursor = textareaRef.current?.selectionStart || 0;
-    const before = input.slice(0, cursor).replace(/@\w*$/, tool.id === 'error' ? '' : `${tool.command} `);
-    const nextValue = before + input.slice(cursor);
-
-    if (tool.id === 'error' && onErrorLogSelect) onErrorLogSelect();
-    setInput(nextValue);
-    setShowCommandPalette(false);
-    requestAnimationFrame(() => {
-      textareaRef.current?.focus();
-      textareaRef.current?.setSelectionRange(before.length, before.length);
-    });
-  };
-
   const canSubmit = !disabled && (input.trim().length > 0 || attachments.length > 0);
   const notifyFocus = (focused: boolean) => {
     onFocusChange?.(focused);
@@ -214,17 +190,9 @@ export function CloraComposer({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <CloraToolPalette
-        isOpen={showCommandPalette}
-        query={commandQuery}
-        onSelect={handleToolSelect}
-        position={{ top: 0, left: 18 }}
-        onClose={() => setShowCommandPalette(false)}
-      />
-
       <motion.div
         layout
-        className={`relative overflow-hidden rounded-[26px] border bg-white shadow-[0_8px_30px_rgba(15,23,42,0.08)] transition focus-within:border-slate-400 focus-within:shadow-[0_12px_36px_rgba(15,23,42,0.12)] ${isDraggingFiles ? 'border-indigo-400 ring-4 ring-indigo-100' : 'border-slate-200'}`}
+        className={`relative overflow-hidden rounded-2xl border bg-white shadow-[0_4px_18px_rgba(16,24,40,0.07)] transition focus-within:border-blue-400 focus-within:shadow-[0_8px_24px_rgba(16,24,40,0.10)] ${isDraggingFiles ? 'border-blue-400 ring-4 ring-blue-100' : 'border-slate-200'}`}
       >
         {isDraggingFiles && (
           <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center bg-white/95 backdrop-blur-sm">
@@ -323,26 +291,10 @@ export function CloraComposer({
         />
 
         <div className="flex items-center justify-between gap-3 px-3 pb-3">
-          <div className="flex items-center gap-1">
-            <button type="button" onClick={onAttachClick} disabled={disabled} className="inline-flex h-10 items-center gap-2 rounded-full px-3 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Upload project files" title="Upload project files">
+          <div className="flex items-center">
+            <button type="button" onClick={onAttachClick} disabled={disabled} className="inline-flex h-10 items-center gap-2 rounded-xl px-3 text-slate-600 transition hover:bg-slate-100 disabled:opacity-40" aria-label="Upload files" title="Upload files">
               <Paperclip className="h-5 w-5" />
-              <span className="text-xs font-semibold">Upload files</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setCommandQuery('');
-                setShowCommandPalette((open) => !open);
-                requestAnimationFrame(() => textareaRef.current?.focus());
-              }}
-              disabled={disabled}
-              className={`inline-flex h-10 items-center gap-2 rounded-full px-3 text-xs font-semibold transition disabled:opacity-40 ${showCommandPalette ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
-              aria-expanded={showCommandPalette}
-              aria-label="Open AI tools"
-              title="Open AI tools"
-            >
-              <Wrench className="h-4 w-4" />
-              <span>Tools</span>
+              <span className="text-xs font-semibold">Attach</span>
             </button>
           </div>
 
@@ -354,7 +306,7 @@ export function CloraComposer({
             )}
 
             {isStreaming ? (
-              <button type="button" onClick={onStopClick} className="grid h-10 w-10 place-items-center rounded-full bg-slate-900 text-white hover:bg-black" aria-label="Stop response">
+              <button type="button" onClick={onStopClick} className="grid h-10 w-10 place-items-center rounded-xl bg-slate-900 text-white hover:bg-black" aria-label="Stop response">
                 <Square className="h-3.5 w-3.5 fill-current" />
               </button>
             ) : (
@@ -365,7 +317,7 @@ export function CloraComposer({
                   type="button"
                   onClick={onSubmit}
                   disabled={!canSubmit}
-                  className="grid h-10 w-10 place-items-center rounded-full bg-slate-900 text-white transition hover:bg-black disabled:bg-slate-200 disabled:text-slate-400"
+                  className="grid h-10 w-10 place-items-center rounded-xl bg-blue-700 text-white transition hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400"
                   aria-label="Send message"
                 >
                   <ArrowUp className="h-5 w-5" />
